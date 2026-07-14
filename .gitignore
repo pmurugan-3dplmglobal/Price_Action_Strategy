@@ -1,0 +1,24 @@
+# Credentials & secrets
+input/program_config.json
+input/kite_access_token.txt
+
+# Output data
+output/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Environment
+.env
+.venv
+venv/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+.DS_Store
