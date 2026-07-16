@@ -3,7 +3,7 @@ import webbrowser
 import subprocess
 import os
 
-DASHBOARD_URL = "http://localhost:5050"
+DASHBOARD_URL = "http://localhost:5051"
 
 def main():
     print("=" * 60)

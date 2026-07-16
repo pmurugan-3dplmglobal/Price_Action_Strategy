@@ -1,0 +1,7 @@
+[Unit]
+Description=Stop Trading Control Center engines and dashboard
+
+[Service]
+Type=oneshot
+User=ubuntu
+ExecStart=/bin/bash /home/ubuntu/Prod_code_02/oracle/stop_bot.sh

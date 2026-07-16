@@ -1,7 +1,9 @@
 import os
+import math
 import logging
+import calendar
 import pandas as pd
-from datetime import datetime as dt, timedelta
+from datetime import datetime as dt, timedelta, date as date_type
 
 from shared.config import (
     BACKTEST_DATE, INDEX_REGISTRY, STOCK_REGISTRY,
@@ -9,6 +11,44 @@ from shared.config import (
     BEAR_INDEX_STRIKE_RANGE, BEAR_NIFTY50_STRIKE_RANGE
 )
 import shared.kite_utils as kite_utils
+
+
+def get_expiry_date(base_symbol, backtest_date=None):
+    """Get expiry date for option contracts.
+    Index (NIFTY/BANKNIFTY): weekly — next Thursday.
+    Stock: monthly — last Thursday of the month.
+    """
+    ref = backtest_date or (BACKTEST_DATE if BACKTEST_DATE else dt.now().date())
+    if isinstance(ref, dt):
+        ref = ref.date()
+
+    is_stock = base_symbol not in INDEX_REGISTRY
+    if is_stock:
+        last_day = calendar.monthrange(ref.year, ref.month)[1]
+        last_date = date_type(ref.year, ref.month, last_day)
+        while last_date.weekday() != 3:
+            last_date -= timedelta(days=1)
+        return last_date
+    else:
+        days_ahead = (3 - ref.weekday()) % 7
+        if days_ahead == 0:
+            days_ahead = 7
+        return ref + timedelta(days=days_ahead)
+
+
+def approximate_delta(spot, strike, option_type, days_to_expiry):
+    """Approximate option delta using sigmoid of moneyness.
+    ATM ~ ±0.5, ITM → ±1, OTM → 0.
+    Time adjustment: delta flattens for far-expiry, sharpens near expiry.
+    """
+    if days_to_expiry <= 0:
+        days_to_expiry = 1
+    moneyness = (spot - strike) / strike
+    sharpness = 3.0 * (30 / max(days_to_expiry, 1)) ** 0.5  # sharper near expiry
+    if option_type == 'CE':
+        return 1 / (1 + math.exp(-sharpness * moneyness))
+    else:
+        return -1 / (1 + math.exp(sharpness * moneyness))
 
 def _get_strike_range(engine_type, config=None):
     """Get strike range for engine type."""
@@ -145,6 +185,29 @@ def resolve_option_contract(base_symbol, spot_price, step_size, option_type, tar
     except Exception as e:
         logging.error(f"Contract resolution error for {base_symbol}: {e}")
         return None
+
+def reresolve_token(base_symbol, spot_price, option_type, engine_type=None):
+    """Best-effort re-resolution of a contract token from cached NFO instruments.
+
+    Used to repair live positions whose stored token was lost/stale (e.g. 0/None)
+    so that SL/target monitoring can resume. Returns (token, tradingsymbol) or (None, None).
+    """
+    nfo = kite_utils.NFO_INSTRUMENTS
+    if nfo is None or nfo.empty:
+        return None, None
+    if base_symbol in INDEX_REGISTRY:
+        step = INDEX_REGISTRY[base_symbol].get("strike_step", 50)
+    elif base_symbol in STOCK_REGISTRY:
+        step = STOCK_REGISTRY[base_symbol].get("strike_step", 50)
+    else:
+        step = 50
+    try:
+        contract = resolve_option_contract(base_symbol, spot_price, step, option_type, engine_type=engine_type)
+    except Exception:
+        contract = None
+    if contract:
+        return contract["token"], contract["tradingsymbol"]
+    return None, None
 
 def get_spot_symbol_tradingsymbol(base_symbol):
     """Get spot tradingsymbol for index/stock."""

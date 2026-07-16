@@ -4,22 +4,28 @@ import pandas as pd
 import numpy as np
 from datetime import datetime as dt, timedelta, date
 
+from shared.config import NOPA_MIN_LEFT_CANDLES
+
 A_CACHE = {}
 
 def _a_cache_key(symbol, target_date):
     return f"{symbol}|{target_date}"
 
-def _no_pa_left(df, a_idx, ref_price, n_a, is_bull):
-    """Check no price action left of anchor pattern."""
-    if a_idx - n_a - 2 < 0:
-        return True
-    left = df.iloc[:a_idx - n_a - 1]
+def _no_pa_left(df, a_idx, a_low, a_high, is_bull, min_left=NOPA_MIN_LEFT_CANDLES):
+    """No Prior Price Action to the left of the anchor pattern.
+    Bull: no candle to the left of A traded below A's low.
+    Bear: no candle to the left of A traded above A's high.
+    Requires at least `min_left` candles of history to the left of A; otherwise
+    the anchor is rejected (cannot confirm the absence of prior price action)."""
+    if a_idx - 1 < min_left:
+        return False
+    left = df.iloc[:a_idx - 1]
     if left.empty:
-        return True
+        return False
     if is_bull:
-        return float(left['close'].min()) >= ref_price
+        return float(left['low'].min()) >= a_low
     else:
-        return float(left['close'].max()) <= ref_price
+        return float(left['high'].max()) <= a_high
 
 def find_swing_lows(df, window=5):
     """Find swing lows in dataframe."""
@@ -394,7 +400,7 @@ def detect_and_cache_a(df_anchor, symbol, target_date, pattern_type='bull'):
                 sl = float(a['low']) - 1
                 benchmark = float(a['high'])
 
-            if _no_pa_left(df_anchor, a_idx, ref_price, 0, True):
+            if _no_pa_left(df_anchor, a_idx, float(a['low']), float(a['high']), True):
                 t1, t2, t3 = find_profit_targets_negation(df_anchor, benchmark, benchmark, 'bull')
                 result = {
                     "pattern_name": pattern_name,
@@ -437,7 +443,7 @@ def detect_and_cache_a(df_anchor, symbol, target_date, pattern_type='bull'):
                 sl = float(a['high']) + 1
                 benchmark = float(a['low'])
 
-            if _no_pa_left(df_anchor, a_idx, ref_price, 0, False):
+            if _no_pa_left(df_anchor, a_idx, float(a['low']), float(a['high']), False):
                 t1, t2, t3 = find_profit_targets_negation(df_anchor, benchmark, benchmark, 'bear')
                 result = {
                     "pattern_name": pattern_name,

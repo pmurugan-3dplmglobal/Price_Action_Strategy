@@ -216,7 +216,42 @@ All 4 live engines now include automatic SL/target monitoring for active positio
 - `execute_highest_rr_trade()` now calls `record_executed_pattern()` in all 4 engines
 - Prevents re-entry of same pattern-symbol-strike combination across restarts
 
-## Changelog (2026-07-14)
+## Changelog
+
+### 2026-07-14 (Session 2) — Underlying-Scanning Migration + Backtest Fixes
+
+#### Architectural Shift: Underlying → Premium Scanning
+
+**Problem**: Patterns detected on option premium charts are noisy (theta/vega distorts candle patterns). This produced low-quality trade signals.
+
+**Change**: Detect patterns on **spot/underlying** data → on match, resolve ATM option contract → compute premium-level SL/targets as fixed multipliers of entry premium.
+
+| Config Constant | Value | Meaning |
+|----------------|-------|---------|
+| `PREMIUM_SL_FACTOR` | 0.5 | SL = entry_premium × 0.5 |
+| `PREMIUM_T1_FACTOR` | 2.0 | T1 = entry_premium × 2.0 |
+| `PREMIUM_T2_FACTOR` | 3.0 | T2 = entry_premium × 3.0 |
+| `PREMIUM_T3_FACTOR` | 4.0 | T3 = entry_premium × 4.0 |
+
+**Files rewritten**:
+- `shared/config.py` — added PREMIUM_* constants
+- `shared/patterns.py` — `find_anchor_ll_sweep()` / `find_anchor_hh_sweep()` rewritten with proper A-B-C-D structure; `detect_and_cache_a()` handles dict returns from sweep finders
+- `backtest/bull_index_backtest.py`, `bear_index_backtest.py`, `bull_nifty50_backtest.py`, `bear_nifty50_backtest.py` — all 4 rewritten: `run_scan_cycle()` detects on spot, then resolves single ATM option; `simulate_trade_outcome()` unified for long positions (PnL = exit_price - entry_premium)
+- `live-trade/bull_index_engine.py`, `bear_index_engine.py`, `bull_nifty50_scanner.py`, `bear_nifty50_scanner.py` — all 4 rewritten for underlying-scanning
+
+#### Bug fixes
+- **PE direction in `monitor_positions()`**: PE is now a **long** position (buy put) → SL: `ltp <= sl`, targets: `ltp >= t1/t2/t3`. Was inverted (SL: `ltp >= sl`), causing puts to never auto-exit on loss. Fixed in `bear_index_engine.py` and `bear_nifty50_scanner.py`.
+- **Stale NFO futures tokens**: Added `resolve_futures_token(symbol)` in `shared/kite_utils.py` — resolves current-month futures contract token from NFO instrument list. Used in both Nifty50 backtest engines to replace hardcoded (stale) tokens.
+- **Graceful bad-token handling**: Wrapped per-symbol data fetch in try-except in Nifty50 backtest `run_scan_cycle()` — one bad token no longer crashes the entire scan.
+- **Unused imports removed**: `numpy`, `KiteConnect`, `ThreadPoolExecutor`, `as_completed`, `sync_instruments` removed from all 4 live-trade engines.
+
+#### Backtest Results (2026-07-14)
+| Engine | Trades | Notable |
+|--------|--------|---------|
+| Bull Index | 0 | No patterns on NIFTY/BANKNIFTY spot |
+| Bear Index | 0 | No patterns on NIFTY/BANKNIFTY spot |
+| Bull Nifty50 | 2 | AXISBANK, HINDUNILVR (entry not triggered) |
+| Bear Nifty50 | 5 | SBIN **+12,375pts** (entry triggered, held to EOD), others entry not triggered |
 
 ### Phase 3: Position Monitoring & Carry-Forward
 - Added `monitor_positions()` to all 4 live engines (bull/bear index + bull/bear nifty50)

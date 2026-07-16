@@ -1,6 +1,7 @@
 import os
 import json
 import time
+import random
 import logging
 import pandas as pd
 from datetime import datetime as dt, timedelta
@@ -47,6 +48,67 @@ def is_market_hours():
     from datetime import time as datetime_time
     return datetime_time(9, 15) <= t <= datetime_time(15, 30)
 
+def is_auth_error(e):
+    """True if the Kite exception is an auth/token rejection. Kite invalidates the
+    previous session's token every time a new login/access-token is generated, so a
+    long-running engine can suddenly start getting 'invalid token' until it reloads."""
+    msg = str(e).lower()
+    return any(k in msg for k in (
+        "invalid token", "invalid access token", "token exception",
+        "unauthorized", "not authenticated", "expired", "403", "invalid request token"
+    ))
+
+def reload_kite_client(kite=None):
+    """Recreate the Kite client from the current token file and re-sync instruments.
+    Call when Kite reports an auth/token error so the engine self-heals after a
+    token regeneration (Kite invalidates the previous session on each new login)."""
+    new_kite = create_kite_client()
+    try:
+        fetch_instruments(new_kite)
+    except Exception as e:
+        logging.warning(f"Instrument re-sync failed during token reload: {e}")
+    return new_kite
+
+
+def validate_stock_registry_tokens(kite, stock_registry=None):
+    """Cross-check STOCK_REGISTRY equity tokens against live NSE EQ instruments and
+    self-correct stale/wrong tokens in place (mutates shared.config.STOCK_REGISTRY).
+    Cheap relative to a scan: a single NSE instruments() call. Returns a list of
+    (symbol, old_token, new_token) corrections. Call once at engine startup (and on
+    token reload) so a de-listed/renamed/rotated equity token can never silently
+    break an entire scan cycle again."""
+    import shared.config as _cfg
+    registry = stock_registry if stock_registry is not None else _cfg.STOCK_REGISTRY
+    if not registry:
+        return []
+    try:
+        eq = kite.instruments("NSE")
+    except Exception as e:
+        logging.warning(f"validate_stock_registry_tokens: NSE instrument fetch failed: {e}")
+        return []
+    live = {}
+    for r in eq:
+        if r.get("instrument_type") == "EQ":
+            live[str(r["tradingsymbol"]).upper()] = int(r["instrument_token"])
+    corrections = []
+    for sym, meta in list(registry.items()):
+        tok = live.get(sym.upper())
+        if tok is None:
+            logging.warning(
+                f"validate_stock_registry_tokens: {sym} not found on NSE EQ; "
+                f"keeping token {meta.get('token')}"
+            )
+            continue
+        if int(meta.get("token", 0)) != tok:
+            old = meta.get("token")
+            meta["token"] = tok
+            corrections.append((sym, old, tok))
+            logging.warning(f"validate_stock_registry_tokens: corrected {sym} token {old} -> {tok}")
+    if corrections:
+        logging.info(f"validate_stock_registry_tokens: {len(corrections)} token(s) corrected.")
+    return corrections
+
+
 CACHE_DIR = os.path.join("output", "cache")
 
 def safe_historical(kite, token, from_date, to_date, tf, max_retries=5):
@@ -92,9 +154,11 @@ def safe_historical(kite, token, from_date, to_date, tf, max_retries=5):
             except Exception as e:
                 logging.warning(f"Error reading historical cache for token {token}: {e}")
                 
+    # Per-process pacing to avoid Kite 429s; jitter desynchronizes the 4 engines
+    MIN_GAP = 0.75
     elapsed = time.time() - _last_hist_time
-    if elapsed < 0.4:
-        time.sleep(0.4 - elapsed)
+    if elapsed < MIN_GAP:
+        time.sleep(MIN_GAP - elapsed + random.uniform(0, 0.15))
     _last_hist_time = time.time()
     
     for attempt in range(max_retries):
@@ -142,6 +206,32 @@ def fetch_instruments(kite):
 
 def sync_instruments(kite):
     return fetch_instruments(kite)
+
+
+def resolve_futures_token(base_symbol):
+    """Resolve current-month NFO futures token for a stock/index base symbol."""
+    global NFO_INSTRUMENTS, instrument_dump
+    df = NFO_INSTRUMENTS if not NFO_INSTRUMENTS.empty else (instrument_dump if instrument_dump is not None else pd.DataFrame())
+    if df.empty:
+        return None
+    futs = df[df['instrument_type'] == 'FUT']
+    if futs.empty:
+        return None
+    # Build a mapping: name -> list of (tradingsymbol, token, expiry)
+    # Pick the nearest expiry (current month)
+    from datetime import date
+    today = date.today()
+    best = None
+    for _, r in futs.iterrows():
+        if str(r['name']).upper() == base_symbol.upper():
+            expiry = r.get('expiry')
+            if expiry is not None:
+                if best is None or abs((expiry - today).days) < abs((best[1] - today).days):
+                    best = (int(r['instrument_token']), expiry if hasattr(expiry, 'date') else expiry)
+    if best is None:
+        return None
+    return best[0]
+
 
 def get_instrument_df():
     """Get the cached NFO instruments DataFrame."""

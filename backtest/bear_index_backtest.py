@@ -6,7 +6,7 @@ import time
 import threading
 import atexit
 import signal
-from datetime import datetime as dt, timedelta
+from datetime import datetime as dt, timedelta, date as date_type
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Add project root to path for shared module imports
@@ -37,7 +37,7 @@ from shared.patterns import (
     find_profit_targets_negation, calculate_rr, _trade_rr
 )
 from shared.option_utils import (
-    resolve_option_strikes, resolve_option_contract, sync_instruments as sync_opt_instruments
+    resolve_option_strikes, resolve_option_contract, approximate_delta, get_expiry_date
 )
 from shared.journal import log_to_journal
 from shared import trade_db
@@ -78,10 +78,11 @@ def _load_config():
     with open(CFG_FILE) as f:
         return json.load(f)
 
-def run_multi_day_backtest(kite, start_date, end_date):
-    """Run backtest over date range."""
+def run_multi_day_backtest(kite, start_date, end_date, max_carry=3):
+    """Run backtest over date range with carry-forward for unfilled entries."""
     results = []
     current = start_date
+    carry_forward = {}  # key -> {"trade": trade, "remaining": int}
     while current <= end_date:
         if current.weekday() >= 5:
             current += timedelta(days=1)
@@ -90,19 +91,52 @@ def run_multi_day_backtest(kite, start_date, end_date):
         global BACKTEST_DATE
         BACKTEST_DATE = current
         
-        staged = run_scan_cycle(kite)
+        try:
+            staged = run_scan_cycle(kite)
+        except Exception as e:
+            logging.error(f"Scan cycle failed for {current}: {e}")
+            staged = []
+        staged_keys = {f"{t['Symbol']}|{t['Pattern']}|{t['Side']}|{t['Strike']}" for t in staged}
+        
+        for key, cf in list(carry_forward.items()):
+            if key not in staged_keys:
+                staged.append(cf["trade"])
+        
         if staged:
             for trade in staged:
+                key = f"{trade['Symbol']}|{trade['Pattern']}|{trade['Side']}|{trade['Strike']}"
                 outcome = simulate_trade_outcome(kite, trade, current)
+                if outcome.get("result") == "ENTRY_NOT_TRIGGERED" and max_carry > 0:
+                    remaining = carry_forward.get(key, {}).get("remaining", max_carry) - 1
+                    if remaining > 0:
+                        carry_forward[key] = {"trade": trade, "remaining": remaining}
+                        continue
+                    outcome = {"trade": trade, "result": "SKIPPED", "pnl": 0,
+                               "entry": trade["Entry"], "exit": trade["Entry"],
+                               "entry_ts": None, "exit_ts": None}
                 results.append(outcome)
+                carry_forward.pop(key, None)
         
         trade_db.clear_cycle_trades(ENGINE_TYPE)
         current += timedelta(days=1)
     
+    for key, cf in carry_forward.items():
+        trade = cf["trade"]
+        results.append({
+            "trade": trade,
+            "result": "SKIPPED",
+            "pnl": 0,
+            "entry": trade["Entry"],
+            "exit": trade["Entry"],
+            "entry_ts": None,
+            "exit_ts": None
+        })
+    
     return results
 
 def simulate_trade_outcome(kite, trade, target_date):
-    """Simulate trade outcome using option premium data."""
+    """Simulate trade outcome using option premium data (long position: CE or PE).
+    Returns ENTRY_NOT_TRIGGERED when entry level is not reached in any candle."""
     try:
         opt_token = trade["OptionToken"]
         entry_premium = trade["Entry"]
@@ -110,87 +144,75 @@ def simulate_trade_outcome(kite, trade, target_date):
         t1 = trade["T1"]
         t2 = trade["T2"]
         t3 = trade["T3"]
-        
+
         from_str = target_date.strftime("%Y-%m-%d")
         to_str = (target_date + timedelta(days=1)).strftime("%Y-%m-%d")
-        
+
         df = pd.DataFrame(safe_historical(kite, opt_token, from_str, to_str, INDEX_TF_ENTRY))
         if df.empty:
             return {"trade": trade, "result": "NO_DATA", "pnl": 0}
-        
+
         entry_ts = None
         exit_ts = None
         entry_hit = False
-        sl_hit = False
-        t1_hit = False
-        t2_hit = False
-        t3_hit = False
-        
+        result = "TIME_EXIT"
+        exit_price = entry_premium
+
         for _, row in df.iterrows():
             high = row['high']
             low = row['low']
             close = row['close']
             ts = row['date']
-            
+
             if not entry_hit and low <= entry_premium <= high:
                 entry_hit = True
                 entry_ts = ts
                 continue
-            
+
             if entry_hit:
-                if high >= sl:
-                    sl_hit = True
+                if sl and low <= sl:
+                    exit_price = sl
                     exit_ts = ts
+                    result = "SL_HIT"
                     break
-                if t1 and low <= t1:
-                    t1_hit = True
-                if t2 and low <= t2:
-                    t2_hit = True
-                if t3 and low <= t3:
-                    t3_hit = True
+                if t3 and high >= t3:
+                    exit_price = t3
                     exit_ts = ts
+                    result = "T3_HIT"
                     break
-        
-        # Calculate P&L (bear: profit when price goes down)
-        if entry_ts is None:
-            entry_ts = df.iloc[0]['date']
-        
-        if sl_hit:
-            pnl = entry_premium - sl
-            result = "SL_HIT"
-            if exit_ts is None:
-                exit_ts = df.iloc[-1]['date']
-        elif t3_hit:
-            pnl = entry_premium - t3
-            result = "T3_HIT"
-        elif t2_hit:
-            pnl = entry_premium - t2
-            result = "T2_HIT"
-        elif t1_hit:
-            pnl = entry_premium - t1
-            result = "T1_HIT"
-        else:
-            last_close = df.iloc[-1]['close']
-            last_ts = df.iloc[-1]['date']
-            pnl = entry_premium - last_close
+                if t2 and high >= t2:
+                    pass
+                if t1 and high >= t1:
+                    pass
+
+        if not entry_hit:
+            return {"trade": trade, "result": "ENTRY_NOT_TRIGGERED", "pnl": 0,
+                    "entry": entry_premium, "exit": entry_premium,
+                    "entry_ts": None, "exit_ts": None}
+
+        if not exit_ts:
+            exit_price = float(df.iloc[-1]['close'])
+            exit_ts = df.iloc[-1]['date']
             result = "TIME_EXIT"
-            exit_ts = last_ts
-        
+
         lot_size = trade["Config"]["lot_size"]
-        pnl_points = pnl * lot_size
-        
+        pnl = exit_price - entry_premium
+        pnl_points = round(pnl * lot_size, 2)
+
         return {
             "trade": trade,
             "result": result,
             "pnl": pnl_points,
             "entry": entry_premium,
-            "exit": entry_premium - pnl,
+            "exit": exit_price,
             "entry_ts": entry_ts,
             "exit_ts": exit_ts
         }
     except Exception as e:
         logging.error(f"Simulation error: {e}")
-        return {"trade": trade, "result": "ERROR", "pnl": 0}
+        return {"trade": trade, "result": "ERROR", "pnl": 0,
+                "entry": trade.get("Entry"), "exit": trade.get("Entry"),
+                "entry_ts": None, "exit_ts": None}
 
 def run_scan_cycle(kite):
     _refresh_nopa_config()
@@ -205,126 +227,86 @@ def run_scan_cycle(kite):
     to_anchor = ref_now.strftime("%Y-%m-%d")
     staged = []
     staged_keys = set()
-    strike_range = BEAR_INDEX_STRIKE_RANGE
     scan_order = list(INDEX_REGISTRY.keys())
-    
-    # 1. Fetch spot prices for all indices
-    spot_prices = {}
-    with ThreadPoolExecutor(max_workers=5) as pool:
-        spot_tasks = {}
-        for symbol in scan_order:
-            config = INDEX_REGISTRY[symbol]
-            spot_tasks[pool.submit(
-                lambda cfg=config: pd.DataFrame(safe_historical(kite, cfg["token"], from_entry, to_entry, INDEX_TF_ENTRY))
-            )] = symbol
-        
-        for f in as_completed(spot_tasks):
-            symbol = spot_tasks[f]
-            try:
-                df = f.result()
-                if not df.empty:
-                    spot_prices[symbol] = float(df.iloc[-1]['close'])
-            except Exception as e:
-                logging.warning(f"Spot fetch failed for {symbol}: {e}")
-    
-    # 2. For each index, scan option contracts
+
     for symbol in scan_order:
-        if symbol not in spot_prices:
+        if symbol not in INDEX_REGISTRY:
             continue
         config = INDEX_REGISTRY[symbol]
-        spot = spot_prices[symbol]
-        step = config["strike_step"]
-        
-        # Resolve PE contracts around ATM
-        contracts = resolve_option_strikes(symbol, spot, step, OPTION_TYPE, strike_range, ENGINE_TYPE)
-        if not contracts:
-            logging.warning(f"No contracts resolved for {symbol} @ {spot}")
+        token = config["token"]
+
+        df_spot_entry = pd.DataFrame(safe_historical(kite, token, from_entry, to_entry, INDEX_TF_ENTRY))
+        df_spot_anchor = pd.DataFrame(safe_historical(kite, token, from_anchor, to_anchor, INDEX_TF_ANCHOR))
+        if df_spot_entry.empty or df_spot_anchor.empty:
             continue
-        
-        # 3. Fetch option premium data for all contracts
-        opt_data = {}
-        with ThreadPoolExecutor(max_workers=5) as pool:
-            opt_tasks = {}
-            for contract in contracts:
-                opt_tasks[pool.submit(
-                    lambda c=contract: safe_historical(kite, c["token"], from_entry, to_entry, INDEX_TF_ENTRY)
-                )] = ("entry", contract)
-                opt_tasks[pool.submit(
-                    lambda c=contract: safe_historical(kite, c["token"], from_anchor, to_anchor, INDEX_TF_ANCHOR)
-                )] = ("anchor", contract)
-            
-            for f in as_completed(opt_tasks):
-                tf_type, contract = opt_tasks[f]
-                try:
-                    df = pd.DataFrame(f.result())
-                    if df.empty:
-                        continue
-                    tsym = contract["tradingsymbol"]
-                    if tsym not in opt_data:
-                        opt_data[tsym] = {}
-                    opt_data[tsym][tf_type] = df
-                except Exception as e:
-                    logging.warning(f"Option data failed for {contract['tradingsymbol']}: {e}")
-        
-        # 4. Run pattern detection on each contract
-        for contract in contracts:
-            tsym = contract["tradingsymbol"]
-            if tsym not in opt_data or "entry" not in opt_data[tsym] or "anchor" not in opt_data[tsym]:
+
+        cache_key = _a_cache_key(symbol, target_date or dt.now().date())
+        if cache_key not in A_CACHE or A_CACHE[cache_key] is None:
+            if len(df_spot_anchor) >= 5:
+                detect_and_cache_a(df_spot_anchor, symbol, target_date or dt.now().date(), PATTERN_TYPE)
+
+        cache = A_CACHE.get(cache_key)
+        if cache is None:
+            continue
+
+        if cache["needs_bcd"]:
+            bcd = find_bcd_forward(df_spot_entry, cache["a_ts"], cache["benchmark"], PATTERN_TYPE)
+            if bcd is None:
                 continue
-            
-            df_opt_entry = opt_data[tsym]["entry"]
-            df_opt_anchor = opt_data[tsym]["anchor"]
-            
-            # Phase A: Detect/cache A-pattern on option anchor TF
-            cache_key = _a_cache_key(tsym, target_date or BACKTEST_DATE or dt.now().date())
-            if cache_key not in A_CACHE:
-                if len(df_opt_anchor) >= 5:
-                    detect_and_cache_a(df_opt_anchor, tsym, target_date or BACKTEST_DATE or dt.now().date(), PATTERN_TYPE)
-            
-            if cache_key not in A_CACHE or A_CACHE[cache_key] is None:
-                continue
-            
-            cache = A_CACHE[cache_key]
-            
-            # Phase B: Check BCD on option entry TF
-            if cache["needs_bcd"]:
-                bcd = find_bcd_forward(df_opt_entry, cache["a_ts"], cache["benchmark"], PATTERN_TYPE)
-                if bcd is None:
-                    continue
-                entry_price = bcd['close']
-            else:
-                entry_price = float(df_opt_entry.iloc[-1]['close'])
-            
-            # Validate targets in premium space (bear: targets below entry)
-            t1, t2, t3 = cache.get("t1"), cache.get("t2"), cache.get("t3")
-            if t1 and t1 >= entry_price: t1 = None
-            if t2 and t2 >= (t1 or entry_price): t2 = None
-            if t3 and t3 >= (t2 or t1 or entry_price): t3 = None
-            
-            # Stage trade with this option contract
-            side = OPTION_TYPE
-            key = f"{symbol}|{cache['pattern_name']}|{side}|{contract['strike']}"
-            if trade_db.is_pattern_executed(ENGINE_TYPE, key) or key in staged_keys:
-                continue
-            
-            trade_data = {
-                "Symbol": symbol,
-                "OptionSymbol": tsym,
-                "OptionToken": contract["token"],
-                "Strike": contract["strike"],
-                "Side": side,
-                "Entry": entry_price,
-                "SL": cache["SL"],
-                "T1": t1, "T2": t2, "T3": t3,
-                "RR": "",
-                "Pattern": cache["pattern_name"],
-                "Config": config
-            }
-            staged.append(trade_data)
-            staged_keys.add(key)
-            trade_db.stage_cycle_trade(ENGINE_TYPE, trade_data)
-            logging.info(f"BACKTEST OPTION MATCH: {symbol} {tsym} | {cache['pattern_name']} | Entry: {entry_price:.2f} | SL: {cache['SL']:.2f} | T3: {t3}")
-    
+            bcd_ts = bcd['date']
+        else:
+            bcd_ts = df_spot_entry.iloc[-1]['date']
+
+        current_spot = float(df_spot_entry.iloc[-1]['close'])
+        step = config["strike_step"]
+        contract = resolve_option_contract(symbol, current_spot, step, OPTION_TYPE, engine_type=ENGINE_TYPE)
+        if contract is None:
+            continue
+
+        df_opt = pd.DataFrame(safe_historical(kite, contract["token"], from_entry, to_entry, INDEX_TF_ENTRY))
+        if df_opt.empty:
+            continue
+
+        bcd_dt = pd.Timestamp(bcd_ts)
+        opt_row = df_opt[df_opt['date'] >= bcd_dt]
+        if opt_row.empty:
+            continue
+        entry_premium = float(opt_row.iloc[0]['close'])
+
+        expiry_date = get_expiry_date(symbol)
+        days_to_expiry = (expiry_date - date_type.today()).days
+        delta = approximate_delta(current_spot, contract['strike'], OPTION_TYPE, days_to_expiry)
+
+        sl_premium = round(entry_premium + delta * (cache['SL'] - current_spot), 2)
+        sl_premium = max(round(0.1 * entry_premium, 2), sl_premium)
+        t1 = round(entry_premium + delta * (cache['t1'] - current_spot), 2) if cache.get('t1') else None
+        t2 = round(entry_premium + delta * (cache['t2'] - current_spot), 2) if cache.get('t2') else None
+        t3 = round(entry_premium + delta * (cache['t3'] - current_spot), 2) if cache.get('t3') else None
+
+        if sl_premium >= entry_premium or (t1 and t1 <= entry_premium):
+            continue
+
+        key = f"{symbol}|{cache['pattern_name']}|{OPTION_TYPE}|{contract['strike']}"
+        if key in staged_keys:
+            continue
+
+        trade_data = {
+            "Symbol": symbol,
+            "OptionSymbol": contract["tradingsymbol"],
+            "OptionToken": contract["token"],
+            "Strike": contract["strike"],
+            "Side": OPTION_TYPE,
+            "Entry": entry_premium,
+            "SL": sl_premium,
+            "T1": t1, "T2": t2, "T3": t3,
+            "Pattern": cache["pattern_name"],
+            "Config": config,
+        }
+        staged.append(trade_data)
+        staged_keys.add(key)
+        trade_db.stage_cycle_trade(ENGINE_TYPE, trade_data)
+        logging.info(f"BACKTEST MATCH: {symbol} {contract['tradingsymbol']} | {cache['pattern_name']} | Entry: {entry_premium:.2f} | SL: {sl_premium:.2f} | T1: {t1} | T2: {t2} | T3: {t3}")
+
     return staged
 
 def main():

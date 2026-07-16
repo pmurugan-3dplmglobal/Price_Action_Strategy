@@ -147,3 +147,12 @@ def record_executed_pattern(engine, key, info=None):
         db.setdefault(engine, {})
         db[engine][key] = info or {"executed_at": time.strftime("%Y-%m-%d %H:%M:%S")}
         _write_json(EXECUTED_STORE_FILE, db)
+
+
+def unrecord_executed_pattern(engine, key):
+    """Removes an executed pattern record (e.g. when a pending order is cancelled)."""
+    with _executed_cache_lock:
+        db = _load_executed_cache()
+        if engine in db and key in db[engine]:
+            del db[engine][key]
+            _write_json(EXECUTED_STORE_FILE, db)

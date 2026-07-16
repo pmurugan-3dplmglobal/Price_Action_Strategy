@@ -33,7 +33,7 @@ BEAR_INDEX_LOG_FILE = "output/logs/bear_index_trade_engine.log"
 BEAR_NIFTY50_LOG_FILE = "output/logs/bear_nifty50_scanner.log"
 BEAR_DAILY_LOG_FILE = "output/logs/bear_daily_scanner.log"
 
-DASHBOARD_PORT = 5050
+DASHBOARD_PORT = 5051
 REFRESH_SECONDS = 5
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -475,6 +475,19 @@ def refresh_data():
                     except Exception:
                         pass
             cached_data["backtest_results"] = bt
+            # Load scanner display data (staged trades + active positions)
+            try:
+                _dp = os.path.join("output", "monitor", "scan_display_data.json")
+                if os.path.exists(_dp):
+                    with open(_dp) as f:
+                        cached_data["scan_display_data"] = json.load(f)
+                else:
+                    cached_data["scan_display_data"] = {}
+            except Exception:
+                cached_data["scan_display_data"] = {}
+            cached_data["live_execution"] = {
+                "nifty50": os.path.exists(os.path.join("input", "nifty50_live.flag"))
+            }
             now = time.time()
             if now - _ltp_last_fetch > 30 and cached_data["all_trades"]:
                 _ltp_last_fetch = now
@@ -547,7 +560,7 @@ HTML_TEMPLATE = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Trading Control Center</title>
+    <title>Trading -02-Underlying Stock bases</title>
     <script>
         // ── Filter State ──
         let journalFilter = 'all';
@@ -578,6 +591,24 @@ HTML_TEMPLATE = """
             else if (type === 'log') logFilter = value;
             else if (type === 'position') { positionFilter = value; document.querySelectorAll('.pos-filter-btn').forEach(b => b.classList.remove('active')); event.target.classList.add('active'); }
             renderReport();
+        }
+
+        // ── Live Execution Toggle ──
+        async function setLiveExec(engine, on) {
+            try {
+                const r = await fetch('/api/live-execution/' + engine, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({enabled: on})
+                });
+                const j = await r.json();
+                const lbl = document.getElementById(engine + '-live-label');
+                if (lbl) {
+                    lbl.textContent = j.enabled ? 'LIVE EXECUTION ON' : 'SCAN-ONLY';
+                    lbl.classList.toggle('on', !!j.enabled);
+                }
+                if (!j.ok) console.log('live-exec toggle failed', j);
+            } catch(e) { console.log(e); }
         }
 
         // ── Backtest Controls ──
@@ -820,48 +851,57 @@ HTML_TEMPLATE = """
             }
             document.getElementById('journal-body').innerHTML = jHtml;
 
-            let scanHtml = '';
-            let allSetups = {};
-            const engines = scanFilter === 'all' ? ['index', 'nifty50', 'daily', 'bear_index', 'bear_nifty50', 'bear_daily'] : [scanFilter];
-            engines.forEach(pid => {
-                const summary = d.programs?.[pid]?.scan_summary;
-                if (!summary) return;
-                Object.keys(summary.anchors || {}).forEach(sym => {
-                    if (!allSetups[sym]) allSetups[sym] = {anchor: summary.anchors[sym], abc: null};
-                    else allSetups[sym].anchor = summary.anchors[sym];
-                });
-                Object.keys(summary.abc_matches || {}).forEach(sym => {
-                    if (!allSetups[sym]) allSetups[sym] = {anchor: null, abc: summary.abc_matches[sym]};
-                    else allSetups[sym].abc = summary.abc_matches[sym];
-                });
-            });
-            function parseAnchorLine(line) {
-                if (!line) return null;
-                const p = line.split('|').map(s => s.trim());
-                const g = (i,prefix) => p[i] && p[i].startsWith(prefix) ? p[i].replace(prefix,'').trim() : (p[i]||'');
-                return { raw: line, pattern: p[1]||'', close: g(2,'Close:'), sl: g(3,'SL:'), t1: g(4,'T1:'), t2: g(5,'T2:'), t3: g(6,'T3:'), tf: g(7,'TF:'), ts: p[8]||'' };
+            // ── Live Scanner Display (scan_display_data.json) ──
+            const sdd = d.scan_display_data || {};
+            const liveOn = (d.live_execution && d.live_execution.nifty50) || false;
+            const tog = document.getElementById('nifty50-live-toggle');
+            if (tog) tog.checked = liveOn;
+            const sLbl = document.getElementById('nifty50-live-label');
+            if (sLbl) {
+                sLbl.textContent = liveOn ? 'LIVE EXECUTION ON' : 'SCAN-ONLY';
+                sLbl.classList.toggle('on', liveOn);
             }
-            Object.entries(allSetups).forEach(([sym, info]) => {
-                if (info.anchor && info.abc) {
-                    const a = parseAnchorLine(info.anchor);
-                    const b = parseAnchorLine(info.abc) || {pattern: info.abc.split('|').pop().trim()};
-                    scanHtml += '<div class="match-highlight" style="border-left-color:#3fb950;background:#3fb95015"><strong>SETUP FORMED</strong>: ' + sym + '<br><span style="font-size:11px">\u2691\u2009' + a.pattern + ' \u2022 Close:' + a.close + ' SL:' + a.sl + (a.t1!='None'?' T1:'+a.t1:'') + (a.tf?' \u2022 '+a.tf:'') + (a.ts?' \u2022 '+a.ts:'') + '</span><br><span style="font-size:11px;color:#58a6ff">\u25B2 ABC: ' + b.pattern + '</span></div>';
-                } else if (info.anchor) {
-                    const a = parseAnchorLine(info.anchor);
-                    scanHtml += '<div class="match-highlight" style="border-left-color:#d29922"><strong>ANCHOR</strong>: ' + sym + '<br><span style="font-size:11px">' + a.pattern + ' \u2022 Close:' + a.close + ' SL:' + a.sl + (a.t1!='None'?' T1:'+a.t1:'') + (a.tf?' \u2022 '+a.tf:'') + (a.ts?' \u2022 '+a.ts:'') + '</span></div>';
-                } else if (info.abc) {
-                    scanHtml += '<div class="match-highlight" style="border-left-color:#58a6ff"><strong>ABC</strong>: ' + sym + '<br><span style="font-size:11px">' + (info.abc.split('|')[1]||info.abc.split('|').pop()).trim() + '</span></div>';
-                }
-            });
-            if (!scanHtml) {
-                const allScans = [];
-                engines.forEach(pid => {
-                    allScans.push(...(d.programs?.[pid]?.scans || []));
-                });
-                allScans.forEach(l => { scanHtml += '<div class="match-highlight">'+l+'</div>'; });
-                if (!scanHtml) scanHtml = '<p class="empty-state">No scan matches yet</p>';
+
+            // Daily reset: clear view if the display date is not today.
+            // Use LOCAL date (engine writes local date) to avoid the UTC
+            // mismatch that would blank the tab after ~18:30 IST.
+            const sddDate = sdd.date || '';
+            const todayStr = new Date().toLocaleDateString('en-CA'); // YYYY-MM-DD local
+            let stagedList = sdd.staged_trades || [];
+            const HIT = ['SL_HIT','TARGET_HIT','T1_HIT','T2_HIT','T3_HIT'];
+            let activeList = (sdd.active_positions || []).filter(p => !HIT.includes(p.status));
+            if (sddDate && sddDate !== todayStr) { stagedList = []; activeList = []; }
+
+            function tradeRow(t) {
+                const num = (v) => (v === null || v === undefined || v === 0) ? '-' : v;
+                return '<tr>' +
+                    '<td>' + (t.symbol || t.contract || '-') + '</td>' +
+                    '<td>' + (t.contract || '-') + '</td>' +
+                    '<td>' + (t.side || '-') + '</td>' +
+                    '<td>' + num(t.entry) + '</td>' +
+                    '<td>' + num(t.sl) + '</td>' +
+                    '<td>' + num(t.t1) + '</td>' +
+                    '<td>' + num(t.t2) + '</td>' +
+                    '<td>' + num(t.t3) + '</td>' +
+                    '<td>' + (t.entry_time || '-') + '</td>' +
+                    '<td>' + (t.exit_time || '-') + '</td>' +
+                    '<td>' + (t.status || 'STAGED') + '</td>' +
+                    '<td>' + num(t.pnl_percent) + '</td>' +
+                '</tr>';
             }
-            document.getElementById('scan-body').innerHTML = scanHtml;
+            const thead = '<table class="scan-table"><thead><tr>' +
+                '<th>Symbol</th><th>Contract</th><th>Side</th><th>Entry</th><th>SL</th><th>T1</th><th>T2</th><th>T3</th><th>Entry Time</th><th>Exit Time</th><th>Result</th><th>P&amp;L%</th>' +
+                '</tr></thead><tbody>';
+
+            const sb = document.getElementById('scan-staged-body');
+            if (sb) sb.innerHTML = stagedList.length
+                ? thead + stagedList.map(tradeRow).join('') + '</tbody></table>'
+                : '<p class="empty-state">No scan matches yet</p>';
+
+            const ab = document.getElementById('scan-active-body');
+            if (ab) ab.innerHTML = activeList.length
+                ? thead + activeList.map(tradeRow).join('') + '</tbody></table>'
+                : '<p class="empty-state">No active positions</p>';
 
             let logHtml = '';
             let allLogs = [];
@@ -1486,7 +1526,7 @@ HTML_TEMPLATE = """
     </style>
 </head>
 <body>
-    <h1>Trading Control Center <small>Steering & Dashboard</small></h1>
+    <h1>Trading Control Center-02 <small>Steering & Dashboard-02</small></h1>
 
     <div id="token-banner" class="token-banner token-hidden">
         <div class="token-banner-row">
@@ -1676,17 +1716,36 @@ HTML_TEMPLATE = """
                 </div>
             </div>
             <div id="scan-tab" class="tab-content">
+                <style>
+                    #scan-tab .scan-table{border-collapse:collapse;width:100%;font-size:12px;color:#e6e6e6;margin-bottom:6px}
+                    #scan-tab .scan-table th,#scan-tab .scan-table td{border:1px solid #333;padding:4px 8px;text-align:right;white-space:nowrap}
+                    #scan-tab .scan-table th{background:#16213e;position:sticky;top:0}
+                    #scan-tab .scan-table td:nth-child(1),#scan-tab .scan-table td:nth-child(2),#scan-tab .scan-table td:nth-child(3),#scan-tab .scan-table td:nth-child(11){text-align:left}
+                    #scan-tab .scan-subhead{margin:14px 0 6px;font-weight:600;color:#58a6ff;border-bottom:1px solid #333;padding-bottom:4px}
+                    #scan-tab .flag-label{font-size:11px;padding:2px 8px;border-radius:10px;background:#3a2a00;color:#d29922;border:1px solid #d29922;margin-left:8px}
+                    #scan-tab .flag-label.on{background:#0a3a1a;color:#3fb950;border-color:#3fb950}
+                    #scan-tab .scan-toggle{margin-left:auto;display:flex;align-items:center;gap:8px;font-size:12px}
+                    #scan-tab .switch{position:relative;display:inline-block;width:42px;height:22px}
+                    #scan-tab .switch input{opacity:0;width:0;height:0}
+                    #scan-tab .slider{position:absolute;cursor:pointer;top:0;left:0;right:0;bottom:0;background:#444;border-radius:22px;transition:.2s}
+                    #scan-tab .slider:before{position:absolute;content:"";height:16px;width:16px;left:3px;bottom:3px;background:#e6e6e6;border-radius:50%;transition:.2s}
+                    #scan-tab .switch input:checked + .slider{background:#3fb950}
+                    #scan-tab .switch input:checked + .slider:before{transform:translateX(20px)}
+                </style>
                 <div class="section-panel">
-                    <div class="section-header"><span>Scan Matches</span>
-                        <select onchange="setFilter('scan',this.value)" class="filter-select">
-                            <option value="all">All</option>
-                            <option value="index">Index</option>
-                            <option value="bear_index">Bear Index</option>
-                            <option value="nifty50">Nifty 50</option>
-                            <option value="bear_nifty50">Bear Nifty50</option>
-                        </select>
+                    <div class="section-header"><span>Live Scanner &amp; Positions (Nifty 50)</span>
+                        <span class="scan-toggle">
+                            <span id="nifty50-live-label" class="flag-label">SCAN-ONLY</span>
+                            <label class="switch" title="ON = place real orders. OFF = scan-only (display, no orders)">
+                                <input type="checkbox" id="nifty50-live-toggle" onchange="setLiveExec('nifty50', this.checked)">
+                                <span class="slider"></span>
+                            </label>
+                        </span>
                     </div>
-                    <div id="scan-body"><p class="empty-state">No scan matches yet</p></div>
+                    <div class="scan-subhead">New Scan Results</div>
+                    <div id="scan-staged-body"><p class="empty-state">No scan matches yet</p></div>
+                    <div class="scan-subhead">Active Positions (carried forward)</div>
+                    <div id="scan-active-body"><p class="empty-state">No active positions</p></div>
                 </div>
             </div>
             <div id="best-trades-tab" class="tab-content">
@@ -1751,7 +1810,9 @@ def api_status():
             "stats": cached_data["stats"],
             "config": cfg,
             "pending_trades": cached_data.get("pending_trades", []),
-            "backtest_results": cached_data.get("backtest_results", {})
+            "backtest_results": cached_data.get("backtest_results", {}),
+            "scan_display_data": cached_data.get("scan_display_data", {}),
+            "live_execution": cached_data.get("live_execution", {"nifty50": False})
         })
 
 @app.route("/api/token/check")
@@ -1794,6 +1855,23 @@ def api_scanner_config():
     except Exception:
         cfg = {"disable_nopa": False}
     return jsonify(cfg)
+
+@app.route("/api/live-execution/nifty50", methods=["GET", "POST"])
+def api_live_execution_nifty50():
+    flag = os.path.join("input", "nifty50_live.flag")
+    if request.method == "POST":
+        data = request.get_json(force=True, silent=True) or {}
+        enabled = bool(data.get("enabled", False))
+        try:
+            if enabled:
+                os.makedirs("input", exist_ok=True)
+                open(flag, "w").close()
+            elif os.path.exists(flag):
+                os.remove(flag)
+        except Exception as e:
+            return jsonify({"ok": False, "error": str(e)})
+        return jsonify({"ok": True, "enabled": enabled})
+    return jsonify({"enabled": os.path.exists(flag)})
 
 @app.route("/api/config/<prog_id>", methods=["POST"])
 def api_save_config(prog_id):

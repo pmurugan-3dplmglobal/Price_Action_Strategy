@@ -4,6 +4,7 @@ input/kite_access_token.txt
 
 # Output data
 output/
+logs/
 
 # Python cache
 __pycache__/

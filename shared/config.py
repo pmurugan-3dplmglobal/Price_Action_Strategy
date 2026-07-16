@@ -21,6 +21,13 @@ TIMEFRAME_FALLBACK = "3minute"
 
 STRIKE_RANGE = 1
 
+# Minimum candles of history required to the LEFT of an anchor for the NoPA
+# (No Prior Price Action) left-side filter to be considered valid. Anchors
+# sitting in the first NOPA_MIN_LEFT_CANDLES of the fetched window are rejected
+# (cannot confirm absence of prior PA). Bull: no left candle below A's low.
+# Bear: no left candle above A's high.
+NOPA_MIN_LEFT_CANDLES = 100
+
 API_KEY = _config.get("api_key", "")
 API_SECRET = _config.get("api_secret", "")
 TOKEN_FILE = "input/kite_access_token.txt"
@@ -70,6 +77,10 @@ DAILY_LOOKBACK = DAILY_CONFIG.get("lookback_days", 500)
 
 VALID_TIMEFRAMES = {"minute", "3minute", "5minute", "10minute", "15minute", "30minute", "60minute", "4hour", "day"}
 
+# Premium-level SL/target factors (multipliers on entry premium for underlying-scanning)
+# Target multipliers (legacy — will be replaced by delta-mapped negation targets)
+
+
 SCAN_INTERVAL_SECONDS = 15
 
 INDEX_REGISTRY = {
@@ -78,53 +89,54 @@ INDEX_REGISTRY = {
 }
 
 STOCK_REGISTRY = {
-    "ADANIENT": {"token": 257801, "lot_size": 1700, "strike_step": 50},
-    "ADANIPORTS": {"token": 1510401, "lot_size": 1250, "strike_step": 20},
-    "APOLLOHOSP": {"token": 1723649, "lot_size": 300, "strike_step": 50},
+    "ADANIENT": {"token": 6401, "lot_size": 1700, "strike_step": 50},
+    "ADANIPORTS": {"token": 3861249, "lot_size": 1250, "strike_step": 20},
+    "APOLLOHOSP": {"token": 40193, "lot_size": 300, "strike_step": 50},
     "ASIANPAINT": {"token": 60417, "lot_size": 300, "strike_step": 50},
     "AXISBANK": {"token": 1510401, "lot_size": 625, "strike_step": 10},
-    "BAJAJ-AUTO": {"token": 2097153, "lot_size": 125, "strike_step": 100},
-    "BAJFINANCE": {"token": 1667585, "lot_size": 125, "strike_step": 100},
-    "BAJAJFINSV": {"token": 4268545, "lot_size": 500, "strike_step": 20},
+    "BAJAJ-AUTO": {"token": 4267265, "lot_size": 125, "strike_step": 100},
     "BAJFINANCE": {"token": 81153, "lot_size": 125, "strike_step": 100},
-    "BEL": {"token": 54017, "lot_size": 1000, "strike_step": 5},
+    "BAJAJFINSV": {"token": 4268801, "lot_size": 500, "strike_step": 20},
+    "BEL": {"token": 98049, "lot_size": 1000, "strike_step": 5},
     "BHARTIARTL": {"token": 2714625, "lot_size": 950, "strike_step": 20},
     "CIPLA": {"token": 177665, "lot_size": 650, "strike_step": 20},
     "COALINDIA": {"token": 5215745, "lot_size": 1250, "strike_step": 10},
     "DRREDDY": {"token": 225537, "lot_size": 125, "strike_step": 100},
     "EICHERMOT": {"token": 232961, "lot_size": 175, "strike_step": 50},
+    "ETERNAL": {"token": 1304833, "lot_size": 2425, "strike_step": 10},
     "GRASIM": {"token": 315393, "lot_size": 400, "strike_step": 20},
-    "HCLTECH": {"token": 1837313, "lot_size": 700, "strike_step": 20},
+    "HCLTECH": {"token": 1850625, "lot_size": 700, "strike_step": 20},
     "HDFCBANK": {"token": 341249, "lot_size": 550, "strike_step": 10},
     "HDFCLIFE": {"token": 119553, "lot_size": 1100, "strike_step": 10},
-    "HEROMOTOCO": {"token": 345089, "lot_size": 300, "strike_step": 50},
-    "HINDALCO": {"token": 348417, "lot_size": 1400, "strike_step": 10},
-    "HINDUNILVR": {"token": 3404801, "lot_size": 300, "strike_step": 20},
+    "HINDALCO": {"token": 348929, "lot_size": 1400, "strike_step": 10},
+    "HINDUNILVR": {"token": 356865, "lot_size": 300, "strike_step": 20},
     "ICICIBANK": {"token": 1270529, "lot_size": 700, "strike_step": 10},
     "INDIGO": {"token": 2865921, "lot_size": 300, "strike_step": 50},
     "INFY": {"token": 408065, "lot_size": 400, "strike_step": 20},
     "ITC": {"token": 424961, "lot_size": 1600, "strike_step": 5},
-    "JIOFIN": {"token": 21806081, "lot_size": 2000, "strike_step": 5},
-    "JSWSTEEL": {"token": 3001857, "lot_size": 675, "strike_step": 10},
+    "JIOFIN": {"token": 4644609, "lot_size": 2000, "strike_step": 5},
+    "JSWSTEEL": {"token": 3001089, "lot_size": 675, "strike_step": 10},
     "KOTAKBANK": {"token": 492033, "lot_size": 400, "strike_step": 20},
     "LT": {"token": 2939649, "lot_size": 300, "strike_step": 50},
     "M&M": {"token": 519937, "lot_size": 350, "strike_step": 20},
-    "MARUTI": {"token": 2800641, "lot_size": 50, "strike_step": 100},
-    "NESTLEIND": {"token": 4543233, "lot_size": 400, "strike_step": 20},
+    "MARUTI": {"token": 2815745, "lot_size": 50, "strike_step": 100},
+    "MAXHEALTH": {"token": 5728513, "lot_size": 525, "strike_step": 20},
+    "NESTLEIND": {"token": 4598529, "lot_size": 400, "strike_step": 20},
     "NTPC": {"token": 2977281, "lot_size": 3000, "strike_step": 5},
     "ONGC": {"token": 633601, "lot_size": 3850, "strike_step": 5},
     "POWERGRID": {"token": 3834113, "lot_size": 3600, "strike_step": 5},
     "RELIANCE": {"token": 738561, "lot_size": 250, "strike_step": 20},
-    "SBILIFE": {"token": 5633, "lot_size": 750, "strike_step": 20},
-    "SBIN": {"token": 7795201, "lot_size": 1500, "strike_step": 10},
-    "SHRIRAMFIN": {"token": 3184129, "lot_size": 300, "strike_step": 20},
+    "SBILIFE": {"token": 5582849, "lot_size": 750, "strike_step": 20},
+    "SBIN": {"token": 779521, "lot_size": 1500, "strike_step": 10},
+    "SHRIRAMFIN": {"token": 1102337, "lot_size": 300, "strike_step": 20},
     "SUNPHARMA": {"token": 857857, "lot_size": 700, "strike_step": 20},
-    "TATACONSUM": {"token": 3465729, "lot_size": 550, "strike_step": 20},
-    "TATASTEEL": {"token": 897537, "lot_size": 5500, "strike_step": 2},
+    "TATACONSUM": {"token": 878593, "lot_size": 550, "strike_step": 20},
+    "TATASTEEL": {"token": 895745, "lot_size": 5500, "strike_step": 2},
     "TCS": {"token": 2953217, "lot_size": 175, "strike_step": 50},
-    "TECHM": {"token": 3418369, "lot_size": 600, "strike_step": 20},
-    "TITAN": {"token": 895745, "lot_size": 375, "strike_step": 50},
-    "TRENT": {"token": 5064961, "lot_size": 150, "strike_step": 100},
+    "TECHM": {"token": 3465729, "lot_size": 600, "strike_step": 20},
+    "TITAN": {"token": 897537, "lot_size": 375, "strike_step": 50},
+    "TMPV": {"token": 884737, "lot_size": 1600, "strike_step": 10},
+    "TRENT": {"token": 502785, "lot_size": 150, "strike_step": 100},
     "ULTRACEMCO": {"token": 2952193, "lot_size": 100, "strike_step": 100},
     "WIPRO": {"token": 969473, "lot_size": 1500, "strike_step": 5},
 }

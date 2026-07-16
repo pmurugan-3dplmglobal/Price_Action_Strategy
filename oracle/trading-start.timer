@@ -1,0 +1,11 @@
+[Unit]
+Description=Start Trading Control Center at market open (9:00 AM IST)
+
+[Timer]
+# 9:00 AM IST = 03:30 UTC (VM should be on Asia/Kolkata, so use local 9:00)
+OnCalendar=*-*-* 09:00:00
+Persistent=false
+Unit=trading-dashboard.service
+
+[Install]
+WantedBy=timers.target

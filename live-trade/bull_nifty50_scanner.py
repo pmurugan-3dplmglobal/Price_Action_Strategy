@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import json
 import logging
@@ -6,12 +7,9 @@ import time
 import threading
 import atexit
 import signal
-from datetime import datetime as dt, timedelta
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime as dt, timedelta, date as date_type
 
 import pandas as pd
-import numpy as np
-from kiteconnect import KiteConnect
 
 # Add project root to path for shared module imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -27,16 +25,17 @@ from shared.config import (
     JOURNAL_FILE,
 )
 from shared.kite_utils import (
-    safe_historical, fetch_instruments,
+    safe_historical, fetch_instruments, validate_stock_registry_tokens,
     get_instrument_df, load_kite_session, create_kite_client, is_market_hours,
-    init_registries
+    init_registries, is_auth_error, reload_kite_client
 )
 from shared.patterns import (
     A_CACHE, _a_cache_key, detect_and_cache_a, find_bcd_forward,
     find_profit_targets_negation, calculate_rr, _trade_rr
 )
 from shared.option_utils import (
-    resolve_option_strikes, resolve_option_contract, sync_instruments as sync_opt_instruments
+    resolve_option_strikes, resolve_option_contract, approximate_delta, get_expiry_date,
+    reresolve_token
 )
 from shared.journal import log_to_journal
 from shared.trade_db import (
@@ -52,6 +51,7 @@ from shared.trade_db import (
     is_pattern_executed,
     clear_executed_patterns,
     record_executed_pattern,
+    unrecord_executed_pattern,
 )
 from shared.pid_util import check_pid_file
 
@@ -69,10 +69,22 @@ ENGINE_TYPE = "nifty50"
 PATTERN_TYPE = "bull"
 OPTION_TYPE = "CE"
 
+# Live-execution flag: when present the engine places real API orders.
+# When absent (default) the engine runs in scan-only mode: it scans and logs
+# staged trades with a "READY TO EXECUTE" note but does NOT place orders.
+LIVE_EXEC_FLAG = os.path.join("input", "nifty50_live.flag")
+# Shared display data file consumed by the dashboard scan tab.
+SCAN_DISPLAY_FILE = os.path.join("output", "monitor", "scan_display_data.json")
+
 ACTIVE_POSITIONS = {}
-position_lock = threading.Lock()
+position_lock = threading.RLock()
 STATE_FILE = "output/monitor/bull_nifty50_state.json"
 _NOPA_DISABLED = False
+# Per-day in-memory set of (symbol|pattern|strike) already logged as
+# "READY TO EXECUTE" in scan-only mode. Used only to avoid duplicate log
+# lines; the persistent executed-pattern registry (G) is the source of truth
+# for suppressing re-staging across cycles/restarts.
+_scanonly_logged = set()
 
 def _refresh_nopa_config():
     global _NOPA_DISABLED
@@ -85,6 +97,10 @@ def _refresh_nopa_config():
 def _load_config():
     with open(CFG_FILE) as f:
         return json.load(f)
+
+def live_execution_enabled():
+    """True only when the live-execution flag file exists."""
+    return os.path.exists(LIVE_EXEC_FLAG)
 
 def save_state():
     with position_lock:
@@ -102,6 +118,22 @@ def load_state():
             with open(STATE_FILE, "r", encoding="utf-8") as f:
                 loaded = json.load(f)
             if isinstance(loaded, dict):
+                # Repair or drop state positions whose token was lost/stale (0/None)
+                for s, p in list(loaded.items()):
+                    if not p.get("token"):
+                        try:
+                            tk, sy = reresolve_token(s, p.get("entry_spot", 0),
+                                                  p.get("side", OPTION_TYPE), ENGINE_TYPE)
+                            if tk:
+                                p["token"] = tk
+                                if sy:
+                                    p["contract"] = sy
+                                logging.info(f"Repaired token for {s}: {tk}")
+                            else:
+                                loaded.pop(s, None)
+                                logging.warning(f"Dropped unrecoverable state position: {s}")
+                        except Exception:
+                            loaded.pop(s, None)
                 ACTIVE_POSITIONS.update(loaded)
             logging.info(f"Recovered {len(ACTIVE_POSITIONS)} positions from state file")
         except Exception:
@@ -110,6 +142,9 @@ def load_state():
     for t in db_trades:
         sym = t.get("symbol", "")
         if not sym or sym in ACTIVE_POSITIONS:
+            continue
+        # Skip phantom db trades that were never given a valid token (not real orders)
+        if not t.get("token"):
             continue
         pos = {
             "contract": t.get("contract", ""),
@@ -134,6 +169,152 @@ def load_state():
         save_state()
     logging.info(f"Total active positions loaded: {len(ACTIVE_POSITIONS)}")
 
+def _derive_sl_targets_for_symbol(kite, symbol, entry_premium):
+    """Re-derive SL/T1/T2/T3 for a symbol using set-02's OWN detection logic
+    (anchor on underlying -> BCD -> premium targets via delta). Mirrors the
+    computation in run_scan_cycle. Returns dict or None."""
+    try:
+        config = STOCK_REGISTRY.get(symbol)
+        if not config:
+            return None
+        ref_now = dt.now()
+        limits = {"minute": 60, "3minute": 100, "5minute": 100, "10minute": 100, "15minute": 200, "30minute": 200, "60minute": 400, "4hour": 600, "day": 2000}
+        max_days_entry = limits.get(NIFTY50_TF_ENTRY, 180)
+        max_days_anchor = limits.get(NIFTY50_TF_ANCHOR, 180)
+        from_entry = (ref_now - timedelta(days=min(LOOKBACK_DAYS, max_days_entry))).strftime("%Y-%m-%d")
+        to_entry = ref_now.strftime("%Y-%m-%d")
+        from_anchor = (ref_now - timedelta(days=min(LOOKBACK_DAYS, max_days_anchor))).strftime("%Y-%m-%d")
+        to_anchor = ref_now.strftime("%Y-%m-%d")
+        df_spot_entry = pd.DataFrame(safe_historical(kite, config["token"], from_entry, to_entry, NIFTY50_TF_ENTRY))
+        df_spot_anchor = pd.DataFrame(safe_historical(kite, config["token"], from_anchor, to_anchor, NIFTY50_TF_ANCHOR))
+        if df_spot_entry.empty or df_spot_anchor.empty:
+            return None
+        cache_key = _a_cache_key(symbol, ref_now.date())
+        if cache_key not in A_CACHE or A_CACHE[cache_key] is None:
+            if len(df_spot_anchor) >= 5:
+                detect_and_cache_a(df_spot_anchor, symbol, ref_now.date(), PATTERN_TYPE)
+        cache = A_CACHE.get(cache_key)
+        if cache is None:
+            return None
+        if cache["needs_bcd"]:
+            bcd = find_bcd_forward(df_spot_entry, cache["a_ts"], cache["benchmark"], PATTERN_TYPE)
+            if bcd is None:
+                return None
+            bcd_ts = bcd['date']
+        else:
+            bcd_ts = df_spot_entry.iloc[-1]['date']
+        current_spot = float(df_spot_entry.iloc[-1]['close'])
+        step = config["strike_step"]
+        contract = resolve_option_contract(symbol, current_spot, step, OPTION_TYPE, engine_type=ENGINE_TYPE)
+        if contract is None:
+            return None
+        df_opt = pd.DataFrame(safe_historical(kite, contract["token"], from_entry, to_entry, NIFTY50_TF_ENTRY))
+        if df_opt.empty:
+            return None
+        opt_row = df_opt[df_opt['date'] >= pd.Timestamp(bcd_ts)]
+        if opt_row.empty:
+            return None
+        entry_premium = float(opt_row.iloc[0]['close'])
+        expiry_date = get_expiry_date(symbol)
+        days_to_expiry = (expiry_date - date_type.today()).days
+        delta = approximate_delta(current_spot, contract['strike'], OPTION_TYPE, days_to_expiry)
+        sl_premium = round(entry_premium + delta * (cache['SL'] - current_spot), 2)
+        sl_premium = max(round(0.1 * entry_premium, 2), sl_premium)
+        t1 = round(entry_premium + delta * (cache['t1'] - current_spot), 2) if cache.get('t1') else None
+        t2 = round(entry_premium + delta * (cache['t2'] - current_spot), 2) if cache.get('t2') else None
+        t3 = round(entry_premium + delta * (cache['t3'] - current_spot), 2) if cache.get('t3') else None
+        if sl_premium >= entry_premium or (t1 and t1 <= entry_premium):
+            return None
+        return {
+            "current_sl": sl_premium, "t1": t1, "t2": t2, "t3": t3,
+            "pattern": cache["pattern_name"], "side": OPTION_TYPE, "strike": contract["strike"],
+        }
+    except Exception as e:
+        logging.warning(f"SL/Target derivation failed for {symbol}: {e}")
+        return None
+
+def reconcile_positions(kite):
+    """Cross-reference ACTIVE_POSITIONS against Kite open positions and the trade DB.
+    - Remove stale entries not in Kite and not ACTIVE in DB
+    - Flag carry_forward for positions opened on a prior day
+    - Derive/repair missing SL/T1/T2/T3 (from DB first, else set-02 detection)"""
+    today = dt.now().strftime("%Y-%m-%d")
+    kite_symbols = set()
+    try:
+        resp = kite.positions()
+        for plist in (resp.get("day", []) or [], resp.get("net", []) or []):
+            for p in plist:
+                qty = abs(int(p.get("net_quantity", 0) or 0))
+                if qty <= 0:
+                    continue
+                sym = p.get("tradingsymbol", "")
+                base = re.match(r"^([A-Z]+)", sym)
+                base = base.group(1) if base else sym
+                if base in STOCK_REGISTRY:
+                    kite_symbols.add(base)
+    except Exception as e:
+        logging.warning(f"Kite position fetch for reconciliation failed: {e}")
+    db_active = {t["symbol"] for t in get_active_trades(ENGINE_TYPE) if t.get("symbol") in STOCK_REGISTRY}
+    with position_lock:
+        # 1. Remove stale positions
+        stale = [s for s in ACTIVE_POSITIONS if s not in kite_symbols and s not in db_active]
+        for s in stale:
+            pos = ACTIVE_POSITIONS[s]
+            tid = pos.get("trade_id")
+            logging.info(f"[RECONCILE] Removing stale position: {s}")
+            if tid:
+                try:
+                    remove_trades([tid])
+                except Exception:
+                    pass
+            ACTIVE_POSITIONS.pop(s, None)
+        # 2. Flag carry_forward + 3. Repair missing SL/targets
+        for s, pos in list(ACTIVE_POSITIONS.items()):
+            if "entry_time" not in pos:
+                pos["entry_time"] = dt.now().strftime("%Y-%m-%d %H:%M:%S")
+            entry_date = pos["entry_time"][:10] if isinstance(pos["entry_time"], str) else today
+            pos["carry_forward"] = entry_date < today
+            if (pos.get("current_sl") or 0) == 0 or (pos.get("t1") or 0) == 0:
+                contract = pos.get("contract", "")
+                db_found = False
+                if contract:
+                    try:
+                        all_t = get_all_trades(ENGINE_TYPE)
+                        for t in all_t:
+                            if t.get("contract") == contract and t.get("current_sl") and t.get("t1"):
+                                pos["current_sl"] = t["current_sl"]
+                                pos["t1"] = t["t1"]
+                                pos["t2"] = t.get("t2")
+                                pos["t3"] = t.get("t3")
+                                pos["pattern"] = t.get("pattern", pos.get("pattern", "DB_RECOVERED"))
+                                db_found = True
+                                tid = pos.get("trade_id")
+                                if tid:
+                                    update_trade(tid, {"current_sl": pos["current_sl"], "t1": pos["t1"],
+                                                      "t2": pos["t2"], "t3": pos["t3"]})
+                                logging.info(f"[RECONCILE] Restored SL/Targets for {s} from DB: SL={pos['current_sl']} T1={pos['t1']}")
+                                break
+                    except Exception as e:
+                        logging.warning(f"[RECONCILE] DB restore failed for {s}: {e}")
+                if not db_found:
+                    result = _derive_sl_targets_for_symbol(kite, s, pos.get("entry_spot", 0))
+                    if result:
+                        pos["current_sl"] = result["current_sl"]
+                        pos["t1"] = result["t1"]
+                        pos["t2"] = result["t2"]
+                        pos["t3"] = result["t3"]
+                        pos["pattern"] = result.get("pattern", pos.get("pattern", "DERIVED"))
+                        pos["side"] = result.get("side", pos.get("side", OPTION_TYPE))
+                        pos["strike"] = result.get("strike", pos.get("strike", 0))
+                        tid = pos.get("trade_id")
+                        if tid:
+                            update_trade(tid, {"current_sl": result["current_sl"], "t1": result["t1"],
+                                              "t2": result["t2"], "t3": result["t3"], "pattern": pos["pattern"]})
+                        logging.info(f"[RECONCILE] Derived SL/Targets for {s}: SL={result['current_sl']} T1={result['t1']} T2={result['t2']} T3={result['t3']}")
+                    else:
+                        logging.info(f"[RECONCILE] No pattern match for {s}, leaving as passive tracking")
+        save_state()
+
 def close_position(kite, pos, reason="MANUAL", symbol=None):
     if not LIVE_MARKET_DEPLOYMENT:
         logging.info(f"[BACKTEST EXIT] {pos['contract']} reason={reason}")
@@ -144,6 +325,9 @@ def close_position(kite, pos, reason="MANUAL", symbol=None):
         ltp = qd.get("last_price", 0)
         bid = qd.get("depth", {}).get("buy", [{}])[0].get("price", 0)
         price = round((bid if bid > 0 else ltp) * 0.995, 1)
+        if price <= 0:
+            logging.warning(f"Skip close {pos['contract']}: invalid price {price} (ltp={ltp}); contract likely expired/illiquid")
+            return
         qty = pos["lot_size"] * pos.get("position_size", 1)
         oid = kite.place_order(
             variety=kite.VARIETY_REGULAR, tradingsymbol=pos["contract"],
@@ -175,6 +359,21 @@ def close_position(kite, pos, reason="MANUAL", symbol=None):
 def monitor_positions(kite):
     if not ACTIVE_POSITIONS:
         return
+    # Repair positions whose stored token was lost/stale so monitoring can resume
+    for sym, pos in list(ACTIVE_POSITIONS.items()):
+        if not pos.get("token"):
+            try:
+                new_tk, new_sym = reresolve_token(sym, pos.get("entry_spot", 0),
+                                              pos.get("side", OPTION_TYPE), ENGINE_TYPE)
+                if new_tk:
+                    pos["token"] = new_tk
+                    if new_sym:
+                        pos["contract"] = new_sym
+                    if pos.get("trade_id"):
+                        update_trade(pos["trade_id"], {"token": new_tk, "contract": pos["contract"]})
+                    logging.info(f"Re-resolved token for {sym}: {new_tk}")
+            except Exception as e:
+                logging.warning(f"Token re-resolution failed for {sym}: {e}")
     tokens = {sym: pos.get("token", 0) for sym, pos in list(ACTIVE_POSITIONS.items()) if pos.get("token")}
     if not tokens:
         return
@@ -184,6 +383,8 @@ def monitor_positions(kite):
         logging.warning(f"Position monitor LTP fetch failed: {e}")
         return
     for symbol, pos in list(ACTIVE_POSITIONS.items()):
+        if pos.get("status") == "PENDING":
+            continue
         token = pos.get("token", 0)
         ltp = 0
         if token and str(token) in ltps:
@@ -197,6 +398,12 @@ def monitor_positions(kite):
             continue
         entry = pos.get("entry_spot", 0)
         sl = pos.get("current_sl", 0)
+        # Safety: SL/targets must be in premium units (same as LTP). Legacy
+        # state stored spot-denominated SLs; comparing to premium LTP would
+        # fire instant false SL exits. Skip such positions.
+        if ltp > 0 and sl and sl > ltp * 20:
+            logging.warning(f"Skipping {symbol}: SL {sl} >> LTP {ltp} (unit mismatch?)")
+            continue
         t1 = pos.get("t1")
         t2 = pos.get("t2")
         t3 = pos.get("t3")
@@ -243,6 +450,158 @@ def monitor_positions(kite):
                 close_position(kite, pos, "T1_HIT", symbol)
                 continue
 
+def check_pending_orders(kite):
+    """Carry-forward: verify fill status of pending LIMIT orders and free patterns
+    when an order is cancelled/rejected so the symbol can re-enter on a later scan."""
+    pending = {s: p for s, p in list(ACTIVE_POSITIONS.items()) if p.get("status") == "PENDING"}
+    if not pending:
+        return
+    try:
+        orders = kite.orders()
+    except Exception as e:
+        logging.warning(f"Pending order check failed: {e}")
+        return
+    status_by_id = {o.get("order_id"): o for o in orders}
+    for symbol, pos in list(pending.items()):
+        oid = pos.get("order_id")
+        if not oid:
+            with position_lock:
+                ACTIVE_POSITIONS.pop(symbol, None)
+            save_state()
+            continue
+        o = status_by_id.get(oid)
+        if not o:
+            continue
+        st = (o.get("status") or "").upper()
+        if st == "COMPLETE":
+            pos["status"] = "ACTIVE"
+            avg = o.get("average_price") or pos.get("entry_spot")
+            if avg:
+                pos["entry_spot"] = round(float(avg), 2)
+            if pos.get("trade_id"):
+                update_trade(pos["trade_id"], {"status": "ACTIVE", "entry_spot": pos["entry_spot"]})
+            logging.info(f"PENDING FILLED: {symbol} order {oid} @ {pos['entry_spot']}")
+            save_state()
+        elif st in ("CANCELLED", "REJECTED", "EXPIRED"):
+            key = f"{symbol}|{pos['pattern']}|{pos.get('side')}|{pos.get('strike')}"
+            unrecord_executed_pattern(ENGINE_TYPE, key)
+            if pos.get("trade_id"):
+                update_trade(pos["trade_id"], {"status": st})
+            with position_lock:
+                ACTIVE_POSITIONS.pop(symbol, None)
+            logging.info(f"PENDING CANCELLED: {symbol} order {oid} ({st}) freed for re-entry")
+            save_state()
+
+
+def write_scan_display_data(staged):
+    """Write staged trades + active positions to the shared display file."""
+    display = {
+        "engine": ENGINE_ID,
+        "date": dt.now().strftime("%Y-%m-%d"),
+        "timestamp": dt.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "live_execution": live_execution_enabled(),
+        "staged_trades": [],
+        "active_positions": [],
+    }
+    for s in (staged or []):
+        rr = _trade_rr(s, s.get("Side", OPTION_TYPE))
+        display["staged_trades"].append({
+            "symbol": s.get("Symbol", ""),
+            "contract": s.get("OptionSymbol", ""),
+            "side": s.get("Side", OPTION_TYPE),
+            "entry": round(float(s.get("Entry", 0)), 2),
+            "sl": round(float(s.get("SL", 0)), 2),
+            "t1": s.get("T1"), "t2": s.get("T2"), "t3": s.get("T3"),
+            "pattern": s.get("Pattern", ""),
+            "rr": round(rr, 2) if rr else 0,
+            "status": "STAGED",
+        })
+    with position_lock:
+        for sym, p in list(ACTIVE_POSITIONS.items()):
+            display["active_positions"].append({
+                "symbol": p.get("contract", sym),
+                "contract": p.get("contract", ""),
+                "side": p.get("side", OPTION_TYPE),
+                "entry": round(float(p.get("entry_spot", 0)), 2),
+                "sl": round(float(p.get("current_sl", 0)), 2),
+                "t1": p.get("t1"), "t2": p.get("t2"), "t3": p.get("t3"),
+                "entry_time": p.get("entry_time", ""),
+                "exit_time": p.get("exit_time", ""),
+                "status": p.get("status", "ACTIVE"),
+                "pnl_percent": p.get("pnl_percent", ""),
+                "pattern": p.get("pattern", ""),
+            })
+    try:
+        os.makedirs(os.path.dirname(SCAN_DISPLAY_FILE), exist_ok=True)
+        with open(SCAN_DISPLAY_FILE, "w", encoding="utf-8") as f:
+            json.dump(display, f, indent=2)
+    except Exception as e:
+        logging.error(f"Display data write failed: {e}")
+
+
+def sync_kite_positions(kite):
+    """Pull open Kite positions and add NEW (manual) positions into
+    ACTIVE_POSITIONS so they get SL/Target monitoring."""
+    try:
+        resp = kite.positions()
+    except Exception as e:
+        logging.warning(f"Kite position sync failed: {e}")
+        return
+    for plist in (resp.get("day", []) or [], resp.get("net", []) or []):
+        for p in plist:
+            qty = int(p.get("net_quantity", 0) or 0)
+            if qty <= 0:
+                continue
+            sym = p.get("tradingsymbol", "")
+            if not sym:
+                continue
+            with position_lock:
+                if any(pos.get("contract") == sym for pos in ACTIVE_POSITIONS.values()):
+                    continue
+            base = re.match(r"^([A-Z]+)", sym)
+            base = base.group(1) if base else sym
+            if base not in STOCK_REGISTRY:
+                continue
+            entry = float(p.get("net_price", 0) or 0)
+            if entry <= 0:
+                continue
+            side = "PE" if "PE" in sym.upper() else "CE"
+            # Resolve strike from the contract symbol (e.g. HINDUNILVR26JUL2100CE)
+            mstrike = re.search(r"(\d+)(CE|PE)$", sym.upper())
+            strike = int(mstrike.group(1)) if mstrike else 0
+            pos = {
+                "contract": sym,
+                "token": int(p.get("instrument_token", 0) or 0),
+                "entry_spot": round(entry, 2),
+                "current_sl": round(entry * 0.5, 2),
+                "t1": round(entry * 2.0, 2),
+                "t2": round(entry * 3.0, 2),
+                "t3": round(entry * 4.0, 2),
+                "trailing_stage": 0,
+                "lot_size": abs(qty),
+                "position_size": 1,
+                "pattern": "MANUAL",
+                "timeframe": NIFTY50_TF_ENTRY,
+                "side": side,
+                "strike": strike,
+                "status": "ACTIVE",
+                "manual": True,
+                "entry_time": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "trade_id": None,
+            }
+            with position_lock:
+                ACTIVE_POSITIONS[sym] = pos
+            # Mark this holding as executed so the scan loop and carry-forward
+            # pool never re-offer a contract already open in the real account.
+            exec_key = f"{base}|*|{side}|{strike}"
+            try:
+                record_executed_pattern(ENGINE_TYPE, exec_key, {"contract": sym, "manual": True})
+            except Exception:
+                pass
+            logging.info(f"SYNCED MANUAL POSITION: {sym} qty={qty} entry={entry:.2f}")
+            save_state()
+
+
 def execute_highest_rr_trade(kite, staged):
     if not staged:
         return
@@ -255,6 +614,22 @@ def execute_highest_rr_trade(kite, staged):
     if is_pattern_executed(ENGINE_TYPE, key):
         logging.info(f"Best cycle trade {key} already executed; skipping")
         return
+    rr_best = round((best["T1"] - best["Entry"]) / (best["Entry"] - best["SL"]), 2) if best["SL"] != best["Entry"] else 0
+    # Apply the same minimum R:R gate as live mode. Sub-1.5 setups are never
+    # shown as executable in scan-only either.
+    if rr_best < 1.5:
+        logging.info(f"Skipping trade {key}: R:R={rr_best:.2f} < 1.5")
+        return
+    # Scan-only mode: do NOT place an order. Record the executed pattern so the
+    # setup is not re-staged across cycles/restarts (and carry-forward won't
+    # re-offer a contract already shown/held), then log it once per day.
+    if not live_execution_enabled():
+        record_executed_pattern(ENGINE_TYPE, key, {"executed_at": time.strftime("%Y-%m-%d %H:%M:%S"), "contract": opt_sym, "scan_only": True})
+        log_key = f"{sym}|{best['Pattern']}|{best['Strike']}"
+        if log_key not in _scanonly_logged:
+            _scanonly_logged.add(log_key)
+            logging.info(f"READY TO EXECUTE (scan-only): {opt_sym} | {best['Pattern']} | Side:{side} Strike:{best['Strike']} | Entry:{best['Entry']:.2f} SL:{best['SL']:.2f} T1:{best['T1']} T2:{best['T2']} T3:{best['T3']} RR={rr_best}")
+        return
     cfg = best["Config"]
     entry_premium = best["Entry"]
     pos_size = 1
@@ -266,14 +641,12 @@ def execute_highest_rr_trade(kite, staged):
         "t1": best["T1"], "t2": best["T2"], "t3": best["T3"],
         "trailing_stage": 0, "lot_size": cfg["lot_size"], "position_size": pos_size,
         "pattern": best["Pattern"], "timeframe": NIFTY50_TF_ENTRY,
-        "side": side, "strike": best["Strike"]
+        "side": side, "strike": best["Strike"],
+        "status": "PENDING"
     }
-    record_executed_pattern(ENGINE_TYPE, key, {"executed_at": time.strftime("%Y-%m-%d %H:%M:%S"), "contract": opt_sym})
     pos["entry_time"] = time.strftime("%Y-%m-%d %H:%M:%S")
     pos["trade_id"] = create_trade(ENGINE_TYPE, sym, {k: v for k, v in pos.items() if k != "trade_id"})
-    with position_lock:
-        ACTIVE_POSITIONS[sym] = pos
-    save_state()
+
     if LIVE_MARKET_DEPLOYMENT:
         try:
             q = kite.quote(f"{kite.EXCHANGE_NFO}:{opt_sym}")
@@ -288,9 +661,6 @@ def execute_highest_rr_trade(kite, staged):
                 log_to_journal(sym, best["Pattern"], NIFTY50_TF_ENTRY, "BUY", "FAILED",
                                f"Invalid price={price} qty={qty} ltp={ltp} ask={ask}",
                                entry=best["Entry"], sl=best["SL"], target=best["T1"])
-                with position_lock:
-                    ACTIVE_POSITIONS.pop(sym, None)
-                save_state()
                 return
             oid = kite.place_order(
                 variety=kite.VARIETY_REGULAR, tradingsymbol=opt_sym,
@@ -298,14 +668,22 @@ def execute_highest_rr_trade(kite, staged):
                 quantity=qty, order_type=kite.ORDER_TYPE_LIMIT, price=price,
                 product=kite.PRODUCT_NRML
             )
+            pos["order_id"] = oid
             logging.info(f"ORDER PLACED: {opt_sym} qty={qty} price={price} oid={oid}")
-            rr_best = round((best["Entry"] - best["T1"]) / (best["SL"] - best["Entry"]), 2) if best["SL"] != best["Entry"] else 0
+            record_executed_pattern(ENGINE_TYPE, key, {"executed_at": time.strftime("%Y-%m-%d %H:%M:%S"), "contract": opt_sym, "order_id": oid})
             log_to_journal(sym, best["Pattern"], NIFTY50_TF_ENTRY, "BUY", "SUCCESS",
                            f"Order: {oid}, Qty: {qty}, {side}@{best['Strike']}", entry=best["Entry"], sl=best["SL"], target=best["T1"], rr=rr_best)
         except Exception as e:
             log_to_journal(sym, best["Pattern"], NIFTY50_TF_ENTRY, "BUY", "FAILED", str(e),
                            entry=best["Entry"], sl=best["SL"], target=best["T1"])
             logging.error(f"Order failed for {opt_sym}: {e}")
+            return
+    else:
+        record_executed_pattern(ENGINE_TYPE, key, {"executed_at": time.strftime("%Y-%m-%d %H:%M:%S"), "contract": opt_sym})
+
+    with position_lock:
+        ACTIVE_POSITIONS[sym] = pos
+    save_state()
 
 def run_scan_cycle(kite):
     _refresh_nopa_config()
@@ -320,129 +698,127 @@ def run_scan_cycle(kite):
     to_anchor = ref_now.strftime("%Y-%m-%d")
     staged = []
     staged_keys = set()
-    strike_range = NIFTY50_STRIKE_RANGE
     scan_order = SUPER_STOCKS + [s for s in STOCK_REGISTRY if s not in SUPER_STOCKS]
-    
-    # 1. Fetch spot prices for all stocks
-    spot_prices = {}
-    with ThreadPoolExecutor(max_workers=10) as pool:
-        spot_tasks = {}
-        for symbol in scan_order:
-            config = STOCK_REGISTRY[symbol]
-            with position_lock:
-                if symbol in ACTIVE_POSITIONS:
-                    continue
-            spot_tasks[pool.submit(
-                lambda cfg=config: pd.DataFrame(safe_historical(kite, cfg["token"], from_entry, to_entry, NIFTY50_TF_ENTRY))
-            )] = symbol
-        
-        for f in as_completed(spot_tasks):
-            symbol = spot_tasks[f]
-            try:
-                df = f.result()
-                if not df.empty:
-                    spot_prices[symbol] = float(df.iloc[-1]['close'])
-            except Exception as e:
-                logging.warning(f"Spot fetch failed for {symbol}: {e}")
-    
-    # 2. For each stock, scan option contracts
+
+    # Diagnostic counters (F): why do only some symbols surface? Logged once/day.
+    diag = {"total": 0, "active_skip": 0, "fetch_fail": 0, "no_anchor": 0,
+            "no_bcd": 0, "bad_sl_tgt": 0, "low_rr": 0, "executed_skip": 0, "staged": 0}
+
     for symbol in scan_order:
-        if symbol not in spot_prices:
+        if symbol not in STOCK_REGISTRY:
             continue
         config = STOCK_REGISTRY[symbol]
-        spot = spot_prices[symbol]
-        step = config["strike_step"]
-        
-        # Resolve CE contracts around ATM
-        contracts = resolve_option_strikes(symbol, spot, step, OPTION_TYPE, strike_range, ENGINE_TYPE)
-        if not contracts:
-            logging.warning(f"No contracts resolved for {symbol} @ {spot}")
+        diag["total"] += 1
+        with position_lock:
+            if symbol in ACTIVE_POSITIONS:
+                diag["active_skip"] += 1
+                continue
+
+        token = config["token"]
+
+        try:
+            df_spot_entry = pd.DataFrame(safe_historical(kite, token, from_entry, to_entry, NIFTY50_TF_ENTRY))
+            df_spot_anchor = pd.DataFrame(safe_historical(kite, token, from_anchor, to_anchor, NIFTY50_TF_ANCHOR))
+        except Exception as e:
+            logging.warning(f"Spot data fetch failed for {symbol} (token={token}): {e}; skipping")
+            diag["fetch_fail"] += 1
             continue
-        
-        # 3. Fetch option premium data for all contracts
-        opt_data = {}
-        with ThreadPoolExecutor(max_workers=10) as pool:
-            opt_tasks = {}
-            for contract in contracts:
-                opt_tasks[pool.submit(
-                    lambda c=contract: safe_historical(kite, c["token"], from_entry, to_entry, NIFTY50_TF_ENTRY)
-                )] = ("entry", contract)
-                opt_tasks[pool.submit(
-                    lambda c=contract: safe_historical(kite, c["token"], from_anchor, to_anchor, NIFTY50_TF_ANCHOR)
-                )] = ("anchor", contract)
-            
-            for f in as_completed(opt_tasks):
-                tf_type, contract = opt_tasks[f]
-                try:
-                    df = pd.DataFrame(f.result())
-                    if df.empty:
-                        continue
-                    tsym = contract["tradingsymbol"]
-                    if tsym not in opt_data:
-                        opt_data[tsym] = {}
-                    opt_data[tsym][tf_type] = df
-                except Exception as e:
-                    logging.warning(f"Option data failed for {contract['tradingsymbol']}: {e}")
-        
-        # 4. Run pattern detection on each contract
-        for contract in contracts:
-            tsym = contract["tradingsymbol"]
-            if tsym not in opt_data or "entry" not in opt_data[tsym] or "anchor" not in opt_data[tsym]:
+        if df_spot_entry.empty or df_spot_anchor.empty:
+            diag["fetch_fail"] += 1
+            continue
+
+        cache_key = _a_cache_key(symbol, target_date or dt.now().date())
+        if cache_key not in A_CACHE or A_CACHE[cache_key] is None:
+            if len(df_spot_anchor) >= 5:
+                detect_and_cache_a(df_spot_anchor, symbol, target_date or dt.now().date(), PATTERN_TYPE)
+
+        cache = A_CACHE.get(cache_key)
+        if cache is None:
+            diag["no_anchor"] += 1
+            continue
+
+        if cache["needs_bcd"]:
+            bcd = find_bcd_forward(df_spot_entry, cache["a_ts"], cache["benchmark"], PATTERN_TYPE)
+            if bcd is None:
+                diag["no_bcd"] += 1
                 continue
-            
-            df_opt_entry = opt_data[tsym]["entry"]
-            df_opt_anchor = opt_data[tsym]["anchor"]
-            
-            # Phase A: Detect/cache A-pattern on option anchor TF
-            cache_key = _a_cache_key(tsym, target_date or BACKTEST_DATE or dt.now().date())
-            if cache_key not in A_CACHE or A_CACHE[cache_key] is None:
-                if len(df_opt_anchor) >= 5:
-                    detect_and_cache_a(df_opt_anchor, tsym, target_date or BACKTEST_DATE or dt.now().date(), PATTERN_TYPE)
-            
-            if cache_key not in A_CACHE or A_CACHE[cache_key] is None:
-                continue
-            
-            cache = A_CACHE[cache_key]
-            
-            # Phase B: Check BCD on option entry TF
-            if cache["needs_bcd"]:
-                bcd = find_bcd_forward(df_opt_entry, cache["a_ts"], cache["benchmark"], PATTERN_TYPE)
-                if bcd is None:
-                    continue
-                entry_price = bcd['close']
-            else:
-                entry_price = float(df_opt_entry.iloc[-1]['close'])
-            
-            # Validate targets in premium space
-            t1, t2, t3 = cache.get("t1"), cache.get("t2"), cache.get("t3")
-            if t1 and t1 <= entry_price: t1 = None
-            if t2 and t2 <= (t1 or entry_price): t2 = None
-            if t3 and t3 <= (t2 or t1 or entry_price): t3 = None
-            
-            # Stage trade with this option contract
-            side = OPTION_TYPE
-            key = f"{symbol}|{cache['pattern_name']}|{side}|{contract['strike']}"
-            if is_pattern_executed(ENGINE_TYPE, key) or key in staged_keys:
-                continue
-            
-            trade_data = {
-                "Symbol": symbol,
-                "OptionSymbol": tsym,
-                "OptionToken": contract["token"],
-                "Strike": contract["strike"],
-                "Side": side,
-                "Entry": entry_price,
-                "SL": cache["SL"],
-                "T1": t1, "T2": t2, "T3": t3,
-                "RR": "",
-                "Pattern": cache["pattern_name"],
-                "Config": config
-            }
-            staged.append(trade_data)
-            staged_keys.add(key)
-            stage_cycle_trade(ENGINE_TYPE, trade_data)
-            logging.info(f"OPTION MATCH staged: {symbol} {tsym} | {cache['pattern_name']} | Entry: {entry_price:.2f} | SL: {cache['SL']:.2f} | T3: {t3}")
-    
+            bcd_ts = bcd['date']
+        else:
+            bcd_ts = df_spot_entry.iloc[-1]['date']
+
+        current_spot = float(df_spot_entry.iloc[-1]['close'])
+        step = config["strike_step"]
+        contract = resolve_option_contract(symbol, current_spot, step, OPTION_TYPE, engine_type=ENGINE_TYPE)
+        if contract is None:
+            diag["no_bcd"] += 1
+            continue
+
+        try:
+            df_opt = pd.DataFrame(safe_historical(kite, contract["token"], from_entry, to_entry, NIFTY50_TF_ENTRY))
+        except Exception as e:
+            logging.warning(f"Option data fetch failed for {symbol} {contract.get('tradingsymbol')}: {e}; skipping")
+            continue
+        if df_opt.empty:
+            continue
+
+        bcd_dt = pd.Timestamp(bcd_ts)
+        opt_row = df_opt[df_opt['date'] >= bcd_dt]
+        if opt_row.empty:
+            continue
+        entry_premium = float(opt_row.iloc[0]['close'])
+
+        expiry_date = get_expiry_date(symbol)
+        days_to_expiry = (expiry_date - date_type.today()).days
+        delta = approximate_delta(current_spot, contract['strike'], OPTION_TYPE, days_to_expiry)
+
+        sl_premium = round(entry_premium + delta * (cache['SL'] - current_spot), 2)
+        sl_premium = max(round(0.1 * entry_premium, 2), sl_premium)
+        t1 = round(entry_premium + delta * (cache['t1'] - current_spot), 2) if cache.get('t1') else None
+        t2 = round(entry_premium + delta * (cache['t2'] - current_spot), 2) if cache.get('t2') else None
+        t3 = round(entry_premium + delta * (cache['t3'] - current_spot), 2) if cache.get('t3') else None
+
+        if sl_premium >= entry_premium or (t1 and t1 <= entry_premium):
+            diag["bad_sl_tgt"] += 1
+            continue
+
+        rr = round((t1 - entry_premium) / (entry_premium - sl_premium), 2) if sl_premium != entry_premium and t1 else 0
+        if rr < 1.5:
+            diag["low_rr"] += 1
+            continue
+
+        key = f"{symbol}|{cache['pattern_name']}|{OPTION_TYPE}|{contract['strike']}"
+        if is_pattern_executed(ENGINE_TYPE, key) or key in staged_keys:
+            diag["executed_skip"] += 1
+            continue
+
+        trade_data = {
+            "Symbol": symbol,
+            "OptionSymbol": contract["tradingsymbol"],
+            "OptionToken": contract["token"],
+            "Strike": contract["strike"],
+            "Side": OPTION_TYPE,
+            "Entry": entry_premium,
+            "SL": sl_premium,
+            "T1": t1, "T2": t2, "T3": t3,
+            "Pattern": cache["pattern_name"],
+            "Config": config
+        }
+        staged.append(trade_data)
+        staged_keys.add(key)
+        stage_cycle_trade(ENGINE_TYPE, trade_data)
+        logging.info(f"OPTION MATCH staged: {symbol} {contract['tradingsymbol']} | {cache['pattern_name']} | Entry: {entry_premium:.2f} | SL: {sl_premium:.2f} | T1: {t1} | T2: {t2} | T3: {t3}")
+
+    # Diagnostic (F): log the per-symbol pass/fail breakdown once per day so we
+    # can confirm why only a few symbols surface. Safe to ignore in normal runs.
+    global _scanonly_logged
+    _diag_last_date = getattr(run_scan_cycle, "_diag_last_date", None)
+    today_d = dt.now().date()
+    if _diag_last_date != today_d:
+        run_scan_cycle._diag_last_date = today_d
+        diag["staged"] = len(staged)
+        logging.info(f"SCAN DIAGNOSTIC {today_d}: " + " | ".join(f"{k}={v}" for k, v in diag.items()) +
+                     f" | scan_order={len(scan_order)}")
+
     # Carry-forward: re-enter previous day's valid trades with RR >= 1.5
     cf_pool = load_carry_forward()
     for cf in cf_pool:
@@ -450,6 +826,11 @@ def run_scan_cycle(kite):
         if sym in ACTIVE_POSITIONS or sym not in STOCK_REGISTRY:
             continue
         side = cf.get("Side", "CE")
+        # Never re-offer a contract already open in the real account. The
+        # wildcard strike key (recorded by sync_kite_positions) blocks any
+        # strike of this symbol/side, regardless of the CF pattern name.
+        if is_pattern_executed(ENGINE_TYPE, f"{sym}|*|{side}|0"):
+            continue
         try:
             tk = STOCK_REGISTRY[sym]["token"]
             cf_lookback = limits.get(NIFTY50_TF_ENTRY, 60)
@@ -470,7 +851,7 @@ def run_scan_cycle(kite):
             step = STOCK_REGISTRY[sym].get("strike_step", 50)
             strike = int(round(cp / step) * step)
             key = f"{sym}|{cf['Pattern']}|{side}|{strike}"
-            if key in staged_keys or trade_db.is_pattern_executed(ENGINE_TYPE, key):
+            if key in staged_keys or is_pattern_executed(ENGINE_TYPE, key):
                 continue
             trade_data = {
                 "Symbol": sym, "Config": STOCK_REGISTRY[sym],
@@ -485,7 +866,7 @@ def run_scan_cycle(kite):
             logging.info(f"RE-ENTRY staged (carry-forward): {sym} | {cf['Pattern']} | RR={rr:.2f}")
         except Exception as e:
             logging.warning(f"CF check {sym}: {e}")
-    
+
     # Save trades with RR >= 1.5 for future re-entry
     cf_save = []
     for t in staged:
@@ -494,7 +875,7 @@ def run_scan_cycle(kite):
         if rr >= 1.5:
             cf_save.append({k: v for k, v in t.items() if k != "Config"})
     save_carry_forward(cf_save)
-    
+
     return staged
 
 def run_live(kite):
@@ -502,6 +883,8 @@ def run_live(kite):
     load_state()
     last_scan = 0
     last_monitor = 0
+    cycle = 0
+    last_token_reload = 0
     while True:
         if not is_market_hours():
             time.sleep(30)
@@ -513,12 +896,28 @@ def run_live(kite):
                 if staged:
                     execute_highest_rr_trade(kite, staged)
                 clear_cycle_trades(ENGINE_TYPE)
+                write_scan_display_data(staged)
             except Exception as e:
+                if is_auth_error(e) and now - last_token_reload > 60:
+                    logging.warning("Auth/token error - reloading Kite session from token file")
+                    try:
+                        kite = reload_kite_client(kite)
+                        last_token_reload = now
+                    except Exception as re:
+                        logging.error(f"Token reload failed: {re}")
                 logging.error(f"Scan cycle error: {e}")
             last_scan = now
+            cycle += 1
+            if cycle % 5 == 0:
+                try:
+                    sync_kite_positions(kite)
+                    reconcile_positions(kite)
+                except Exception as e:
+                    logging.error(f"Kite sync/reconcile error: {e}")
         if now - last_monitor >= 3:
             try:
                 monitor_positions(kite)
+                check_pending_orders(kite)
             except Exception as e:
                 logging.error(f"Position monitor error: {e}")
             last_monitor = now
@@ -606,6 +1005,7 @@ def main():
     
     kite = create_kite_client()
     fetch_instruments(kite)
+    validate_stock_registry_tokens(kite)
     
     if args.anchor_only:
         run_anchor_scan(kite)

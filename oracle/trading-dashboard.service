@@ -1,0 +1,26 @@
+[Unit]
+Description=Trading Control Center Dashboard (Flask)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/Prod_code_02
+Environment=PYTHONUNBUFFERED=1
+ExecStartPre=/bin/bash /home/ubuntu/Prod_code_02/oracle/check_token.sh
+ExecStart=/home/ubuntu/Prod_code_02/venv/bin/python app.py
+Restart=on-failure
+RestartSec=10
+# Don't auto-restart forever; we want it bounded to market hours via timers.
+RuntimeMaxSec=8h
+
+# Hard stop at market close is handled by trading-stop.timer; this is a safety cap.
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+StandardOutput=append:/home/ubuntu/Prod_code_02/output/dashboard.log
+StandardError=append:/home/ubuntu/Prod_code_02/output/dashboard.log
+
+[Install]
+WantedBy=multi-user.target

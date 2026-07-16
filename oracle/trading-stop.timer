@@ -1,0 +1,11 @@
+[Unit]
+Description=Stop Trading Control Center at market close (3:30 PM IST)
+
+[Timer]
+# 3:30 PM IST = 10:00 UTC (VM should be on Asia/Kolkata, so use local 15:30)
+OnCalendar=*-*-* 15:30:00
+Persistent=false
+Unit=trading-stop.service
+
+[Install]
+WantedBy=timers.target
