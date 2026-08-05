@@ -1,5 +1,6 @@
 __pycache__/
 *.pyc
+*.pyo
 logs/
 output/
 input/*.txt
@@ -7,6 +8,18 @@ input/kite_access_token.txt
 .DS_Store
 *.log
 scratch/
+
+# Environment
+.env
+.venv
+venv/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
 
 # Image formats
 *.png
