@@ -52,7 +52,13 @@ source venv/bin/activate
 pip install --upgrade pip
 pip install kiteconnect pandas numpy flask openpyxl requests schedule yfinance
 
-# 4. Create Systemd Service: Options Dashboard (Port 5050)
+# 4. Fix SELinux Context for Oracle Linux / RHEL Systemd Execution
+if command -v getenforce &> /dev/null && [ "$(getenforce)" != "Disabled" ]; then
+    echo "🛡️ Setting SELinux permissions for virtual environment..."
+    sudo chcon -R -t bin_t "$APP_DIR/venv/bin/" || true
+fi
+
+# 5. Create Systemd Service: Options Dashboard (Port 5050)
 echo "⚙️ Creating Systemd Service: trading-options.service (Port 5050)..."
 sudo bash -c "cat <<EOF > /etc/systemd/system/trading-options.service
 [Unit]
@@ -62,7 +68,7 @@ After=network.target
 [Service]
 User=$USER
 WorkingDirectory=$APP_DIR/Trade_Option
-ExecStart=$APP_DIR/venv/bin/python app_option_Trade.py
+ExecStart=$APP_DIR/venv/bin/python $APP_DIR/Trade_Option/app_option_Trade.py
 Restart=always
 RestartSec=5
 Environment=PYTHONUNBUFFERED=1
@@ -71,7 +77,7 @@ Environment=PYTHONUNBUFFERED=1
 WantedBy=multi-user.target
 EOF"
 
-# 5. Create Systemd Service: Stock Dashboard (Port 5051)
+# 6. Create Systemd Service: Stock Dashboard (Port 5051)
 echo "⚙️ Creating Systemd Service: trading-stock.service (Port 5051)..."
 sudo bash -c "cat <<EOF > /etc/systemd/system/trading-stock.service
 [Unit]
@@ -81,7 +87,7 @@ After=network.target
 [Service]
 User=$USER
 WorkingDirectory=$APP_DIR/Trade_Stock
-ExecStart=$APP_DIR/venv/bin/python app_Sock_Trade.py
+ExecStart=$APP_DIR/venv/bin/python $APP_DIR/Trade_Stock/app_Sock_Trade.py
 Restart=always
 RestartSec=5
 Environment=PYTHONUNBUFFERED=1
@@ -90,7 +96,7 @@ Environment=PYTHONUNBUFFERED=1
 WantedBy=multi-user.target
 EOF"
 
-# 6. Create Systemd Service: Export Scheduler Daemon
+# 7. Create Systemd Service: Export Scheduler Daemon
 echo "⚙️ Creating Systemd Service: trading-export.service..."
 sudo bash -c "cat <<EOF > /etc/systemd/system/trading-export.service
 [Unit]
@@ -100,7 +106,7 @@ After=network.target
 [Service]
 User=$USER
 WorkingDirectory=$APP_DIR
-ExecStart=$APP_DIR/venv/bin/python Trade_Option/run_export_scheduler_daemon.py
+ExecStart=$APP_DIR/venv/bin/python $APP_DIR/Trade_Option/run_export_scheduler_daemon.py
 Restart=always
 RestartSec=10
 Environment=PYTHONUNBUFFERED=1
@@ -109,7 +115,7 @@ Environment=PYTHONUNBUFFERED=1
 WantedBy=multi-user.target
 EOF"
 
-# 7. Enable and Start Services
+# 8. Enable and Start Services
 echo "🔄 Reloading systemd daemon & starting services..."
 sudo systemctl daemon-reload
 sudo systemctl enable trading-options trading-stock trading-export
