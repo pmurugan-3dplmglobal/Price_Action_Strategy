@@ -2,14 +2,15 @@
 input/program_config.json
 input/kite_access_token.txt
 
-# Output data
-output/
-logs/
-
-# Python cache
+# Python cache & logs
 __pycache__/
 *.pyc
 *.pyo
+logs/
+output/
+input/*.txt
+.DS_Store
+*.log
 
 # Environment
 .env
@@ -22,4 +23,3 @@ venv/
 
 # OS
 Thumbs.db
-.DS_Store

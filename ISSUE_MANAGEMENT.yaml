@@ -1,0 +1,334 @@
+# Price Action Trading Strategy — Issue Management & Resolution Journal
+# Master Diagnostic & Maintenance Log (Single Source of Truth for Bugs & Solutions)
+
+meta:
+  system: Price Action Unified Strategy System
+  version: Prod Code v02
+  last_updated: "2026-08-05"
+  purpose: Document operational failures, root causes, regression fixes, and system enhancements.
+
+issues:
+  - id: ISSUE-001
+    title: Option Engine Background Thread Pause / Stalling
+    severity: HIGH
+    category: Concurrency & Thread Locking
+    date_reported: "2026-07-28"
+    symptom: |
+      Stock Options Trade Engine logs paused after "TF: 60minute | Interval: 30s | Risk: 10.0%" with no scan updates for 15+ minutes.
+    root_cause: |
+      Background thread lock contention on position_lock in common/trading_core.py.
+      Thread t1 (position_monitor_loop) called monitor_active_positions, which held position_lock while making HTTP network API calls (fetch_and_resample_candles and kite.quote).
+      Thread t2 (main_scan_loop) attempted to acquire position_lock during run_scan_cycle and blocked indefinitely waiting for network I/O to release the lock.
+    affected_files:
+      - common/trading_core.py
+    resolution: |
+      Narrowed position_lock scope inside monitor_active_positions.
+      Network HTTP candle/quote calls now execute outside position_lock, and position_lock guards fast (~1ms) local memory dictionary updates only.
+    status: RESOLVED
+
+  - id: ISSUE-002
+    title: Empty Scan Tab on Option Dashboard
+    severity: HIGH
+    category: Persistence & UI Serialization
+    date_reported: "2026-07-28"
+    symptom: |
+      Dashboard Scan Tab became empty during routine scan execution, empty scan cycles, or web app launch.
+    root_cause: |
+      1. Expired Zerodha access_token string in Trade_Stock/input/kite_access_token.txt causing stock quote lookups to fail silently.
+      2. In common/trading_core.py write_scan_display_data, deduplication was erroneously using underlying stock symbol (symbol) instead of contract name (contract). Multiple staged option contracts for the same stock collapsed down to 1 single trade, and empty scan cycles cleared preserved staged trades.
+      3. In app_option_Trade.py & app_Sock_Trade.py, the web app refresh loop (_last_scan_reset) blindly overwrote SCAN_DISPLAY_FILE with empty staged_trades: [] on web app launch.
+    affected_files:
+      - common/trading_core.py
+      - Trade_Option/app_option_Trade.py
+      - Trade_Stock/app_Sock_Trade.py
+      - Trade_Stock/input/kite_access_token.txt
+      - Trade_Option/input/kite_access_token.txt
+    resolution: |
+      1. Synchronized active Zerodha OAuth access token across all workspace input directories.
+      2. Fixed write_scan_display_data deduplication to group by _trade_key(t) (unique option contract key, e.g., COALINDIA26AUG410CE).
+      3. Updated web app refresh loop (_last_scan_reset) to inspect existing file contents and preserve today's staged trades on startup.
+    status: RESOLVED
+
+  - id: ISSUE-003
+    title: FileNotFoundError on FlushFileHandler Initialization
+    severity: MEDIUM
+    category: Environment & Logging
+    date_reported: "2026-07-28"
+    symptom: |
+      Launching stock_options_trade_engine.py outside Trade_Option directory threw FileNotFoundError: [Errno 2] No such file or directory: 'output/logs/bull_nifty50_scanner.log'.
+    root_cause: |
+      FlushFileHandler expected the output/logs directory to already exist in the working directory before creating the log file.
+    affected_files:
+      - Trade_Option/stock_options_trade_engine.py
+    resolution: |
+      Added os.makedirs(os.path.dirname("output/logs/bull_nifty50_scanner.log"), exist_ok=True) prior to logging.basicConfig initialization.
+    status: RESOLVED
+
+  - id: ISSUE-004
+    title: Download Export Filename Overwritten to Static scan_export.csv
+    severity: LOW
+    category: Dashboard UX
+    date_reported: "2026-07-28"
+    symptom: |
+      Clicking the "Export Scan CSV" button on the UI downloaded a file named scan_export.csv without any date/time timestamp.
+    root_cause: |
+      Frontend JavaScript in app_option_Trade.py and app_Sock_Trade.py hardcoded a.download = 'scan_export.csv', overriding the server's Content-Disposition header.
+    affected_files:
+      - Trade_Option/app_option_Trade.py
+      - Trade_Stock/app_Sock_Trade.py
+    resolution: |
+      Updated frontend JavaScript and Flask HTTP response headers to format export files dynamically as scan_export_DD_MM_YY_HHMM.csv (e.g., scan_export_28_07_26_2230.csv).
+    status: RESOLVED
+
+  - id: ISSUE-005
+    title: Strike Range (±) Config Field Missing in Stock Options Dashboard UI
+    severity: LOW
+    category: Feature Parity & Configuration
+    date_reported: "2026-07-28"
+    symptom: |
+      The "Strike Range (±)" configuration control was present for Index Options but missing from the Stock Options Trade Engine settings panel in the Web UI.
+    root_cause: |
+      The nifty50 entry in PROGRAMS["nifty50"]["config_fields"] in app_option_Trade.py lacked the strike_range UI field definition and default value.
+    affected_files:
+      - Trade_Option/app_option_Trade.py
+      - Trade_Option/input/program_config.json
+      - Trade_Stock/input/program_config.json
+    resolution: |
+      Added "strike_range": {"label": "Strike Range (±)", "type": "number", "default": 0} to nifty50 config fields in app_option_Trade.py and set "strike_range": 0 (ATM strike) across program_config.json files.
+    status: RESOLVED
+
+  - id: ISSUE-006
+    title: SENSEX BFO Exchange Routing Mismatch
+    severity: HIGH
+    category: Multi-Exchange API Integration
+    date_reported: "2026-07-30"
+    symptom: |
+      Exit failed for SENSEX26JUL77700PE: 'NFO:SENSEX26JUL77700PE' when attempting entry or exit on Zerodha Kite.
+    root_cause: |
+      Hardcoded NFO exchange in close_position and execute_index_entry. SENSEX options trade on BFO (BSE Options), causing Zerodha to reject quotes and orders.
+    affected_files:
+      - common/trading_core.py
+      - Trade_Option/index_options_trade_engine.py
+    resolution: |
+      Updated close_position in common/trading_core.py and execute_index_entry in index_options_trade_engine.py to dynamically inspect contract string and route SENSEX/BSE contracts to BFO, NIFTY/BANKNIFTY to NFO, and stock spot to NSE.
+    status: RESOLVED
+
+  - id: ISSUE-007
+    title: Pending Exit LIMIT Order Execution Stalling
+    severity: HIGH
+    category: Order Execution & Market Dynamics
+    date_reported: "2026-07-30"
+    symptom: |
+      Position monitor submitted LIMIT exit order, but when option prices dropped rapidly, order remained OPEN/unfilled in Zerodha orderbook and exit guard blocked secondary retry.
+    root_cause: |
+      Rigid is_contract_exit_executed check blocked subsequent exit handling while LIMIT order was stuck unfilled in orderbook.
+    affected_files:
+      - common/trading_core.py
+    resolution: |
+      Enhanced close_position in common/trading_core.py to check Zerodha order status via API. If an exit order remains OPEN/unfilled while price moves lower, it cancels the pending limit order and fires an immediate MARKET sell fallback order.
+    status: RESOLVED
+
+  - id: ISSUE-008
+    title: False Stop Loss Wick Exits
+    severity: MEDIUM
+    category: Risk Management & Signal Validation
+    date_reported: "2026-07-30"
+    symptom: |
+      Temporary price wicks or micro-dips triggered false stop loss exits on options before recovery.
+    root_cause: |
+      Immediate exit on instantaneous tick price ltp <= sl without noise buffer or candle close confirmation.
+    affected_files:
+      - Trade_Option/app_option_Trade.py
+      - Trade_Stock/app_Sock_Trade.py
+    resolution: |
+      Added 0.5% Stop Loss Noise Buffer (sl_buffered = SL * 0.995) and required previous 15-minute candle close confirmation (prev_candle.close <= SL) before triggering SL exit. Retained 1.5% emergency crash protection break.
+    status: RESOLVED
+
+  - id: ISSUE-009
+    title: 1-Click BUY Feature Implementation on Scan Tab
+    severity: ENHANCEMENT
+    category: Dashboard UX & Live Trading
+    date_reported: "2026-07-30"
+    symptom: |
+      Users had to manually place trades on Kite terminal for staged scan setups.
+    root_cause: |
+      Missing interactive 1-click execution controls on Scan Tab table.
+    affected_files:
+      - Trade_Option/app_option_Trade.py
+      - Trade_Stock/app_Sock_Trade.py
+    resolution: |
+      Added interactive green BUY button to Scan Tab table in app_option_Trade.py (Port 5050) and app_Sock_Trade.py (Port 5051), backed by /api/buy-scanned-trade API endpoint with dynamic exchange resolution and automatic BOUGHT status protection against double-buying.
+    status: RESOLVED
+
+  - id: FEATURE-010
+    title: Dual Monitoring Split (09:15 AM Target Exit vs 09:45 AM SL Failsafe)
+    severity: ENHANCEMENT
+    category: Risk Management & Strategy Execution
+    date_reported: "2026-08-01"
+    symptom: |
+      Single monitoring loop evaluated both SL and Target simultaneously during volatile 09:15-09:45 AM opening window, risking premature SL shakeouts.
+    root_cause: |
+      Need to separate Target monitoring (active from 09:15 AM open) from SL monitoring (deferred to 09:45 AM+ with 3-way confirmation).
+    affected_files:
+      - common/trading_core.py
+    resolution: |
+      Updated monitor_active_positions in common/trading_core.py: Target monitoring remains active from 09:15 AM. SL monitoring skips 09:15-09:45 AM window, evaluates a 3-way failsafe check at 09:45 AM (LTP < SL & prev candle closed < SL & current candle trading < SL), then resumes continuous SL monitoring after 09:45 AM.
+    status: RESOLVED
+
+  - id: FEATURE-011
+    title: Non-Intrusive Scan Export Spot Trend & Target Annotator Utility
+    severity: ENHANCEMENT
+    category: Data Export & Analysis
+    date_reported: "2026-08-01"
+    symptom: |
+      Scan exports lacked underlying spot stock trend and spot T1 target metrics.
+    root_cause: |
+      Need a separate, non-intrusive post-processing utility to enrich scan export CSV files without modifying core engines.
+    affected_files:
+      - common/spot_enricher.py
+    resolution: |
+      Created common/spot_enricher.py utility module. It reads exported scan CSVs, extracts underlying symbols, evaluates spot trend (BULL/BEAR) and spot T1 target using Negation Theory, and appends Spot_Trend and Spot_T1_Target columns to an enriched CSV output file.
+    status: RESOLVED
+
+  - id: FEATURE-012
+    title: Strict Anchor A.low Closing Basis Invalidation Alignment (Option A)
+    severity: ENHANCEMENT
+    category: Pattern Engine & Blueprint Alignment
+    date_reported: "2026-08-04"
+    symptom: |
+      Breakout scanner previously checked invalidation against A.low - buffer (e.g. 60.43), allowing candles after C to close below A.low (e.g. 61.50) while remaining above the buffered SL level.
+    root_cause: |
+      Discrepancy with Master Price Action Blueprint (Page 6), which explicitly mandates "holding above A.low" (A.low floor line) on a closing basis.
+    affected_files:
+      - common/trading_core.py
+      - ISSUE_MANAGEMENT.yaml
+    resolution: |
+      Updated scan_anchor_bcd_breakout in common/trading_core.py to strictly enforce Option A invalidation: setup is invalidated if any candle between A and D closes below A.low (a_low floor line), while retaining A.low - buffer (sl_val) for order execution risk-reward and Stop Loss calculations.
+    status: RESOLVED
+
+  - id: ISSUE-003
+    title: Display Data Write Failed - NameError 'rr' Is Not Defined
+    severity: HIGH
+    category: Persistence & UI Serialization
+    date_reported: "2026-08-04"
+    symptom: |
+      Display data write failed with error: name 'rr' is not defined when index/stock options engine called write_scan_display_data.
+    root_cause: |
+      Inside build_trade helper function in common/trading_core.py, the output dictionary attempted to reference an outer scope variable 'rr' instead of computing or reading trade risk-reward.
+    affected_files:
+      - common/trading_core.py
+      - ISSUE_MANAGEMENT.yaml
+    resolution: |
+      Updated build_trade in write_scan_display_data to safely extract rr_val from trade dictionary (or dynamically calculate risk-reward from entry, sl, and t1) and format rr_num safely.
+    status: RESOLVED
+
+  - id: ISSUE-004
+    title: Display Data Write Failed - NameError 'side_val' Is Not Defined
+    severity: HIGH
+    category: Persistence & UI Serialization
+    date_reported: "2026-08-04"
+    symptom: |
+      Display data write failed with error: name 'side_val' is not defined when nifty50 options engine called write_scan_display_data.
+    root_cause: |
+      Inside build_trade helper function in common/trading_core.py, side_val declaration block was missing before dictionary construction.
+    affected_files:
+      - common/trading_core.py
+      - ISSUE_MANAGEMENT.yaml
+    resolution: |
+      Defined side_val variable inside build_trade, deriving CE/PE option type from trade dictionary or contract string.
+    status: RESOLVED
+
+  - id: FEATURE-013
+    title: Blueprint Directory Documentation - Scratch vs Backtest Utilities
+    severity: ENHANCEMENT
+    category: Documentation & Architecture
+    date_reported: "2026-08-04"
+    symptom: |
+      The master documentation lacked explicit definitions separating official backtest validation suites from temporary scratch diagnostic tools.
+    root_cause: |
+      Need single-source-of-truth mapping in MASTER_DOCUMENTATION.yaml for AI agent re-usability of existing helper scripts in scratch/ and backtest/.
+    affected_files:
+      - MASTER_DOCUMENTATION.yaml
+      - ISSUE_MANAGEMENT.yaml
+    resolution: |
+      Documented backtest/ (official historical validation runner suite) and scratch/ (re-usable maintenance tools, target auditors, and active position metrics analyzers) in MASTER_DOCUMENTATION.yaml.
+    status: RESOLVED
+
+  - id: FEATURE-014
+    title: Pattern Name Standardization - BEAR_BASE_ABCD
+    severity: ENHANCEMENT
+    category: Strategy Core Naming
+    date_reported: "2026-08-04"
+    symptom: |
+      Bearish base breakout setups used non-symmetrical label "BEAR_A_BCD_Breakout" while Bullish base setups used "BASE_ABCD".
+    root_cause: |
+      Default pattern_type fallback in scan_anchor_bcd_breakout_bearish required standardization for 100% naming symmetry.
+    affected_files:
+      - common/trading_core.py
+    resolution: |
+      Standardized default pattern_type string in scan_anchor_bcd_breakout_bearish to "BEAR_BASE_ABCD".
+    status: RESOLVED
+
+  - id: FEATURE-015
+    title: Interactive Chart View Modal with TradingView Lightweight Charts & SL/Target Overlays
+    severity: ENHANCEMENT
+    category: Dashboard UI Integration
+    date_reported: "2026-08-04"
+    symptom: |
+      Users could not visualize staged or active trade setups with SL and Target price lines directly on interactive charts.
+    root_cause: |
+      Feature 3 requirement for interactive chart pop-up modal with dual scope (Option Contract + Spot Stock) and direct Zerodha Kite links.
+    affected_files:
+      - Trade_Option/app_option_Trade.py
+      - Trade_Stock/app_Sock_Trade.py
+      - ISSUE_MANAGEMENT.yaml
+    resolution: |
+      Added /api/get-chart-data backend endpoint and TradingView Lightweight Charts pop-up modal (#chartModal) to both web dashboards. Renders candlestick series, overlay price lines (Entry, SL, T1, T2, T3), scope toggles, and direct Zerodha Kite links.
+    status: RESOLVED
+
+  - id: FEATURE-016
+    title: Chart Modal A-B-C-D Sequence Markers with Benchmark Entry Line (direction-aware)
+    severity: ENHANCEMENT
+    category: Dashboard UI Integration
+    date_reported: "2026-08-05"
+    symptom: |
+      Chart modal rendered only an A marker and drew the Entry price line at D's close / entry price, and B/C/D markers were computed from candle_a_time-derived levels instead of the engine's confirmed benchmark. For LL_Sweep setups (e.g. ITC26AUG290PE) the A-time candle (09:15 sweep) was an outlier (H=9.9) so B was never found even though the engine had confirmed a full A->B->C->D sequence.
+    root_cause: |
+      1. find_anchor_ll_sweep returns CandleATime = sweep/Low-2 candle (df.iloc[-4]) while the engine's benchmark = A.high at a_idx (a different candle). Re-deriving A.high from candle_a_time mismatched the engine's confirmed anchor.
+      2. The Entry price line used entry_spot (D's close) instead of the engine benchmark, and SL%/RR/footer math used the actual entry.
+      3. Marker detection was not direction-aware and had no BEAR mirror.
+    affected_files:
+      - common/trading_core.py
+      - Trade_Option/app_option_Trade.py
+      - Trade_Option/index_options_trade_engine.py
+      - Trade_Option/stock_options_trade_engine.py
+      - ISSUE_MANAGEMENT.yaml
+      - Trade_Option/Read_Me_Notes/FNO_Scanning_Workflow_Spec.md
+    resolution: |
+      1. Persisted benchmark (A.high for CE/BULL, A.low for PE/BEAR), anchor_floor (A.low BULL / A.high BEAR), and direction ("BULL"/"BEAR") end-to-end: scanners (scan_anchor_bcd_breakout / _bearish), scan_symbol trade_data, write_scan_display_data build_trade, and both engines' position dicts. All 10 staged Nifty 50 trades now carry the fields (e.g. ITC bench=5.0, floor=3.2).
+      2. Chart modal (app_option_Trade.py loadChartDataAndRender): Entry line now draws at the stored benchmark (label "Entry (A.high)"/"Entry (A.low)"), falling back to entry price when benchmark is absent (legacy data). SL%, T1 RR, and footer R:R are computed against the benchmark for strategy-consistent risk math.
+      3. Markers are direction-aware with a BEAR mirror: BULL B = first close > A.high, C = red retest dipping to/near A.high holding above A.low, D = close > A.high; BEAR B = first close < A.low, C = retest holding below A.high, D = red close < A.low. A "Seq broken" red marker fires when any candle between A and D breaches the anchor_floor (BULL: close < A.low; BEAR: close > A.high).
+      4. Both chart buttons (Scan tab + Positions tab) and Kite/DB merged position items pass benchmark/anchor_floor/direction into openChartModal.
+    status: RESOLVED
+
+  - id: FEATURE-017
+    title: Chart Modal parseDateToUnix Year/Day Swap Caused Missing Markers
+    severity: HIGH
+    category: Dashboard UI Bug
+    date_reported: "2026-08-05"
+    symptom: |
+      Chart markers (A/B/C/D) did not render because findClosestCandleIndex matched timestamps from 2009 instead of 2026.
+    root_cause: |
+      parseDateToUnix parsed the ISO date as day=dateParts[0] and year=dateParts[2] (e.g. 2026-08-03 -> day 2026, year 3), producing epoch values in 2009 that never matched the candle times.
+    affected_files:
+      - Trade_Option/app_option_Trade.py
+    resolution: |
+      Fixed parseDateToUnix to parse year=dateParts[0], month=dateParts[1], day=dateParts[2]. Markers now align to the correct candle timestamps.
+    status: RESOLVED
+
+
+
+
+
+
+
