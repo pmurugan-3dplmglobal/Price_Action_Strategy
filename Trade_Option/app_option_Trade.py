@@ -412,7 +412,7 @@ def refresh_data():
             cached_data["live_execution"] = os.path.exists(LIVE_EXECUTION_FLAG)
             cached_data["live_execution_index"] = os.path.exists(LIVE_EXECUTION_FLAG_INDEX)
             now = time.time()
-            if now - _ltp_last_fetch > 30 and cached_data["all_trades"]:
+            if now - _ltp_last_fetch > 3 and cached_data["all_trades"]:
                 _ltp_last_fetch = now
                 try:
                     active = trade_db.get_active_trades()

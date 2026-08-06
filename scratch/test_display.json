@@ -1,0 +1,48 @@
+{
+  "date": "2026-08-04",
+  "timestamp": "2026-08-04 19:48:41",
+  "staged_trades": [
+    {
+      "symbol": "",
+      "contract": "NIFTY26AUG24500CE",
+      "side": "CE",
+      "entry_spot": 100,
+      "current_sl": 90,
+      "t1": 150,
+      "t2": null,
+      "t3": null,
+      "pattern": null,
+      "entry_time": "2026-08-04 19:48",
+      "exit_time": "",
+      "result": "BE_ABCD",
+      "carry_forward": false,
+      "rr": 5.0,
+      "candle_a_time": "",
+      "timeframe": "",
+      "candle_tf_time": ""
+    }
+  ],
+  "carry_forward": [],
+  "active_live": [
+    {
+      "symbol": "RELIANCE",
+      "contract": "RELIANCE26AUG1300CE",
+      "side": "CE",
+      "entry_spot": 20,
+      "current_sl": 15,
+      "t1": 30,
+      "t2": null,
+      "t3": null,
+      "pattern": null,
+      "entry_time": "2026-08-04 19:48",
+      "exit_time": "",
+      "result": "ACTIVE",
+      "carry_forward": false,
+      "rr": 2.0,
+      "candle_a_time": "",
+      "timeframe": "",
+      "candle_tf_time": ""
+    }
+  ],
+  "engine": "nifty50"
+}
