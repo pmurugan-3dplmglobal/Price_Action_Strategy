@@ -2488,6 +2488,7 @@ def api_scan_clear():
                 with open(f, "r", encoding="utf-8") as fh:
                     old_d = json.load(fh)
                 old_d["staged_trades"] = []
+                old_d["all_staged_today"] = []
                 old_d["cleared_at"] = now_str
                 with open(f, "w", encoding="utf-8") as fh:
                     json.dump(old_d, fh, indent=2)
