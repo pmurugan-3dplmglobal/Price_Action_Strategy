@@ -1163,7 +1163,7 @@ def close_position(kite, pos, live_market=True, product=None):
     
     target_product = product
     try:
-        if not target_product:
+        if not target_product and kite:
             kp = kite.positions()
             for p in (kp.get("day", []) + kp.get("net", [])):
                 if p.get("tradingsymbol") == contract:
@@ -1172,17 +1172,40 @@ def close_position(kite, pos, live_market=True, product=None):
     except Exception as e:
         logging.warning(f"Could not fetch Kite position product for {contract}: {e}")
     if not target_product:
-        target_product = pos.get("product") or kite.PRODUCT_NRML
+        target_product = pos.get("product") or (kite.PRODUCT_NRML if kite else "NRML")
 
     c_str = str(contract).upper()
+    is_option = "CE" in c_str or "PE" in c_str or "NIFTY" in c_str or "BANK" in c_str or "SENSEX" in c_str or "BSE" in c_str
     if "SENSEX" in c_str or "BSE" in c_str:
         target_exch = "BFO"
-    elif "CE" in c_str or "PE" in c_str or "NIFTY" in c_str or "BANK" in c_str:
+    elif is_option:
         target_exch = "NFO"
     else:
         target_exch = "NSE"
 
     qty = pos.get("quantity") or (get_option_lot_size(contract) or pos.get("lot_size", 1)) * pos.get("position_size", 1)
+
+    # Fetch live quote for LTP & Bid price
+    ltp = 0.0
+    bid = 0.0
+    if kite and live_market:
+        try:
+            q_key = f"{target_exch}:{contract}"
+            q = kite.quote([q_key])
+            if q_key in q:
+                ltp = float(q[q_key].get("last_price", 0))
+                depth = q[q_key].get("depth", {}).get("buy", [])
+                if depth and len(depth) > 0:
+                    bid = float(depth[0].get("price", 0))
+        except Exception as q_err:
+            logging.warning(f"Could not fetch quote for exit {contract}: {q_err}")
+
+    ref_price = bid if bid > 0 else ltp
+    if ref_price <= 0:
+        ref_price = float(pos.get("entry_spot", 1.0))
+    
+    # Calculate marketable limit price (0.995 * ref_price rounded to 0.05 tick)
+    price = max(0.05, round(round((ref_price * 0.995) / 0.05) * 0.05, 2))
 
     if is_contract_exit_executed(contract):
         prev = EXECUTED_EXITS.get(contract, {})
@@ -1196,20 +1219,21 @@ def close_position(kite, pos, live_market=True, product=None):
                         o_status = o.get("status")
                         break
                 if o_status in ["OPEN", "TRIGGER PENDING"]:
-                    logging.warning(f"[PENDING LIMIT EXIT DETECTED] Order {oid} for {contract} is OPEN/UNFILLED. Cancelling limit order and executing MARKET exit fallback...")
+                    logging.warning(f"[PENDING LIMIT EXIT DETECTED] Order {oid} for {contract} is OPEN/UNFILLED. Cancelling order and executing aggressive Marketable LIMIT exit fallback...")
                     try:
                         kite.cancel_order(variety=kite.VARIETY_REGULAR, order_id=oid)
                     except Exception as c_err:
                         logging.warning(f"Could not cancel pending order {oid}: {c_err}")
                     
+                    fallback_price = max(0.05, round(round((ref_price * 0.98) / 0.05) * 0.05, 2))
                     m_oid = kite.place_order(
                         variety=kite.VARIETY_REGULAR, tradingsymbol=contract,
                         exchange=target_exch, transaction_type=kite.TRANSACTION_TYPE_SELL,
-                        quantity=qty, order_type=kite.ORDER_TYPE_MARKET,
-                        product=target_product
+                        quantity=qty, order_type=kite.ORDER_TYPE_LIMIT,
+                        price=fallback_price, product=target_product
                     )
-                    save_executed_exit(contract, m_oid, {"type": "MARKET_FALLBACK", "qty": qty})
-                    logging.info(f"Fallback MARKET exit SUCCESS for {contract} on exchange {target_exch} (Order ID: {m_oid})")
+                    save_executed_exit(contract, m_oid, {"type": "MARKETABLE_LIMIT_FALLBACK", "price": fallback_price, "qty": qty})
+                    logging.info(f"Fallback Marketable LIMIT exit SUCCESS for {contract} at price {fallback_price} on exchange {target_exch} (Order ID: {m_oid})")
                     return
                 elif o_status in ["CANCELLED", "REJECTED", "EXPIRED", "CANCELLED ALL"]:
                     logging.warning(f"[EXIT GUARD RESET] Order {oid} for {contract} is {o_status}. Clearing exit guard and retrying exit.")
@@ -1230,40 +1254,28 @@ def close_position(kite, pos, live_market=True, product=None):
         return
 
     try:
-        q_key = f"{target_exch}:{contract}"
-        q = kite.quote([q_key])
-        ltp = q.get(q_key, {}).get("last_price", 0)
-        bid = 0
-        depth = q.get(q_key, {}).get("depth", {}).get("buy", [])
-        if depth and len(depth) > 0:
-            bid = float(depth[0].get("price", 0))
-        raw_price = (bid if bid > 0 else ltp) * 0.995
-        price = round(round(raw_price / 0.05) * 0.05, 2)
+        oid = kite.place_order(
+            variety=kite.VARIETY_REGULAR, tradingsymbol=contract,
+            exchange=target_exch, transaction_type=kite.TRANSACTION_TYPE_SELL,
+            quantity=qty, order_type=kite.ORDER_TYPE_LIMIT,
+            price=price, product=target_product
+        )
+        save_executed_exit(contract, oid, {"type": "LIMIT", "price": price, "qty": qty})
+        logging.info(f"Closed {contract} with Marketable LIMIT order price {price} on exchange {target_exch} (Order ID: {oid})")
+    except Exception as primary_err:
+        logging.warning(f"Primary LIMIT exit with {target_product} on {target_exch} failed for {contract}: {primary_err}. Retrying with aggressive limit fallback...")
         try:
+            fallback_price = max(0.05, round(round((ref_price * 0.98) / 0.05) * 0.05, 2))
             oid = kite.place_order(
                 variety=kite.VARIETY_REGULAR, tradingsymbol=contract,
                 exchange=target_exch, transaction_type=kite.TRANSACTION_TYPE_SELL,
                 quantity=qty, order_type=kite.ORDER_TYPE_LIMIT,
-                price=price, product=target_product
+                price=fallback_price, product=target_product
             )
-            save_executed_exit(contract, oid, {"type": "LIMIT", "price": price, "qty": qty})
-            logging.info(f"Closed {contract} with LIMIT order price {price} on exchange {target_exch} (Order ID: {oid})")
-        except Exception as primary_err:
-            logging.warning(f"Primary LIMIT exit with {target_product} on {target_exch} failed for {contract}: {primary_err}. Retrying with MARKET order...")
-            try:
-                oid = kite.place_order(
-                    variety=kite.VARIETY_REGULAR, tradingsymbol=contract,
-                    exchange=target_exch, transaction_type=kite.TRANSACTION_TYPE_SELL,
-                    quantity=qty, order_type=kite.ORDER_TYPE_MARKET,
-                    product=target_product
-                )
-                save_executed_exit(contract, oid, {"type": "MARKET", "price": ltp, "qty": qty})
-                logging.info(f"Fallback MARKET exit SUCCESS for {contract} on exchange {target_exch} with product {target_product}")
-            except Exception as m_err:
-                logging.error(f"Fallback MARKET exit failed for {contract}: {m_err}")
-    except Exception as e:
-        logging.error(f"Exit failed for {contract}: {e}")
-        logging.error(f"Exit failed for {contract}: {e}")
+            save_executed_exit(contract, oid, {"type": "LIMIT_FALLBACK", "price": fallback_price, "qty": qty})
+            logging.info(f"Fallback Marketable LIMIT exit SUCCESS for {contract} on exchange {target_exch} at price {fallback_price} with product {target_product}")
+        except Exception as m_err:
+            logging.error(f"Fallback exit failed for {contract}: {m_err}")
 
 def load_program_config_for_engine(cfg_section, extra_fields=None):
     """Load engine config from program_config.json. Returns dict of applied overrides."""

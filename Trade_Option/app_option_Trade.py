@@ -3075,6 +3075,128 @@ def api_buy_scanned_trade():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 # ──────────────────────────────────────────────
+#  MANUAL EXIT POSITION API (SINGLE & ALL)
+# ──────────────────────────────────────────────
+@app.route("/api/exit-position", methods=["POST"])
+def api_exit_position():
+    try:
+        data = request.json or {}
+        symbol = data.get("symbol", "")
+        contract = data.get("contract") or symbol
+        engine = data.get("engine", "nifty50")
+        
+        if not symbol and not contract:
+            return jsonify({"ok": False, "error": "Symbol or contract name required"}), 400
+
+        target_str = str(contract or symbol).replace(" ", "").upper()
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        all_t = trade_db.get_all_trades()
+        exited_ids = []
+        for t in all_t:
+            t_sym = str(t.get("symbol") or "").replace(" ", "").upper()
+            t_cnt = str(t.get("contract") or "").replace(" ", "").upper()
+            if t.get("status") == "ACTIVE" and (target_str in (t_sym, t_cnt) or t_sym in target_str or t_cnt in target_str):
+                trade_db.update_trade(t["id"], {
+                    "status": "USER_EXIT",
+                    "exit_time": now_str,
+                    "result": "USER_EXIT",
+                    "updated_at": now_str
+                })
+                exited_ids.append(t["id"])
+
+        global _kite_session
+        if _kite_session:
+            try:
+                c_str = target_str
+                if "SENSEX" in c_str or "BSE" in c_str:
+                    exch = "BFO"
+                elif "CE" in c_str or "PE" in c_str or "NIFTY" in c_str or "BANK" in c_str:
+                    exch = "NFO"
+                else:
+                    exch = "NSE"
+                
+                pos_obj = {
+                    "contract": contract,
+                    "symbol": symbol,
+                    "exchange": exch,
+                    "quantity": data.get("quantity", 0)
+                }
+                from trading_core import close_position as shared_close
+                shared_close(_kite_session, pos_obj, True)
+            except Exception as k_err:
+                logging.warning(f"Live exit execution warning for {contract}: {k_err}")
+
+        with data_lock:
+            if isinstance(cached_data.get("positions"), dict):
+                cached_data["positions"].pop(symbol, None)
+                cached_data["positions"].pop(contract, None)
+
+        for disp_path in [SCAN_DISPLAY_FILE, SCAN_DISPLAY_INDEX_FILE]:
+            if os.path.exists(disp_path):
+                try:
+                    with open(disp_path, "r", encoding="utf-8") as f:
+                        sd = json.load(f)
+                    sd["active_positions"] = [p for p in sd.get("active_positions", []) if str(p.get("contract") or p.get("symbol")).replace(" ", "").upper() != target_str]
+                    sd["active_live"] = [p for p in sd.get("active_live", []) if str(p.get("contract") or p.get("symbol")).replace(" ", "").upper() != target_str]
+                    with open(disp_path, "w", encoding="utf-8") as f:
+                        json.dump(sd, f, indent=2)
+                except Exception as e:
+                    pass
+
+        return jsonify({"ok": True, "message": f"Manual EXIT executed for {contract or symbol}"})
+    except Exception as e:
+        logging.error(f"Manual Exit API failed: {e}")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/exit-all-positions", methods=["POST"])
+def api_exit_all_positions():
+    try:
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        all_t = trade_db.get_all_trades()
+        exited_count = 0
+        for t in all_t:
+            if t.get("status") == "ACTIVE":
+                trade_db.update_trade(t["id"], {
+                    "status": "USER_EXIT",
+                    "exit_time": now_str,
+                    "result": "USER_EXIT",
+                    "updated_at": now_str
+                })
+                exited_count += 1
+
+        global _kite_session
+        if _kite_session:
+            try:
+                kp = _kite_session.positions()
+                for p in (kp.get("day", []) + kp.get("net", [])):
+                    if abs(int(p.get("quantity", 0))) > 0:
+                        contract = p.get("tradingsymbol")
+                        pos_obj = {"contract": contract, "quantity": abs(int(p.get("quantity", 0)))}
+                        from trading_core import close_position as shared_close
+                        shared_close(_kite_session, pos_obj, True)
+            except Exception as k_err:
+                logging.warning(f"Exit all live positions warning: {k_err}")
+
+        for disp_path in [SCAN_DISPLAY_FILE, SCAN_DISPLAY_INDEX_FILE]:
+            if os.path.exists(disp_path):
+                try:
+                    with open(disp_path, "r", encoding="utf-8") as f:
+                        sd = json.load(f)
+                    sd["active_positions"] = []
+                    sd["active_live"] = []
+                    with open(disp_path, "w", encoding="utf-8") as f:
+                        json.dump(sd, f, indent=2)
+                except Exception as e:
+                    pass
+
+        return jsonify({"ok": True, "message": f"Manual EXIT ALL executed for {exited_count} position(s)"})
+    except Exception as e:
+        logging.error(f"Manual Exit All API failed: {e}")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+# ──────────────────────────────────────────────
 #  INTERACTIVE NEGATION ANALYZER API
 # ──────────────────────────────────────────────
 @app.route("/api/analyze-trade", methods=["POST"])
