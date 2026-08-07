@@ -2190,8 +2190,28 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
 
     for sym, pos in items:
         try:
-            token = pos.get("option_token") or registry.get(sym, {}).get("token")
+            contract = pos.get("contract") or pos.get("symbol") or sym
+            c_str = str(contract).upper()
+            is_stock_spot = pos.get("position_type") == "stock" or (pos.get("position_type") is None and not ("CE" in c_str or "PE" in c_str))
+
+            token = pos.get("option_token")
+            if not token and not is_stock_spot and kite:
+                try:
+                    exch = "BFO" if ("SENSEX" in c_str or "BSE" in c_str) else "NFO"
+                    q = kite.quote([f"{exch}:{contract}"])
+                    if f"{exch}:{contract}" in q:
+                        token = int(q[f"{exch}:{contract}"].get("instrument_token", 0))
+                        if token:
+                            with lock:
+                                positions_dict[sym]["option_token"] = token
+                except Exception as tok_err:
+                    logging.debug(f"Option token lookup error for {contract}: {tok_err}")
+
+            if not token and is_stock_spot:
+                token = registry.get(sym, {}).get("token")
+
             if not token:
+                logging.warning(f"[MONITOR SKIP] Could not resolve valid token for {contract}. Skipping spot token fallback to prevent target corruption.")
                 continue
 
             pos_tf = pos.get("timeframe") or timeframe_entry
@@ -2209,7 +2229,7 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
             live_ltp = 0.0
             try:
                 contract_name = pos.get("contract") or pos.get("symbol") or sym
-                exch = "NSE" if is_stock else "NFO"
+                exch = "NSE" if is_stock else ("BFO" if ("SENSEX" in c_str or "BSE" in c_str) else "NFO")
                 q_key = f"{exch}:{contract_name}"
                 q_res = kite.quote([q_key])
                 if q_key in q_res:
@@ -2291,9 +2311,10 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                 else:
                     close_position(kite, pos, live, product_type)
                 entry_s = pos.get("entry_spot", 0)
-                pnl = ((cp - entry_s) / entry_s * 100) if entry_s else 0
+                exit_price = cp if cp > 0 else (live_ltp if live_ltp > 0 else current_sl)
+                pnl = ((exit_price - entry_s) / entry_s * 100) if entry_s else 0
                 log_fn(sym, pos.get("pattern", ""), pos_tf, "EXIT_SL", "CLOSED",
-                       f"SL hit [{sl_reason}]: {cp}", pnl,
+                       f"SL hit [{sl_reason}]: {exit_price:.2f}", pnl,
                        entry=entry_s, sl=current_sl, target=pos.get("t1", ""),
                        event_time=event_time)
                 if tid:
@@ -2332,9 +2353,10 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                     else:
                         close_position(kite, pos, live, product_type)
                     entry_s = pos.get("entry_spot", 0)
-                    pnl = ((t1_val - entry_s) / entry_s * 100) if entry_s else 0
+                    exit_price = cp if cp > 0 else (live_ltp if live_ltp > 0 else t1_val)
+                    pnl = ((exit_price - entry_s) / entry_s * 100) if entry_s else 0
                     log_fn(sym, pos.get("pattern", ""), pos_tf, "EXIT_T1", "CLOSED",
-                           f"T1={t1_val:.2f} (Early Exit @ {hp:.2f})", pnl,
+                           f"T1={t1_val:.2f} (Exit @ {exit_price:.2f})", pnl,
                            entry=entry_s, sl=pos.get("current_sl", ""), target=t1_val,
                            event_time=last.get('date'))
                     if tid:
@@ -2381,9 +2403,10 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                 else:
                     close_position(kite, pos, live, product_type)
                 entry_s = pos.get("entry_spot", 0)
-                pnl = ((t3_val - entry_s) / entry_s * 100) if entry_s else 0
+                exit_price = cp if cp > 0 else (live_ltp if live_ltp > 0 else t3_val)
+                pnl = ((exit_price - entry_s) / entry_s * 100) if entry_s else 0
                 log_fn(sym, pos.get("pattern", ""), timeframe_entry, "EXIT_T3", "CLOSED",
-                       f"T3={t3_val:.2f}", pnl,
+                       f"T3={t3_val:.2f} (Exit @ {exit_price:.2f})", pnl,
                        entry=entry_s, sl=pos.get("current_sl", ""), target=t3_val,
                        event_time=last.get('date'))
                 if tid:
