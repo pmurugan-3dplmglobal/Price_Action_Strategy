@@ -328,6 +328,22 @@ issues:
       Normalized both df_anchor['date'] and candle_a_time using clean_timestamp inside is_anchor_valid_and_active before string comparison. Subsequent candle filtering now accurately excludes the anchor candle, restoring full setup detection and staging.
     status: RESOLVED
 
+  - id: ISSUE-019
+    title: Cross-Module Trade_Stock Fallback Polluting Trade_Option Dashboard
+    severity: HIGH
+    category: Dashboard / UI Data Pipeline
+    date_reported: "2026-08-07"
+    symptom: |
+      Options Dashboard (Trade_Option on port 5050) displayed Spot Stock trades (e.g. BPCL 286.45, ITC 285.10, TCS 2096.10) under the Stock Options Scan Tab instead of Option contracts (e.g. BPCL26AUG290CE).
+    root_cause: |
+      In Trade_Option/app_option_Trade.py, refresh_data() had a fallback block reading Trade_Stock/output/monitor/scan_display_data.json whenever Trade_Option scan_display_data.json had no staged trades. This injected spot stock prices into scan_display["nifty50"].
+    affected_files:
+      - Trade_Option/app_option_Trade.py
+      - ISSUE_MANAGEMENT.yaml
+    resolution: |
+      Removed the Trade_Stock file fallback block from Trade_Option/app_option_Trade.py. The Options Dashboard now strictly reads Option contracts from Trade_Option/output/monitor/scan_display_data.json, eliminating cross-module data pollution.
+    status: RESOLVED
+
 
 
 
