@@ -2480,13 +2480,21 @@ def api_save_config(prog_id):
 
 @app.route("/api/scan/clear", methods=["POST"])
 def api_scan_clear():
-    empty_scan = {"date": dt.now().strftime("%Y-%m-%d"),
-                  "timestamp": dt.now().strftime("%Y-%m-%d %H:%M:%S"),
-                  "staged_trades": [], "carry_forward": [], "active_live": []}
+    now_str = dt.now().strftime("%Y-%m-%d %H:%M:%S")
+    today_str = dt.now().strftime("%Y-%m-%d")
     for f in [SCAN_DISPLAY_FILE, SCAN_DISPLAY_INDEX_FILE]:
         try:
-            with open(f, "w") as fh:
-                json.dump(empty_scan, fh)
+            if os.path.exists(f):
+                with open(f, "r", encoding="utf-8") as fh:
+                    old_d = json.load(fh)
+                old_d["staged_trades"] = []
+                old_d["cleared_at"] = now_str
+                with open(f, "w", encoding="utf-8") as fh:
+                    json.dump(old_d, fh, indent=2)
+            else:
+                empty_scan = {"date": today_str, "timestamp": now_str, "cleared_at": now_str, "staged_trades": [], "all_staged_today": [], "carry_forward": [], "active_live": []}
+                with open(f, "w", encoding="utf-8") as fh:
+                    json.dump(empty_scan, fh)
         except Exception:
             pass
     return jsonify({"ok": True})
