@@ -336,6 +336,17 @@ def main_scan_loop(kite):
     try:
         kite_positions = kite.positions()
         all_positions = kite_positions.get("net", []) or kite_positions.get("day", [])
+        
+        # Auto-complete positions closed on Zerodha (quantity == 0)
+        zero_qty_contracts = {p["tradingsymbol"] for p in all_positions if int(p.get("quantity", 0)) == 0}
+        for sym, pos in list(ACTIVE_POSITIONS.items()):
+            cnt = pos.get("contract") or pos.get("symbol")
+            if cnt in zero_qty_contracts or (pos.get("contract") and pos.get("contract") in zero_qty_contracts):
+                logging.info(f"[KITE SYNC] Position {cnt} is closed on Zerodha (qty=0). Syncing DB status to COMPLETED.")
+                if pos.get("trade_id"):
+                    trade_db.update_trade_status(pos["trade_id"], "COMPLETED", exit_price=pos.get("entry_spot", 0), exit_reason="KITE_MANUAL_EXIT")
+                ACTIVE_POSITIONS.pop(sym, None)
+
         for p in all_positions:
             if p["exchange"] != "NFO" or int(p["quantity"]) == 0:
                 continue
