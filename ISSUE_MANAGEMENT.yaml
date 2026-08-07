@@ -311,20 +311,23 @@ issues:
       4. Both chart buttons (Scan tab + Positions tab) and Kite/DB merged position items pass benchmark/anchor_floor/direction into openChartModal.
     status: RESOLVED
 
-  - id: FEATURE-017
-    title: Chart Modal parseDateToUnix Year/Day Swap Caused Missing Markers
+  - id: ISSUE-018
+    title: String Timestamp Timezone Offset Comparison Bug in is_anchor_valid_and_active
     severity: HIGH
-    category: Dashboard UI Bug
-    date_reported: "2026-08-05"
+    category: Strategy Core / Invalidation Engine
+    date_reported: "2026-08-07"
     symptom: |
-      Chart markers (A/B/C/D) did not render because findClosestCandleIndex matched timestamps from 2009 instead of 2026.
+      Valid formed chart patterns (e.g. BAJAJFINSV26AUG2000PE, AXISBANK26AUG1240PE) were logged in engine scans but discarded from Scan Tab display with message "PE/CE MATCH already completed T1/SL (skip)".
     root_cause: |
-      parseDateToUnix parsed the ISO date as day=dateParts[0] and year=dateParts[2] (e.g. 2026-08-03 -> day 2026, year 3), producing epoch values in 2009 that never matched the candle times.
+      In common/trading_core.py is_anchor_valid_and_active, raw date string comparison (df_anchor['date'].astype(str) > c_time_str) compared Zerodha timezone strings (e.g. '2026-08-04 11:15:00+05:30') with stripped anchor timestamps (e.g. '2026-08-04 11:15:00').
+      Because '+05:30' > '' is True in string comparison, subseq erroneously included the anchor candle itself. Checking the anchor candle's own high/close against T1/SL falsely invalidated fresh anchor setups.
     affected_files:
-      - Trade_Option/app_option_Trade.py
+      - common/trading_core.py
+      - ISSUE_MANAGEMENT.yaml
     resolution: |
-      Fixed parseDateToUnix to parse year=dateParts[0], month=dateParts[1], day=dateParts[2]. Markers now align to the correct candle timestamps.
+      Normalized both df_anchor['date'] and candle_a_time using clean_timestamp inside is_anchor_valid_and_active before string comparison. Subsequent candle filtering now accurately excludes the anchor candle, restoring full setup detection and staging.
     status: RESOLVED
+
 
 
 

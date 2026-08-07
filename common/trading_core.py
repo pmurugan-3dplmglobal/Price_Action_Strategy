@@ -1887,10 +1887,13 @@ def is_anchor_valid_and_active(df_anchor, candle_a_time, sl_target, t1_target):
     if df_anchor is None or df_anchor.empty or not candle_a_time:
         return True
     try:
-        c_time_str = str(candle_a_time)
-        if 'date' not in df_anchor.columns:
+        c_time_clean = clean_timestamp(candle_a_time)
+        if 'date' not in df_anchor.columns or not c_time_clean:
             return True
-        subseq = df_anchor[df_anchor['date'].astype(str) > c_time_str]
+        
+        # Normalize date strings using clean_timestamp to strip timezone offsets (+05:30) before comparison
+        dates_clean = df_anchor['date'].astype(str).apply(clean_timestamp)
+        subseq = df_anchor[dates_clean > c_time_clean]
         if subseq.empty:
             return True
         
