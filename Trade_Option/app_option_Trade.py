@@ -448,7 +448,7 @@ def refresh_data():
                                 cached_data["ltp"] = ltp
                 except Exception:
                     _kite_session = None
-        if now - _kite_positions_last_fetch > 5:
+        if now - _kite_positions_last_fetch > 10:
             _kite_positions_last_fetch = now
             try:
                 if not _kite_session:
