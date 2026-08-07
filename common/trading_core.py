@@ -1231,6 +1231,10 @@ def close_position(kite, pos, live_market=True, product=None):
 
     qty = pos.get("quantity") or (get_option_lot_size(contract) or pos.get("lot_size", 1)) * pos.get("position_size", 1)
 
+    if kite and live_market and not is_market_open():
+        logging.info(f"[MARKET CLOSED] Skipping live Zerodha exit order for {contract} outside market hours (09:15-15:30 IST). Position status logged.")
+        return
+
     # Fetch live quote for LTP & Bid price
     ltp = 0.0
     bid = 0.0
