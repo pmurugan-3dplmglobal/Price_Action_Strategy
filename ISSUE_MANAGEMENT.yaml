@@ -344,6 +344,39 @@ issues:
       Removed the Trade_Stock file fallback block from Trade_Option/app_option_Trade.py. The Options Dashboard now strictly reads Option contracts from Trade_Option/output/monitor/scan_display_data.json, eliminating cross-module data pollution.
     status: RESOLVED
 
+  - id: ISSUE-020
+    title: Off-Market Hours Live Order Rejection Spam
+    severity: MEDIUM
+    category: Execution Engine / Order Guard
+    date_reported: "2026-08-07"
+    symptom: |
+      Running trade engines outside market hours (e.g. after 3:30 PM IST or at night) logged continuous error warnings: "Your order could not be converted to a After Market Order (AMO)".
+    root_cause: |
+      execute_position_exit() and close_position() attempted to submit regular live Sell orders (VARIETY_REGULAR) to Zerodha when NFO/BFO exchanges were closed.
+    affected_files:
+      - common/trading_core.py
+      - ISSUE_MANAGEMENT.yaml
+    resolution: |
+      Implemented is_market_open() check in common/trading_core.py (Mon-Fri 09:15-15:30 IST). Outside market hours, live order placement is gracefully skipped with an informational log line.
+    status: RESOLVED
+
+  - id: ISSUE-021
+    title: Out-of-Band Exited Trades Retriggering Exit Orders
+    severity: HIGH
+    category: Position Recovery / Zerodha State Sync
+    date_reported: "2026-08-07"
+    symptom: |
+      Positions exited directly on Zerodha Kite mobile app or web portal remained ACTIVE in local trade_db.json, causing local engines to attempt duplicate exit orders on subsequent cycles.
+    root_cause: |
+      Position recovery loop checked quantity == 0 when loading positions from Zerodha, but did not sync zero-quantity contracts back to trade_db if the contract was already listed as ACTIVE in local DB state.
+    affected_files:
+      - Trade_Option/stock_options_trade_engine.py
+      - Trade_Option/index_options_trade_engine.py
+      - ISSUE_MANAGEMENT.yaml
+    resolution: |
+      Added automatic zero-quantity Zerodha position synchronization in stock and index trade engines. When Zerodha returns quantity == 0 for an active contract, the engine automatically updates trade_db status to COMPLETED (KITE_MANUAL_EXIT) and removes it from ACTIVE_POSITIONS.
+    status: RESOLVED
+
 
 
 
