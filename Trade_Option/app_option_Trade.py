@@ -3089,7 +3089,7 @@ def api_exit_position():
             return jsonify({"ok": False, "error": "Symbol or contract name required"}), 400
 
         target_str = str(contract or symbol).replace(" ", "").upper()
-        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        now_str = dt.now().strftime("%Y-%m-%d %H:%M:%S")
 
         all_t = trade_db.get_all_trades()
         exited_ids = []
@@ -3153,7 +3153,7 @@ def api_exit_position():
 @app.route("/api/exit-all-positions", methods=["POST"])
 def api_exit_all_positions():
     try:
-        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        now_str = dt.now().strftime("%Y-%m-%d %H:%M:%S")
         all_t = trade_db.get_all_trades()
         exited_count = 0
         for t in all_t:
