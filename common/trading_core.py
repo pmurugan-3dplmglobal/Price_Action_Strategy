@@ -2142,6 +2142,27 @@ def _load_program_config_file():
             pass
     return {}
 
+def is_candle_before_entry(c_date, entry_time_val):
+    if not entry_time_val:
+        return False
+    try:
+        c_dt = pd.to_datetime(c_date)
+        e_dt = pd.to_datetime(entry_time_val)
+        if hasattr(c_dt, 'tz') and c_dt.tz is not None:
+            c_dt = c_dt.tz_convert('Asia/Kolkata').tz_localize(None)
+        if hasattr(e_dt, 'tz') and e_dt.tz is not None:
+            e_dt = e_dt.tz_convert('Asia/Kolkata').tz_localize(None)
+        if e_dt.hour < 8 and c_dt.hour >= 9:
+            e_dt = e_dt + timedelta(hours=5, minutes=30)
+        return c_dt < e_dt
+    except Exception:
+        try:
+            c_str = str(c_date).replace("T", " ").split("+")[0].strip()[:16]
+            e_str = str(entry_time_val).replace("T", " ").split("+")[0].strip()[:16]
+            return c_str < e_str
+        except Exception:
+            return False
+
 def monitor_active_positions(kite, registry, positions_dict, lock, product_type, engine_name,
                               timeframe_entry, trade_db, log_fn, save_state_fn=None,
                               live=True):
@@ -2203,7 +2224,7 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
             for idx in range(len(df)):
                 c_row = df.iloc[idx]
                 c_date = str(c_row.get('date', ''))
-                if entry_time_str and c_date < entry_time_str[:16]:
+                if is_candle_before_entry(c_date, entry_time_str):
                     continue
                 hp = max(hp, float(c_row['high']))
 
@@ -2241,7 +2262,7 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                     for idx in range(len(df)):
                         c_row = df.iloc[idx]
                         c_date = str(c_row.get('date', ''))
-                        if entry_time_str and c_date < entry_time_str[:16]:
+                        if is_candle_before_entry(c_date, entry_time_str):
                             continue
                         if float(c_row['close']) <= current_sl:
                             sl_hit = True
