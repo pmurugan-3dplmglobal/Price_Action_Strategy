@@ -320,19 +320,23 @@ def monitor_active_positions(kite):
 
 def main_scan_loop(kite):
     active = trade_db.get_active_trades("index")
+    seen_symbols = set()
     for t in active:
-        if t["symbol"] in INDEX_REGISTRY:
+        sym = t.get("symbol")
+        if sym in INDEX_REGISTRY and sym not in seen_symbols:
+            seen_symbols.add(sym)
             with position_lock:
                 pos = {k: v for k, v in t.items() if k not in ("id", "engine", "symbol", "status", "created_at", "updated_at")}
                 pos["trade_id"] = t["id"]
                 pos["entry_spot"] = pos.get("entry_spot") or t.get("entry_spot")
                 if "entry_time" not in pos:
                     pos["entry_time"] = t.get("created_at") or dt.now().isoformat()
-                ACTIVE_POSITIONS[t["symbol"]] = pos
-            logging.info(f"Recovered position: {t['symbol']} | {t.get('contract','')}")
+                ACTIVE_POSITIONS[sym] = pos
+            logging.info(f"Recovered position: {sym} | {t.get('contract','')}")
     try:
         kite_positions = kite.positions()
-        for p in kite_positions.get("day", []) + kite_positions.get("net", []):
+        all_positions = kite_positions.get("net", []) or kite_positions.get("day", [])
+        for p in all_positions:
             if p["exchange"] != "NFO" or int(p["quantity"]) == 0:
                 continue
             symbol = next((s for s in INDEX_REGISTRY if s in p["tradingsymbol"]), None)

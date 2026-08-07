@@ -672,8 +672,12 @@ def main():
         if BACKTEST_DATE is None:
             load_state()
             active = trade_db.get_active_trades("nifty50")
+            seen_symbols = set()
             for t in active:
-                if t["symbol"] not in STOCK_REGISTRY: continue
+                sym = t.get("symbol")
+                if not sym or sym not in STOCK_REGISTRY or sym in seen_symbols:
+                    continue
+                seen_symbols.add(sym)
                 pos = {k: v for k, v in t.items() if k not in ("id", "engine", "symbol", "status", "created_at", "updated_at")}
                 pos.setdefault("pattern", "DB_RECOVERED")
                 pos.setdefault("lot_size", 1)
@@ -688,11 +692,12 @@ def main():
                 if "entry_time" not in pos:
                     pos["entry_time"] = t.get("created_at") or dt.now().isoformat()
                 with position_lock:
-                    ACTIVE_POSITIONS[t["symbol"]] = pos
-                logging.info(f"Recovered position: {t['symbol']}")
+                    ACTIVE_POSITIONS[sym] = pos
+                logging.info(f"Recovered position: {sym}")
             try:
                 kite_positions = kite.positions()
-                for p in kite_positions.get("day", []) + kite_positions.get("net", []):
+                all_positions = kite_positions.get("net", []) or kite_positions.get("day", [])
+                for p in all_positions:
                     if p["exchange"] not in ("NFO", "NSE") or int(p.get("quantity", 0)) == 0:
                         continue
                     symbol = next((s for s in STOCK_REGISTRY if s in p["tradingsymbol"]), None)
