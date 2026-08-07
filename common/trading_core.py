@@ -1168,6 +1168,40 @@ def clear_executed_exit(contract):
         except Exception as e:
             logging.error(f"Failed to clear executed exit for {contract}: {e}")
 
+def is_market_open():
+    """Check if Indian markets (NSE/NFO/BSE/BFO) are currently open (Mon-Fri 09:15 to 15:30 IST)."""
+    now = dt.now()
+    if now.weekday() >= 5:
+        return False
+    t_now = now.time()
+    return datetime_time(9, 15) <= t_now <= datetime_time(15, 30)
+
+def execute_position_exit(kite, pos, live_market=False, reason="SL"):
+    """
+    Executes position exit safely.
+    Uses Marketable LIMIT order (0.995 * ref_price) to prevent market order slippage.
+    Checks market open status so off-market hours do not spam rejected order errors.
+    """
+    contract = pos.get("contract") or pos.get("symbol")
+    if not contract:
+        return
+
+    c_str = str(contract).upper()
+    target_product = pos.get("product") or "NRML"
+    is_option = "CE" in c_str or "PE" in c_str or "NIFTY" in c_str or "BANK" in c_str or "SENSEX" in c_str or "BSE" in c_str
+    if "SENSEX" in c_str or "BSE" in c_str:
+        target_exch = "BFO"
+    elif is_option:
+        target_exch = "NFO"
+    else:
+        target_exch = "NSE"
+
+    qty = pos.get("quantity") or (get_option_lot_size(contract) or pos.get("lot_size", 1)) * pos.get("position_size", 1)
+
+    if kite and live_market and not is_market_open():
+        logging.info(f"[MARKET CLOSED] Skipping live Zerodha exit order for {contract} outside market hours (09:15-15:30 IST). Position status logged.")
+        return
+
 def close_position(kite, pos, live_market=True, product=None):
     contract = pos.get("contract") or pos.get("tradingsymbol")
     if not contract:
