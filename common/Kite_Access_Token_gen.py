@@ -24,7 +24,7 @@ CONFIG_FILE = "input/program_config.json"
 TOKEN_FILE = "input/kite_access_token.txt"
 
 def get_kite_credentials():
-    """Read Kite API key/secret from program_config.json (moved out of source)."""
+    """Read Kite API key/secret from program_config.json or token file."""
     api_key, api_secret = "", ""
     if os.path.exists(CONFIG_FILE):
         try:
@@ -32,6 +32,13 @@ def get_kite_credentials():
                 cfg = json.load(f)
             api_key = cfg.get("api_key", "")
             api_secret = cfg.get("api_secret", "")
+        except Exception:
+            pass
+    if not api_key and os.path.exists(TOKEN_FILE):
+        try:
+            with open(TOKEN_FILE) as f:
+                td = json.load(f)
+            api_key = td.get("api_key", "")
         except Exception:
             pass
     return api_key, api_secret
