@@ -1325,8 +1325,16 @@ def sync_kite_positions(kite, registry, positions_dict, lock, engine, timeframe_
             is_stock = p.get("exchange", "") == "NSE"
             with lock:
                 if sym in positions_dict:
-                    if not positions_dict[sym].get("option_token"):
+                    stored_contract = positions_dict[sym].get("contract")
+                    if stored_contract and stored_contract != contract:
+                        logging.warning(f"[KITE_SYNC] Contract mismatch for {sym}: stored '{stored_contract}' vs live '{contract}'. Updating to live contract.")
+                        positions_dict[sym]["contract"] = contract
                         positions_dict[sym]["option_token"] = int(p.get("instrument_token", 0))
+                        positions_dict[sym]["entry_spot"] = entry
+                        positions_dict[sym]["user_edited"] = False
+                    elif not positions_dict[sym].get("option_token"):
+                        positions_dict[sym]["option_token"] = int(p.get("instrument_token", 0))
+                    
                     if not positions_dict[sym].get("user_edited"):
                         scan_sl = lookup_scan_sl_target(contract, sym, engine, kite, entry, timeframe_entry, timeframe_anchor)
                         if scan_sl:

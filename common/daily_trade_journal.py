@@ -5,7 +5,12 @@ import logging
 from datetime import datetime
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-JOURNAL_DIR = r"G:\Poovendan\AI\Trading\Share\Account_Status_leaning"
+WIN_JOURNAL_DIR = r"G:\Poovendan\AI\Trading\Share\Account_Status_leaning"
+if os.path.exists(r"G:\Poovendan\AI\Trading\Share"):
+    JOURNAL_DIR = WIN_JOURNAL_DIR
+else:
+    JOURNAL_DIR = os.path.join(BASE_DIR, "output", "journal")
+os.makedirs(JOURNAL_DIR, exist_ok=True)
 JOURNAL_CSV_PATH = os.path.join(JOURNAL_DIR, "daily_trade_journal.csv")
 JOURNAL_JSON_PATH = os.path.join(JOURNAL_DIR, "daily_trade_journal.json")
 
