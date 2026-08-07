@@ -109,6 +109,8 @@ _ltp_last_fetch = 0
 _kite_positions_last_fetch = 0
 _kite_session = None
 _last_scan_reset = ""
+_ltp_memory = {}
+_pnl_memory = {}
 
 # ──────────────────────────────────────────────
 #  PROCESS MANAGEMENT (Start/Stop Programs)
@@ -477,12 +479,29 @@ def refresh_data():
                             live_ltp = float(q_data.get("last_price", 0))
                         except Exception:
                             pass
-                        live_pnl = round((live_ltp - entry_pr) * qty, 2) if live_ltp > 0 and entry_pr > 0 else float(p.get("pnl", 0))
+
+                        tok_id = str(p.get("instrument_token", ""))
+                        sym_str = str(sym)
+
                         if live_ltp > 0:
-                            cached_data["ltp"][str(sym)] = live_ltp
-                            tok_id = p.get("instrument_token")
+                            _ltp_memory[sym_str] = live_ltp
                             if tok_id:
-                                cached_data["ltp"][str(tok_id)] = live_ltp
+                                _ltp_memory[tok_id] = live_ltp
+                            cached_data["ltp"][sym_str] = live_ltp
+                            if tok_id:
+                                cached_data["ltp"][tok_id] = live_ltp
+                        else:
+                            live_ltp = _ltp_memory.get(sym_str) or _ltp_memory.get(tok_id) or 0
+                            if live_ltp > 0:
+                                cached_data["ltp"][sym_str] = live_ltp
+                                if tok_id:
+                                    cached_data["ltp"][tok_id] = live_ltp
+
+                        if live_ltp > 0 and entry_pr > 0:
+                            live_pnl = round((live_ltp - entry_pr) * qty, 2)
+                            _pnl_memory[sym_str] = live_pnl
+                        else:
+                            live_pnl = _pnl_memory.get(sym_str, float(p.get("pnl", 0)))
 
                         # Fail-Safe Active Position Risk Monitor
                         try:
@@ -1369,22 +1388,34 @@ HTML_TEMPLATE = """
                     if (st === 'sl_hit') { badge = 'badge-loss'; stLabel = 'SL HIT'; }
                     else if (st === 'target_hit') { badge = 'badge-profit'; stLabel = 'TARGET'; }
                     else if (st === 'exited') { badge = 'badge-closed'; stLabel = 'EXITED'; }
+                    window._lastKnownLtp = window._lastKnownLtp || {};
+                    window._lastKnownPnl = window._lastKnownPnl || {};
+                    const posKey = t.contract || t.symbol || 'pos';
                     const tokenKey = t.token || t.contract || t.symbol;
-                    const fallbackLtp = tokenKey ? (ltpData[tokenKey] || ltpData[t.contract] || ltpData[t.symbol] || '') : '';
-                    const displayLtp = (t.ltp !== undefined && t.ltp !== null && t.ltp > 0) ? t.ltp : fallbackLtp;
+                    let rawLtp = (t.ltp !== undefined && t.ltp !== null && parseFloat(t.ltp) > 0) ? parseFloat(t.ltp) : (ltpData[tokenKey] || ltpData[t.contract] || ltpData[t.symbol]);
+                    if (rawLtp && parseFloat(rawLtp) > 0) {
+                        window._lastKnownLtp[posKey] = parseFloat(rawLtp);
+                    } else if (window._lastKnownLtp[posKey]) {
+                        rawLtp = window._lastKnownLtp[posKey];
+                    }
+                    const displayLtp = (rawLtp && parseFloat(rawLtp) > 0) ? parseFloat(rawLtp).toFixed(2) : '-';
+
                     let pnlStr = '';
-                    if (t.pnl !== undefined && t.pnl !== null && t.quantity > 0) {
-                        const rawPnl = parseFloat(t.pnl);
-                        const pctPnl = (t.entry_spot && t.entry_spot > 0) ? ((displayLtp - t.entry_spot) / t.entry_spot * 100).toFixed(2) : '0.00';
-                        pnlStr = `${rawPnl >= 0 ? '+' : ''}${rawPnl.toFixed(2)} (${pctPnl}%)`;
-                    } else if (displayLtp && t.entry_spot && t.entry_spot > 0) {
-                        const rawPnl = (displayLtp - t.entry_spot) * (t.quantity || 1);
-                        const pctPnl = ((displayLtp - t.entry_spot) / t.entry_spot * 100).toFixed(2);
+                    let rawPnl = (t.pnl !== undefined && t.pnl !== null && !isNaN(t.pnl)) ? parseFloat(t.pnl) : null;
+                    if (rawPnl === null && displayLtp !== '-' && t.entry_spot && t.entry_spot > 0) {
+                        rawPnl = (parseFloat(displayLtp) - t.entry_spot) * (t.quantity || 1);
+                    }
+                    if (rawPnl !== null) {
+                        window._lastKnownPnl[posKey] = rawPnl;
+                    } else if (window._lastKnownPnl[posKey] !== undefined) {
+                        rawPnl = window._lastKnownPnl[posKey];
+                    }
+
+                    if (rawPnl !== null && rawPnl !== undefined) {
+                        const pctPnl = (displayLtp !== '-' && t.entry_spot && t.entry_spot > 0) ? ((parseFloat(displayLtp) - t.entry_spot) / t.entry_spot * 100).toFixed(2) : '0.00';
                         pnlStr = `${rawPnl >= 0 ? '+' : ''}${rawPnl.toFixed(2)} (${pctPnl}%)`;
                     } else if (t.pnl_percent !== undefined && t.pnl_percent !== null) {
                         pnlStr = `${t.pnl_percent}%`;
-                    } else if (t.pnl !== undefined && t.pnl !== null) {
-                        pnlStr = `${t.pnl >= 0 ? '+' : ''}${parseFloat(t.pnl).toFixed(2)}`;
                     }
                     const pnlBadge = pnlStr ? (pnlStr.includes('-') ? 'badge-loss' : 'badge-profit') : '';
                     const qty = t.quantity || '';

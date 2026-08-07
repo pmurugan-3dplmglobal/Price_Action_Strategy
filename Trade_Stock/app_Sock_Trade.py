@@ -133,6 +133,8 @@ _ltp_last_fetch = 0
 _kite_positions_last_fetch = 0
 _kite_session = None
 _last_scan_reset = ""
+_ltp_memory = {}
+_pnl_memory = {}
 
 # ──────────────────────────────────────────────
 #  PROCESS MANAGEMENT (Start/Stop Programs)
@@ -486,12 +488,29 @@ def refresh_data():
                             live_ltp = float(q_data.get("last_price", 0))
                         except Exception:
                             pass
-                        live_pnl = round((live_ltp - entry_pr) * qty, 2) if live_ltp > 0 and entry_pr > 0 else float(p.get("pnl", 0))
+
+                        tok_id = str(p.get("instrument_token", ""))
+                        sym_str = str(sym)
+
                         if live_ltp > 0:
-                            cached_data["ltp"][str(sym)] = live_ltp
-                            tok_id = p.get("instrument_token")
+                            _ltp_memory[sym_str] = live_ltp
                             if tok_id:
-                                cached_data["ltp"][str(tok_id)] = live_ltp
+                                _ltp_memory[tok_id] = live_ltp
+                            cached_data["ltp"][sym_str] = live_ltp
+                            if tok_id:
+                                cached_data["ltp"][tok_id] = live_ltp
+                        else:
+                            live_ltp = _ltp_memory.get(sym_str) or _ltp_memory.get(tok_id) or 0
+                            if live_ltp > 0:
+                                cached_data["ltp"][sym_str] = live_ltp
+                                if tok_id:
+                                    cached_data["ltp"][tok_id] = live_ltp
+
+                        if live_ltp > 0 and entry_pr > 0:
+                            live_pnl = round((live_ltp - entry_pr) * qty, 2)
+                            _pnl_memory[sym_str] = live_pnl
+                        else:
+                            live_pnl = _pnl_memory.get(sym_str, float(p.get("pnl", 0)))
 
                         # Fail-Safe Active Position Risk Monitor
                         try:
