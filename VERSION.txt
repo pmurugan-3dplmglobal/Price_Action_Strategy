@@ -1,0 +1,13 @@
+VERSION=2.0.0-stable
+RELEASE_NAME=Stable Version 02
+RELEASE_DATE=2026-08-07
+STATUS=STABLE
+SYSTEM=Price Action Strategy Engine & Control Center (Prod_code_01)
+
+CHANGELOG_HIGHLIGHTS:
+- 1-Click Automated Zerodha OAuth Login & Token Callback (/api/token/callback)
+- Persistent Daily Scan Accumulation across all scan cycles (all_staged_today)
+- Interactive TradingView Lightweight Charts with SL, Entry, T1/T2/T3, Anchor Floor & Benchmark lines
+- Option A Invalidation & Timezone Normalized Anchor Filtering (ISSUE-018)
+- Strict Options/Spot Scan Isolation eliminating cross-module data pollution (ISSUE-019)
+- Comprehensive Strategy Regression Test Suite (100% Success, 6/6 Tests OK)
