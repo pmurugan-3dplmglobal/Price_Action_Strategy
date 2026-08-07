@@ -2,7 +2,7 @@ import json
 import os
 
 print("=== OPTION SCAN DISPLAY DATA ===")
-p1 = 'Trade_Option/output/scan_display_data.json'
+p1 = 'Trade_Option/output/monitor/scan_display_data.json'
 if os.path.exists(p1):
     d = json.load(open(p1))
     print("Keys:", list(d.keys()))
@@ -13,7 +13,7 @@ else:
     print(p1, "does not exist")
 
 print("\n=== INDEX SCAN DISPLAY DATA ===")
-p2 = 'Trade_Option/output/scan_display_index_data.json'
+p2 = 'Trade_Option/output/monitor/scan_display_index_data.json'
 if os.path.exists(p2):
     d = json.load(open(p2))
     print("Keys:", list(d.keys()))
@@ -24,7 +24,7 @@ else:
     print(p2, "does not exist")
 
 print("\n=== STOCK SCAN DISPLAY DATA ===")
-p3 = 'Trade_Stock/output/scan_display_data.json'
+p3 = 'Trade_Stock/output/monitor/scan_display_data.json'
 if os.path.exists(p3):
     d = json.load(open(p3))
     print("Keys:", list(d.keys()))
