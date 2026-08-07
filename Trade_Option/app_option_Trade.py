@@ -1710,12 +1710,17 @@ HTML_TEMPLATE = """
             document.getElementById('token-panel').style.display = 'block';
             document.getElementById('token-gen-btn').style.display = 'none';
             document.getElementById('token-feedback').textContent = '';
+            const box = document.getElementById('token-url-box');
             try {
                 const r = await fetch('/api/token/url');
                 const d = await r.json();
-                document.getElementById('token-url-text').textContent = d.url || 'Error loading URL';
+                if (d.url) {
+                    box.innerHTML = `<a href="${d.url}" target="_blank" style="color:#58a6ff;font-size:13px;font-weight:bold;text-decoration:underline;word-break:break-all;">🔗 Click Here to Log In on Zerodha Kite</a>`;
+                } else {
+                    box.textContent = 'Error loading URL';
+                }
             } catch(e) {
-                document.getElementById('token-url-text').textContent = 'Failed to load login URL';
+                box.textContent = 'Failed to load login URL';
             }
         }
 
@@ -2589,6 +2594,35 @@ def api_token_check():
 @app.route("/api/token/url")
 def api_token_url():
     return jsonify({"url": get_login_url()})
+
+@app.route("/api/token/callback", methods=["GET", "POST"])
+def api_token_callback():
+    req_token = request.args.get("request_token") or request.form.get("request_token")
+    if not req_token:
+        data = request.get_json(force=True, silent=True) or {}
+        req_token = data.get("request_token")
+    if not req_token:
+        return "<h3>Error: No request_token received from Zerodha</h3><p><a href='/'>Return to Dashboard</a></p>", 400
+    
+    res = exchange_request_token(req_token.strip())
+    if res.get("ok"):
+        return """
+        <!DOCTYPE html>
+        <html>
+        <head><title>Kite Token Generated</title></head>
+        <body style="font-family:sans-serif;background:#0d1117;color:#c9d1d9;text-align:center;padding:50px;">
+            <div style="background:#161b22;border:1px solid #238636;border-radius:8px;padding:30px;max-width:500px;margin:auto;box-shadow:0 4px 12px rgba(0,0,0,0.5);">
+                <h2 style="color:#3fb950;margin-top:0;">✅ Token Generated Successfully!</h2>
+                <p style="color:#8b949e;">Zerodha access token has been generated and saved for today.</p>
+                <a href="/" style="display:inline-block;background:#238636;color:#ffffff;padding:10px 20px;border-radius:6px;text-decoration:none;font-weight:bold;margin-top:15px;">Return to Dashboard</a>
+            </div>
+            <script>setTimeout(function(){ window.location.href = '/'; }, 1500);</script>
+        </body>
+        </html>
+        """
+    else:
+        err = res.get("error", "Unknown error")
+        return f"<h3>Token Exchange Failed</h3><p>Error: {err}</p><p><a href='/'>Return to Dashboard</a></p>", 500
 
 @app.route("/api/token/exchange", methods=["POST"])
 def api_token_exchange():
