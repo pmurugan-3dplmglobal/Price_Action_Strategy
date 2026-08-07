@@ -108,7 +108,8 @@ def fetch_instruments(kite):
         instrument_dump = pd.DataFrame(combined)
         logging.info(f"Synced {len(instrument_dump)} NFO/BFO contracts.")
     except Exception as e:
-        logging.error(f"Instrument sync failed: {e}")
+        err_msg = str(e) if str(e).strip() else type(e).__name__
+        logging.error(f"Instrument sync failed: {err_msg}")
         raise
 
 def resolve_option_contract(base_symbol, spot_price, step_size, option_type, expiry_offset=0):

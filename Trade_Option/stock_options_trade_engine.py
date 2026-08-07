@@ -155,7 +155,9 @@ def sync_instruments(kite):
         logging.warning("Instrument sync timed out after 90s, trying cached NFO data")
         _load_cached_nfo()
     except Exception as e:
-        logging.error(f"Instrument sync failed: {e}")
+        err_msg = str(e) if str(e).strip() else type(e).__name__
+        logging.error(f"Instrument sync failed: {err_msg}")
+        _load_cached_nfo()
     finally:
         pool.shutdown(wait=False)
 
