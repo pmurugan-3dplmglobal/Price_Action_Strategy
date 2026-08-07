@@ -979,8 +979,19 @@ def get_fetch_timeframe(timeframe_str):
     else:
         return "day"
 
+_HISTORICAL_CANDLE_CACHE = {}
+_CACHE_TTL_SECONDS = 5.0
+
 def fetch_and_resample_candles(kite, token, from_date, to_date, timeframe_str):
     fetch_tf = get_fetch_timeframe(timeframe_str)
+    cache_key = (token, str(from_date), str(to_date), fetch_tf)
+    now = time.time()
+    
+    if cache_key in _HISTORICAL_CANDLE_CACHE:
+        cached_df, timestamp = _HISTORICAL_CANDLE_CACHE[cache_key]
+        if now - timestamp < _CACHE_TTL_SECONDS:
+            return resample_timeframe(cached_df.copy(), timeframe_str)
+
     if hasattr(kite, "timeout") and not kite.timeout:
         kite.timeout = 10
     raw = None
@@ -997,6 +1008,7 @@ def fetch_and_resample_candles(kite, token, from_date, to_date, timeframe_str):
     if raw is None:
         raw = kite.historical_data(token, from_date, to_date, fetch_tf)
     df = pd.DataFrame(raw)
+    _HISTORICAL_CANDLE_CACHE[cache_key] = (df.copy(), now)
     return resample_timeframe(df, timeframe_str)
 
 def fetch_option_data(kite, token, from_date, to_date, primary_tf, fallback_tf, min_candles=5):

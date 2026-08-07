@@ -373,9 +373,8 @@ def parse_scans_for_program(log_lines, prog_id):
                 abc_matches[sym] = clean
     return matches, anchors, abc_matches
 
-# ──────────────────────────────────────────────
-#  BACKGROUND DATA REFRESH THREAD
-# ──────────────────────────────────────────────
+_file_mtime_cache = {}
+_parsed_json_cache = {}
 
 def refresh_data():
     global cached_data, _ltp_last_fetch, _kite_positions_last_fetch, _kite_session, _last_scan_reset
@@ -418,8 +417,15 @@ def refresh_data():
             scan_display = {}
             try:
                 if os.path.exists(SCAN_DISPLAY_FILE):
-                    with open(SCAN_DISPLAY_FILE, "r") as f:
-                        scan_display["nifty50"] = json.load(f)
+                    mtime = os.path.getmtime(SCAN_DISPLAY_FILE)
+                    if _file_mtime_cache.get(SCAN_DISPLAY_FILE) == mtime and SCAN_DISPLAY_FILE in _parsed_json_cache:
+                        scan_display["nifty50"] = _parsed_json_cache[SCAN_DISPLAY_FILE]
+                    else:
+                        with open(SCAN_DISPLAY_FILE, "r") as f:
+                            data_obj = json.load(f)
+                        _file_mtime_cache[SCAN_DISPLAY_FILE] = mtime
+                        _parsed_json_cache[SCAN_DISPLAY_FILE] = data_obj
+                        scan_display["nifty50"] = data_obj
             except Exception:
                 pass
             for k in ["nifty50", "index"]:
