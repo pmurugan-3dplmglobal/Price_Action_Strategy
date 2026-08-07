@@ -28,13 +28,24 @@ def get_kite_credentials():
     cfg = load_config()
     api_key = cfg.get("api_key", "")
     api_secret = cfg.get("api_secret", "")
-    if not api_key and os.path.exists(TOKEN_FILE):
+    if (not api_key or not api_secret) and os.path.exists(TOKEN_FILE):
         try:
             with open(TOKEN_FILE) as f:
                 td = json.load(f)
-            api_key = td.get("api_key", "")
+            if not api_key: api_key = td.get("api_key", "")
+            if not api_secret: api_secret = td.get("api_secret", "")
         except Exception:
             pass
+    if not api_secret:
+        opt_cfg = os.path.join(BASE_DIR, "input", "program_config.json")
+        if os.path.exists(opt_cfg):
+            try:
+                with open(opt_cfg) as f:
+                    c2 = json.load(f)
+                if not api_key: api_key = c2.get("api_key", "")
+                if not api_secret: api_secret = c2.get("api_secret", "")
+            except Exception:
+                pass
     if not api_key or not api_secret:
         logging.warning("api_key/api_secret missing in program_config.json")
     return api_key, api_secret
