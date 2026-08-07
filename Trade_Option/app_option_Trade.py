@@ -413,12 +413,11 @@ def refresh_data():
                             scan_display["nifty50"]["staged_trades"] = stock_disp["staged_trades"]
             except Exception:
                 pass
-            try:
-                if os.path.exists(SCAN_DISPLAY_INDEX_FILE):
-                    with open(SCAN_DISPLAY_INDEX_FILE, "r") as f:
-                        scan_display["index"] = json.load(f)
-            except Exception:
-                pass
+            for k in ["nifty50", "index"]:
+                if k in scan_display and isinstance(scan_display[k], dict):
+                    obj = scan_display[k]
+                    if not obj.get("staged_trades") and obj.get("all_staged_today"):
+                        obj["staged_trades"] = obj["all_staged_today"]
             cached_data["scan_display"] = scan_display
             cached_data["live_execution"] = os.path.exists(LIVE_EXECUTION_FLAG)
             cached_data["live_execution_index"] = os.path.exists(LIVE_EXECUTION_FLAG_INDEX)
@@ -1199,7 +1198,7 @@ HTML_TEMPLATE = """
             engines.forEach(eng => {
                 const data = sd[eng];
                 if (!data) return;
-                const staged = data.staged_trades || [];
+                const staged = (data.staged_trades && data.staged_trades.length) ? data.staged_trades : (data.all_staged_today || []);
                 const engLabel = eng === 'nifty50' ? 'Nifty 50' : 'Index';
                 if (staged.length) {
                     scanHtml += '<div class="scan-section-title">[' + engLabel + '] Scan Results (' + staged.length + ')</div>';

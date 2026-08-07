@@ -1124,7 +1124,7 @@ HTML_TEMPLATE = """
             engines.forEach(eng => {
                 const data = sd[eng];
                 if (!data) return;
-                const staged = data.staged_trades || [];
+                const staged = (data.staged_trades && data.staged_trades.length) ? data.staged_trades : (data.all_staged_today || []);
                 const engLabel = eng === 'nifty50' ? 'Nifty 50' : 'Index';
                 if (staged.length) {
                     scanHtml += '<div class="scan-section-title">[' + engLabel + '] Scan Results (' + staged.length + ')</div>';
