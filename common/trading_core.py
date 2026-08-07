@@ -1688,13 +1688,22 @@ def write_scan_display_data(staged, active, display_file, engine_name=None):
         def _trade_key(t):
             return str(t.get("contract") or t.get("symbol") or "").replace(" ", "").upper()
 
-        cleared_at = None
-        preserved = []
-        staged_list = new_staged if new_staged else []
+        # Accumulate all staged trades for today's date from display_file
+        existing_staged = []
+        if display_file and os.path.exists(display_file):
+            try:
+                with open(display_file, "r", encoding="utf-8") as fh:
+                    old_d = json.load(fh)
+                if old_d.get("date") == today:
+                    existing_staged = old_d.get("staged_trades", [])
+            except Exception:
+                pass
+
+        combined_staged = existing_staged + new_staged
 
         # Deduplicate staged trades by unique contract key: keep freshest entry_time & highest RR
         contract_map = {}
-        for t in staged_list:
+        for t in combined_staged:
             key = _trade_key(t)
             if not key or key in active_keys:
                 continue
