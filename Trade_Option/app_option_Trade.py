@@ -2624,6 +2624,15 @@ def api_token_callback():
         err = res.get("error", "Unknown error")
         return f"<h3>Token Exchange Failed</h3><p>Error: {err}</p><p><a href='/'>Return to Dashboard</a></p>", 500
 
+@app.route("/api/postback", methods=["POST"])
+def api_postback():
+    try:
+        data = request.get_json(force=True, silent=True) or request.form.to_dict()
+        logging.info(f"[POSTBACK] Received Zerodha order update: {data}")
+    except Exception as e:
+        logging.warning(f"[POSTBACK] Error parsing postback: {e}")
+    return jsonify({"status": "success"}), 200
+
 @app.route("/api/token/exchange", methods=["POST"])
 def api_token_exchange():
     data = request.get_json(force=True, silent=True)
