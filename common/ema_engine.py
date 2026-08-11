@@ -10,7 +10,7 @@ from kiteconnect import KiteConnect
 import paths
 
 from trading_core import (
-    STOCK_REGISTRY, load_kite_session, fetch_and_resample_candles, sync_stock_tokens
+    STOCK_REGISTRY, INDEX_REGISTRY, load_kite_session, fetch_and_resample_candles, sync_stock_tokens
 )
 from equity_universe import get_universe_symbols_and_tokens
 
@@ -144,6 +144,17 @@ def run_ema_scan_symbol(kite, symbol, info, timeframe="1d", fast_period=13, slow
         logger.warning(f"EMA Scan skipped for {symbol}: {e}")
         return None
 
+def _accumulate_today_setups(prev_payload, results, today_str):
+    accumulated = {}
+    if isinstance(prev_payload, dict):
+        for t in prev_payload.get("ema_engine", {}).get("all_staged_today", []):
+            if isinstance(t, dict) and str(t.get("entry_time") or t.get("candle_a_time") or "").startswith(today_str):
+                accumulated[t.get("symbol")] = t
+    for r in results:
+        if isinstance(r, dict) and r.get("symbol"):
+            accumulated[r.get("symbol")] = r
+    return list(accumulated.values())
+
 def execute_ema_scan_cycle(timeframe="1d", is_options_mode=True, target_universe="ALL"):
     try:
         ak, at = load_kite_session()
@@ -157,16 +168,19 @@ def execute_ema_scan_cycle(timeframe="1d", is_options_mode=True, target_universe
         except Exception as e:
             logger.warning(f"Stock token sync warning: {e}")
 
-        if target_universe and target_universe.upper() != "ALL":
-            symbols, token_map = get_universe_symbols_and_tokens(kite, target_universe)
-            target_registry = {}
-            for sym in symbols:
-                if sym in STOCK_REGISTRY:
-                    target_registry[sym] = STOCK_REGISTRY[sym]
-                else:
-                    target_registry[sym] = {"token": token_map.get(sym, 0), "strike_step": 10, "lot_size": 100}
-        else:
-            target_registry = STOCK_REGISTRY
+        symbols, token_map = get_universe_symbols_and_tokens(kite, target_universe)
+        target_registry = {}
+        for sym in symbols:
+            if sym in STOCK_REGISTRY and STOCK_REGISTRY[sym].get("token"):
+                target_registry[sym] = STOCK_REGISTRY[sym]
+            elif sym in INDEX_REGISTRY and INDEX_REGISTRY[sym].get("token"):
+                target_registry[sym] = INDEX_REGISTRY[sym]
+            else:
+                target_registry[sym] = {
+                    "token": token_map.get(sym, 0),
+                    "strike_step": STOCK_REGISTRY.get(sym, {}).get("strike_step", 10),
+                    "lot_size": STOCK_REGISTRY.get(sym, {}).get("lot_size", 100)
+                }
 
         results = []
         for symbol, info in target_registry.items():
@@ -228,13 +242,23 @@ def execute_ema_scan_cycle(timeframe="1d", is_options_mode=True, target_universe
                     "timeframe": timeframe
                 })
 
-        # Save scan display file
+        # Save scan display file (accumulate today's setups across cycles so the scan
+        # tab is not wiped empty once a crossover candle ages out of the fresh-cross window)
         out_file = EMA_DISPLAY_FILE_OPTION if is_options_mode else EMA_DISPLAY_FILE_STOCK
         os.makedirs(os.path.dirname(out_file), exist_ok=True)
+        today_str = time.strftime("%Y-%m-%d")
+        prev_payload = {}
+        if os.path.exists(out_file):
+            try:
+                with open(out_file, encoding="utf-8") as f:
+                    prev_payload = json.load(f)
+            except Exception:
+                pass
+        accumulated_list = _accumulate_today_setups(prev_payload, results, today_str)
         payload = {
             "ema_engine": {
-                "staged_trades": results,
-                "all_staged_today": results,
+                "staged_trades": accumulated_list,
+                "all_staged_today": accumulated_list,
                 "carry_forward": [],
                 "active_live": []
             },

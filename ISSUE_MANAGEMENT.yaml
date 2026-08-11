@@ -1129,6 +1129,34 @@ issues:
       4. Verified via in-process route calls (7 EMA rows in both exports), ast.parse, node --check, and
          scratch/run_full_regression_test.py (10/10).
      status: RESOLVED
+  - id: ISSUE-049
+    title: EMA Scan Tab Shows No Trades (Results Wiped Empty Every Cycle)
+    severity: HIGH
+    category: Strategy Engine / Scan Display
+    family: BUG_FIX
+    date_reported: "2026-08-11"
+    symptom: |
+      On the Stock Dashboard (5051) the EMA Scan tab intermittently showed zero trades even though the EMA
+      engine logged "N setups found" and wrote them to scan_display_ema_stock.json moments earlier.
+      Example log: 14:35:45 (2 setups) -> 14:36:11 (3 setups) -> 14:38:30 (0 setups) overwrote the file.
+    root_cause: |
+      execute_ema_scan_cycle in common/ema_engine.py wrote BOTH staged_trades and all_staged_today as only the
+      current cycle's fresh crosses. The is_fresh_cross condition (prev candle at/below an EMA) only holds on
+      the exact crossover candle (e.g., 60minute), so once a newer candle formed the next cycle found 0 results
+      and OVERWROTE the file with an empty list - wiping the tab. all_staged_today was intended to accumulate
+      the day's setups but was set equal to the transient results list.
+    affected_files:
+      - common/ema_engine.py
+    resolution: |
+      1. Added _accumulate_today_setups(prev_payload, results, today_str) which merges the previous
+         all_staged_today list (filtered to today's date) with the current cycle's results, deduped by symbol
+         with the latest setup winning.
+      2. execute_ema_scan_cycle now reads the existing display file, accumulates today's setups, and writes both
+         staged_trades and all_staged_today as the accumulated list - the tab persists all of today's crosses
+         instead of being wiped by a 0-result cycle. Stale (previous-day) setups are dropped.
+      3. Verified accumulation logic standalone (merge/dedupe/refresh/stale-drop) and
+         scratch/run_full_regression_test.py (10/10).
+    status: RESOLVED
 
 
 
