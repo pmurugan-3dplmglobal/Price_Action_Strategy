@@ -870,6 +870,8 @@ def api_scan_export():
                 continue
             with open(full) as f:
                 data = json.load(f)
+            if isinstance(data, dict) and "ema_engine" in data:
+                data = data["ema_engine"]
             for section_name, status_tag in [("staged_trades", "Staged"), ("active_live", "Active"), ("carry_forward", "CarryFwd")]:
                 for t in data.get(section_name, []):
                     raw_sym = t.get("contract") or t.get("symbol") or ""
@@ -883,8 +885,8 @@ def api_scan_export():
                         t.get("symbol", ""),
                         t.get("contract", ""),
                         t.get("side", ""),
-                        _format_float(t.get("entry_spot")),
-                        _format_float(t.get("current_sl")),
+                        _format_float(t.get("entry") or t.get("entry_spot")),
+                        _format_float(t.get("sl") or t.get("current_sl")),
                         _format_float(t.get("t1")),
                         _format_float(t.get("t2")),
                         _format_float(t.get("t3")),
@@ -901,6 +903,51 @@ def api_scan_export():
         csv_bytes = output.getvalue().encode("utf-8-sig")
         return Response(csv_bytes, mimetype="text/csv",
                         headers={"Content-Disposition": f"attachment; filename=scan_export_{dt.now().strftime('%d_%m_%y_%H%M')}.csv"})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)})
+
+@app.route("/api/export/ema", methods=["POST"])
+def api_export_ema():
+    try:
+        import io
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(["Symbol", "Contract", "Side", "Entry", "SL", "T1", "T2", "T3",
+                         "Spot", "RR", "Timeframe", "Pattern", "AncherT", "EntryTime", "Status"])
+        full = EMA_DISPLAY_FILE_STOCK if os.path.isabs(EMA_DISPLAY_FILE_STOCK) else os.path.join(BASE_DIR, EMA_DISPLAY_FILE_STOCK)
+        if os.path.exists(full):
+            with open(full, encoding="utf-8") as f:
+                data = json.load(f)
+            ema_payload = data.get("ema_engine", data) if isinstance(data, dict) else {}
+            for section_name, status_tag in [("staged_trades", "Staged"), ("active_live", "Active"), ("carry_forward", "CarryFwd")]:
+                for t in ema_payload.get(section_name, []):
+                    side_val = t.get("side", "")
+                    if not side_val:
+                        cnt_str = str(t.get("contract") or t.get("symbol") or "").upper()
+                        if "CE" in cnt_str:
+                            side_val = "CE"
+                        elif "PE" in cnt_str:
+                            side_val = "PE"
+                    writer.writerow([
+                        t.get("symbol", ""),
+                        t.get("contract", ""),
+                        side_val,
+                        _format_float(t.get("entry")),
+                        _format_float(t.get("sl") or t.get("current_sl")),
+                        _format_float(t.get("t1")),
+                        _format_float(t.get("t2")),
+                        _format_float(t.get("t3")),
+                        _format_float(t.get("entry_spot")),
+                        _format_float(t.get("rr")),
+                        t.get("timeframe", ""),
+                        t.get("pattern", ""),
+                        _format_timestamp(t.get("candle_a_time")),
+                        _format_timestamp(t.get("entry_time")),
+                        status_tag
+                    ])
+        csv_bytes = output.getvalue().encode("utf-8-sig")
+        return Response(csv_bytes, mimetype="text/csv",
+                        headers={"Content-Disposition": f"attachment; filename=ema_export_{dt.now().strftime('%d_%m_%y_%H%M')}.csv"})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)})
 
@@ -1082,6 +1129,7 @@ def api_update_position():
     t1 = data.get("t1")
     t2 = data.get("t2")
     t3 = data.get("t3")
+    entry_price = data.get("entry_price")
     if not symbol or (current_sl is None and t1 is None and t2 is None and t3 is None):
         return jsonify({"ok": False, "error": "symbol and at least one level required"}), 400
     vals = {}
@@ -1089,6 +1137,7 @@ def api_update_position():
     if t1 is not None and str(t1).strip() != "": vals["t1"] = float(t1)
     if t2 is not None and str(t2).strip() != "": vals["t2"] = float(t2)
     if t3 is not None and str(t3).strip() != "": vals["t3"] = float(t3)
+    if entry_price is not None and str(entry_price).strip() != "": vals["entry_spot"] = float(entry_price)
     vals["user_edited"] = True
 
     clean_target = str(symbol).replace(" ", "").upper()
@@ -1144,7 +1193,7 @@ def api_update_position():
                     exchange = kp.get("exchange", "NSE")
                     break
             is_stock = exchange == "NSE"
-            trade_data = {"contract": contract, "entry_spot": 0, "position_type": "stock" if is_stock else "option"}
+            trade_data = {"contract": contract, "entry_spot": vals.get("entry_spot", 0), "position_type": "stock" if is_stock else "option"}
             trade_data.update(vals)
             tid, _created = trade_db.create_trade(engine, symbol, trade_data)
             entry = {"symbol": symbol, "contract": contract, "id": tid, "engine": engine, "status": "ACTIVE", "position_type": "stock" if is_stock else "option"}

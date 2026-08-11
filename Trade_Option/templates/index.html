@@ -232,6 +232,28 @@
             } catch(e) { console.log(e); }
         }
 
+        async function emaExport() {
+            try {
+                const r = await fetch('/api/export/ema', {method:'POST'});
+                if (!r.ok) return;
+                const blob = await r.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                const now = new Date();
+                const pad = n => String(n).padStart(2, '0');
+                const dd = pad(now.getDate());
+                const mm = pad(now.getMonth() + 1);
+                const yy = String(now.getFullYear()).slice(-2);
+                const hhmin = pad(now.getHours()) + pad(now.getMinutes());
+                a.download = `ema_export_${dd}_${mm}_${yy}_${hhmin}.csv`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            } catch(e) { console.log(e); }
+        }
+
         let _sortPref = {};
 
         function sortTable(th, colIdx) {
@@ -478,7 +500,8 @@
                         current_sl: d.current_sl,
                         t1: d.t1 !== 'N/A' ? d.t1 : null,
                         t2: d.t2 !== 'N/A' ? d.t2 : null,
-                        t3: d.t3 !== 'N/A' ? d.t3 : null
+                        t3: d.t3 !== 'N/A' ? d.t3 : null,
+                        entry_price: d.entry_price || 0
                     })
                 });
                 const res = await r.json();
@@ -707,9 +730,9 @@
             c.appendChild(t);
             setTimeout(() => { t.style.opacity = '0'; setTimeout(() => t.remove(), 300); }, 2500);
         }
-        function editRow(uid, symbol, sl, t1, t2, t3) {
+        function editRow(uid, symbol, sl, t1, t2, t3, entry) {
             const clean = v => (v === '---' || v === '' || v === undefined || v === null) ? '' : v;
-            editStates[uid] = {active: true, symbol: symbol, sl: clean(sl), t1: clean(t1), t2: clean(t2), t3: clean(t3)};
+            editStates[uid] = {active: true, symbol: symbol, sl: clean(sl), t1: clean(t1), t2: clean(t2), t3: clean(t3), entry: clean(entry)};
             window._isEditing = true;
             fetch('/api/edit-lock', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({symbol: symbol, active: true})});
             renderScanTab(true); renderReport(true);
@@ -728,6 +751,7 @@
             const newT1 = document.getElementById('t1_'+uid)?.value;
             const newT2 = document.getElementById('t2_'+uid)?.value;
             const newT3 = document.getElementById('t3_'+uid)?.value;
+            const newEntry = document.getElementById('entry_'+uid)?.value;
             if (!newSl || !newT1) return;
             delete editStates[uid];
             if (Object.keys(editStates).length === 0) window._isEditing = false;
@@ -735,7 +759,7 @@
                 const r = await fetch('/api/update-position', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({engine: engine, symbol: symbol, current_sl: parseFloat(newSl), t1: parseFloat(newT1), t2: newT2 ? parseFloat(newT2) : null, t3: newT3 ? parseFloat(newT3) : null})
+                    body: JSON.stringify({engine: engine, symbol: symbol, current_sl: parseFloat(newSl), t1: parseFloat(newT1), t2: newT2 ? parseFloat(newT2) : null, t3: newT3 ? parseFloat(newT3) : null, entry_price: newEntry ? parseFloat(newEntry) : null})
                 });
                 const j = await r.json();
                 if (j.ok) {
@@ -906,16 +930,18 @@
                     const entryVal = t.entry_spot !== undefined && t.entry_spot !== null ? t.entry_spot : '';
                     const uid = 'pos_' + (t.symbol || 'no_sym') + '_' + (t.source || '');
                     const es = editStates[uid];
-                    let slCell, t1Cell, t2Cell, t3Cell, actCell;
+                    let slCell, t1Cell, t2Cell, t3Cell, entryCell, actCell;
                     const chartCellPos = `<td style="text-align:center"><button class="btn-chart" onclick="openChartModal('${t.contract||t.symbol||''}','${t.symbol||''}','${t.side||'CE'}',${t.entry_spot||0},${t.current_sl||t.sl||0},${t.t1||0},${t.t2||0},${t.t3||0},'${t.pattern||''}','${t.candle_a_time||''}','${t.entry_time||''}',${t.benchmark||0},${t.anchor_floor||0},'${t.direction||'BULL'}')" style="background:#1f6feb;color:#ffffff;border:none;padding:2px 6px;border-radius:4px;font-size:10px;cursor:pointer;font-weight:600;">📈 Chart</button></td>`;
                     if (es && es.active) {
                         const eng2 = t.engine === 'Index' ? 'index' : 'nifty50';
+                        entryCell = `<td><input id="entry_${uid}" value="${es.entry}" style="width:60px" oninput="editStates['${uid}'].entry=this.value" onchange="saveEdit('${uid}','${t.contract||t.symbol||''}','${eng2}')"></td>`;
                         slCell = `<td><input id="sl_${uid}" value="${es.sl}" style="width:60px" oninput="editStates['${uid}'].sl=this.value" onchange="saveEdit('${uid}','${t.contract||t.symbol||''}','${eng2}')"></td>`;
                         t1Cell = `<td><input id="t1_${uid}" value="${es.t1}" style="width:60px" oninput="editStates['${uid}'].t1=this.value" onchange="saveEdit('${uid}','${t.contract||t.symbol||''}','${eng2}')"></td>`;
                         t2Cell = `<td><input id="t2_${uid}" value="${es.t2}" style="width:60px" oninput="editStates['${uid}'].t2=this.value" onchange="saveEdit('${uid}','${t.contract||t.symbol||''}','${eng2}')"></td>`;
                         t3Cell = `<td><input id="t3_${uid}" value="${es.t3}" style="width:60px" oninput="editStates['${uid}'].t3=this.value" onchange="saveEdit('${uid}','${t.contract||t.symbol||''}','${eng2}')"></td>`;
                         actCell = `<td><button class="btn-edit-save" onclick="saveEdit('${uid}','${t.contract||t.symbol||''}','${eng2}')">Save</button><button class="btn-edit-cancel" onclick="cancelEdit('${uid}')">X</button></td>`;
                     } else {
+                        entryCell = `<td>${entryVal}</td>`;
                         slCell = `<td>${slVal}</td>`;
                         t1Cell = `<td>${t1v}</td>`;
                         t2Cell = `<td>${t2v}</td>`;
@@ -923,12 +949,12 @@
                         const canEdit = st === 'active';
                         if (canEdit) {
                             const eng2 = t.engine === 'Index' ? 'index' : 'nifty50';
-                            actCell = `<td><button class="btn-edit" onclick="editRow('${uid}','${t.contract||t.symbol||''}','${slVal}','${t1v}','${t2v}','${t3v}')">Edit</button><button class="btn-exit" style="background:#da3633;color:#fff;border:none;padding:2px 8px;border-radius:4px;font-size:10px;cursor:pointer;margin-left:4px;font-weight:600;" onclick="manualExitPosition(this,'${t.contract||t.symbol||''}','${eng2}')">EXIT</button></td>`;
+                            actCell = `<td><button class="btn-edit" onclick="editRow('${uid}','${t.contract||t.symbol||''}','${slVal}','${t1v}','${t2v}','${t3v}','${entryVal}')">Edit</button><button class="btn-exit" style="background:#da3633;color:#fff;border:none;padding:2px 8px;border-radius:4px;font-size:10px;cursor:pointer;margin-left:4px;font-weight:600;" onclick="manualExitPosition(this,'${t.contract||t.symbol||''}','${eng2}')">EXIT</button></td>`;
                         } else {
                             actCell = `<td></td>`;
                         }
                     }
-                    posHtml += `<tr><td><strong>${t.symbol}</strong></td><td>${t.source}</td><td><span class="badge badge-open">${t.pattern||''}</span></td><td>${entryVal}</td>${slCell}${t1Cell}${t2Cell}${t3Cell}<td>${displayLtp || '-'}</td><td>${qty}</td><td><span class="badge ${badge}">${stLabel}</span></td><td>${pnlStr !== '' ? `<span class="badge ${pnlBadge}">${pnlStr}</span>` : '-'}</td>${chartCellPos}${actCell}</tr>`;
+                    posHtml += `<tr><td><strong>${t.symbol}</strong></td><td>${t.source}</td><td><span class="badge badge-open">${t.pattern||''}</span></td>${entryCell}${slCell}${t1Cell}${t2Cell}${t3Cell}<td>${displayLtp || '-'}</td><td>${qty}</td><td><span class="badge ${badge}">${stLabel}</span></td><td>${pnlStr !== '' ? `<span class="badge ${pnlBadge}">${pnlStr}</span>` : '-'}</td>${chartCellPos}${actCell}</tr>`;
                 });
                 posHtml += '</tbody></table>';
             } else {
@@ -1642,7 +1668,7 @@
                         <span>EMA Crossover Scan Trades</span>
                         <div style="display:flex;align-items:center;gap:6px">
                             <button class="btn-scan-clear" onclick="clearEmaScanData()" style="padding:2px 10px;background:inherit;border:1px solid #f85149;color:#f85149;border-radius:4px;font-size:10px;cursor:pointer">Clear</button>
-                            <button class="btn-scan-export" onclick="scanExport()" style="padding:2px 10px;background:inherit;border:1px solid #58a6ff;color:#58a6ff;border-radius:4px;font-size:10px;cursor:pointer">Export</button>
+                            <button class="btn-scan-export" onclick="emaExport()" style="padding:2px 10px;background:inherit;border:1px solid #58a6ff;color:#58a6ff;border-radius:4px;font-size:10px;cursor:pointer">Export</button>
                         </div>
                     </div>
                     <div id="ema-scan-body"><p class="empty-state">No EMA scan trades yet</p></div>

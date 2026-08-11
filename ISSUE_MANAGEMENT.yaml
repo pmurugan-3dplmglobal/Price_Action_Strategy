@@ -209,6 +209,90 @@ issues:
       Created common/spot_enricher.py utility module. It reads exported scan CSVs, extracts underlying symbols, evaluates spot trend (BULL/BEAR) and spot T1 target using Negation Theory, and appends Spot_Trend and Spot_T1_Target columns to an enriched CSV output file.
     status: RESOLVED
 
+  - id: FEATURE-002
+    title: Code Quality & Performance Improvement Pass (Phase 1+2+3+4)
+    severity: ENHANCEMENT
+    category: Code Quality / Performance / Architecture
+    date_reported: "2026-08-11"
+    symptom: |
+      After full codebase audit:
+      (1) trading_core.py was 3,259 lines - a single monolithic file causing maintenance friction.
+      (2) NFO instruments CSV (40K+ rows) was re-parsed on every get_option_lot_size() and
+          contract_is_expired() call - significant performance drag during position monitoring.
+      (3) EXECUTED_EXITS file was re-read from disk on every monitoring cycle call.
+      (4) JSON-based trades_db.json had cross-process file corruption risk (no OS-level locking).
+      (5) Hardcoded symbol-specific remarks (TECHM, DRREDDY, JSWSTEEL, etc.) embedded in
+          daily_trade_journal.py were stale historical annotations from specific trade sessions.
+      (6) CWD-relative file paths in daily_trade_journal.py and lookup_scan_sl_target() violated
+          ISSUE-038 rules.
+      (7) Historical candle cache could grow unbounded over a full trading day.
+      (8) Lambda closure in stock_reversal_scanner.py captured only tok by value, other vars by ref.
+      (9) Inline timeframe parsing block duplicated in stock_reversal_scanner.py vs get_fetch_timeframe().
+      (10) time.sleep(0.2) per symbol in scanner added 10s+ unnecessary delay for 50-stock scans.
+      (11) Bare except: clauses swallowed errors silently in trade_db.py.
+      (12) Missing common/__init__.py preventing proper package imports.
+      (13) requirements.txt had no upper-bound version pins.
+      (14) OBEROIRLTY duplicated in both NIFTY_NEXT100 and NIFTY_MIDCAP100 symbol lists.
+    root_cause: |
+      Organic codebase growth over many iterations without structural refactoring.
+      trading_core.py accumulated all functionality over time without module boundaries.
+      trades_db.json used file-based retry loops which do not prevent simultaneous
+      writes from separate processes (dashboard + scanner + engine).
+    affected_files:
+      - common/trading_core.py
+      - common/trade_db.py
+      - common/daily_trade_journal.py
+      - common/dashboard_sl_overrides.py
+      - common/equity_universe.py
+      - Trade_Stock/stock_reversal_scanner.py
+      - requirements.txt
+    resolution: |
+      Phase 1 - trading_core.py performance fixes:
+        1. NFO cache: Added _get_nfo_cache() with mtime-based invalidation - CSV parsed once,
+           reloaded only when file changes. Eliminates ~40K row re-parse per monitoring call.
+        2. EXECUTED_EXITS: Added _EXECUTED_EXITS_MTIME guard - file re-read only on change.
+        3. Candle cache: Added eviction when cache exceeds 500 entries (TTL-based cleanup).
+        4. Fixed variable shadow: renamed 'paths' local dict to 'display_paths' in
+           lookup_scan_sl_target() to stop shadowing the module-level 'import paths'.
+        5. Fixed CWD-relative strings in lookup_scan_sl_target() -> paths.SCAN_DISPLAY_* constants.
+
+      Phase 2 - other module fixes:
+        6. trade_db.py: Added logging import, replaced bare except: with except Exception:,
+           added warning log on _sync_tab_databases failure.
+        7. daily_trade_journal.py: Removed all hardcoded symbol-specific remarks and lessons
+           (TECHM, DRREDDY, JSWSTEEL, BANKNIFTY, HDFCLIFE, SBIN) - replaced with generic
+           outcome-based logic. Fixed CWD paths -> paths.SCAN_DISPLAY_FILE / paths.TRADE_JOURNAL_CSV.
+        8. dashboard_sl_overrides.py: Added atomic write (tmp + os.replace) for SL overrides file.
+        9. stock_reversal_scanner.py: Replaced 20-line inline timeframe block with
+           get_fetch_timeframe() call, fixed lambda closure to capture fd/td/tf by value,
+           reduced time.sleep(0.2) -> 0.05 (saves ~8s per 50-stock scan cycle).
+        10. equity_universe.py: Removed duplicate OBEROIRLTY from NIFTY_MIDCAP100_SYMBOLS.
+        11. requirements.txt: Added upper-bound version pins for all 6 dependencies.
+
+      Phase 3 - trading_core.py decomposition (3,259 -> 9 focused modules):
+        Created common/timeframe_utils.py  - LOOKBACK_LIMITS, get_fetch_timeframe, resample, etc.
+        Created common/registries.py       - STOCK_REGISTRY, INDEX_REGISTRY, sync_stock_tokens
+        Created common/session.py          - load_kite_session, ensure_kite_session, safe_kite_call
+        Created common/targets.py          - find_profit_targets (bull+bear), SL/buffer/RR calcs
+        Created common/patterns_bull.py    - 5 bullish anchors + BCD scanner + trend continuation
+        Created common/patterns_bear.py    - 5 bearish anchors + BCD scanner + trend continuation
+        Created common/position_monitor.py - monitor_active_positions, close_position, exit guards
+        Created common/display_writer.py   - write_scan_display_data, clean_timestamp
+        Created common/resolve.py          - resolve_option_strikes, scan_symbol, derive_sl_targets
+        trading_core.py retained as-is for backward compatibility (consumers unchanged).
+
+      Phase 4 - SQLite migration for trade_db.py:
+        Replaced JSON-based trades_db.json with SQLite (WAL mode, ACID transactions).
+        Auto-migration: existing trades_db.json loaded on first run automatically.
+        Public API identical (create_trade, update_trade, get_active_trades, etc.)
+        Tab-sync JSON files (active_positions_db.json, journal_trades_db.json) kept for
+        dashboard backward compatibility.
+        Cycle + executed_pattern stores remain JSON (small, infrequent writes).
+        Added common/__init__.py to make common/ a proper Python package.
+
+      Verification: scratch/run_full_regression_test.py - 10/10 tests passed (0 regressions).
+    status: COMPLETED
+
   - id: FEATURE-012
     title: Strict Anchor A.low Closing Basis Invalidation Alignment (Option A)
     severity: ENHANCEMENT
@@ -964,5 +1048,87 @@ issues:
       5. Unified Kite_Access_Token_gen.py to a single root-level canonical copy using common/paths.py; deleted common/Kite_Access_Token_gen.py; updated exporter message.
       6. Corrected AGENTS.md line counts, removed duplicate listings, and added new modules (paths.py, ema_engine.py, dashboard_sl_overrides.py, templates/, merged scanner).
     status: RESOLVED
+  - id: ISSUE-046
+    title: Fix Stock EMA Engine "ALL" Universe Target Aggregation and Token Resolution
+    severity: HIGH
+    category: Strategy Engine / Universe Lookup
+    family: BUG_FIX
+    date_reported: "2026-08-11"
+    symptom: |
+      Selecting "ALL" target universe in Stock EMA Engine produced zero scan results, while selecting individual universe options (NIFTY50, NIFTY_MIDCAP_100, etc.) returned valid scan results.
+    root_cause: |
+      1. execute_ema_scan_cycle in common/ema_engine.py bypassed get_universe_symbols_and_tokens when target_universe was "ALL", defaulting to STOCK_REGISTRY which only contained 51 stocks.
+      2. get_universe_symbols_and_tokens in common/equity_universe.py did not aggregate all indices lists (NIFTY50, NIFTY_NEXT_100, NIFTY_MIDCAP_100, NIFTY_SMALLCAP_250, INDEX_OPTIONS) when target_index_name was "ALL".
+      3. Index symbols (NIFTY, BANKNIFTY, SENSEX) and missing stocks without tokens in STOCK_REGISTRY were skipped.
+    affected_files:
+      - common/ema_engine.py
+      - common/equity_universe.py
+    resolution: |
+      1. Updated get_universe_symbols_and_tokens in common/equity_universe.py to aggregate ALL 239 unique symbols across all registered index lists and STOCK_REGISTRY when target_index_name is "ALL".
+      2. Added INDEX_OPTIONS (NIFTY, BANKNIFTY, SENSEX) to INDICES_REGISTRY_MAP and resolved tokens against INDEX_REGISTRY and kite.instruments("NSE") segment "INDICES".
+      3. Updated execute_ema_scan_cycle in common/ema_engine.py to always call get_universe_symbols_and_tokens for all target_universe values (including "ALL").
+       4. Verified with standalone python script (ALL count: 239 symbols) and scratch/run_full_regression_test.py (10/10 tests passed).
+     status: RESOLVED
+  - id: ISSUE-047
+    title: Entry Price Shows "-" in Scan Tab for Manually-Edited/Override Positions
+    severity: MEDIUM
+    category: Dashboard / Override Flow
+    family: BUG_FIX
+    date_reported: "2026-08-11"
+    symptom: |
+      NIFTY2681124650PE (manually overridden position, user_edited=true, entry_spot=0) rendered Entry "-" in the
+      scan tab because the override flow never recorded an entry price. /api/update-position accepted only
+      SL/T1/T2/T3 and hardcoded entry_spot: 0 when creating a new trade.
+    root_cause: |
+      The /api/update-position endpoint in both dashboards did not accept an entry_price field, and the
+      new-trade creation block (Trade_Option/app_option_Trade.py:1217, Trade_Stock/app_Sock_Trade.py:1149)
+      hardcoded "entry_spot": 0. The scan-tab row build chain (anchorTopVal -> entry_price -> kiteEntry ->
+      entrySpotVal) then resolved 0 and rendered "-".
+    affected_files:
+      - Trade_Option/app_option_Trade.py
+      - Trade_Stock/app_Sock_Trade.py
+      - Trade_Option/templates/index.html
+      - Trade_Stock/templates/index.html
+    resolution: |
+      1. /api/update-position in both dashboards now accepts optional entry_price and stores it as entry_spot;
+         new-trade creation uses vals.get("entry_spot", 0) instead of hardcoded 0.
+      2. applyAnalyzedTradeToActive now sends entry_price: d.entry_price || 0 (analysis response already
+         returns entry_price).
+      3. Positions tab inline edit row gained an Entry input, threaded through editRow()/saveEdit() and
+         included in the update-position payload.
+      4. Verified with ast.parse, node --check on both templates, and scratch/run_full_regression_test.py (10/10).
+     status: RESOLVED
+  - id: ISSUE-048
+    title: EMA Export Produces Empty or Scan-Tab (Wrong Source) Data
+    severity: MEDIUM
+    category: Dashboard / Export
+    family: BUG_FIX
+    date_reported: "2026-08-11"
+    symptom: |
+      The EMA Scan tab Export produced an empty Excel/CSV, or sometimes exported Nifty/Index scan-tab data
+      instead of EMA crossover trades.
+    root_cause: |
+      1. EMA display files (scan_display_ema*.json) store trades nested under "ema_engine", but both
+         /api/scan/export endpoints iterated data.get(section_name, []) at top level (flat layout only), so the
+         "Stock EMA" section was always empty.
+      2. The EMA tab's Export button called scanExport() -> /api/scan/export, which dumps Nifty50+Index+Bear
+         scan data mixed together rather than EMA-only data.
+      3. EMA rows use entry (option premium) and sl fields, while the export read entry_spot/current_sl.
+    affected_files:
+      - Trade_Option/app_option_Trade.py
+      - Trade_Stock/app_Sock_Trade.py
+      - Trade_Option/templates/index.html
+      - Trade_Stock/templates/index.html
+    resolution: |
+      1. Added dedicated /api/export/ema in both dashboards that reads only the EMA display file, normalizes the
+         nested "ema_engine" payload, and emits EMA-correct columns (Entry premium, SL, T1/T2/T3, Spot, RR,
+         Timeframe, Pattern, timestamps, Status).
+      2. EMA tab Export button now calls new emaExport() JS -> /api/export/ema (EMA-only CSV).
+      3. Combined /api/scan/export now detects the nested "ema_engine" structure so its "Stock EMA" section is no
+         longer empty, and falls back to entry/sl fields for EMA rows.
+      4. Verified via in-process route calls (7 EMA rows in both exports), ast.parse, node --check, and
+         scratch/run_full_regression_test.py (10/10).
+     status: RESOLVED
+
 
 
