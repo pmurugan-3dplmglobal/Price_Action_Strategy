@@ -1157,6 +1157,33 @@ issues:
       3. Verified accumulation logic standalone (merge/dedupe/refresh/stale-drop) and
          scratch/run_full_regression_test.py (10/10).
     status: RESOLVED
+  - id: ISSUE-050
+    title: EMA Engine Fails to Spawn Worker Thread After Process Restart (Stale Persisted Status)
+    severity: HIGH
+    category: Strategy Engine / Thread Lifecycle
+    family: BUG_FIX
+    date_reported: "2026-08-11"
+    symptom: |
+      After restarting the dashboards, the EMA engine reported "running" (status file true) but no worker
+      thread actually ran. The option engine (5050) never wrote a cycle; the scan tab stayed empty until the
+      process was restarted a second time. Earlier log evidence showed cycles firing every ~26-140s despite a
+      300s scan_interval, implying duplicate worker threads from repeated start calls.
+    root_cause: |
+      ema_engine_status.json persisted _ema_engine_running={"option": true, "stock": true}. start_ema_engine
+      trusted this flag (if _ema_engine_running.get(mode_key): return "already running") and get_ema_engine_status
+      reported it as truth, so after a process restart the flag said "running" but the thread was gone - the
+      engine could never actually start again. The persisted flag also let repeated start calls spawn duplicate
+      threads whenever the flag was False.
+    affected_files:
+      - common/ema_engine.py
+    resolution: |
+      1. start_ema_engine now decides on ACTUAL thread liveness (existing thread is_alive()) instead of the
+         persisted flag - a fresh thread is spawned whenever no live thread exists for the mode.
+      2. get_ema_engine_status now reports liveness from the live thread and clears the persisted flag when no
+         thread is alive, so the dashboard's Start button reliably (re)starts the engine.
+      3. Verified by restarting both dashboards: 5050 (option) and 5051 (stock) both spawned threads
+         (mode=option / mode=stock logged), completed cycles, and served accumulated scan data (10 / 9 trades).
+    status: RESOLVED
 
 
 

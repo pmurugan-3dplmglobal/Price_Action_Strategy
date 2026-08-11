@@ -285,7 +285,8 @@ def _ema_worker_loop(mode_key, timeframe, is_options_mode, scan_interval=300, ta
 
 def start_ema_engine(timeframe="1d", is_options_mode=True, scan_interval=300, target_universe="ALL"):
     mode_key = "option" if is_options_mode else "stock"
-    if _ema_engine_running.get(mode_key, False):
+    existing = _ema_engine_threads.get(mode_key)
+    if existing is not None and existing.is_alive():
         return True, "EMA Engine is already running"
 
     _ema_engine_running[mode_key] = True
@@ -305,8 +306,11 @@ def stop_ema_engine(is_options_mode=True):
 
 def get_ema_engine_status(is_options_mode=True):
     mode_key = "option" if is_options_mode else "stock"
-    _load_ema_status()
-    return _ema_engine_running.get(mode_key, False)
+    existing = _ema_engine_threads.get(mode_key)
+    if existing is not None and existing.is_alive():
+        return True
+    _ema_engine_running[mode_key] = False
+    return False
 
 def get_ema_scan_data(is_options_mode=True):
     out_file = EMA_DISPLAY_FILE_OPTION if is_options_mode else EMA_DISPLAY_FILE_STOCK
