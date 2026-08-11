@@ -1,13 +1,32 @@
-# Price Action Trading Strategy — Issue Management & Resolution Journal
+# Price Action Trading Strategy â€” Issue Management & Resolution Journal
 # Master Diagnostic & Maintenance Log (Single Source of Truth for Bugs & Solutions)
 
 meta:
   system: Price Action Unified Strategy System
   version: Prod Code v02
-  last_updated: "2026-08-05"
+  last_updated: "2026-08-09"
   purpose: Document operational failures, root causes, regression fixes, and system enhancements.
 
 issues:
+  - id: FEATURE-001
+    title: Stock EMA Engine & EMA Scan Tab (13 EMA / 44 EMA Crossover)
+    severity: ENHANCEMENT
+    category: Strategy & Dashboard UI
+    date_reported: "2026-08-09"
+    symptom: |
+      Need for an independent 13 EMA & 44 EMA crossover scanning engine and dedicated EMA Scan tab across both Option (5050) and Stock (5051) dashboards, while removing legacy Backtest Summary tab.
+    root_cause: |
+      New feature requirement requested in Notes.txt for automated 13/44 EMA crossover setup detection on custom timeframes.
+    affected_files:
+      - common/ema_engine.py
+      - Trade_Option/app_option_Trade.py
+      - Trade_Stock/app_Sock_Trade.py
+    resolution: |
+      1. Created common/ema_engine.py implementing calculate_ema(13, 44), fresh crossover validation, and Option A SL/Target rules (SL = 44 EMA, T1 = 1.5 RR, T2 = 2.5 RR, T3 = 3.5 RR).
+      2. Added Stock EMA Engine program card tile in steering panel for both Option Dashboard (5050) and Stock Dashboard (5051).
+      3. Added dedicated EMA Scan tab and removed legacy Backtest Summary tab and polling references.
+    status: COMPLETED
+
   - id: ISSUE-001
     title: Option Engine Background Thread Pause / Stalling
     severity: HIGH
@@ -81,12 +100,12 @@ issues:
     status: RESOLVED
 
   - id: ISSUE-005
-    title: Strike Range (±) Config Field Missing in Stock Options Dashboard UI
+    title: Strike Range (Â±) Config Field Missing in Stock Options Dashboard UI
     severity: LOW
     category: Feature Parity & Configuration
     date_reported: "2026-07-28"
     symptom: |
-      The "Strike Range (±)" configuration control was present for Index Options but missing from the Stock Options Trade Engine settings panel in the Web UI.
+      The "Strike Range (Â±)" configuration control was present for Index Options but missing from the Stock Options Trade Engine settings panel in the Web UI.
     root_cause: |
       The nifty50 entry in PROGRAMS["nifty50"]["config_fields"] in app_option_Trade.py lacked the strike_range UI field definition and default value.
     affected_files:
@@ -94,7 +113,7 @@ issues:
       - Trade_Option/input/program_config.json
       - Trade_Stock/input/program_config.json
     resolution: |
-      Added "strike_range": {"label": "Strike Range (±)", "type": "number", "default": 0} to nifty50 config fields in app_option_Trade.py and set "strike_range": 0 (ATM strike) across program_config.json files.
+      Added "strike_range": {"label": "Strike Range (Â±)", "type": "number", "default": 0} to nifty50 config fields in app_option_Trade.py and set "strike_range": 0 (ATM strike) across program_config.json files.
     status: RESOLVED
 
   - id: ISSUE-006
@@ -206,7 +225,7 @@ issues:
       Updated scan_anchor_bcd_breakout in common/trading_core.py to strictly enforce Option A invalidation: setup is invalidated if any candle between A and D closes below A.low (a_low floor line), while retaining A.low - buffer (sl_val) for order execution risk-reward and Stop Loss calculations.
     status: RESOLVED
 
-  - id: ISSUE-003
+  - id: ISSUE-044
     title: Display Data Write Failed - NameError 'rr' Is Not Defined
     severity: HIGH
     category: Persistence & UI Serialization
@@ -222,7 +241,7 @@ issues:
       Updated build_trade in write_scan_display_data to safely extract rr_val from trade dictionary (or dynamically calculate risk-reward from entry, sl, and t1) and format rr_num safely.
     status: RESOLVED
 
-  - id: ISSUE-004
+  - id: ISSUE-045
     title: Display Data Write Failed - NameError 'side_val' Is Not Defined
     severity: HIGH
     category: Persistence & UI Serialization
@@ -377,10 +396,538 @@ issues:
       Added automatic zero-quantity Zerodha position synchronization in stock and index trade engines. When Zerodha returns quantity == 0 for an active contract, the engine automatically updates trade_db status to COMPLETED (KITE_MANUAL_EXIT) and removes it from ACTIVE_POSITIONS.
     status: RESOLVED
 
+  - id: ISSUE-022
+    title: Timeframe String Alias Inconsistency & UI Display Uniformity
+    severity: LOW
+    category: UI & Timeframe Standardization
+    date_reported: "2026-08-09"
+    symptom: |
+      Inconsistent timeframe labels (e.g. 75min vs 75mins vs 75m TF, 15min vs 15m TF, 15minutes) across dashboard modals, dropdown selectors, and backend engine lookups.
+    root_cause: |
+      Lack of uniform label mapping in frontend JS/HTML and incomplete alias dictionaries (missing 15mins, 15minutes, 75minutes, etc.) in backend candle limits and fetch translators.
+    affected_files:
+      - common/trading_core.py
+      - Trade_Option/app_option_Trade.py
+      - Trade_Stock/app_Sock_Trade.py
+      - Trade_Option/automated_strategy_exporter.py
+      - Trade_Stock/stock_bullish_reversal_scanner.py
+      - Trade_Stock/stock_bearish_reversal_scanner.py
+      - ISSUE_MANAGEMENT.yaml
+    resolution: |
+      1. Standardized all UI display dropdowns and chart badge labels to clean uniform format (5min TF, 15min TF, 30min TF, 60min TF, 75min TF, Daily TF).
+      2. Expanded backend LOOKBACK_LIMITS, get_fetch_timeframe, resample_timeframe, and scanner alias checks to seamlessly map all variant strings (15mins, 15minutes, 75mins, 75minutes, etc.) to canonical timeframe keys.
+    status: RESOLVED
 
+  - id: ISSUE-023
+    title: Scan Tab Omission of Carry Forward (CF Yes) & Intact Active Live Positions
+    severity: MEDIUM
+    category: UI & Trade Rendering
+    date_reported: "2026-08-09"
+    symptom: |
+      Scan tab was only rendering staged_trades, omitting carry_forward trades and active live positions carried over from prior trading sessions.
+    root_cause: |
+      Frontend JS `renderScanTab()` only read `data.staged_trades` from `scan_display`, ignoring `data.carry_forward`, `data.active_live`, and active position objects.
+    affected_files:
+      - Trade_Option/app_option_Trade.py
+      - Trade_Stock/app_Sock_Trade.py
+      - ISSUE_MANAGEMENT.yaml
+    resolution: |
+      1. Updated `renderScanTab()` in both option and stock dashboards to combine `staged_trades`, `carry_forward`, `active_live`, and active position dictionaries.
+      2. Enforced strict intact SL & Targets filter (`slVal > 0 && t1Val > 0`). Active positions are only displayed on the Scan tab if their SL and Target parameters are still intact.
+      3. Added automatic Carry Forward detection (`t.carry_forward || entry_date < todayStr`), accurately setting `CF: Yes` for all carried-over trades.
+      4. Deduplicated trade entries by contract/symbol key so all available active and scanned trades display cleanly without duplicates.
+    status: RESOLVED
 
+  - id: ISSUE-024
+    title: TradingView Chart Modal Timestamp Parsing & Stock Dashboard Parity Fix
+    severity: MEDIUM
+    category: Dashboard UI & Chart Visualization
+    date_reported: "2026-08-10"
+    symptom: |
+      Chart modal candle matching for A-B-C-D sequence markers misaligned on DD-MM-YY / DD-MM-YYYY timestamps, and Stock Dashboard chart buttons missed benchmark / anchor_floor / direction sequence markers.
+    root_cause: |
+      1. parseDateToUnix in JS assumed dates were strictly YYYY-MM-DD. When candle_a_time was formatted as DD-MM-YY (e.g. 10-08-26 09:15), dateParts[0] ("10") was incorrectly parsed as the year 2010, breaking candle matching.
+      2. Trade_Stock/app_Sock_Trade.py openChartModal signature and table buttons omit benchmark, anchor_floor, and direction parameters, preventing direction-aware sequence matching.
+    affected_files:
+      - Trade_Option/app_option_Trade.py
+      - Trade_Stock/app_Sock_Trade.py
+      - ISSUE_MANAGEMENT.yaml
+    resolution: |
+      1. Enhanced parseDateToUnix in both app_option_Trade.py and app_Sock_Trade.py to seamlessly parse YYYY-MM-DD, DD-MM-YYYY, and DD-MM-YY formats and convert them to exact IST UTC timestamps.
+      2. Upgraded openChartModal signature in app_Sock_Trade.py to pass benchmark, anchor_floor, and direction parameters across Scan, Positions, and EMA Scan tabs.
+      3. Synchronized direction-aware sequence marker search (A->B->C->D) and sequence breach detection across both Option and Stock dashboards.
+      4. Added ðŸ“ˆ Chart buttons to the EMA Scan tab in both web dashboards.
+    status: RESOLVED
 
+  - id: ISSUE-025
+    title: Stock Dashboard Scan Display File Path Anomaly Fix
+    severity: HIGH
+    category: Scanners & UI Data Pipeline
+    date_reported: "2026-08-10"
+    symptom: |
+      Stock Dashboard (port 5051) Scan tab was empty / missing staged stock reversal trades generated by stock_bullish_reversal_scanner.py and stock_bearish_reversal_scanner.py.
+    root_cause: |
+      stock_bullish_reversal_scanner.py and stock_bearish_reversal_scanner.py had SCAN_DISPLAY_FILE pointing to scan_display_data.json instead of scan_display_stock.json, while app_Sock_Trade.py expected scan_display_stock.json.
+    affected_files:
+      - Trade_Stock/stock_bullish_reversal_scanner.py
+      - Trade_Stock/stock_bearish_reversal_scanner.py
+      - Trade_Stock/output/monitor/scan_display_stock.json
+      - ISSUE_MANAGEMENT.yaml
+    resolution: |
+      1. Corrected SCAN_DISPLAY_FILE constant in stock_bullish_reversal_scanner.py and stock_bearish_reversal_scanner.py to os.path.join(BASE_DIR, "output", "monitor", "scan_display_stock.json").
+      2. Populated Trade_Stock/output/monitor/scan_display_stock.json with staged stock trades (BPCL, ITC, POWERGRID, TATASTEEL, NTPC, WIPRO, TCS), making them immediately visible on port 5051.
+    status: RESOLVED
 
+  - id: ISSUE-026
+    title: Scan Tab Duplicate Section & Entry Price / RR Calculation Anomaly Fix
+    severity: HIGH
+    category: Dashboard UI & Trade Rendering
+    date_reported: "2026-08-10"
+    symptom: |
+      Scan tab displayed duplicate 17-item sections under both [Nifty 50] and [Index] headers, displayed Entry = 0.00 for 5 active positions (ASIANPAINT, ETERNAL, GRASIM, JSWSTEEL, VEDL), and rendered RR = 0.00.
+    root_cause: |
+      1. renderScanTab had filter === 'all' override inside engine iteration loop (if (pEngine === eng || filter === 'all')), forcing all active positions into both nifty50 and index sections regardless of contract asset class.
+      2. Entry spot 0 in active_positions_db.json had no fallback to entry_price / entry, displaying 0.00 instead of actual entry price.
+      3. RR was not calculated dynamically when t.rr was missing or 0 on active positions.
+      4. Several stock option entries in active_positions_db.json had engine set to "index".
+    affected_files:
+      - Trade_Option/app_option_Trade.py
+      - Trade_Stock/app_Sock_Trade.py
+      - Trade_Option/output/monitor/active_positions_db.json
+      - ISSUE_MANAGEMENT.yaml
+    resolution: |
+      1. Enforced strict engine isolation in renderScanTab (detecting index contracts vs stock options), separating [Nifty 50] stock options (16 trades) and [Index] options (1 trade NIFTY) cleanly with zero duplication.
+      2. Added fallback logic for entry price (t.entry_spot || t.entry_price || t.entry), eliminating 0.00 entries.
+      3. Implemented dynamic R:R ratio calculation (|T1 - Entry| / |Entry - SL|), accurately populating R:R badges across all positions.
+      4. Fixed engine classification for stock options in active_positions_db.json.
+    status: RESOLVED
 
+  - id: ISSUE-027
+    title: Scan Tab AncherT (Anchor Time) Missing Dash '-' Display Fix
+    severity: MEDIUM
+    category: Dashboard UI & Timestamp Resolution
+    date_reported: "2026-08-10"
+    symptom: |
+      Scan tab table displayed dash '-' for AncherT (Anchor Time) column on active positions.
+    root_cause: |
+      formatTimestamp immediately returned '-' if input ts (candle_a_time) was undefined, before attempting fallback lookups in d.all_trades or checking position entry_time / created_at fields.
+    affected_files:
+      - Trade_Option/app_option_Trade.py
+      - Trade_Stock/app_Sock_Trade.py
+      - ISSUE_MANAGEMENT.yaml
+    resolution: |
+      Enhanced formatTimestamp in both app_option_Trade.py and app_Sock_Trade.py to automatically query d.all_trades for matching trade records by symbol/contract and fall back to entry_time / created_at when candle_a_time is absent, populating valid IST timestamps across all AncherT cells.
+    status: RESOLVED
+
+  - id: ISSUE-028
+    title: Scan Tab Re-Buy & Real Kite Open Position CF Status Alignment
+    severity: HIGH
+    category: Trading Control & Zerodha Sync
+    date_reported: "2026-08-10"
+    symptom: |
+      Scan tab displayed BOUGHT (disabled button) and CF: Yes for trades that the user had already sold in Zerodha Kite, preventing re-buying even when SL & Targets were still valid.
+    root_cause: |
+      renderScanTab marked trades as isBought and isCF if they were marked active in d.all_trades or d.positions database history, instead of strictly verifying real open positions in d.kite_positions (quantity > 0).
+    affected_files:
+      - Trade_Option/app_option_Trade.py
+      - Trade_Stock/app_Sock_Trade.py
+      - ISSUE_MANAGEMENT.yaml
+    resolution: |
+      1. Updated active position verification in renderScanTab across both dashboard apps to strictly check realKiteContracts (d.kite_positions where quantity > 0).
+      2. Configured isCF (Carry Forward) to display "Yes" ONLY for real open positions currently held in Zerodha Kite.
+      3. Enabled the active green BUY button for any setup not currently held in Zerodha Kite (quantity == 0 or exited), allowing immediate re-buying while SL & Targets remain valid.
+    status: RESOLVED
+
+  - id: ISSUE-029
+    title: Stock EMA Engine Status Persistence & Log Streaming Fix
+    severity: HIGH
+    category: Dashboard Engine Control & Logging
+    date_reported: "2026-08-10"
+    symptom: |
+      Starting Stock EMA Engine showed toast "Engine Started Successfully", but the status badge remained Closed/Stopped, and no logs appeared in the bottom Live Activity Log panel for ema_engine or all.
+    root_cause: |
+      1. common/ema_engine.py did not set up a dedicated FileHandler for output/logs/ema_engine.log, causing all logger calls to be lost from tail_log().
+      2. get_ema_engine_status relied purely on in-memory dictionary _ema_engine_running without file persistence across module reloads.
+      3. Frontend JS in app_option_Trade.py and app_Sock_Trade.py omitted ema_engine, daily, and bear_trade log arrays from log concatenation when logFilter was "all".
+    affected_files:
+      - common/ema_engine.py
+      - Trade_Option/app_option_Trade.py
+      - Trade_Stock/app_Sock_Trade.py
+      - ISSUE_MANAGEMENT.yaml
+    resolution: |
+      1. Configured dedicated FileHandler in common/ema_engine.py writing formatted log events to output/logs/ema_engine.log.
+      2. Implemented persistent status file output/monitor/ema_engine_status.json in common/ema_engine.py, ensuring status badges update immediately to Live/Running across process reloads.
+      3. Updated frontend log concatenation in both app_option_Trade.py and app_Sock_Trade.py to combine ema_engine, daily, and bear_trade logs into allLogs when logFilter is "all" or specific engine name.
+    status: RESOLVED
+
+  - id: ISSUE-030
+    title: EMA Engine KiteConnect Client Unpacking, Path Alignment & Log Clear Crash Fix
+    severity: HIGH
+    category: Dashboard Engine Control & Logging
+    date_reported: "2026-08-10"
+    symptom: |
+      1. EMA scan cycle threw "'tuple' object has no attribute 'historical_data'" error on every symbol scan.
+      2. Clicking "Clear Logs" crashed with NameError due to undefined DAILY_LOG_FILE variable in app_option_Trade.py and omitted EMA_LOG_FILE from clearing.
+      3. EMA_LOG_FILE path mismatch prevented log lines from displaying on the dashboard.
+    root_cause: |
+      1. execute_ema_scan_cycle assigned kite = load_kite_session(), which returns (api_key, access_token) tuple instead of KiteConnect instance.
+      2. /api/logs/clear route contained outdated/undefined log file array references.
+      3. EMA_LOG_FILE path in app_option_Trade.py contained unnecessary parent directory traversal, missing the shared output/logs/ema_engine.log file.
+    affected_files:
+      - common/ema_engine.py
+      - Trade_Option/app_option_Trade.py
+      - Trade_Stock/app_Sock_Trade.py
+      - ISSUE_MANAGEMENT.yaml
+    resolution: |
+      1. Updated execute_ema_scan_cycle in common/ema_engine.py to correctly unpack ak, at = load_kite_session() and instantiate KiteConnect(api_key=ak) with access token set.
+      2. Fixed EMA_LOG_FILE path in app_option_Trade.py and app_Sock_Trade.py to point directly to BASE_DIR/output/logs/ema_engine.log.
+      3. Updated api_logs_clear route in both apps to properly include EMA_LOG_FILE and remove undefined variable references.
+      4. Upgraded tail_log to use errors="replace" and clean line stripping, preventing silent encoding exceptions.
+    status: RESOLVED
+
+  - id: ISSUE-031
+    title: Automatic Stock Instrument Token Synchronization in Stock EMA Engine
+    severity: MEDIUM
+    category: Data Quality & Instrument Master Sync
+    date_reported: "2026-08-10"
+    symptom: |
+      EMA Scan cycle logged "EMA Scan skipped for [SYMBOL]: invalid token" for 8 stock symbols (BAJAJ-AUTO, BAJAJFINSV, BEL, JIOFIN, JSWSTEEL, SHRIRAMFIN, TECHM, TRENT).
+    root_cause: |
+      STOCK_REGISTRY static dictionary tokens had expired or changed on Zerodha NSE master for those 8 specific instruments.
+    affected_files:
+      - common/ema_engine.py
+      - ISSUE_MANAGEMENT.yaml
+    resolution: |
+      Integrated sync_stock_tokens(kite) at the start of execute_ema_scan_cycle() in common/ema_engine.py to query Zerodha NSE instrument master and update STOCK_REGISTRY with live tokens before scanning.
+    status: RESOLVED
+
+  - id: ISSUE-032
+    title: Active Trades Entry Price Rendering Fallback & DB Sync Fix
+    severity: MEDIUM
+    category: UI Rendering & Trade DB Sync
+    date_reported: "2026-08-10"
+    symptom: |
+      Active Trade TMPV26AUG350PE rendered "-" under Entry column on dashboard table when entry_spot was 0.
+    root_cause: |
+      tradeRow function in JS evaluated entrySpotVal and entryPriceVal directly without falling back to matching Zerodha Kite positions average_price/buy_price.
+    affected_files:
+      - Trade_Option/app_option_Trade.py
+      - Trade_Stock/app_Sock_Trade.py
+      - output/monitor/trades_db.json
+      - ISSUE_MANAGEMENT.yaml
+    resolution: |
+      1. Updated tradeRow in app_option_Trade.py and app_Sock_Trade.py to query d.kite_positions for average_price/buy_price as fallback when t.entry is 0 or missing.
+      2. Updated trades_db.json entry_price and entry_spot to 12.0 for TMPV26AUG350PE, ensuring 12.00 renders under Entry column.
+    status: RESOLVED
+
+  - id: ISSUE-033
+    title: UI Config Scan Interval Passing & Stock EMA CSV Export Integration
+    severity: MEDIUM
+    category: Dashboard Engine Control & CSV Export
+    date_reported: "2026-08-10"
+    symptom: |
+      1. Stock EMA Engine started with default 300s scan interval regardless of scan_interval set in UI config modal.
+      2. CSV export via Export button omitted Stock EMA Engine scan trades.
+    root_cause: |
+      1. /api/programs/ema_engine/start passed timeframe=tf but omitted scan_interval=interval from load_config().
+      2. api_scan_export files array omitted EMA_DISPLAY_FILE_OPTION / EMA_DISPLAY_FILE_STOCK.
+    affected_files:
+      - Trade_Option/app_option_Trade.py
+      - Trade_Stock/app_Sock_Trade.py
+      - ISSUE_MANAGEMENT.yaml
+    resolution: |
+      1. Updated api_start in app_option_Trade.py and app_Sock_Trade.py to parse scan_interval from load_config() and pass to start_ema_engine.
+      2. Added EMA_DISPLAY_FILE_OPTION / EMA_DISPLAY_FILE_STOCK to files list in api_scan_export route in both apps.
+    status: RESOLVED
+
+  - id: ISSUE-034
+    title: Dedicated Clear Button & Route for EMA Scan Tab
+    severity: FEATURE
+    category: Dashboard UI Controls & Data Clearing
+    date_reported: "2026-08-10"
+    symptom: |
+      EMA Scan tab lacked a dedicated Clear button to reset scanned EMA crossover trades on demand.
+    root_cause: |
+      EMA Scan tab section header only contained title span without action control buttons or clearing endpoint.
+    affected_files:
+      - Trade_Option/app_option_Trade.py
+      - Trade_Stock/app_Sock_Trade.py
+      - ISSUE_MANAGEMENT.yaml
+    resolution: |
+      1. Added red Clear button and blue Export button to section header of ema-scan-tab in app_option_Trade.py and app_Sock_Trade.py.
+      2. Added /api/scan/ema/clear endpoint in backend to clear EMA display files and update in-memory state.
+      3. Implemented clearEmaScanData() in frontend JS for immediate tabular reset.
+    status: RESOLVED
+
+  - id: ISSUE-035
+    title: 09:45 AM Failsafe Un-Pause Triggered Automatic Market Exits for ETERNAL & HCLTECH
+    severity: HIGH
+    category: Live Execution Risk Management & Failsafe Monitor
+    date_reported: "2026-08-10"
+    symptom: |
+      Automatic SELL orders for ETERNAL AUG 300 PE (2425 Qty @ 3.35) and HCLTECH AUG 1340 PE (400 Qty @ 22.80) triggered in Zerodha Kite at 09:45:01 AM and 09:45:23 AM.
+    root_cause: |
+      1. Automated failsafe monitoring was configured to pause before 09:45:00 AM to avoid opening market volatility.
+      2. At 09:45:00 AM sharp, the pause expired and the background position monitor evaluated all active positions against recorded SL levels.
+      3. Since HCLTECH LTP (22.80) <= SL (24.30) and ETERNAL LTP (3.35) <= SL (4.41), the failsafe engine submitted regular SELL limit orders immediately at 09:45:01 and 09:45:23.
+    affected_files:
+      - Trade_Option/app_option_Trade.py
+      - common/trading_core.py
+      - ISSUE_MANAGEMENT.yaml
+    resolution: |
+      1. Identified exact root cause: 09:45 AM failsafe pause expiration evaluated active positions where LTP fell below recorded SL levels.
+      2. Restarted the background trading service cleanly.
+    status: RESOLVED
+
+  - id: ISSUE-036
+    title: UI SL Override Key Mismatch Reset User-Set SL (2.50) to Auto 10% SL (4.41)
+    severity: HIGH
+    category: Risk Management & SL Override Persistence
+    date_reported: "2026-08-10"
+    symptom: |
+      User modified ETERNAL26AUG300PE SL to 2.50 on UI, but failsafe monitor evaluated SL as 4.41 and executed exit at 3.35.
+    root_cause: |
+      1. lookup_scan_sl_target in common/trading_core.py used strict exact string equality (clean_k == clean_c) when searching sl_target_overrides.json.
+      2. If an override was saved under symbol ('ETERNAL') instead of full contract string ('ETERNAL26AUG300PE'), or if Target Sanity Guard invalidated missing T1, lookup_scan_sl_target fell back to derive_sl_targets_for_contract, which auto-generated default 10% SL = 4.41 (4.90 * 0.90).
+    affected_files:
+      - common/trading_core.py
+      - Trade_Option/app_option_Trade.py
+      - ISSUE_MANAGEMENT.yaml
+    resolution: |
+      1. Enhanced lookup_scan_sl_target in common/trading_core.py to support flexible symbol & contract partial key matching (clean_k in clean_c or clean_c in clean_k).
+      2. Updated api_update_position in app_option_Trade.py to write overrides under both clean_target and symbol keys in sl_target_overrides.json.
+      3. Guaranteed that user-specified SL overrides are always preserved regardless of T1 target sanity checks.
+    status: RESOLVED
+
+  - id: ISSUE-037
+    title: Split-Brain sl_target_overrides.json Files Clobbered User SL (HCLTECH 20.0 vs 35.46)
+    severity: HIGH
+    category: Risk Management & SL Override Persistence
+    date_reported: "2026-08-10"
+    symptom: |
+      HCLTECH26AUG1340PE displayed Entry 22.5 / SL 35.46 (SL above entry, -20%) despite active_positions_db.json and
+      root sl_target_overrides.json storing SL 20.0. HCLTECH26AUG1360PE showed pattern TIMEFRAME_SWING_MANUAL after user
+      SL edit was silently overwritten ("manual entry takes precedence").
+    root_cause: |
+      1. Dual override files existed: app_option_Trade.py/app_Sock_Trade.py write to project-root output/monitor/sl_target_overrides.json
+         (BASE_DIR = project root), while index_options_trade_engine.py & stock_options_trade_engine.py read from
+         Trade_Option/output/monitor/sl_target_overrides.json (BASE_DIR = Trade_Option) â€” same contract, different SL values.
+      2. lookup_scan_sl_target in common/trading_core.py used next((p for p in paths if exists)) â€” it stopped at the FIRST existing
+         path (cwd-relative Trade_Option copy), so a user edit living only in the canonical root file was never found.
+      3. On lookup miss, sync_kite_positions fell through to derive_sl_targets_for_contract (TIMEFRAME_SWING_MANUAL / 10% SL),
+         overwriting the user-set SL on every new manual KITE_SYNC entry.
+      4. reconcile_positions in common/trading_core.py also read a bare cwd-relative "output/monitor/sl_target_overrides.json".
+      This is a repeat of the ISSUE-036 family: override persistence was only half-fixed (key matching), the dual-file/cwd split was never addressed.
+    affected_files:
+      - common/trading_core.py
+      - Trade_Option/index_options_trade_engine.py
+      - Trade_Option/stock_options_trade_engine.py
+      - ISSUE_MANAGEMENT.yaml
+    resolution: |
+      1. Added get_override_paths() in common/trading_core.py: returns ordered sl_target_overrides.json candidates with the canonical
+         project-root path FIRST (dedup by normalized absolute path).
+      2. Rewrote lookup_scan_sl_target override search to iterate ALL existing override paths (canonical first) and pick the best
+         match (exact > partial specificity), so a user edit saved under a different cwd is never missed and stale duplicates cannot clobber it.
+      3. Pointed SL_TARGET_OVERRIDES_FILE in index_options_trade_engine.py and stock_options_trade_engine.py at the canonical
+         project-root path (os.path.dirname(BASE_DIR)) so engine [OVERRIDE] loops and reconcile_positions read the same file the apps write.
+      4. reconcile_positions now reads get_override_paths()[0] instead of a bare cwd-relative path.
+    status: RESOLVED
+
+  - id: ISSUE-038
+    title: TRENT26AUG3000CE Staged Trade Invisible on Option Dashboard Scan Tab
+    severity: HIGH
+    category: Dashboard / UI Data Pipeline
+    family: PATH_SPLIT
+    date_reported: "2026-08-10"
+    symptom: |
+      TRENT26AUG3000CE (staged by stock_options_trade_engine at 10:43:32, along with 9 other trades) never
+      appeared on the Option Dashboard (port 5050) Scan Tab. Dashboard showed only 0 staged trades / stale 09:00 data.
+    root_cause: |
+      PATH_SPLIT family root cause: every module re-derives output paths independently (os.getcwd(), BASE_DIR from
+      __file__, bare "output/..." strings), so writes and reads diverged across cwd. Specifically:
+      1. stock_options_trade_engine.py / index_options_trade_engine.py wrote staged trades to
+         Trade_Option/output/monitor/scan_display_data.json (cwd/BASE_DIR-relative), while app_option_Trade.py
+         read only project-root output/monitor/scan_display.json + scan_display_index.json.
+      2. Same split-brain duplicated trades_db.json (root: 9 clean trades vs Trade_Option: 353 trades incl.
+         NIFTY2680424600CE x70 and POWERGRID26AUG290CE x105 duplicate ACTIVE rows), the scanner log, and
+         sl_target_overrides.json â€” the exact ISSUE-037/ISSUE-036 family recurring.
+      3. Legacy Trade_Option/output/monitor/scan_display_data.json became a stale orphan after the fix.
+    affected_files:
+      - common/paths.py
+      - Trade_Option/stock_options_trade_engine.py
+      - Trade_Option/index_options_trade_engine.py
+      - Trade_Stock/stock_bullish_reversal_scanner.py
+      - Trade_Stock/stock_bearish_reversal_scanner.py
+      - Trade_Option/app_option_Trade.py
+      - Trade_Stock/app_Sock_Trade.py
+      - common/trading_core.py
+      - common/trade_db.py
+      - ISSUE_MANAGEMENT.yaml
+    resolution: |
+      Canonicalized ALL cross-module file paths through new common/paths.py (PROJECT_ROOT + input_file/monitor_file/
+      log_file helpers). Engines now write the same root files the dashboards read:
+      1. stock_options_trade_engine.py -> paths.SCAN_DISPLAY_FILE (output/monitor/scan_display.json) + root log.
+      2. index_options_trade_engine.py -> paths.SCAN_DISPLAY_INDEX_FILE + root index log.
+      3. Stock scanners -> paths.SCAN_DISPLAY_STOCK_FILE (scan_display_stock.json).
+      4. trade_db.py / trading_core.py / ema_engine.py / daily_trade_journal.py -> paths.* for all DB/log/token files.
+      5. app_Sock_Trade.py also gained SCAN_DISPLAY_INDEX_FILE + SCAN_DISPLAY_BEAR_FILE (previously undefined).
+      Ghost data cleanup: dedupe_active_positions() removed 170 duplicate ACTIVE rows; purge_expired_positions()
+      removed expired ACTIVE NIFTY2680424600CE rows (weekly expiry 04-Aug-2026). Backups kept under
+      *.bak_ghost_cleanup. TRENT26AUG3000CE (fresh Aug-2026 contract, not expired) now displays correctly.
+    status: RESOLVED
+
+  - id: ISSUE-039
+    title: Four-Layer Prevention System for PATH_SPLIT & DATA_INTEGRITY Issue Families
+    severity: ENHANCEMENT
+    category: Architecture / Process Discipline
+    family: PATH_SPLIT / DATA_INTEGRITY
+    date_reported: "2026-08-10"
+    symptom: |
+      Recursive bugs (ISSUE-036 SL override, ISSUE-037 override split-brain, ISSUE-038 TRENT invisible,
+      NIFTY expired contract, POWERGRID duplicate ACTIVE rows) all trace to two recurring failure classes:
+      modules resolving paths from different cwds, and the trade DB accepting duplicate/expired rows. Fixes
+      kept patching one symptom at a time instead of removing the failure class.
+    root_cause: |
+      1. LAYER MISSING - single source of truth: no canonical path module existed; every file re-derived BASE_DIR.
+      2. LAYER MISSING - write-side integrity: trade_db.create_trade had no duplicate or expiry guard.
+      3. LAYER MISSING - regression self-check: no automated invariant checks (path reachability, DB dupes/expiry).
+      4. LAYER MISSING - process discipline: ISSUE_MANAGEMENT.yaml entries lacked family markers, so recurring
+         families were not recognized.
+    affected_files:
+      - common/paths.py
+      - common/trade_db.py
+      - scratch/run_full_regression_test.py
+      - ISSUE_MANAGEMENT.yaml
+    resolution: |
+      Implemented all four prevention layers so PATH_SPLIT / DATA_INTEGRITY families cannot silently recur:
+      L1 PATH CANONICALIZATION: common/paths.py is the single source of truth (PROJECT_ROOT + helpers); all
+      engines/apps/scanners/DB/log modules now import it. Regression Test 7 enforces cwd-independence.
+      L2 DATA-INTEGRITY GUARDS: trade_db.create_trade(..., allow_duplicate=False) returns (tid, created) and
+      dedups active contracts per engine; contract_is_expired() (NFO-cache-first + embedded-expiry regex, both
+      NIFTY2680424600CE and NIFTY26AUG24600CE formats) guards 1-CLICK BUY in both apps; purge_expired_positions()
+      + dedupe_active_positions() clean ghost rows. Regression Test 8 asserts no dupes/no expired ACTIVE rows.
+      L3 REGRESSION SELF-CHECK: scratch/run_full_regression_test.py extended to 9 tests incl. canonical path
+      consistency, DB invariants, and engine/app path alignment. Regression Test 9 asserts engines and apps point
+      at the identical canonical display files.
+      L4 PROCESS DISCIPLINE: all issue entries now carry a `family:` marker (PATH_SPLIT / DATA_INTEGRITY / ...).
+      Any new fix touching paths or trade data must update the marker so recurring families are visible at a glance.
+    status: RESOLVED
+
+  - id: ISSUE-040
+    title: LT26AUG4050PE False SELL from Corrupted entry_time (Anchor Backfill Overwrote Real Buy Time)
+    severity: CRITICAL
+    category: Monitor / Position Management
+    family: DATA_INTEGRITY
+    date_reported: "2026-08-10"
+    symptom: |
+      LT26AUG4050PE (bought 59.0 via KITE_SYNC at 11:50:40) was SELLed at 11:55:12 @ 55.95 (-5.2%) even though
+      the premium was trading near 55-56 and had NOT reached T1 (74.15). Sequence: 11:55:10 TRAIL-1 SL=BE(59.00),
+      11:55:12 SELL @ 55.95. DB exited with CANDLE_CLOSE_SL on a pre-buy 10:15 bar.
+    root_cause: |
+      The one-time anchor backfill (fixing candle_a_time for ACTIVE rows) ALSO overwrote entry_time with the
+      historical scan D-candle time (2026-08-06 09:45) instead of preserving the real execution time
+      (2026-08-10 11:50:40). monitor_active_positions uses entry_time to exclude candles BEFORE entry
+      (is_candle_before_entry, trading_core.py). With entry_time = 08-06, ALL candles in the 2-day window counted
+      as "after entry": HP picked up a historical high >= T1-buffer -> TRAIL-1 moved SL to breakeven 59.00, then
+      the pre-buy 10:15 bar close (55.95) <= 59.00 tripped CANDLE_CLOSE_SL. COALINDIA exit was GENUINE (entry_time
+      was correct = buy time).
+    affected_files:
+      - common/trading_core.py
+      - Trade_Option/index_options_trade_engine.py
+      - Trade_Option/stock_options_trade_engine.py
+      - Trade_Option/app_option_Trade.py
+      - Trade_Stock/app_Sock_Trade.py
+      - output/monitor/trades_db.json
+      - scratch/run_full_regression_test.py
+    resolution: |
+      1. DB repaired: RELIANCE entry_time 2026-08-10 11:15 -> 11:50:41 (created_at); NIFTY2681124650PE and
+         EICHERMOT26AUG8000PE None -> created_at. All ACTIVE rows now have valid entry_time.
+      2. trading_core.py gained sanitize_entry_time() (falls back to created_at/now when entry_time is empty/None
+         or older than created_at); applied at both entry_time_str sites in monitor_active_positions and in both
+         engine recovery blocks (created_at is now kept in the recovered pos dict).
+      3. api_buy_scanned_trade (both apps) now always stores entry_time = dt.now() (actual execution), never the
+         scan candle time; candle_a_time/CandleATime remain the anchor display fields.
+      4. Regression Test 10 asserts no ACTIVE row has entry_time None or older than created_at.
+  - id: ISSUE-041
+    title: Scan Tab Clearing & Active Position Staging Validation
+    severity: MEDIUM
+    category: Dashboard / UI Data Pipeline
+    family: DATA_INTEGRITY
+    date_reported: "2026-08-10"
+    symptom: |
+      1. Clicking "Clear Scan" on dashboard left old data (carry_forward and active_live arrays) intact in display JSON files, causing old trades to persist after clear.
+      2. Running scan cycles displayed closed, expired, or invalid active positions on the Scan Tab without validating their status.
+    root_cause: |
+      1. api_scan_clear in app_option_Trade.py & app_Sock_Trade.py emptied staged_trades but did not wipe carry_forward and active_live arrays or cycle_trades.json, and app_Sock_Trade.py pointed at wrong file paths.
+      2. write_scan_display_data in trading_core.py blindly pushed active positions to display arrays without checking if status == "ACTIVE", contract expired, or SL/target intact.
+    affected_files:
+      - common/trading_core.py
+      - Trade_Option/app_option_Trade.py
+      - Trade_Stock/app_Sock_Trade.py
+      - scratch/test_scan_clear_and_validation.py
+    resolution: |
+      1. Updated api_scan_clear and api_scan_ema_clear across both apps to wipe all 4 trade sections (staged_trades, all_staged_today, carry_forward, active_live) and cycle files, stamping cleared_at across all canonical display files.
+      2. Updated write_scan_display_data to validate active positions (must be status ACTIVE/OPEN, non-expired, and have valid SL & T1). Invalid or closed positions are filtered out ("else dont display").
+      3. write_scan_display_data respects cleared_at timestamp so old staged trades prior to clearing are never re-loaded.
+      4. Verified with standalone unit test scratch/test_scan_clear_and_validation.py (100% pass).
+  - id: ISSUE-042
+    title: AttributeError in stage_cycle_trade ('list' object has no attribute 'setdefault')
+    severity: HIGH
+    category: Cycle Staging / Persistence
+    family: DATA_INTEGRITY
+    date_reported: "2026-08-10"
+    symptom: |
+      Scanning engine threw error: "nifty50: Error processing INDIGO: 'list' object has no attribute 'setdefault'".
+    root_cause: |
+      api_scan_clear in app_option_Trade.py & app_Sock_Trade.py wrote json.dump([], fh) to paths.CYCLE_STORE_FILE (cycle_trades.json).
+      When stage_cycle_trade ran, _read_json returned a list [] instead of a dictionary {}, causing db.setdefault(engine, []) to crash with AttributeError.
+    affected_files:
+      - common/trade_db.py
+      - Trade_Option/app_option_Trade.py
+      - Trade_Stock/app_Sock_Trade.py
+      - output/monitor/cycle_trades.json
+    resolution: |
+      1. Updated stage_cycle_trade, get_cycle_trades, clear_cycle_trades, and record_executed_pattern in common/trade_db.py to validate `if not isinstance(db, dict): db = {}`, handling non-dict JSON gracefully.
+      2. Updated api_scan_clear in app_option_Trade.py and app_Sock_Trade.py to dump `{}` (dictionary) into CYCLE_STORE_FILE instead of `[]`.
+      3. Overwrote output/monitor/cycle_trades.json on disk with `{}`.
+  - id: ISSUE-043
+    title: Uncaught ReferenceError switchLeftTab is not defined (Missing Brace in app_Sock_Trade.py)
+    severity: HIGH
+    category: Dashboard Frontend JS
+    family: UI_SYNTAX
+    date_reported: "2026-08-10"
+    symptom: |
+      Opening Stock Dashboard (http://localhost:5051/) threw console error: "Uncaught ReferenceError: switchLeftTab is not defined at HTMLButtonElement.onclick".
+    root_cause: |
+      Line 953 in Trade_Stock/app_Sock_Trade.py had a missing closing brace `}` at the end of the `buyScannedTrade` catch block.
+      This unclosed function caused a JavaScript SyntaxError (`Unexpected end of input`), which caused browsers to fail parsing Script Block 1 entirely, making all top-level functions (like `switchLeftTab`) undefined.
+    affected_files:
+      - Trade_Stock/app_Sock_Trade.py
+      - scratch/check_js_syntax.py
+    resolution: |
+      1. Fixed missing closing brace `}` on line 953 of Trade_Stock/app_Sock_Trade.py.
+      2. Created scratch/check_js_syntax.py script using Node.js `--check` to validate all script blocks.
+      3. Verified all 3 inline script blocks in both dashboards pass JS syntax checks with 100% success.
+    status: RESOLVED
+  - id: ISSUE-044
+    title: Add Target Universe Selector and Expanded Timeframes (15m, 30m, 60m) to Stock EMA Engine
+    severity: ENHANCEMENT
+    category: Strategy Engine / UI Configuration
+    family: FEATURE_ENHANCEMENT
+    date_reported: "2026-08-11"
+    symptom: |
+      Stock EMA Engine was restricted to 1d/30m/15m/5m timeframes and hardcoded to scan all symbols in STOCK_REGISTRY without target index universe filtering options.
+    root_cause: |
+      common/ema_engine.py did not accept a target_universe parameter and did not expose 60minute timeframe options in dashboard program configuration.
+    affected_files:
+      - common/ema_engine.py
+      - Trade_Option/app_option_Trade.py
+      - Trade_Stock/app_Sock_Trade.py
+    resolution: |
+      1. Updated common/ema_engine.py to accept target_universe parameter and integrate get_universe_symbols_and_tokens from equity_universe for dynamic symbol lookup.
+      2. Updated PROGRAMS config_fields in Trade_Option/app_option_Trade.py and Trade_Stock/app_Sock_Trade.py to include Target Universe dropdown (ALL, NIFTY50, NIFTY_NEXT_100, NIFTY_MIDCAP_100, NIFTY_SMALLCAP_250, INDEX_OPTIONS) and 60minute timeframe.
+      3. Updated /api/programs/ema_engine/start endpoint in both app services to extract target_universe and pass to start_ema_engine.
+      4. Verified with AST syntax parsing and scratch/run_full_regression_test.py (10/10 tests passed).
+    status: RESOLVED
 
 

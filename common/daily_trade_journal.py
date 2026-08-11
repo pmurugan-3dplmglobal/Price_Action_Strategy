@@ -4,7 +4,9 @@ import csv
 import logging
 from datetime import datetime
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+import paths
+
+BASE_DIR = paths.PROJECT_ROOT
 WIN_JOURNAL_DIR = r"G:\Poovendan\AI\Trading\Share\Account_Status_leaning"
 if os.path.exists(r"G:\Poovendan\AI\Trading\Share"):
     JOURNAL_DIR = WIN_JOURNAL_DIR

@@ -60,6 +60,7 @@ except Exception as e:
 print("[TEST 4] Testing Display Data Serializers (write_scan_display_data)...", end="", flush=True)
 try:
     from trading_core import write_scan_display_data
+    import paths
     test_trades = [{
         "symbol": "BAJAJFINSV",
         "contract": "BAJAJFINSV26AUG2100PE",
@@ -74,7 +75,7 @@ try:
         "entry_time": "2026-08-03 14:45:00",
         "candle_a_time": "2026-08-03 14:45:00"
     }]
-    disp_path = os.path.join("Trade_Option", "output", "monitor", "scan_display_data.json")
+    disp_path = paths.SCAN_DISPLAY_FILE
     write_scan_display_data(test_trades, [], disp_path, engine_name="nifty50")
     print(" PASSED [OK]", flush=True)
 except Exception as e:
@@ -108,9 +109,98 @@ except Exception as e:
     errors.append(f"Database Test Failed: {e}")
     print(f" FAILED [ERR] ({e})", flush=True)
 
+# Test 7: Path Consistency (single canonical root regardless of CWD)
+print("[TEST 7] Testing Canonical Path Consistency (cwd-independent)...", end="", flush=True)
+try:
+    import paths
+    root_abs = os.path.abspath(paths.PROJECT_ROOT)
+    targets = {
+        "SCAN_DISPLAY_FILE": paths.SCAN_DISPLAY_FILE,
+        "SCAN_DISPLAY_INDEX_FILE": paths.SCAN_DISPLAY_INDEX_FILE,
+        "SCAN_DISPLAY_STOCK_FILE": paths.SCAN_DISPLAY_STOCK_FILE,
+        "SCAN_DISPLAY_BEAR_FILE": paths.SCAN_DISPLAY_BEAR_FILE,
+        "TRADES_DB": paths.TRADES_DB,
+        "ACTIVE_POSITIONS_DB": paths.ACTIVE_POSITIONS_DB,
+        "TOKEN_FILE": paths.TOKEN_FILE,
+        "JOURNAL_TRADES_DB": paths.JOURNAL_TRADES_DB,
+    }
+    for name, p in targets.items():
+        ap = os.path.abspath(p)
+        assert ap.startswith(root_abs), f"{name} resolves outside root: {ap}"
+        assert os.path.isabs(ap), f"{name} is not absolute: {ap}"
+    assert os.path.abspath(paths.SCAN_DISPLAY_FILE) == os.path.join(root_abs, "output", "monitor", "scan_display.json"), "scan_display.json not at root output/monitor"
+    assert os.path.abspath(paths.TRADES_DB) == os.path.join(root_abs, "output", "monitor", "trades_db.json"), "trades_db.json not at root output/monitor"
+    print(" PASSED [OK]", flush=True)
+except Exception as e:
+    errors.append(f"Path Consistency Failed: {e}")
+    print(f" FAILED [ERR] ({e})", flush=True)
+
+# Test 8: DB Invariants (no dupe ACTIVE contracts, no expired ACTIVE rows)
+print("[TEST 8] Testing DB Invariants (dupes/expired)...", end="", flush=True)
+try:
+    from collections import Counter
+    from trade_db import get_active_trades
+    from trading_core import contract_is_expired
+    active = get_active_trades()
+    keys = [f"{t.get('engine')}|{t.get('contract', t.get('symbol'))}" for t in active]
+    dups = {k: v for k, v in Counter(keys).items() if v > 1}
+    assert not dups, f"Duplicate ACTIVE rows found: {dups}"
+    expired = [t for t in active if contract_is_expired(str(t.get('contract', t.get('symbol'))))]
+    assert not expired, f"Expired ACTIVE rows found: {[t.get('contract') for t in expired]}"
+    print(f" PASSED [OK] (Active: {len(active)}, no dupes, no expired)", flush=True)
+except Exception as e:
+    errors.append(f"DB Invariants Failed: {e}")
+    print(f" FAILED [ERR] ({e})", flush=True)
+
+# Test 9: Engine path alignment (engines target canonical display files)
+print("[TEST 9] Testing Engine/App Path Alignment...", end="", flush=True)
+try:
+    import paths
+    exp_disp = os.path.abspath(paths.SCAN_DISPLAY_FILE)
+    exp_idx = os.path.abspath(paths.SCAN_DISPLAY_INDEX_FILE)
+    exp_stock = os.path.abspath(paths.SCAN_DISPLAY_STOCK_FILE)
+    exp_bear = os.path.abspath(paths.SCAN_DISPLAY_BEAR_FILE)
+    mismatch = []
+    if os.path.abspath(stock_options_trade_engine.SCAN_DISPLAY_FILE) != exp_disp:
+        mismatch.append("stock_options_trade_engine.SCAN_DISPLAY_FILE")
+    if os.path.abspath(index_options_trade_engine.SCAN_DISPLAY_FILE) != exp_idx:
+        mismatch.append("index_options_trade_engine.SCAN_DISPLAY_FILE")
+    if os.path.abspath(stock_bullish_reversal_scanner.SCAN_DISPLAY_FILE) != exp_stock:
+        mismatch.append("stock_bullish_reversal_scanner.SCAN_DISPLAY_FILE")
+    if os.path.abspath(stock_bearish_reversal_scanner.SCAN_DISPLAY_FILE) != exp_bear:
+        mismatch.append("stock_bearish_reversal_scanner.SCAN_DISPLAY_FILE")
+    assert not mismatch, f"Path mismatch: {mismatch}"
+    print(" PASSED [OK]", flush=True)
+except Exception as e:
+    errors.append(f"Engine Path Alignment Failed: {e}")
+    print(f" FAILED [ERR] ({e})", flush=True)
+
+# Test 10: ACTIVE trades must have a usable entry_time (no None, not older than created_at)
+print("[TEST 10] Testing ACTIVE entry_time Invariant (candle-filter correctness)...", end="", flush=True)
+try:
+    from trade_db import get_active_trades
+    from trading_core import sanitize_entry_time
+    active = get_active_trades()
+    bad = []
+    for t in active:
+        et = str(t.get("entry_time") or "").strip().lower()
+        ca = str(t.get("created_at") or "").strip().lower()
+        if not et or et == "none":
+            bad.append(f"{t.get('contract')}: entry_time missing")
+            continue
+        clean = sanitize_entry_time(dict(t))
+        assert str(clean).strip().lower() == et, f"{t.get('contract')}: sanitize changed {et} -> {clean}"
+        if ca and et < ca:
+            bad.append(f"{t.get('contract')}: entry_time {et} older than created_at {ca}")
+    assert not bad, "; ".join(bad)
+    print(f" PASSED [OK] (Active: {len(active)}, all entry_time valid)", flush=True)
+except Exception as e:
+    errors.append(f"entry_time Invariant Failed: {e}")
+    print(f" FAILED [ERR] ({e})", flush=True)
+
 print("\n" + "=" * 100)
 if not errors:
-    print("      ALL 6 REGRESSION TESTS PASSED WITH 100% SUCCESS -- ZERO REGRESSIONS FOUND!")
+    print("      ALL 10 REGRESSION TESTS PASSED WITH 100% SUCCESS -- ZERO REGRESSIONS FOUND!")
 else:
     print(f"      REGRESSION ERRORS FOUND ({len(errors)}):")
     for err in errors:

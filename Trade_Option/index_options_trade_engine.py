@@ -4,14 +4,12 @@ import logging
 import time
 import threading
 import sys
-import csv
 COMMON_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "common"))
 if COMMON_DIR not in sys.path:
     sys.path.insert(0, COMMON_DIR)
-from datetime import datetime as dt, timedelta, time as datetime_time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import paths
+from datetime import datetime as dt, timedelta
 import pandas as pd
-import numpy as np
 
 from kiteconnect import KiteConnect
 import trade_db
@@ -21,35 +19,24 @@ from trading_core import (
     ensure_kite_session,
     log_to_journal,
     is_market_hours,
-    get_weekly_expiry,
-    cap_lookback_days,
-    check_left_side_rule,
-    find_profit_targets,
-    calculate_position_size,
     scan_anchor_bcd_breakout,
     find_anchor_bullish_engulfing,
     find_anchor_ll_sweep,
     find_anchor_hammer_baby,
     find_anchor_bullish_harami,
     find_anchor_two_higher_highs,
-    fetch_option_data,
-    fetch_and_resample_candles,
     trading_days_between,
-    calc_rr,
     live_execution_enabled,
-    close_position as shared_close_position,
     load_program_config_for_engine,
     sync_kite_positions as shared_sync_kite,
     write_scan_display_data as shared_write_display,
-    derive_sl_targets_for_symbol,
     lookup_scan_sl_target,
     reconcile_positions as shared_reconcile,
     resolve_option_strikes as shared_resolve_strikes,
     scan_symbol,
     monitor_active_positions as shared_monitor_positions,
+    sanitize_entry_time,
     simulate_trade_outcome as shared_simulate,
-    is_anchor_valid_and_active,
-    find_newest_valid_anchor,
     INDEX_REGISTRY
 )
 
@@ -57,7 +44,7 @@ LIVE_MARKET_DEPLOYMENT = True
 LOOKBACK_DAYS = 30
 INITIAL_CAPITAL = 100000.0
 MAX_RISK_PERCENT = 1.0
-TOKEN_FILE = "input/kite_access_token.txt"
+TOKEN_FILE = paths.TOKEN_FILE
 SCAN_INTERVAL_SECONDS = 15
 
 TIMEFRAME_ENTRY = "3minute"
@@ -71,13 +58,12 @@ position_lock = threading.Lock()
 instrument_dump = None
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ANCHOR_SCAN_REQUEST_FILE = os.path.join(BASE_DIR, "output", "monitor", "anchor_scan_request.txt")
-ANCHOR_SCAN_STOP_FILE = os.path.join(BASE_DIR, "output", "monitor", "anchor_scan_stop.txt")
-LIVE_EXECUTION_FLAG = os.path.join(BASE_DIR, "input", "index_live.flag")
-SCAN_DISPLAY_FILE = os.path.join(BASE_DIR, "output", "monitor", "scan_display_index.json")
-SL_TARGET_OVERRIDES_FILE = os.path.join(BASE_DIR, "output", "monitor", "sl_target_overrides.json")
+LIVE_EXECUTION_FLAG = paths.INDEX_LIVE_FLAG
+SCAN_DISPLAY_FILE = paths.SCAN_DISPLAY_INDEX_FILE
+SL_TARGET_OVERRIDES_FILE = paths.SL_TARGET_OVERRIDES_FILE
 
-journal_lock = threading.Lock()
-JOURNAL_FILE = os.path.join(BASE_DIR, "output", "monitor", "trade_journal.csv")
+INDEX_LOG_FILE = paths.INDEX_LOG_FILE
+os.makedirs(os.path.dirname(INDEX_LOG_FILE), exist_ok=True)
 
 class FlushFileHandler(logging.FileHandler):
     def emit(self, record):
@@ -88,7 +74,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[
-        FlushFileHandler("output/logs/bull_index_trade_engine.log", mode="a", encoding="utf-8"),
+        FlushFileHandler(INDEX_LOG_FILE, mode="a", encoding="utf-8"),
         logging.StreamHandler()
     ]
 )
@@ -261,7 +247,7 @@ def execute_highest_rr_trade(kite, staged):
                 if best["symbol"] in ACTIVE_POSITIONS:
                     logging.info(f"{best['symbol']} already active; skipping new trade")
                     return
-                pos["trade_id"] = trade_db.create_trade("index", best["symbol"], {k: v for k, v in pos.items() if k != "trade_id"})
+                pos["trade_id"], _created = trade_db.create_trade("index", best["symbol"], {k: v for k, v in pos.items() if k != "trade_id"})
                 ACTIVE_POSITIONS[best["symbol"]] = pos
         ok = execute_index_entry(kite, pos)
         if ok:
@@ -326,11 +312,10 @@ def main_scan_loop(kite):
         if sym in INDEX_REGISTRY and sym not in seen_symbols:
             seen_symbols.add(sym)
             with position_lock:
-                pos = {k: v for k, v in t.items() if k not in ("id", "engine", "symbol", "status", "created_at", "updated_at")}
+                pos = {k: v for k, v in t.items() if k not in ("id", "engine", "symbol", "status", "updated_at")}
                 pos["trade_id"] = t["id"]
                 pos["entry_spot"] = pos.get("entry_spot") or t.get("entry_spot")
-                if "entry_time" not in pos:
-                    pos["entry_time"] = t.get("created_at") or dt.now().isoformat()
+                pos["entry_time"] = sanitize_entry_time(pos)
                 ACTIVE_POSITIONS[sym] = pos
             logging.info(f"Recovered position: {sym} | {t.get('contract','')}")
     try:
@@ -369,7 +354,7 @@ def main_scan_loop(kite):
                 "position_type": "option",
                 "benchmark": 0, "anchor_floor": 0, "direction": "BULL"
             }
-            pos["trade_id"] = trade_db.create_trade("index", symbol, {k: v for k, v in pos.items() if k != "trade_id"})
+            pos["trade_id"], _created = trade_db.create_trade("index", symbol, {k: v for k, v in pos.items() if k != "trade_id"})
             scan_sl = lookup_scan_sl_target(p["tradingsymbol"], symbol, "index", kite, pos["entry_spot"], TIMEFRAME_ENTRY, TIMEFRAME_ANCHOR)
             if scan_sl:
                 pos.update(scan_sl)
@@ -385,11 +370,10 @@ def main_scan_loop(kite):
         try:
             ensure_kite_session(kite)
             cycle += 1
-            if cycle == 1 or cycle % 4 == 1:
-                with position_lock:
-                    active = len(ACTIVE_POSITIONS)
-                    symbols = list(ACTIVE_POSITIONS.keys())
-                logging.info(f"[BEAT] Cycle {cycle} | Active: {active} {symbols if active else ''}")
+            with position_lock:
+                active = len(ACTIVE_POSITIONS)
+                symbols = list(ACTIVE_POSITIONS.keys())
+            logging.info(f"[BEAT] Starting Index scan cycle {cycle} | Active positions: {active} {symbols if active else ''}")
             if cycle % 10 == 0:
                 shared_sync_kite(kite, INDEX_REGISTRY, ACTIVE_POSITIONS, position_lock, "index", TIMEFRAME_ENTRY, TIMEFRAME_ANCHOR)
             if os.path.exists(SL_TARGET_OVERRIDES_FILE):

@@ -3,46 +3,32 @@ import json
 import logging
 import csv
 import time
-import threading
 from datetime import datetime as dt, timedelta, time as datetime_time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import pandas as pd
-import numpy as np
+
+import paths
 
 # ──────────────────────────────────────────────
 #  CONSTANTS & REGISTRIES
 # ──────────────────────────────────────────────
 
-TOKEN_FILE = "input/kite_access_token.txt"
-JOURNAL_FILE = "output/monitor/trade_journal.csv"
+TOKEN_FILE = paths.TOKEN_FILE
+JOURNAL_FILE = paths.TRADE_JOURNAL_CSV
 
 LOOKBACK_LIMITS = {
-    "minute": 60,
-    "3minute": 100,
-    "5minute": 100,
-    "10minute": 100,
-    "15minute": 200,
-    "15min": 200,
-    "30minute": 200,
-    "30min": 200,
-    "60minute": 400,
-    "1hr": 400,
-    "1h": 400,
-    "75min": 400,
-    "75mins": 400,
-    "75minute": 400,
-    "3hr": 400,
-    "3h": 400,
-    "180min": 400,
-    "4hr": 400,
-    "4h": 400,
-    "240min": 400,
-    "day": 2000,
-    "d": 2000,
-    "1d": 2000,
-    "week": 2000,
-    "w": 2000,
-    "1w": 2000
+    "minute": 60, "1min": 60, "1minute": 60, "1m": 60,
+    "3minute": 100, "3min": 100, "3mins": 100, "3m": 100, "3minutes": 100,
+    "5minute": 100, "5min": 100, "5mins": 100, "5m": 100, "5minutes": 100,
+    "10minute": 100, "10min": 100, "10mins": 100, "10m": 100, "10minutes": 100,
+    "15minute": 200, "15min": 200, "15mins": 200, "15m": 200, "15minutes": 200,
+    "30minute": 200, "30min": 200, "30mins": 200, "30m": 200, "30minutes": 200,
+    "60minute": 400, "60min": 400, "60mins": 400, "60m": 400, "60minutes": 400, "1hr": 400, "1h": 400, "1hour": 400,
+    "75min": 400, "75mins": 400, "75m": 400, "75minute": 400, "75minutes": 400,
+    "3hr": 400, "3h": 400, "180min": 400,
+    "4hr": 400, "4h": 400, "240min": 400, "4hour": 400,
+    "day": 2000, "d": 2000, "1d": 2000, "daily": 2000,
+    "week": 2000, "w": 2000, "1w": 2000, "weekly": 2000
 }
 
 def get_next_candle_start_time(candle_date, timeframe_str):
@@ -98,7 +84,7 @@ def resample_timeframe(df, timeframe_str):
         return df
 
     tf_s = str(timeframe_str).lower()
-    if tf_s in ["75min", "75mins", "75m", "75minute"]:
+    if tf_s in ["75min", "75mins", "75m", "75minute", "75minutes"]:
         rule = '75min'
     elif tf_s in ["3hr", "3h", "180min", "180minute"]:
         rule = '180min'
@@ -120,7 +106,7 @@ def resample_timeframe(df, timeframe_str):
             return df
 
         hist[time_col] = pd.to_datetime(hist[time_col])
-        if tf_s in ["75min", "75mins", "75m", "75minute"]:
+        if tf_s in ["75min", "75mins", "75m", "75minute", "75minutes"]:
             hist['trade_date'] = hist[time_col].dt.date
             groups = []
             for d, g in hist.groupby('trade_date'):
@@ -167,7 +153,7 @@ STOCK_REGISTRY = {
     "BHARTIARTL": {"token": 2714625, "lot_size": 950, "strike_step": 20},
     "CIPLA": {"token": 177665, "lot_size": 650, "strike_step": 20},
     "COALINDIA": {"token": 5215745, "lot_size": 1250, "strike_step": 10},
-    "DRREDDY": {"token": 225537, "lot_size": 125, "strike_step": 100},
+    "DRREDDY": {"token": 225537, "lot_size": 625, "strike_step": 20},
     "EICHERMOT": {"token": 232961, "lot_size": 175, "strike_step": 50},
     "ETERNAL": {"token": 1304833, "lot_size": 2425, "strike_step": 5},
     "GRASIM": {"token": 315393, "lot_size": 400, "strike_step": 20},
@@ -230,13 +216,9 @@ def sync_stock_tokens(kite):
 # ──────────────────────────────────────────────
 
 def get_best_token_file(default_path=TOKEN_FILE):
-    cwd = os.getcwd()
-    base = os.path.dirname(os.path.dirname(__file__))
+    base = paths.PROJECT_ROOT
     candidates = [
         default_path,
-        os.path.join(cwd, "input", "kite_access_token.txt"),
-        os.path.join(cwd, "Trade_Option", "input", "kite_access_token.txt"),
-        os.path.join(cwd, "Trade_Stock", "input", "kite_access_token.txt"),
         os.path.join(base, "input", "kite_access_token.txt"),
         os.path.join(base, "Trade_Option", "input", "kite_access_token.txt"),
         os.path.join(base, "Trade_Stock", "input", "kite_access_token.txt")
@@ -317,11 +299,8 @@ def log_to_journal(symbol, pattern, timeframe, action, status, details="", pnl_p
         _write()
 
 def is_market_hours():
-    now = dt.now()
-    if now.weekday() in [5, 6]:
-        return False
-    t = now.time()
-    return datetime_time(9, 15) <= t <= datetime_time(15, 30)
+    """Compatibility alias for is_market_open (Mon-Fri 09:15-15:30 IST)."""
+    return is_market_open()
 
 def get_weekly_expiry(target_weekday=1):
     now = dt.now()
@@ -893,59 +872,6 @@ def scan_anchor_bcd_breakout(df_entry, df_anchor):
     best_latest.pop("d_idx", None)
     return best_latest
 
-    return None
-
-# Alias for backward compatibility across engines and scripts
-def _record_completed_scan_trade(contract_name, pattern_label, entry, sl, target, rr, action_str, status_str, pnl_pct, entry_time, exit_time):
-    try:
-        import trade_db, csv
-        journal_db_path = os.path.join("output", "monitor", "journal_trades_db.json")
-        csv_path = os.path.join("output", "monitor", "trade_journal.csv")
-        
-        entry_row = {
-            "Timestamp": exit_time or entry_time,
-            "Symbol": contract_name,
-            "Pattern": pattern_label,
-            "Action": action_str,
-            "Status": status_str,
-            "Entry": round(entry, 2),
-            "SL": round(sl, 2),
-            "Target": round(target, 2),
-            "RR": round(rr, 2),
-            "P&L %": f"{pnl_pct:+.2f}%",
-            "entry_time": entry_time,
-            "exit_time": exit_time
-        }
-        
-        existing = trade_db._read_json(journal_db_path, {"journal_entries": []})
-        entries = existing.get("journal_entries", [])
-        if any(e.get("Symbol") == contract_name and e.get("Timestamp") == entry_row["Timestamp"] for e in entries):
-            return
-            
-        entries.append(entry_row)
-        trade_db._write_json(journal_db_path, {"updated_at": time.strftime("%Y-%m-%d %H:%M:%S"), "journal_entries": entries})
-        
-        write_header = not os.path.exists(csv_path)
-        os.makedirs(os.path.dirname(csv_path), exist_ok=True)
-        with open(csv_path, "a", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=["Timestamp", "Symbol", "Pattern", "Action", "Status", "Entry", "SL", "Target", "RR", "P&L %"])
-            if write_header:
-                writer.writeheader()
-            writer.writerow({
-                "Timestamp": entry_row["Timestamp"],
-                "Symbol": entry_row["Symbol"],
-                "Pattern": entry_row["Pattern"],
-                "Action": entry_row["Action"],
-                "Status": entry_row["Status"],
-                "Entry": entry_row["Entry"],
-                "SL": entry_row["SL"],
-                "Target": entry_row["Target"],
-                "RR": entry_row["RR"],
-                "P&L %": entry_row["P&L %"]
-            })
-    except Exception as e:
-        logging.warning(f"Journal record error: {e}")
-
 
 # ──────────────────────────────────────────────
 #  SHARED ENGINE UTILITIES (identical between engines)
@@ -962,19 +888,19 @@ def get_fetch_timeframe(timeframe_str):
         return "day"
     elif tf_clean in ["3hr", "3hrs", "3h", "180min", "180minute", "4hr", "4hrs", "4h", "4hour", "240min", "240minute", "1hr", "1hrs", "1h", "60min", "60minute"]:
         return "60minute"
-    elif tf_clean in ["75min", "75mins", "75m", "75minute"]:
+    elif tf_clean in ["75min", "75mins", "75m", "75minute", "75minutes"]:
         return "15minute"
-    elif tf_clean in ["30min", "30minute"]:
+    elif tf_clean in ["30min", "30mins", "30m", "30minute", "30minutes"]:
         return "30minute"
-    elif tf_clean in ["15min", "15minute"]:
+    elif tf_clean in ["15min", "15mins", "15m", "15minute", "15minutes"]:
         return "15minute"
-    elif tf_clean in ["10min", "10minute"]:
+    elif tf_clean in ["10min", "10mins", "10m", "10minute", "10minutes"]:
         return "10minute"
-    elif tf_clean in ["5min", "5minute"]:
+    elif tf_clean in ["5min", "5mins", "5m", "5minute", "5minutes"]:
         return "5minute"
-    elif tf_clean in ["3min", "3minute"]:
+    elif tf_clean in ["3min", "3mins", "3m", "3minute", "3minutes"]:
         return "3minute"
-    elif tf_clean in ["minute", "1min"]:
+    elif tf_clean in ["minute", "1min", "1m", "1minute"]:
         return "minute"
     else:
         return "day"
@@ -1051,7 +977,7 @@ def live_execution_enabled(flag_path):
 #  SHARED POSITION MANAGEMENT
 # ──────────────────────────────────────────────
 
-NFO_CACHE_FILE = os.path.join("output", "monitor", "nfo_instruments_cache.csv")
+NFO_CACHE_FILE = paths.NFO_CACHE_FILE
 
 def get_option_lot_size(contract):
     """Look up actual lot size from NFO instruments cache, not from registry."""
@@ -1065,6 +991,54 @@ def get_option_lot_size(contract):
     except Exception as e:
         logging.warning(f"Lot size lookup failed for {contract}: {e}")
     return None
+
+_CONTRACT_EXPIRY_RE = None
+
+def contract_is_expired(contract):
+    """Return True if the option contract has already expired.
+
+    Uses the NFO instruments cache (authoritative expiry) when available;
+    falls back to parsing the embedded expiry from the contract name.
+    """
+    import re
+    global _CONTRACT_EXPIRY_RE
+    if not contract:
+        return False
+    c = str(contract).strip().upper()
+    try:
+        if os.path.exists(NFO_CACHE_FILE):
+            df = pd.read_csv(NFO_CACHE_FILE)
+            row = df[df['tradingsymbol'] == c]
+            if not row.empty:
+                exp_str = str(row.iloc[0]['expiry'])
+                exp_date = pd.to_datetime(exp_str).date()
+                return exp_date < dt.now().date()
+    except Exception as e:
+        logging.warning(f"Expiry cache lookup failed for {c}: {e}")
+    if _CONTRACT_EXPIRY_RE is None:
+        _CONTRACT_EXPIRY_RE = re.compile(r"(\d+)(CE|PE)$")
+    m = _CONTRACT_EXPIRY_RE.search(c)
+    if m:
+        num_part = m.group(1)
+        for strike_len in range(6, 2, -1):
+            if len(num_part) <= strike_len:
+                continue
+            date_part = num_part[:len(num_part) - strike_len]
+            if len(date_part) < 5:
+                continue
+            for mm_width in (2, 1):
+                if len(date_part) != 2 + mm_width + 2:
+                    continue
+                yy = int(date_part[:2])
+                mm = int(date_part[2:2 + mm_width])
+                dd = int(date_part[2 + mm_width:])
+                if 1 <= mm <= 12 and 1 <= dd <= 31:
+                    try:
+                        exp_date = dt.strptime("20%02d-%02d-%02d" % (yy, mm, dd), "%Y-%m-%d").date()
+                        return exp_date < dt.now().date()
+                    except Exception:
+                        continue
+    return False
 
 def close_stock_position(kite, pos, live_market=True, product=None):
     if not kite:
@@ -1124,7 +1098,7 @@ def close_stock_position(kite, pos, live_market=True, product=None):
     except Exception as e:
         logging.error(f"Stock exit failed for {contract}: {e}")
 
-EXECUTED_EXITS_FILE = os.path.join(os.getcwd(), "output", "monitor", "executed_exit_orders.json")
+EXECUTED_EXITS_FILE = paths.EXECUTED_EXITS_FILE
 EXECUTED_EXITS = {}
 
 def load_executed_exits():
@@ -1177,30 +1151,8 @@ def is_market_open():
     return datetime_time(9, 15) <= t_now <= datetime_time(15, 30)
 
 def execute_position_exit(kite, pos, live_market=False, reason="SL"):
-    """
-    Executes position exit safely.
-    Uses Marketable LIMIT order (0.995 * ref_price) to prevent market order slippage.
-    Checks market open status so off-market hours do not spam rejected order errors.
-    """
-    contract = pos.get("contract") or pos.get("symbol")
-    if not contract:
-        return
-
-    c_str = str(contract).upper()
-    target_product = pos.get("product") or "NRML"
-    is_option = "CE" in c_str or "PE" in c_str or "NIFTY" in c_str or "BANK" in c_str or "SENSEX" in c_str or "BSE" in c_str
-    if "SENSEX" in c_str or "BSE" in c_str:
-        target_exch = "BFO"
-    elif is_option:
-        target_exch = "NFO"
-    else:
-        target_exch = "NSE"
-
-    qty = pos.get("quantity") or (get_option_lot_size(contract) or pos.get("lot_size", 1)) * pos.get("position_size", 1)
-
-    if kite and live_market and not is_market_open():
-        logging.info(f"[MARKET CLOSED] Skipping live Zerodha exit order for {contract} outside market hours (09:15-15:30 IST). Position status logged.")
-        return
+    """Compatibility alias for close_position. Kept so external callers that reference it do not break."""
+    return close_position(kite, pos, live_market=live_market)
 
 def close_position(kite, pos, live_market=True, product=None):
     contract = pos.get("contract") or pos.get("tradingsymbol")
@@ -1332,7 +1284,7 @@ def load_program_config_for_engine(cfg_section, extra_fields=None):
     applied = {}
     try:
         possible_paths = [
-            os.path.join(os.getcwd(), "input", "program_config.json"),
+            paths.PROGRAM_CONFIG_FILE,
             os.path.join(os.path.dirname(os.path.dirname(__file__)), "input", "program_config.json"),
             os.path.join(os.path.dirname(__file__), "input", "program_config.json")
         ]
@@ -1419,7 +1371,7 @@ def sync_kite_positions(kite, registry, positions_dict, lock, engine, timeframe_
                     "position_type": "stock" if is_stock else "option"
                 }
             import trade_db
-            tid = trade_db.create_trade(engine, sym, {"contract": contract, "entry_spot": entry, "current_sl": 0, "t1": 0, "t2": 0, "t3": 0, "lot_size": lot_size, "pattern": "MANUAL_ENTRY", "entry_time": dt.now().isoformat()})
+            tid, _created = trade_db.create_trade(engine, sym, {"contract": contract, "entry_spot": entry, "current_sl": 0, "t1": 0, "t2": 0, "t3": 0, "lot_size": lot_size, "pattern": "MANUAL_ENTRY", "entry_time": dt.now().isoformat()})
             with lock:
                 positions_dict[sym]["trade_id"] = tid
             logging.info(f"[KITE_SYNC] New manual position: {contract} entry={entry}")
@@ -1534,6 +1486,27 @@ def derive_sl_targets_for_contract(kite, contract, entry_price, timeframe_entry=
             }
         return None
 
+def get_override_paths():
+    """
+    Return ordered candidate paths for sl_target_overrides.json.
+    Canonical project-root path is listed first so it always wins over
+    any cwd-relative duplicate (e.g. Trade_Option/output/monitor vs output/monitor).
+    """
+    project_root = paths.PROJECT_ROOT
+    candidates = [
+        os.path.join(project_root, "output", "monitor", "sl_target_overrides.json"),
+        os.path.join(os.getcwd(), "output", "monitor", "sl_target_overrides.json"),
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "output", "monitor", "sl_target_overrides.json")
+    ]
+    seen, ordered = set(), []
+    for p in candidates:
+        norm = os.path.normcase(os.path.abspath(p))
+        if norm not in seen:
+            seen.add(norm)
+            ordered.append(p)
+    return ordered
+
+
 def lookup_scan_sl_target(contract, symbol, engine, kite=None, entry_price=0, timeframe_entry="15minute", timeframe_anchor="15minute", entry_date=None, is_stock=False):
     """
     Search trade_db and scan display files using:
@@ -1547,45 +1520,43 @@ def lookup_scan_sl_target(contract, symbol, engine, kite=None, entry_price=0, ti
     stock_key = f"{symbol}_{entry_date}".replace(" ", "").upper()
     clean_c = stock_key if is_stock else str(contract or symbol).replace(" ", "").upper()
 
-    # 0. Check sl_target_overrides.json first for any user overrides
+    # 0. Check sl_target_overrides.json first for any user overrides.
+    #    Search ALL override paths (canonical project-root first), so a user
+    #    edit saved under a different cwd is never missed and stale duplicates
+    #    don't clobber the canonical value.
     try:
-        ov_paths = [
-            os.path.join(os.getcwd(), "output", "monitor", "sl_target_overrides.json"),
-            os.path.join(os.path.dirname(os.path.dirname(__file__)), "output", "monitor", "sl_target_overrides.json"),
-            os.path.join(os.path.dirname(__file__), "output", "monitor", "sl_target_overrides.json")
-        ]
-        ov_path = next((p for p in ov_paths if os.path.exists(p)), None)
-        if ov_path:
+        best_match = None
+        best_spec = -1
+        clean_sym = str(symbol or "").replace(" ", "").upper()
+        for ov_path in get_override_paths():
+            if not os.path.exists(ov_path):
+                continue
             with open(ov_path, encoding="utf-8") as f:
                 overrides = json.load(f)
-            best_match = None
             for eng_k in (engine, "nifty50", "index"):
                 eng_ov = overrides.get(eng_k, {})
                 for sym_k, vals in eng_ov.items():
                     clean_k = str(sym_k).replace(" ", "").upper()
-                    if clean_k == clean_c:
-                        best_match = vals
-                        break
-                if best_match:
-                    break
-            if best_match:
-                ov_sl = best_match.get("current_sl")
-                ov_t1 = best_match.get("t1")
-                # Target & SL Sanity Guard: Ensure T1 > entry_price for long options
-                if entry_price and float(entry_price) > 0:
-                    ep = float(entry_price)
-                    if ov_t1 is not None and ov_t1 <= ep:
-                        logging.warning(f"[TARGET SANITY GUARD] Override T1 ({ov_t1}) <= Entry ({ep}) for {clean_c}. Rejecting invalid override targets.")
-                        ov_t1 = None
-                if ov_t1 is not None:
-                    return {
-                        "current_sl": ov_sl,
-                        "t1": ov_t1,
-                        "t2": best_match.get("t2"),
-                        "t3": best_match.get("t3"),
-                        "pattern": "USER_OVERRIDE",
-                        "user_edited": True
-                    }
+                    exact = (clean_k == clean_c) or (clean_sym and clean_k == clean_sym)
+                    partial = bool(clean_k and clean_k in clean_c) or bool(clean_c and clean_c in clean_k)
+                    if exact or partial:
+                        ov_sl = vals.get("current_sl")
+                        if ov_sl is not None and str(ov_sl).strip() != "":
+                            spec = 2 if exact else 1
+                            if spec > best_spec:
+                                best_match = vals
+                                best_spec = spec
+        if best_match:
+            ov_sl = best_match.get("current_sl")
+            ov_t1 = best_match.get("t1")
+            return {
+                "current_sl": float(ov_sl),
+                "t1": float(ov_t1) if (ov_t1 is not None and str(ov_t1).strip() != "") else 0.0,
+                "t2": float(best_match.get("t2")) if (best_match.get("t2") is not None and str(best_match.get("t2")).strip() != "") else 0.0,
+                "t3": float(best_match.get("t3")) if (best_match.get("t3") is not None and str(best_match.get("t3")).strip() != "") else 0.0,
+                "pattern": "USER_OVERRIDE",
+                "user_edited": True
+            }
     except Exception:
         pass
     
@@ -1692,6 +1663,20 @@ def write_scan_display_data(staged, active, display_file, engine_name=None):
                 elif "PE" in cnt:
                     side_val = "PE"
 
+            ca_time = t.get("candle_a_time") or t.get("CandleATime")
+            if not ca_time:
+                try:
+                    import trade_db
+                    cnt_key = str(contract or t.get("symbol") or "").replace(" ", "").upper()
+                    if cnt_key:
+                        for db_tr in trade_db.get_all_trades():
+                            db_cnt = str(db_tr.get("contract") or db_tr.get("symbol") or "").replace(" ", "").upper()
+                            if db_cnt == cnt_key:
+                                ca_time = db_tr.get("candle_a_time") or db_tr.get("CandleATime")
+                                if ca_time: break
+                except Exception:
+                    pass
+
             return {
                 "symbol": t.get("symbol", ""),
                 "contract": contract,
@@ -1707,7 +1692,7 @@ def write_scan_display_data(staged, active, display_file, engine_name=None):
                 "result": result,
                 "carry_forward": False,
                 "rr": round(rr_num, 2),
-                "candle_a_time": clean_timestamp(t.get("candle_a_time") or t.get("CandleATime") or t.get("entry_time", "")),
+                "candle_a_time": clean_timestamp(ca_time or t.get("entry_time", "")),
                 "timeframe": t.get("timeframe", ""),
                 "candle_tf_time": t.get("candle_tf_time", ""),
                 "benchmark": t.get("benchmark"),
@@ -1722,7 +1707,49 @@ def write_scan_display_data(staged, active, display_file, engine_name=None):
         for s, p in active_iterable:
             t = p.copy()
             t["symbol"] = s
-            et = p.get("entry_time", now_str)
+            c_key = str(p.get("contract") or s or "").replace(" ", "").upper()
+
+            # Validation check 1: Status must be ACTIVE or OPEN
+            status_val = str(p.get("status") or "ACTIVE").upper()
+            if status_val not in ["ACTIVE", "OPEN"]:
+                continue
+
+            # Validation check 2: Contract must NOT be expired
+            if contract_is_expired(c_key):
+                continue
+
+            # Validation check 3: Must have valid SL & T1
+            sl_val = float(p.get("current_sl") or p.get("sl") or 0)
+            t1_val = float(p.get("t1") or 0)
+            if sl_val <= 0 or t1_val <= 0:
+                continue
+            
+            # Lookup original scanned trade from trade_db to get exact candle timestamps
+            db_match = None
+            try:
+                import trade_db
+                for db_tr in trade_db.get_all_trades():
+                    db_c = str(db_tr.get("contract") or db_tr.get("symbol") or "").replace(" ", "").upper()
+                    if db_c == c_key:
+                        db_match = db_tr
+                        break
+            except Exception:
+                pass
+
+            if db_match:
+                if not t.get("candle_a_time"):
+                    t["candle_a_time"] = db_match.get("candle_a_time") or db_match.get("CandleATime")
+                curr_et = str(t.get("entry_time") or "").replace("T", " ").split("+")[0].strip()
+                curr_parts = curr_et.split(" ")
+                curr_hr = 0
+                if len(curr_parts) >= 2 and ":" in curr_parts[1]:
+                    h_str = curr_parts[1].split(":")[0]
+                    if h_str.isdigit():
+                        curr_hr = int(h_str)
+                if db_match.get("entry_time") and (not t.get("entry_time") or curr_hr >= 16 or curr_hr < 9):
+                    t["entry_time"] = db_match.get("entry_time")
+
+            et = t.get("entry_time", now_str)
             entry_date = et[:10] if isinstance(et, str) else today
             cf = entry_date < today
             entry_time_display = et if isinstance(et, str) else now_str
@@ -1740,12 +1767,21 @@ def write_scan_display_data(staged, active, display_file, engine_name=None):
 
         # Accumulate all staged trades for today's date from display_file
         existing_staged = []
+        cleared_at_ts = None
         if display_file and os.path.exists(display_file):
             try:
                 with open(display_file, "r", encoding="utf-8") as fh:
                     old_d = json.load(fh)
+                cleared_at_ts = old_d.get("cleared_at")
                 if old_d.get("date") == today:
-                    existing_staged = old_d.get("all_staged_today") or old_d.get("staged_trades") or []
+                    raw_old = old_d.get("all_staged_today") or old_d.get("staged_trades") or []
+                    if cleared_at_ts:
+                        for tr in raw_old:
+                            tr_time = str(tr.get("entry_time") or "")
+                            if tr_time > cleared_at_ts:
+                                existing_staged.append(tr)
+                    else:
+                        existing_staged = raw_old
             except Exception:
                 pass
 
@@ -1907,7 +1943,7 @@ def reconcile_positions(kite, registry, positions_dict, lock, engine, timeframe_
                             logging.info(f"[RECONCILE] Derived SL/Targets for {s}: SL={result['SL']} T1={result['T1']} T2={result['T2']} T3={result['T3']}")
                         else:
                             logging.info(f"[RECONCILE] No pattern match for {s}, leaving as passive tracking")
-    SL_TARGET_OVERRIDES_FILE = os.path.join("output", "monitor", "sl_target_overrides.json")
+    SL_TARGET_OVERRIDES_FILE = get_override_paths()[0]
     if os.path.exists(SL_TARGET_OVERRIDES_FILE):
         try:
             with open(SL_TARGET_OVERRIDES_FILE) as f:
@@ -1963,6 +1999,32 @@ def is_anchor_valid_and_active(df_anchor, candle_a_time, sl_target, t1_target):
     except Exception as e:
         logging.warning(f"Error checking anchor validity: {e}")
         return True
+
+def get_anchor_invalidation_reason(df_anchor, candle_a_time, sl_target, t1_target):
+    """
+    Returns 'SL' or 'T1' indicating which level invalidated the anchor,
+    or None if the anchor is still valid/active.
+    """
+    if df_anchor is None or df_anchor.empty or not candle_a_time:
+        return None
+    try:
+        c_time_clean = clean_timestamp(candle_a_time)
+        if 'date' not in df_anchor.columns or not c_time_clean:
+            return None
+        dates_clean = df_anchor['date'].astype(str).apply(clean_timestamp)
+        subseq = df_anchor[dates_clean > c_time_clean]
+        if subseq.empty:
+            return None
+        sl_val = float(sl_target) if sl_target else 0.0
+        t1_val = float(t1_target) if t1_target else 0.0
+        if sl_val > 0 and (subseq['close'].astype(float) <= sl_val).any():
+            return "SL"
+        if t1_val > 0 and (subseq['high'].astype(float) >= t1_val).any():
+            return "T1"
+        return None
+    except Exception as e:
+        logging.warning(f"Error checking anchor invalidation reason: {e}")
+        return None
 
 def is_setup_already_completed(df_candles, candle_time, t1_target, sl_target):
     """Return True if setup was completed or invalidated."""
@@ -2111,7 +2173,9 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                 key = f"{symbol}|{result_ce['Pattern']}|CE|{strike}"
                 candle_a_time = str(result_ce.get("CandleATime", ""))
                 if not is_anchor_valid_and_active(df_ce_a, candle_a_time or candle_time, result_ce.get("SL"), result_ce.get("T1")):
-                    logging.info(f"CE MATCH already completed T1/SL (skip): {ce['tradingsymbol']} | {result_ce['Pattern']}")
+                    invalid_reason = get_anchor_invalidation_reason(df_ce_a, candle_a_time or candle_time, result_ce.get("SL"), result_ce.get("T1"))
+                    skip_reason = f"already completed {invalid_reason} (skip)" if invalid_reason else "already completed (skip)"
+                    logging.info(f"CE MATCH {skip_reason}: {ce['tradingsymbol']} | {result_ce['Pattern']}")
                     matched = True
                     break
                 pos_size = calculate_position_size(current_spot, result_ce["SL"])
@@ -2152,7 +2216,9 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                 key = f"{symbol}|{result_pe['Pattern']}|PE|{strike}"
                 candle_a_time = str(result_pe.get("CandleATime", ""))
                 if not is_anchor_valid_and_active(df_pe_a, candle_a_time or candle_time, result_pe.get("SL"), result_pe.get("T1")):
-                    logging.info(f"PE MATCH already completed T1/SL (skip): {pe['tradingsymbol']} | {result_pe['Pattern']}")
+                    invalid_reason = get_anchor_invalidation_reason(df_pe_a, candle_a_time or candle_time, result_pe.get("SL"), result_pe.get("T1"))
+                    skip_reason = f"already completed {invalid_reason} (skip)" if invalid_reason else "already completed (skip)"
+                    logging.info(f"PE MATCH {skip_reason}: {pe['tradingsymbol']} | {result_pe['Pattern']}")
                     matched = True
                     break
                 pos_size = calculate_position_size(current_spot, result_pe["SL"])
@@ -2192,7 +2258,7 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
 
 def _load_program_config_file():
     possible_paths = [
-        os.path.join(os.getcwd(), "input", "program_config.json"),
+        paths.PROGRAM_CONFIG_FILE,
         os.path.join(os.path.dirname(os.path.dirname(__file__)), "input", "program_config.json"),
         os.path.join(os.path.dirname(__file__), "input", "program_config.json")
     ]
@@ -2225,6 +2291,36 @@ def is_candle_before_entry(c_date, entry_time_val):
             return c_str < e_str
         except Exception:
             return False
+
+def sanitize_entry_time(pos, now_ts=None):
+    """
+    Guarantee entry_time is a usable candle-filter timestamp for ACTIVE positions.
+    Rules:
+      - empty/None entry_time  -> fall back to created_at (or now)
+      - entry_time older than created_at -> use created_at (real execution reference)
+    Returns a sanitized ISO-ish string and stores it back into pos['entry_time'].
+    """
+    now_ts = now_ts or dt.now()
+    et = str(pos.get("entry_time") or "").strip()
+    ca = str(pos.get("created_at") or "").strip()
+    def _parse(v):
+        try:
+            d = pd.to_datetime(v)
+            if hasattr(d, 'tz') and d.tz is not None:
+                d = d.tz_convert('Asia/Kolkata').tz_localize(None)
+            return d
+        except Exception:
+            return None
+    et_dt = _parse(et) if et and et.lower() != "none" else None
+    ca_dt = _parse(ca) if ca and ca.lower() != "none" else None
+    if et_dt is None:
+        clean = ca if ca_dt is not None else now_ts.isoformat()
+    elif ca_dt is not None and et_dt < ca_dt:
+        clean = ca
+    else:
+        clean = et
+    pos["entry_time"] = clean
+    return clean
 
 def monitor_active_positions(kite, registry, positions_dict, lock, product_type, engine_name,
                               timeframe_entry, trade_db, log_fn, save_state_fn=None,
@@ -2302,7 +2398,7 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                 logging.debug(f"Live quote fetch error for {sym}: {q_err}")
 
             # Compute High (hp) strictly for candles AFTER trade entry_time + live_ltp
-            entry_time_str = str(pos.get("entry_time", ""))
+            entry_time_str = sanitize_entry_time(pos)
             hp = live_ltp if live_ltp > 0 else cp
             for idx in range(len(df)):
                 c_row = df.iloc[idx]
@@ -2341,7 +2437,7 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                         event_time = last.get('date')
                 else:
                     # Normal Active SL Monitoring after 09:45 AM
-                    entry_time_str = str(pos.get("entry_time", ""))
+                    entry_time_str = sanitize_entry_time(pos)
                     for idx in range(len(df)):
                         c_row = df.iloc[idx]
                         c_date = str(c_row.get('date', ''))
@@ -2485,12 +2581,19 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
 
     if to_clear and save_state_fn:
         save_state_fn()
-    if to_clear and save_state_fn:
-        save_state_fn()
 
 
 def simulate_trade_outcome(kite, trade, target_date, resolve_token_fn=None):
     try:
+        if isinstance(target_date, str):
+            try:
+                target_date = dt.strptime(target_date, "%Y-%m-%d")
+            except ValueError:
+                target_date = dt.now()
+        elif target_date is None:
+            target_date = dt.now().date()
+        if isinstance(target_date, dt):
+            target_date = target_date.date()
         sym = trade["symbol"]
         cp = trade["entry_spot"]
         side = trade.get("side", "CE")
@@ -3088,6 +3191,7 @@ def scan_trend_continuation_reentry(df_entry, df_anchor):
         "T2": t2,
         "T3": t3,
         "Entry": entry_price,
+        "Close": entry_price,
         "RR": round(rr, 2),
         "Signal": "Immediate_ReEntry",
         "D_time": str(current_candle.get("date", "")),

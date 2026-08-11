@@ -3,7 +3,6 @@ Read :DOCUMENTATION.yaml/DOCUMENTATION_STOCK.yaml for understanding
 Update :ISSUE_MANAGEMENT.yaml whenever you fix any bug or add feature 
 commit :to git with propre notes  
 
-
 Rule : Skip completed for coding purpose , read rest and mark  as completed if implemented .
 
 Bug:1  : Comlpleted 
@@ -49,3 +48,6 @@ also mark the SL & T's on the chart is it possible with Kite ?
         2. External Zerodha Kite Link: A button inside the modal or directly next to the icon to open the native chart in kite.zerodha.com in a new browser tab.
 
   > Approach 1 (Recommended): Built-in Interactive Modal with TradingView Lightweight Charts  proceed this & . Chart Scope: Should the chart view support both
+
+Bug : In progress
+can you check if the candle marking on Chart is correct ? while changing TF its should adapt the chart 

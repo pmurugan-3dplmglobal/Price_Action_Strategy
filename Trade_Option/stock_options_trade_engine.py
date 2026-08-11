@@ -7,11 +7,10 @@ import sys
 COMMON_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "common"))
 if COMMON_DIR not in sys.path:
     sys.path.insert(0, COMMON_DIR)
+import paths
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import csv
-from datetime import datetime as dt, timedelta, time as datetime_time
+from datetime import datetime as dt, timedelta
 import pandas as pd
-import numpy as np
 
 from kiteconnect import KiteConnect
 import trade_db
@@ -21,9 +20,6 @@ from trading_core import (
     ensure_kite_session,
     log_to_journal,
     is_market_hours,
-    cap_lookback_days,
-    check_left_side,
-    find_profit_targets,
     calculate_position_size,
     scan_anchor_bcd_breakout,
     find_anchor_bullish_engulfing,
@@ -31,35 +27,29 @@ from trading_core import (
     find_anchor_hammer_baby,
     find_anchor_bullish_harami,
     find_anchor_two_higher_highs,
-    fetch_option_data,
-    fetch_and_resample_candles,
     trading_days_between,
-    calc_rr,
     live_execution_enabled,
     close_position as shared_close_position,
     load_program_config_for_engine,
     sync_kite_positions as shared_sync_kite,
     write_scan_display_data as shared_write_display,
     derive_sl_targets_for_symbol,
-    derive_sl_targets_for_contract,
     lookup_scan_sl_target,
     reconcile_positions as shared_reconcile,
     resolve_option_strikes as shared_resolve_strikes,
     scan_symbol,
     monitor_active_positions as shared_monitor_positions,
+    sanitize_entry_time,
     simulate_trade_outcome as shared_simulate,
-    is_anchor_valid_and_active,
-    find_newest_valid_anchor,
-    STOCK_REGISTRY,
-    SUPER_STOCKS
+    STOCK_REGISTRY
 )
 
 LIVE_MARKET_DEPLOYMENT = True
 LOOKBACK_DAYS = 30
 INITIAL_CAPITAL = 100000.0
 MAX_RISK_PERCENT = 1.0
-TOKEN_FILE = "input/kite_access_token.txt"
-STATE_FILE = "output/monitor/stock_positions_state.json"
+TOKEN_FILE = paths.TOKEN_FILE
+STATE_FILE = paths.monitor_file("stock_positions_state.json")
 SCAN_INTERVAL_SECONDS = 300
 STRIKE_RANGE = 0
 
@@ -73,26 +63,22 @@ NFO_INSTRUMENTS = pd.DataFrame()
 instruments_lock = threading.Lock()
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ANCHOR_SCAN_REQUEST_FILE = os.path.join(BASE_DIR, "output", "monitor", "anchor_scan_request.txt")
-ANCHOR_SCAN_STOP_FILE = os.path.join(BASE_DIR, "output", "monitor", "anchor_scan_stop.txt")
-LIVE_EXECUTION_FLAG = os.path.join(BASE_DIR, "input", "nifty50_live.flag")
-SCAN_DISPLAY_FILE = os.path.join(BASE_DIR, "output", "monitor", "scan_display_data.json")
-SL_TARGET_OVERRIDES_FILE = os.path.join(BASE_DIR, "output", "monitor", "sl_target_overrides.json")
-
-journal_lock = threading.Lock()
-JOURNAL_FILE = os.path.join(BASE_DIR, "output", "monitor", "trade_journal.csv")
+LIVE_EXECUTION_FLAG = paths.NIFTY50_LIVE_FLAG
+SCAN_DISPLAY_FILE = paths.SCAN_DISPLAY_FILE
+SL_TARGET_OVERRIDES_FILE = paths.SL_TARGET_OVERRIDES_FILE
 
 class FlushFileHandler(logging.FileHandler):
     def emit(self, record):
         super().emit(record)
         self.flush()
 
-os.makedirs(os.path.dirname("output/logs/bull_nifty50_scanner.log"), exist_ok=True)
+os.makedirs(os.path.dirname(paths.NIFTY50_LOG_FILE), exist_ok=True)
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[
-        FlushFileHandler("output/logs/bull_nifty50_scanner.log", mode="a", encoding="utf-8"),
+        FlushFileHandler(paths.NIFTY50_LOG_FILE, mode="a", encoding="utf-8"),
         logging.StreamHandler()
     ]
 )
@@ -115,7 +101,7 @@ def load_state():
         except Exception:
             ACTIVE_POSITIONS = {}
 
-NFO_CACHE_FILE = os.path.join("output", "monitor", "nfo_instruments_cache.csv")
+NFO_CACHE_FILE = paths.NFO_CACHE_FILE
 
 def sync_instruments(kite):
     global NFO_INSTRUMENTS
@@ -369,7 +355,7 @@ def execute_highest_rr_trade(kite, staged):
                 "entry_time": dt.now().isoformat(),
                 "position_type": "option"
             }
-            pos["trade_id"] = trade_db.create_trade("nifty50", sym, {k: v for k, v in pos.items() if k != "trade_id"})
+            pos["trade_id"], _created = trade_db.create_trade("nifty50", sym, {k: v for k, v in pos.items() if k != "trade_id"})
             ACTIVE_POSITIONS[sym] = pos
         save_state()
     avg_rr = round(_avg_target_rank(best), 2)
@@ -461,9 +447,6 @@ def position_monitor_loop(kite):
 
 def write_scan_display_data(staged, active, display_file=SCAN_DISPLAY_FILE, engine_name="nifty50"):
     return shared_write_display(staged, active, display_file, engine_name)
-
-def _sync_kite_positions(kite):
-    return shared_sync_kite(kite, STOCK_REGISTRY, ACTIVE_POSITIONS, position_lock, "nifty50", TIMEFRAME_ENTRY, TIMEFRAME_ANCHOR)
 
 # ──────────────────────────────────────────────
 #  MAIN LOOP — SCAN CYCLE + ANCHOR POLL
@@ -678,7 +661,7 @@ def main():
                 if not sym or sym not in STOCK_REGISTRY or sym in seen_symbols:
                     continue
                 seen_symbols.add(sym)
-                pos = {k: v for k, v in t.items() if k not in ("id", "engine", "symbol", "status", "created_at", "updated_at")}
+                pos = {k: v for k, v in t.items() if k not in ("id", "engine", "symbol", "status", "updated_at")}
                 pos.setdefault("pattern", "DB_RECOVERED")
                 pos.setdefault("lot_size", 1)
                 pos.setdefault("entry_spot", 0)
@@ -689,8 +672,7 @@ def main():
                 pos.setdefault("trailing_stage", 0)
                 pos.setdefault("position_type", "option")
                 pos["trade_id"] = t["id"]
-                if "entry_time" not in pos:
-                    pos["entry_time"] = t.get("created_at") or dt.now().isoformat()
+                pos["entry_time"] = sanitize_entry_time(pos)
                 with position_lock:
                     ACTIVE_POSITIONS[sym] = pos
                 logging.info(f"Recovered position: {sym}")
@@ -740,7 +722,7 @@ def main():
                             "entry_time": dt.now().isoformat(),
                             "position_type": "stock"
                         }
-                    pos["trade_id"] = trade_db.create_trade("nifty50", symbol, {k: v for k, v in pos.items() if k != "trade_id"})
+                    pos["trade_id"], _created = trade_db.create_trade("nifty50", symbol, {k: v for k, v in pos.items() if k != "trade_id"})
                     scan_sl = lookup_scan_sl_target(p["tradingsymbol"], symbol, "nifty50", kite, pos["entry_spot"], TIMEFRAME_ENTRY, TIMEFRAME_ANCHOR)
                     if scan_sl:
                         pos.update(scan_sl)

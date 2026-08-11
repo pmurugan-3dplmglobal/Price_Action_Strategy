@@ -1,4 +1,63 @@
 Don't make any change directly lets discuss (add any point/idea ) finally we can implement
-Read :DOCUMENTATION.yaml/DOCUMENTATION_STOCK.yaml for understanding 
+Read :DOCUMENTATION.yaml/DOCUMENTATION_STOCK.yaml/ISSUE_MANAGEMENT.YAML for understanding 
+Update :ISSUE_MANAGEMENT.yaml whenever you fix any bug or add feature 
+commit :to git with proper notes  
 
 
+Rule : Skip completed for coding purpose , read rest and mark  as completed if implemented .
+
+New Feature 1 : New Engine based on EMA : Completed
+
+i need one more engine (tile next to Stock Options Trade Engine named Stock  EMA Engine) , which is based on new strategy 
+
+Statergy > need to get conatract near ATM (based on Range) have the single TF config (similar to Entry or Ancher any one) , ex if i choose 1d TF on this time frame scan if the symbol crossed & trading above 13 EMA and 44 EMA ( can have the 2 config to have this 13 & 44 : later we can change in UI if needed)
+
+similar for Stock service (5051) where instead of running on contract it run on stock spot symbol 
+
+for each service > create tap next to Todays tap > named as EMA Scan > Remove Backtest Summnery Tap (with its references )
+
+New Feature 1 : New Engine based on EMA : Completed
+
+ 1. New Engine Tile:
+      • Add a program card titled Stock EMA Engine next to Stock Options Trade Engine in the Control
+      Center steering panel.
+      • On Option Dashboard (5050): Scans Nifty 50 stocks and picks ATM option contracts.
+      • On Stock Dashboard (5051): Scans stock spot symbols directly.
+  2. Strategy Core (13 EMA & 44 EMA):
+      • Single Timeframe Config: User selects a timeframe (e.g. 1d, 30minute, 15minute).
+      • EMA Periods: Uses 2 configurable EMA parameters: Fast EMA = 13, Slow EMA = 44.
+      • Scan Logic:
+          • Symbol close is trading above both 13 EMA and 44 EMA, AND/OR has freshly crossed above
+          them.
+          • Option selection: Picks nearest ATM strike CE for bullish setup (PE for bearish if
+          applicable).
+
+  3. Dashboard Tab Layout:
+      • Add a new tab named EMA Scan next to the Today's scan tab.
+      • Remove the Backtest Summary Tab (and clean up backtest references) across both dashboards.
+
+  ──────
+  ### 💡 Points & Implementation Plan for Discussion
+
+  #### A. Strategy & Signal Confirmation
+
+  1. Trigger Condition:
+      • Should the setup trigger when Close > 13 EMA AND Close > 44 EMA on the latest candle? (trigger : its a sacn when i start engin & show the list which ic completed & wait for new completion next cycle : no duplcaition)
+      • Should we also require 13 EMA > 44 EMA (bullish EMA stack alignment) or a fresh crossover > fresh crossover ( based on TF we choose on UI)
+      condition (Previous Close <= 13 EMA/44 EMA and Current Close > 13 EMA/44 EMA)?
+  2. Stop Loss & Target Calculation:
+      • How should SL and Targets be calculated for EMA setups?
+          • Option A: SL set at the 44 EMA value (or recent swing low), T1 at 1:1.5 RR, T2 at 1:2.5 RR.> this for now
+          • Option B: Use fixed % or ATR buffer below 13/44 EMA. 
+3 . EMA Scan should gets updated based on this scan (so crete sepatae db if required)
+
+
+
+  #### B. Dashboard UI Updates
+
+  1. Steering Panel Controls:
+      • Add start/stop toggle button and status badge (Open / Closed) for Stock EMA Engine.
+      • Timeframe dropdown selector for EMA timeframe (default 1d / 30minute).
+  2. Tabs Update:
+      • Add EMA Scan tab in the main tab navigation header.
+      • Remove Backtest Summary tab and its associated API polling / JS chart functions.

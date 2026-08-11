@@ -31,8 +31,10 @@ architecture:
 
   directory:
     common:
+      paths.py: "Single source of truth for canonical system file paths across engines and dashboards (TRADES_DB, ACTIVE_POSITIONS_DB, SCAN_DISPLAY_*, TOKEN_FILE, etc.)"
+      ema_engine.py: "13 EMA & 44 EMA crossover scanner and display output builder for options (5050) and stock spot (5051) modes"
       trading_core.py: "Centralized strategy core: scan_anchor_bcd_breakout_generic, 5 Bullish + 5 Bearish anchor detectors, find_profit_targets, find_profit_targets_bearish, resample_timeframe (4h), get_adaptive_lookback, STOCK_REGISTRY (50 stocks), INDEX_REGISTRY (NIFTY, BANKNIFTY, SENSEX), _HISTORICAL_CANDLE_CACHE (TTL RAM caching), is_market_open (09:15-15:30 IST execution guard), session loading, journal writer"
-      trade_db.py: "Thread-safe JSON trade database, cycle staging, and executed pattern deduplication"
+      trade_db.py: "Thread-safe JSON trade database, cycle staging, duplicate active position rejection, expired position purging, and executed pattern deduplication"
       Kite_Access_Token_gen.py: "Zerodha Kite OAuth access token generator CLI"
     Trade_Option:
       app_option_Trade.py: "Options Dashboard (port 5050) with 1-Click BUY button on Scan Tab (/api/buy-scanned-trade). Chart modal (/api/get-chart-data) renders direction-aware A-B-C-D markers + benchmark Entry line (A.high/A.low) + benchmark-based SL%/RR."
@@ -120,6 +122,15 @@ engines:
     instruments: "Nifty 50 Constituent Stocks (Spot)"
     defaults: {timeframe_entry: "day", timeframe_anchor: "day", lookback_days: 2000}
 
+  case_e_stock_ema:
+    id: "ema_engine"
+    name: "Stock EMA Engine (13 EMA / 44 EMA Crossover)"
+    file: "common/ema_engine.py"
+    asset_class: "STOCK_OPTION / STOCK_SPOT"
+    side: "BULL / BEAR"
+    instruments: "Nifty 50 Constituent Stocks & Options"
+    defaults: {timeframe: "1d", fast_ema: 13, slow_ema: 44, scan_interval: 300}
+
 backtest_suite:
   directory: "backtest/"
   runners:
@@ -143,6 +154,20 @@ backtest_suite:
         - "Engine Separation: Index Options Engine (index_options_trade_engine.py / app_option_Trade.py) and Stock Options Engine (stock_options_trade_engine.py / app_Sock_Trade.py) must maintain clear workspace and display isolation."
         - "Default View Integrity: Web UI dashboards must default their view filters to their corresponding core engine (Index Dashboard defaults to 'Index', Stock Dashboard defaults to 'Nifty 50')."
         - "Independent Testing: Any new API endpoint or scanner tool must be tested in isolation to verify zero side-effects on active trade execution, position recovery, and display files."
+
+    canonical_path_integrity:
+      rule_name: "Canonical Path Consolidation (common/paths.py)"
+      fundamental_principle: "All modules MUST import file paths from common/paths.py to eliminate CWD-dependent file location splits."
+      enforcement_guidelines:
+        - "All engines, scanners, dashboards, and background processes must resolve output paths via common/paths.py."
+        - "Guarantees zero path split-brain bugs between root and workspace-relative directories."
+
+    active_trade_guards:
+      rule_name: "Active Trade Invariants & Data Safeguards"
+      duplication_guard: "create_trade(..., allow_duplicate=False) rejects duplicate ACTIVE contracts per engine."
+      expiry_purge: "purge_expired_positions() automatically clears expired option contracts."
+      entry_time_sanitization: "sanitize_entry_time() guarantees entry_time represents the true execution timestamp to prevent pre-buy candle evaluation errors."
+      one_click_buy_preservation: "1-Click BUY captures and preserves candle_a_time, benchmark, anchor_floor, and direction while guarding against expired contract purchases."
 
     anchor_selection_and_invalidation:
       rule_name: "Universal Anchor Validity & Activity Rule (is_anchor_valid_and_active)"

@@ -88,7 +88,8 @@ def run_scan_for_registry(kite, registry, engine_name, timeframe, strike_range=0
     ref_now = dt.now()
     limits = {
         "minute": 60, "3minute": 100, "5minute": 100, "10minute": 100,
-        "15minute": 200, "30minute": 200, "60minute": 400, "75minute": 400, "day": 2000
+        "15minute": 200, "15min": 200, "15mins": 200, "30minute": 200, "30min": 200, "30mins": 200,
+        "60minute": 400, "60min": 400, "60mins": 400, "75minute": 400, "75min": 400, "75mins": 400, "75minutes": 400, "day": 2000
     }
     lookback = limits.get(timeframe, 180)
     from_date = (ref_now - timedelta(days=lookback)).strftime("%Y-%m-%d")
