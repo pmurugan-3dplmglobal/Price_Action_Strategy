@@ -298,10 +298,6 @@ def log_to_journal(symbol, pattern, timeframe, action, status, details="", pnl_p
     else:
         _write()
 
-def is_market_hours():
-    """Compatibility alias for is_market_open (Mon-Fri 09:15-15:30 IST)."""
-    return is_market_open()
-
 def get_weekly_expiry(target_weekday=1):
     now = dt.now()
     days_ahead = (target_weekday - now.weekday()) % 7
@@ -1150,10 +1146,6 @@ def is_market_open():
     t_now = now.time()
     return datetime_time(9, 15) <= t_now <= datetime_time(15, 30)
 
-def execute_position_exit(kite, pos, live_market=False, reason="SL"):
-    """Compatibility alias for close_position. Kept so external callers that reference it do not break."""
-    return close_position(kite, pos, live_market=live_market)
-
 def close_position(kite, pos, live_market=True, product=None):
     contract = pos.get("contract") or pos.get("tradingsymbol")
     if not contract:
@@ -1487,24 +1479,8 @@ def derive_sl_targets_for_contract(kite, contract, entry_price, timeframe_entry=
         return None
 
 def get_override_paths():
-    """
-    Return ordered candidate paths for sl_target_overrides.json.
-    Canonical project-root path is listed first so it always wins over
-    any cwd-relative duplicate (e.g. Trade_Option/output/monitor vs output/monitor).
-    """
-    project_root = paths.PROJECT_ROOT
-    candidates = [
-        os.path.join(project_root, "output", "monitor", "sl_target_overrides.json"),
-        os.path.join(os.getcwd(), "output", "monitor", "sl_target_overrides.json"),
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), "output", "monitor", "sl_target_overrides.json")
-    ]
-    seen, ordered = set(), []
-    for p in candidates:
-        norm = os.path.normcase(os.path.abspath(p))
-        if norm not in seen:
-            seen.add(norm)
-            ordered.append(p)
-    return ordered
+    """Return the canonical path for sl_target_overrides.json (ISSUE-038: no CWD-relative fallback)."""
+    return [paths.SL_TARGET_OVERRIDES_FILE]
 
 
 def lookup_scan_sl_target(contract, symbol, engine, kite=None, entry_price=0, timeframe_entry="15minute", timeframe_anchor="15minute", entry_date=None, is_stock=False):

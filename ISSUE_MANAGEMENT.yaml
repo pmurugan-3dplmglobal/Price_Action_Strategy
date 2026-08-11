@@ -927,7 +927,42 @@ issues:
       1. Updated common/ema_engine.py to accept target_universe parameter and integrate get_universe_symbols_and_tokens from equity_universe for dynamic symbol lookup.
       2. Updated PROGRAMS config_fields in Trade_Option/app_option_Trade.py and Trade_Stock/app_Sock_Trade.py to include Target Universe dropdown (ALL, NIFTY50, NIFTY_NEXT_100, NIFTY_MIDCAP_100, NIFTY_SMALLCAP_250, INDEX_OPTIONS) and 60minute timeframe.
       3. Updated /api/programs/ema_engine/start endpoint in both app services to extract target_universe and pass to start_ema_engine.
-      4. Verified with AST syntax parsing and scratch/run_full_regression_test.py (10/10 tests passed).
+       4. Verified with AST syntax parsing and scratch/run_full_regression_test.py (10/10 tests passed).
+    status: RESOLVED
+  - id: ISSUE-045
+    title: Codebase Cleanup (dead aliases, canonical paths, deduplication, docs accuracy)
+    severity: LOW
+    category: Maintenance / Refactor
+    family: CODE_CLEANUP
+    date_reported: "2026-08-11"
+    symptom: |
+      Dead alias execute_position_exit had zero callers; is_market_hours alias duplicated is_market_open;
+      dashboards redefined SL_TARGET_OVERRIDES_FILE via BASE_DIR instead of common/paths.py; get_override_paths
+      still carried an os.getcwd() fallback; Kite_Access_Token_gen.py existed in two copies (root + common) with
+      divergent content; legacy_backup/ was dead code; AGENTS.md line counts were stale.
+    root_cause: |
+      Incremental growth left compatibility aliases and duplicated path/override logic that diverged from the
+      canonical sources (common/paths.py, ISSUE-038 family) and duplicated modules.
+    affected_files:
+      - common/trading_core.py
+      - common/paths.py
+      - common/dashboard_sl_overrides.py
+      - common/Kite_Access_Token_gen.py
+      - Kite_Access_Token_gen.py
+      - Trade_Option/app_option_Trade.py
+      - Trade_Stock/app_Sock_Trade.py
+      - Trade_Option/index_options_trade_engine.py
+      - Trade_Option/stock_options_trade_engine.py
+      - Trade_Option/automated_strategy_exporter.py
+      - archive/legacy_backup/
+      - AGENTS.md
+    resolution: |
+      1. Removed dead alias execute_position_exit (common/trading_core.py); replaced is_market_hours with is_market_open in both option trade engines and deleted the alias.
+      2. Moved legacy_backup/ to archive/legacy_backup/.
+      3. Dashboards now use paths.SL_TARGET_OVERRIDES_FILE; get_override_paths() returns only the canonical path (no CWD fallback).
+      4. Created common/dashboard_sl_overrides.py (read_sl_overrides / write_sl_overrides) and refactored /api/update-position in both dashboards to use it.
+      5. Unified Kite_Access_Token_gen.py to a single root-level canonical copy using common/paths.py; deleted common/Kite_Access_Token_gen.py; updated exporter message.
+      6. Corrected AGENTS.md line counts, removed duplicate listings, and added new modules (paths.py, ema_engine.py, dashboard_sl_overrides.py, templates/, merged scanner).
     status: RESOLVED
 
 

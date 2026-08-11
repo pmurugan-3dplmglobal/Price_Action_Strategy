@@ -15,32 +15,35 @@ Canonical root: `G:\Poovendan\AI\Trading\Share\ReadyToDeploy\Prod_code_01\Price_
 
 ```
 common/                       # shared logic (the "brain")
-  trading_core.py (2977)      # Kite session, candles, anchors, pattern scan, SL/T1 calc,
+  trading_core.py (3282)      # Kite session, candles, anchors, pattern scan, SL/T1 calc,
                               # position monitoring, display writers, position close/exit
-  ema_engine.py               # 13/44 EMA strategy engine (stock spot + option contracts)
-  paths.py                    # single source of truth for all file paths
-  trade_db.py                 # trades_db / active_positions_db read-write helpers
-  daily_trade_journal.py      # trade journal CSV/db
+  ema_engine.py (295)         # 13/44 EMA strategy engine (stock spot + option contracts)
+  paths.py (49)               # single source of truth for all file paths
+  dashboard_sl_overrides.py   # shared read/write of user-edited SL/T1/T2/T3 overrides (dashboards)
+  trade_db.py (265)           # trades_db / active_positions_db read-write helpers
+  daily_trade_journal.py (402)  # trade journal CSV/db
   equity_universe.py          # stock universe for scanning
   spot_enricher.py            # spot price enrichment for symbols
   websocket_monitor.py        # (optional) live websocket
-  Kite_Access_Token_gen.py    # token generation
 
 Trade_Option/                 # Options Dashboard + engines (port 5050)
-  app_option_Trade.py (1718)  # Flask dashboard; HTML/JS in templates/index.html
-  stock_options_trade_engine.py (743)   # Stock Options engine (thin wrapper over trading_core)
-  index_options_trade_engine.py (536)   # Index Options engine (thin wrapper over trading_core)
-  templates/index.html (1893) # dashboard HTML/JS (loaded at import)
+  app_option_Trade.py (1866)  # Flask dashboard; HTML/JS in templates/index.html
+  stock_options_trade_engine.py (801)   # Stock Options engine (thin wrapper over trading_core)
+  index_options_trade_engine.py (571)   # Index Options engine (thin wrapper over trading_core)
+  templates/index.html (2030) # dashboard HTML/JS (loaded at import)
   automated_strategy_exporter.py
   run_export_scheduler_daemon.py
   launcher.py
 
 Trade_Stock/                  # Stock Trade Dashboard + scanners (port 5051)
-  app_Sock_Trade.py (1531)    # Flask dashboard; HTML/JS in templates/index.html
-  stock_reversal_scanner.py (350)   # merged BULL/BEAR parameterized scanner (PROFILE-driven)
+  app_Sock_Trade.py (1668)    # Flask dashboard; HTML/JS in templates/index.html
+  stock_reversal_scanner.py (375)   # merged BULL/BEAR parameterized scanner (PROFILE-driven)
   stock_bullish_reversal_scanner.py (25)  # thin wrapper: configure_bull() + re-export
   stock_bearish_reversal_scanner.py (24)  # thin wrapper: configure_bear() + re-export
-  templates/index.html (1860) # dashboard HTML/JS (loaded at import)
+  templates/index.html (1995) # dashboard HTML/JS (loaded at import)
+
+Kite_Access_Token_gen.py      # root-level token generator (single canonical copy; oracle/*.sh reference it)
+archive/                      # decommissioned code (moved from legacy_backup/)
 
 scratch/                      # diagnostic/regression scripts
   run_full_regression_test.py # 10-test regression suite (imports both scanners + apps)
@@ -85,7 +88,7 @@ both wrappers in one process and expect both configurations — the last-configu
   `with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'templates/index.html')) ...`
   then still use `render_template_string(HTML_TEMPLATE, refresh=..., programs=...)`.
 - To edit dashboard UI, edit `Trade_Option/templates/index.html` or `Trade_Stock/templates/index.html`
-  (option 1893 lines / stock 1860 lines), then restart the dashboard — no Python edit needed.
+  (option 2030 lines / stock 1995 lines), then restart the dashboard — no Python edit needed.
 
 ## trading_core.py Key Functions
 
@@ -102,15 +105,14 @@ Shared: `scan_anchor_bcd_breakout_generic(df, side=...)`, `scan_trend_continuati
 `find_newest_valid_anchor`, `is_anchor_valid_and_active`, `get_anchor_invalidation_reason`,
 `find_profit_targets(+_bearish)`, `check_left_side_rule(+_bearish)`, `calc_rr`.
 
-Position mgmt: `close_position` (real exit path), `execute_position_exit` (alias → `close_position`),
-`close_stock_position`, `monitor_active_positions`, `reconcile_positions`, `sync_kite_positions`,
-`derive_sl_targets_for_contract`, `derive_sl_targets_for_symbol`, `lookup_scan_sl_target`,
-`derive_sl_targets_for_symbol`, `sanitize_entry_time`.
+Position mgmt: `close_position` (real exit path), `close_stock_position`, `monitor_active_positions`,
+`reconcile_positions`, `sync_kite_positions`, `derive_sl_targets_for_contract`,
+`derive_sl_targets_for_symbol`, `lookup_scan_sl_target`, `sanitize_entry_time`.
 
 Display/persistence: `write_scan_display_data`, `load_executed_exits`/`save_executed_exit`/`clear_executed_exit`,
 `is_contract_exit_executed`, `contract_is_expired`, `get_option_lot_size`, `live_execution_enabled`.
 
-Market: `is_market_open`, `is_market_hours` (alias → `is_market_open`).
+Market: `is_market_open`.
 
 ## Canonical File Paths (common/paths.py)
 

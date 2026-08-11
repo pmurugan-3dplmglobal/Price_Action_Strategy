@@ -198,7 +198,7 @@ def execute_scheduled_export(slot_name=None):
     except Exception as e:
         logging.error(f"Kite session authentication failed: {e}")
         print(f"\n[ERROR] Authentication failed: {e}")
-        print("Please run common/Kite_Access_Token_gen.py to generate today's access token.")
+        print("Please run Kite_Access_Token_gen.py to generate today's access token.")
         return
 
     index_jobs = [

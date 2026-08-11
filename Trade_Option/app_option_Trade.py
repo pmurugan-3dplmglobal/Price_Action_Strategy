@@ -9,6 +9,7 @@ from datetime import datetime as dt, time as datetime_time
 from flask import Flask, render_template_string, jsonify, request, Response
 from kiteconnect import KiteConnect
 import trade_db
+from dashboard_sl_overrides import write_sl_overrides
 from trading_core import (
     lookup_scan_sl_target,
     derive_sl_targets_for_contract,
@@ -1125,8 +1126,6 @@ def api_live_execution_index():
         return jsonify({"ok": True, "enabled": enabled})
     return jsonify({"enabled": os.path.exists(os.path.join(BASE_DIR, LIVE_EXECUTION_FLAG_INDEX))})
 
-SL_TARGET_OVERRIDES_FILE = os.path.join(BASE_DIR, "output", "monitor", "sl_target_overrides.json")
-
 @app.route("/api/edit-lock", methods=["POST"])
 def api_edit_lock():
     data = request.json or {}
@@ -1162,23 +1161,7 @@ def api_update_position():
     
     clean_target = str(symbol).replace(" ", "").upper()
 
-    overrides = {}
-    try:
-        if os.path.exists(SL_TARGET_OVERRIDES_FILE):
-            with open(SL_TARGET_OVERRIDES_FILE) as f:
-                overrides = json.load(f)
-    except Exception:
-        overrides = {}
-
-    for eng_k in (engine, "nifty50", "index"):
-        overrides.setdefault(eng_k, {})[clean_target] = vals
-        if symbol:
-            clean_sym = str(symbol).replace(" ", "").upper()
-            overrides[eng_k][clean_sym] = vals
-
-    os.makedirs(os.path.dirname(SL_TARGET_OVERRIDES_FILE), exist_ok=True)
-    with open(SL_TARGET_OVERRIDES_FILE, "w") as f:
-        json.dump(overrides, f, indent=2)
+    write_sl_overrides(engine, symbol, vals, (engine, "nifty50", "index"))
 
     clear_executed_exit(symbol)
     clear_executed_exit(clean_target)

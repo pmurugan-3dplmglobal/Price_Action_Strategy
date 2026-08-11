@@ -19,7 +19,7 @@ from trading_core import (
     load_kite_session,
     ensure_kite_session,
     log_to_journal,
-    is_market_hours,
+    is_market_open,
     calculate_position_size,
     scan_anchor_bcd_breakout,
     find_anchor_bullish_engulfing,
@@ -336,7 +336,7 @@ def execute_highest_rr_trade(kite, staged):
         logging.error(f"Could not resolve option for {sym}")
         return
     option_token = _resolve_option_token(contract)
-    live_ok = LIVE_MARKET_DEPLOYMENT and live_execution_enabled(LIVE_EXECUTION_FLAG) and is_market_hours()
+    live_ok = LIVE_MARKET_DEPLOYMENT and live_execution_enabled(LIVE_EXECUTION_FLAG) and is_market_open()
     if live_ok:
         with position_lock:
             if sym in ACTIVE_POSITIONS:

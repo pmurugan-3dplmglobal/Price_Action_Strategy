@@ -27,7 +27,7 @@ architecture:
           Centralized Shared Core (common/)
             ├── trading_core.py (Scanners, Negation Theory, Resampling, Registries)
             ├── trade_db.py (Thread-safe JSON persistence & staging)
-            └── Kite_Access_Token_gen.py (Daily Zerodha OAuth token CLI)
+            └── dashboard_sl_overrides.py (Shared SL/T1/T2/T3 override read/write)
 
   directory:
     common:
@@ -35,7 +35,8 @@ architecture:
       ema_engine.py: "13 EMA & 44 EMA crossover scanner and display output builder for options (5050) and stock spot (5051) modes"
       trading_core.py: "Centralized strategy core: scan_anchor_bcd_breakout_generic, 5 Bullish + 5 Bearish anchor detectors, find_profit_targets, find_profit_targets_bearish, resample_timeframe (4h), get_adaptive_lookback, STOCK_REGISTRY (50 stocks), INDEX_REGISTRY (NIFTY, BANKNIFTY, SENSEX), _HISTORICAL_CANDLE_CACHE (TTL RAM caching), is_market_open (09:15-15:30 IST execution guard), session loading, journal writer"
       trade_db.py: "Thread-safe JSON trade database, cycle staging, duplicate active position rejection, expired position purging, and executed pattern deduplication"
-      Kite_Access_Token_gen.py: "Zerodha Kite OAuth access token generator CLI"
+      dashboard_sl_overrides.py: "Shared read/write of user-edited SL/T1/T2/T3 overrides (sl_target_overrides.json) used by both dashboards"
+    Kite_Access_Token_gen.py: "Zerodha Kite OAuth access token generator CLI (single canonical root-level copy)"
     Trade_Option:
       app_option_Trade.py: "Options Dashboard (port 5050) with 1-Click BUY button on Scan Tab (/api/buy-scanned-trade). Chart modal (/api/get-chart-data) renders direction-aware A-B-C-D markers + benchmark Entry line (A.high/A.low) + benchmark-based SL%/RR."
       index_options_trade_engine.py: "Intraday index options engine (NIFTY, BANKNIFTY, SENSEX with BFO exchange routing)"

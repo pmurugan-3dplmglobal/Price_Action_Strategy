@@ -18,7 +18,7 @@ from trading_core import (
     load_kite_session,
     ensure_kite_session,
     log_to_journal,
-    is_market_hours,
+    is_market_open,
     scan_anchor_bcd_breakout,
     find_anchor_bullish_engulfing,
     find_anchor_ll_sweep,
@@ -237,7 +237,7 @@ def execute_highest_rr_trade(kite, staged):
     if trade_db.is_pattern_executed("index", key):
         logging.info(f"Best cycle trade {key} already executed; skipping")
         return
-    live_ok = LIVE_MARKET_DEPLOYMENT and live_execution_enabled(LIVE_EXECUTION_FLAG) and is_market_hours()
+    live_ok = LIVE_MARKET_DEPLOYMENT and live_execution_enabled(LIVE_EXECUTION_FLAG) and is_market_open()
     if live_ok or BACKTEST_DATE is not None:
         pos = best.copy()
         pos["entry_time"] = dt.now().isoformat()
