@@ -156,6 +156,7 @@ def _accumulate_today_setups(prev_payload, results, today_str):
     return list(accumulated.values())
 
 def execute_ema_scan_cycle(timeframe="1d", is_options_mode=True, target_universe="ALL"):
+    mode_key = "option" if is_options_mode else "stock"
     try:
         ak, at = load_kite_session()
         if not ak or not at:
@@ -184,6 +185,9 @@ def execute_ema_scan_cycle(timeframe="1d", is_options_mode=True, target_universe
 
         results = []
         for symbol, info in target_registry.items():
+            if not _ema_engine_running.get(mode_key, False):
+                logger.info(f"EMA scan cycle aborted (engine stopped) for mode={mode_key}")
+                break
             setup = run_ema_scan_symbol(kite, symbol, info, timeframe=timeframe)
             if not setup:
                 continue
@@ -280,7 +284,11 @@ def _ema_worker_loop(mode_key, timeframe, is_options_mode, scan_interval=300, ta
             execute_ema_scan_cycle(timeframe=timeframe, is_options_mode=is_options_mode, target_universe=target_universe)
         except Exception as e:
             logger.error(f"EMA worker loop error: {e}")
-        time.sleep(scan_interval)
+        # Poll the running flag in small increments so Stop takes effect promptly
+        # instead of blocking on a single long sleep for the full scan_interval.
+        wait_until = time.time() + scan_interval
+        while time.time() < wait_until and _ema_engine_running.get(mode_key, False):
+            time.sleep(1)
     logger.info(f"Stock EMA Engine worker loop stopped for mode={mode_key}")
 
 def start_ema_engine(timeframe="1d", is_options_mode=True, scan_interval=300, target_universe="ALL"):

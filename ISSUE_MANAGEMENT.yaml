@@ -1184,6 +1184,63 @@ issues:
       3. Verified by restarting both dashboards: 5050 (option) and 5051 (stock) both spawned threads
          (mode=option / mode=stock logged), completed cycles, and served accumulated scan data (10 / 9 trades).
     status: RESOLVED
+  - id: ISSUE-051
+    title: EMA Engine Stop Button Appears Not to Work (Thread Blocks on Full Sleep)
+    severity: MEDIUM
+    category: Strategy Engine / Thread Lifecycle
+    family: BUG_FIX
+    date_reported: "2026-08-11"
+    symptom: |
+      Clicking Stop on the Stock EMA Engine card did nothing - the status stayed "Live"/running for minutes.
+    root_cause: |
+      stop_ema_engine set _ema_engine_running[mode_key]=False, but the worker thread then blocked on a single
+      time.sleep(scan_interval) (300s) and never re-checked the flag until that full sleep finished.
+      get_ema_engine_status reports thread is_alive(), so the UI kept showing "running" for up to ~5 minutes
+      after Stop. A mid-cycle Stop also waited for the whole 239-symbol scan to finish.
+    affected_files:
+      - common/ema_engine.py
+    resolution: |
+      1. _ema_worker_loop now polls the running flag in 1s increments instead of one long sleep, so Stop takes
+         effect within ~1s of the current cycle finishing.
+      2. execute_ema_scan_cycle now derives mode_key and aborts the symbol loop as soon as the running flag is
+         cleared (logged "EMA scan cycle aborted (engine stopped)").
+      3. Verified live: Stop on 5051 flipped status to stopped in 8.4s (log shows cycle abort + worker loop
+         stopped), then Start restored running=True.
+    status: RESOLVED
 
 
 
+
+  - id: BUGFIX-001
+    title: Blueprint Alignment - Benchmark / Close-Basis / TF Labeling
+    severity: BUG
+    category: Strategy Logic / Signal Accuracy
+    date_reported: 2026-08-11
+    symptom: |
+      (1) Setup 2 LL Sweep: benchmark = bounce_candle.high, should = sweep_candle.high (Low 2 = A).
+      (2) Setup 4 Hammer: benchmark = post_baby.high, should = baby_candle.high.
+      (3) Setup 5 Harami: benchmark = post_harami.high, should = inside_bar.high.
+      Bearish mirrors had same deviation: HH Sweep, Shooting Star, Bearish Harami.
+      Scanner also ran on still-forming last candle (not close-basis).
+      Scan results lacked anchor_tf and entry_tf labeling.
+    root_cause: |
+      BCD scanner always set benchmark = float(a['high']) where a = df.iloc[a_idx].
+      For Setup 2/4/5 the actual A candle sits at a_idx-1 because those anchor
+      functions look at df.iloc[-4] as A while the loop variable a = df.iloc[-3].
+      So benchmark was computed from the candle AFTER the true A candle.
+    affected_files:
+      - common/trading_core.py
+      - Trade_Stock/stock_reversal_scanner.py
+    resolution: |
+      1. Added BenchmarkPrice key to 6 anchor functions (3 bull + 3 bear mirrors)
+         returning the actual A candle high (bull) or low (bear).
+      2. BCD scanner now uses anchor_match.BenchmarkPrice when present,
+         falling back to float(a.high) for Setup 1 and 3 which were already correct.
+      3. Close-basis: df.iloc[:-1].copy() trim added to 4 scan functions so only
+         fully-closed candles are evaluated.
+      4. TF labeling: anchor_tf and entry_tf params added to scan_anchor_bcd_breakout
+         signature, populated in result dict. stock_reversal_scanner.py passes
+         TIMEFRAME_ANCHOR and TIMEFRAME_ENTRY values into both live and formed_display
+         dicts so the dashboard can show Anchor TF vs Entry TF for each signal.
+      Verified: scratch/run_full_regression_test.py 10/10 passed.
+    status: RESOLVED
