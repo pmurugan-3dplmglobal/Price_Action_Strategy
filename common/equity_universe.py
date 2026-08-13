@@ -41,7 +41,7 @@ NIFTY_MIDCAP100_SYMBOLS = [
     "INDIANB", "INDHOTEL", "INDUSTOWER", "IPCALAB", "JISLJALEQS",
     "JUBLFOOD", "KEI", "KPITTECH", "LICHSGFIN", "LUPIN",
     "M&MFIN", "MFSL", "MPHASIS", "MRF", "MUTHOOTFIN",
-    "NATIONALUM", "NAVINFLUOR", "OBEROIRLTY", "OFSS", "PAGEIND",
+    "NATIONALUM", "NAVINFLUOR", "OFSS", "PAGEIND",
     "PERSISTENT", "PETRONET", "POLYCAB", "POONAWALLA", "PRESTIGE",
     "SAIL", "SCHAEFFLER", "SOLARINDS", "SONACOMS", "SUNDARMFIN",
     "SUPREMEIND", "SYNGENE", "TATACHEM", "TATACOMM", "TIINDIA",
@@ -69,7 +69,8 @@ INDICES_REGISTRY_MAP = {
     "NIFTY50": NIFTY50_SYMBOLS,
     "NIFTY_NEXT_100": NIFTY_NEXT100_SYMBOLS,
     "NIFTY_MIDCAP_100": NIFTY_MIDCAP100_SYMBOLS,
-    "NIFTY_SMALLCAP_250": NIFTY_SMALLCAP250_SYMBOLS
+    "NIFTY_SMALLCAP_250": NIFTY_SMALLCAP250_SYMBOLS,
+    "INDEX_OPTIONS": ["NIFTY", "BANKNIFTY", "SENSEX"]
 }
 
 # ──────────────────────────────────────────────
@@ -84,27 +85,38 @@ def get_universe_symbols_and_tokens(kite=None, target_index_name="NIFTY50"):
     Integrates with Kite Connect API to resolve instrument tokens dynamically.
     """
     global _NSE_TOKEN_CACHE
-    from trading_core import STOCK_REGISTRY
+    from trading_core import STOCK_REGISTRY, INDEX_REGISTRY
 
-    symbols = INDICES_REGISTRY_MAP.get(target_index_name)
-    if not symbols:
-        symbols = sorted(list(STOCK_REGISTRY.keys()))
+    if target_index_name and str(target_index_name).upper() in ["ALL", "EVERYTHING"]:
+        all_syms = set(STOCK_REGISTRY.keys())
+        for lst in INDICES_REGISTRY_MAP.values():
+            all_syms.update(lst)
+        symbols = sorted(list(all_syms))
+    else:
+        symbols = INDICES_REGISTRY_MAP.get(target_index_name)
+        if not symbols:
+            symbols = sorted(list(STOCK_REGISTRY.keys()))
 
     token_map = {}
     for sym in symbols:
         if sym in STOCK_REGISTRY and STOCK_REGISTRY[sym].get("token"):
             token_map[sym] = STOCK_REGISTRY[sym]["token"]
+        elif sym in INDEX_REGISTRY and INDEX_REGISTRY[sym].get("token"):
+            token_map[sym] = INDEX_REGISTRY[sym]["token"]
 
     missing_symbols = [s for s in symbols if s not in token_map or token_map[s] == 0]
     if missing_symbols and kite:
         if not _NSE_TOKEN_CACHE:
             try:
-                logging.info(f"Fetching NSE instrument master for universe '{target_index_name}' ({len(missing_symbols)} missing tokens)...")
+                logging.info(f"Fetching NSE/INDICES instrument master for universe '{target_index_name}' ({len(missing_symbols)} missing tokens)...")
                 insts = kite.instruments("NSE")
                 for item in insts:
-                    if item.get("segment") == "NSE":
+                    seg = item.get("segment", "")
+                    if seg in ["NSE", "INDICES"]:
                         _NSE_TOKEN_CACHE[item["tradingsymbol"].strip()] = int(item["instrument_token"])
-                logging.info(f"Cached {len(_NSE_TOKEN_CACHE)} NSE instrument tokens")
+                        if item.get("name"):
+                            _NSE_TOKEN_CACHE[item["name"].strip()] = int(item["instrument_token"])
+                logging.info(f"Cached {len(_NSE_TOKEN_CACHE)} NSE/INDICES instrument tokens")
             except Exception as e:
                 logging.error(f"Failed to fetch NSE instruments for token map: {e}")
 

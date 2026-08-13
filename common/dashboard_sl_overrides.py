@@ -27,6 +27,8 @@ def write_sl_overrides(engine, symbol, vals, engine_aliases):
         overrides.setdefault(eng_k, {})[str(symbol)] = vals
         overrides.setdefault(eng_k, {})[clean_symbol] = vals
     os.makedirs(os.path.dirname(paths.SL_TARGET_OVERRIDES_FILE), exist_ok=True)
-    with open(paths.SL_TARGET_OVERRIDES_FILE, "w", encoding="utf-8") as f:
+    tmp = paths.SL_TARGET_OVERRIDES_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(overrides, f, indent=2)
+    os.replace(tmp, paths.SL_TARGET_OVERRIDES_FILE)
     return overrides

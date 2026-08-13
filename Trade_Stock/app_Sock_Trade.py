@@ -23,6 +23,25 @@ from ema_engine import (
     EMA_DISPLAY_FILE_STOCK
 )
 
+def resolve_underlying(contract_or_symbol, engine="nifty50"):
+    """Return the real underlying registry symbol for a contract string.
+
+    Fixes the stale-ACTIVE anomaly where the DB `symbol` was stored as the full
+    contract string instead of the underlying. Falls back to raw input.
+    """
+    from trading_core import INDEX_REGISTRY, STOCK_REGISTRY
+    raw = str(contract_or_symbol or "").replace(" ", "").upper()
+    if not raw:
+        return contract_or_symbol or ""
+    reg = INDEX_REGISTRY if engine == "index" else STOCK_REGISTRY
+    for sym in sorted(reg.keys(), key=len, reverse=True):
+        if sym.replace(" ", "").upper() in raw:
+            return sym
+    for sym in sorted(STOCK_REGISTRY.keys(), key=len, reverse=True):
+        if sym.replace(" ", "").upper() in raw:
+            return sym
+    return contract_or_symbol or ""
+
 app = Flask(__name__)
 
 # ──────────────────────────────────────────────
@@ -167,8 +186,12 @@ cached_data = {
     "anchor_status": {"running": False, "engine": None, "requested_at": None, "completed_at": None},
     "scan_display": {"date": "", "timestamp": "", "staged_trades": [], "active_positions": []},
     "live_execution": False,
-    "live_execution_index": False
+    "live_execution_index": False,
+    "executed_exits": {},
+    "expired_contracts": []
 }
+_expired_cache_day = ""
+_expired_cache_set = set()
 _ltp_last_fetch = 0
 _kite_positions_last_fetch = 0
 _kite_session = None
@@ -232,7 +255,7 @@ def load_config():
         if os.path.exists(CONFIG_FILE):
             with open(CONFIG_FILE) as f:
                 return json.load(f)
-    except:
+    except Exception:
         pass
     return {}
 
@@ -333,10 +356,17 @@ def load_positions():
     try:
         active = trade_db.get_active_trades()
         return {t["symbol"]: t for t in active}
-    except:
+    except Exception:
         return {}
 
 def load_journal():
+    try:
+        from daily_trade_journal import load_journal_entries
+        entries = load_journal_entries()
+        if entries:
+            return entries
+    except Exception:
+        pass
     rows = []
     if os.path.exists(JOURNAL_FILE):
         try:
@@ -351,6 +381,7 @@ def load_journal():
         except Exception:
             pass
     return rows[-200:]
+
 
 def tail_log(filepath, n=200):
     if not os.path.exists(filepath):
@@ -422,6 +453,10 @@ _parsed_json_cache = {}
 
 def refresh_data(single_run=False):
     global cached_data, _ltp_last_fetch, _kite_positions_last_fetch, _kite_session, _last_scan_reset
+    try:
+        trade_db.run_db_housekeeping()
+    except Exception:
+        pass
     while True:
         with data_lock:
             pos = load_positions()
@@ -481,6 +516,37 @@ def refresh_data(single_run=False):
             cached_data["scan_display"] = scan_display
             cached_data["live_execution"] = os.path.exists(LIVE_EXECUTION_FLAG)
             cached_data["live_execution_index"] = os.path.exists(LIVE_EXECUTION_FLAG_INDEX)
+            try:
+                from trading_core import load_executed_exits, EXECUTED_EXITS
+                load_executed_exits()
+                cached_data["executed_exits"] = dict(EXECUTED_EXITS)
+            except Exception:
+                pass
+            day_key = dt.now().strftime("%Y-%m-%d")
+            global _expired_cache_day, _expired_cache_set
+            if _expired_cache_day != day_key:
+                try:
+                    from trading_core import contract_is_expired
+                    sym_set = set()
+                    for _cat in ("staged_trades", "all_staged_today", "carry_forward", "active_live"):
+                        for item in (cached_data["scan_display"].get("nifty50") or {}).get(_cat) or []:
+                            c = str(item.get("contract") or item.get("symbol") or "").replace(" ", "").upper()
+                            if c:
+                                sym_set.add(c)
+                    for _cat in ("staged_trades", "all_staged_today", "carry_forward", "active_live"):
+                        for item in (cached_data["scan_display"].get("index") or {}).get(_cat) or []:
+                            c = str(item.get("contract") or item.get("symbol") or "").replace(" ", "").upper()
+                            if c:
+                                sym_set.add(c)
+                    for t in cached_data.get("all_trades", []):
+                        c = str(t.get("contract") or t.get("symbol") or "").replace(" ", "").upper()
+                        if c:
+                            sym_set.add(c)
+                    _expired_cache_set = {c for c in sym_set if contract_is_expired(c)}
+                    _expired_cache_day = day_key
+                except Exception:
+                    pass
+            cached_data["expired_contracts"] = sorted(_expired_cache_set)
             now = time.time()
             if now - _ltp_last_fetch > 3 and cached_data["all_trades"]:
                 _ltp_last_fetch = now
@@ -676,7 +742,9 @@ def api_status():
             "scan_display": cached_data["scan_display"],
             "ema_scan": get_ema_scan_data(is_options_mode=False),
             "live_execution": cached_data["live_execution"],
-            "live_execution_index": cached_data["live_execution_index"]
+            "live_execution_index": cached_data["live_execution_index"],
+            "executed_exits": cached_data.get("executed_exits", {}),
+            "expired_contracts": cached_data.get("expired_contracts", [])
         })
 
 @app.route("/api/token/check")
@@ -1195,8 +1263,9 @@ def api_update_position():
             is_stock = exchange == "NSE"
             trade_data = {"contract": contract, "entry_spot": vals.get("entry_spot", 0), "position_type": "stock" if is_stock else "option"}
             trade_data.update(vals)
-            tid, _created = trade_db.create_trade(engine, symbol, trade_data)
-            entry = {"symbol": symbol, "contract": contract, "id": tid, "engine": engine, "status": "ACTIVE", "position_type": "stock" if is_stock else "option"}
+            db_symbol = resolve_underlying(symbol or contract, engine)
+            tid, _created = trade_db.create_trade(engine, db_symbol, trade_data)
+            entry = {"symbol": db_symbol, "contract": contract, "id": tid, "engine": engine, "status": "ACTIVE", "position_type": "stock" if is_stock else "option"}
             entry.update(vals)
             cached_data["all_trades"].append(entry)
             cached_data["positions"][symbol] = entry
@@ -1334,6 +1403,7 @@ def api_buy_scanned_trade():
                 return jsonify({"ok": False, "error": f"Contract {contract} is expired. Cannot place 1-Click Buy."}), 400
         except Exception as exp_check_err:
             logging.warning(f"1-Click Buy expiry check skipped: {exp_check_err}")
+        symbol = resolve_underlying(symbol or contract, engine)
         tid, _created = trade_db.create_trade(engine, symbol, trade_data)
         clear_executed_exit(contract)
 
@@ -1453,8 +1523,175 @@ def api_exit_all_positions():
 EXPORT_STATE_FILE = "output/monitor/export_state.json"
 
 # ──────────────────────────────────────────────
-#  MONTHLY EXPORT (trades to Excel archive)
+#  DAILY SELF-LEARNING TRADE JOURNAL API
 # ──────────────────────────────────────────────
+@app.route("/api/journal/get", methods=["GET"])
+def api_journal_get():
+    try:
+        from daily_trade_journal import load_journal_entries
+        return jsonify(load_journal_entries())
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+@app.route("/api/journal/sync", methods=["POST"])
+def api_journal_sync():
+    try:
+        from daily_trade_journal import generate_daily_journal
+        req = request.json or {}
+        dt_str = req.get("date")
+        entries = generate_daily_journal(dt_str, kite=_kite_session)
+        return jsonify({"ok": True, "count": len(entries), "entries": entries})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+@app.route("/api/journal/update", methods=["POST"])
+def api_journal_update():
+    try:
+        from daily_trade_journal import load_journal_entries, save_journal_entries
+        data = request.json or {}
+        symbol = data.get("symbol")
+        date_str = data.get("date")
+        trade_id = data.get("trade_id")
+        remarks = data.get("remarks")
+        lesson = data.get("lesson")
+        if trade_id and lesson is not None:
+            trade_db.update_self_learning_lesson(trade_id, lesson)
+        if not symbol or not date_str:
+            return jsonify({"ok": True, "message": "Updated trade_db lesson"})
+        entries = load_journal_entries()
+        updated = False
+        for e in entries:
+            if e.get("Date") == date_str and (e.get("Symbol") == symbol or symbol in e.get("Symbol", "")):
+                if remarks is not None: e["Analysis_Remarks"] = remarks
+                if lesson is not None: e["Self_Learning_Lesson"] = lesson
+                updated = True
+        if updated:
+            save_journal_entries(entries)
+            return jsonify({"ok": True})
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+@app.route("/api/journal/export", methods=["GET", "POST"])
+def api_journal_export():
+    try:
+        import io
+        from daily_trade_journal import load_journal_entries
+        entries = load_journal_entries()
+        headers = [
+            "Date", "Engine", "Symbol", "Side", "Timeframe", "Pattern",
+            "Entry_Time", "Entry_Price", "Exit_Time", "Exit_Price",
+            "SL", "T1", "T2", "T3", "Quantity", "Lot_Size",
+            "PnL_Rs", "PnL_Pct", "Outcome", "Analysis_Remarks", "Self_Learning_Lesson"
+        ]
+        output = io.StringIO()
+        writer = csv.DictWriter(output, fieldnames=headers, extrasaction="ignore")
+        writer.writeheader()
+        for e in entries:
+            writer.writerow(e)
+        csv_data = output.getvalue()
+        fname = f"trade_journal_export_{dt.now().strftime('%Y_%m_%d_%H%M')}.csv"
+        return Response(
+            csv_data,
+            mimetype="text/csv",
+            headers={"Content-Disposition": f"attachment; filename={fname}"}
+        )
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+@app.route("/api/journal/export/excel", methods=["GET", "POST"])
+def api_journal_export_excel():
+    try:
+        import openpyxl, io
+        from openpyxl.styles import Font, PatternFill, Alignment
+        from daily_trade_journal import load_journal_entries
+
+        entries = load_journal_entries()
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Trade Journal"
+
+        headers = [
+            "Date", "Engine", "Symbol", "Side", "Timeframe", "Pattern",
+            "Entry Time", "Entry Price", "Exit Time", "Exit Price",
+            "SL", "T1", "T2", "T3", "Quantity", "Lot Size",
+            "PnL (₹)", "PnL (%)", "Outcome", "Analysis Remarks", "Self-Learning Lesson"
+        ]
+        
+        header_font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+        header_fill = PatternFill(start_color="1F2937", end_color="1F2937", fill_type="solid")
+        center_align = Alignment(horizontal="center", vertical="center")
+        
+        ws.append(headers)
+        for col_num in range(1, len(headers) + 1):
+            cell = ws.cell(row=1, column=col_num)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = center_align
+
+        for e in entries:
+            ws.append([
+                e.get("Date", ""),
+                e.get("Engine", ""),
+                e.get("Symbol", ""),
+                e.get("Side", ""),
+                e.get("Timeframe", ""),
+                e.get("Pattern", ""),
+                e.get("Entry_Time", ""),
+                e.get("Entry_Price", ""),
+                e.get("Exit_Time", ""),
+                e.get("Exit_Price", ""),
+                e.get("SL", ""),
+                e.get("T1", ""),
+                e.get("T2", ""),
+                e.get("T3", ""),
+                e.get("Quantity", ""),
+                e.get("Lot_Size", ""),
+                e.get("PnL_Rs", 0),
+                e.get("PnL_Pct", ""),
+                e.get("Outcome", ""),
+                e.get("Analysis_Remarks", ""),
+                e.get("Self_Learning_Lesson", "")
+            ])
+
+        for col in ws.columns:
+            max_len = max(len(str(cell.value or '')) for cell in col)
+            col_letter = openpyxl.utils.get_column_letter(col[0].column)
+            ws.column_dimensions[col_letter].width = max(max_len + 3, 12)
+
+        ws2 = wb.create_sheet(title="Performance Summary")
+        ws2.append(["Metric", "Value"])
+        ws2.cell(row=1, column=1).font = header_font
+        ws2.cell(row=1, column=1).fill = header_fill
+        ws2.cell(row=1, column=2).font = header_font
+        ws2.cell(row=1, column=2).fill = header_fill
+
+        total_trades = len(entries)
+        wins = sum(1 for e in entries if float(e.get("PnL_Rs") or 0) > 0)
+        losses = sum(1 for e in entries if float(e.get("PnL_Rs") or 0) < 0)
+        win_rate = (wins / total_trades * 100) if total_trades > 0 else 0
+        total_pnl = sum(float(e.get("PnL_Rs") or 0) for e in entries)
+
+        ws2.append(["Total Trades", total_trades])
+        ws2.append(["Winning Trades", wins])
+        ws2.append(["Losing Trades", losses])
+        ws2.append(["Win Rate (%)", f"{win_rate:.1f}%"])
+        ws2.append(["Total Net PnL (₹)", f"₹{total_pnl:.2f}"])
+
+        output = io.BytesIO()
+        wb.save(output)
+        output.seek(0)
+
+        fname = f"trade_journal_export_{dt.now().strftime('%Y_%m_%d_%H%M')}.xlsx"
+        return Response(
+            output.getvalue(),
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f"attachment; filename={fname}"}
+        )
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 
 # ──────────────────────────────────────────────
 #  INTERACTIVE NEGATION ANALYZER API

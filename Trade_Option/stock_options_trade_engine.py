@@ -41,7 +41,8 @@ from trading_core import (
     monitor_active_positions as shared_monitor_positions,
     sanitize_entry_time,
     simulate_trade_outcome as shared_simulate,
-    STOCK_REGISTRY
+    STOCK_REGISTRY,
+    match_registry_symbol
 )
 
 LIVE_MARKET_DEPLOYMENT = True
@@ -358,7 +359,7 @@ def execute_highest_rr_trade(kite, staged):
             pos["trade_id"], _created = trade_db.create_trade("nifty50", sym, {k: v for k, v in pos.items() if k != "trade_id"})
             ACTIVE_POSITIONS[sym] = pos
         save_state()
-    avg_rr = round(_avg_target_rank(best), 2)
+    trade_db.record_executed_pattern("nifty50", key, {"contract": contract, "entry": cp})
     if live_ok:
         try:
             q = kite.quote(f"{kite.EXCHANGE_NFO}:{contract}")
@@ -654,6 +655,7 @@ def main():
         sync_instruments(kite)
         if BACKTEST_DATE is None:
             load_state()
+            trade_db.run_db_housekeeping()
             active = trade_db.get_active_trades("nifty50")
             seen_symbols = set()
             for t in active:
@@ -693,7 +695,7 @@ def main():
                 for p in all_positions:
                     if p["exchange"] not in ("NFO", "NSE") or int(p.get("quantity", 0)) == 0:
                         continue
-                    symbol = next((s for s in STOCK_REGISTRY if s in p["tradingsymbol"]), None)
+                    symbol = match_registry_symbol(STOCK_REGISTRY, p["tradingsymbol"])
                     if not symbol or symbol in ACTIVE_POSITIONS:
                         continue
                     nq = abs(int(p.get("quantity", 0)))

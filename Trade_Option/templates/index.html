@@ -29,6 +29,74 @@
             event.target.classList.add('active');
         }
 
+        function saveJournalLesson(btn, tradeId, symbol, dateStr) {
+            const row = btn.closest('tr');
+            const input = row.querySelector('.journal-lesson-input');
+            const lesson = input ? input.value : '';
+            btn.disabled = true;
+            btn.innerText = 'Saving...';
+            fetch('/api/journal/update', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    trade_id: tradeId,
+                    symbol: symbol,
+                    date: dateStr,
+                    lesson: lesson
+                })
+            })
+            .then(res => res.json())
+            .then(res => {
+                btn.disabled = false;
+                btn.innerText = '💾 Saved';
+                setTimeout(() => { btn.innerText = '💾 Save'; }, 2000);
+                if (typeof showToast === 'function') {
+                    showToast('Lesson saved to SQLite & CSV Journal!', 'success');
+                }
+            })
+            .catch(err => {
+                btn.disabled = false;
+                btn.innerText = '💾 Save';
+                alert('Failed to save lesson: ' + err);
+            });
+        }
+
+        function exportJournalCSV() {
+            window.open('/api/journal/export', '_blank');
+        }
+
+        function exportJournalExcel() {
+            window.open('/api/journal/export/excel', '_blank');
+        }
+
+        let journalOutcomeFilter = 'all';
+        let journalSearchQuery = '';
+        let journalPageSize = 10;
+        let journalCurrentPage = 1;
+
+        function onJournalSearch(val) {
+            journalSearchQuery = (val || '').trim().toLowerCase();
+            journalCurrentPage = 1;
+            renderReport();
+        }
+
+        function onJournalOutcomeFilter(val) {
+            journalOutcomeFilter = val;
+            journalCurrentPage = 1;
+            renderReport();
+        }
+
+        function onJournalPageSize(val) {
+            journalPageSize = val === 'all' ? 999999 : parseInt(val, 10);
+            journalCurrentPage = 1;
+            renderReport();
+        }
+
+        function changeJournalPage(p) {
+            journalCurrentPage = p;
+            renderReport();
+        }
+
         // ── Filter Controls ──
         function setFilter(type, value) {
             if (type === 'journal') journalFilter = value;
@@ -634,8 +702,10 @@
 
                 let rrNum = parseFloat(t.rr);
                 if (isNaN(rrNum) || rrNum <= 0) {
-                    if (entryNum > 0 && slNum > 0 && t1Num > 0 && Math.abs(entryNum - slNum) > 0) {
-                        rrNum = Math.abs(t1Num - entryNum) / Math.abs(entryNum - slNum);
+                    const risk = Math.abs(entryNum - slNum);
+                    const riskMin = Math.max(0.01, Math.abs(entryNum) * 0.005);
+                    if (entryNum > 0 && slNum > 0 && t1Num > 0 && risk >= riskMin) {
+                        rrNum = Math.abs(t1Num - entryNum) / risk;
                     } else {
                         rrNum = 0.0;
                     }
@@ -643,10 +713,17 @@
                 const rr = rrNum > 0 ? rrNum.toFixed(2) : '0.00';
 
                 const isBought = isRealOpenKitePos;
-                
+
+                const expiredSet = new Set(d.expired_contracts || []);
+                const execExits = d.executed_exits || {};
+                const isExpired = expiredSet.has(cleanContract) || (t.symbol && expiredSet.has(cleanSymbol));
+                const isExitDone = execExits[cleanContract] || (t.symbol && execExits[cleanSymbol]) || execExits[t.contract || ''] || false;
+
                 const chartCell = `<td style="text-align:center"><button class="btn-chart" onclick="openChartModal('${t.contract||t.symbol||''}','${t.symbol||''}','${t.side||'CE'}',${t.entry_spot||t.entry||0},${t.current_sl||t.sl||0},${t.t1||0},${t.t2||0},${t.t3||0},'${res}','${t.candle_a_time||''}','${t.entry_time||''}',${t.benchmark||0},${t.anchor_floor||0},'${t.direction||'BULL'}')" style="background:#1f6feb;color:#ffffff;border:none;padding:4px 8px;border-radius:4px;font-weight:bold;cursor:pointer;font-size:11px;">📈 Chart</button></td>`;
                 let actCell = '';
-                if (isBought) {
+                if (isExpired || isExitDone) {
+                    actCell = '<td style="text-align:center"><button disabled class="btn-expired" style="background:' + (isExpired ? '#8957e5' : '#d29922') + ';color:#ffffff;border:none;padding:4px 10px;border-radius:4px;font-weight:bold;cursor:not-allowed;font-size:11px">' + (isExpired ? 'EXPIRED' : 'EXITED') + '</button></td>';
+                } else if (isBought) {
                     actCell = '<td style="text-align:center"><button disabled class="btn-bought" style="background:#238636;color:#ffffff;border:none;padding:4px 10px;border-radius:4px;font-weight:bold;cursor:not-allowed;font-size:11px">BOUGHT</button></td>';
                 } else {
                     actCell = `<td style="text-align:center"><button class="btn-buy" onclick="buyScannedTrade(this, '${t.symbol||''}', '${t.contract||''}', '${t.side||'CE'}', ${t.entry_spot||0}, ${t.current_sl||t.sl||0}, ${t.t1||0}, ${t.t2||0}, ${t.t3||0}, '${eng}', '${t.timeframe||''}', '${(t.candle_a_time||'').replace(/'/g,"")}', '${(t.entry_time||'').replace(/'/g,"")}', ${t.benchmark||0}, ${t.anchor_floor||0}, '${t.direction||'BULL'}')" style="background:#2ea043;color:#ffffff;border:none;padding:4px 12px;border-radius:4px;font-weight:bold;cursor:pointer;font-size:11px">BUY</button></td>`;
@@ -988,44 +1065,151 @@
 
             if (journalFilter !== 'all') {
                 filteredJournal = filteredJournal.filter(j => {
-                    const sym = (j.Symbol || '').toUpperCase();
+                    const sym = (j.Symbol || j.contract || '').toUpperCase();
                     const isIndex = sym.includes('NIFTY') || sym.includes('BANK');
                     return journalFilter === 'index' ? isIndex : !isIndex;
                 });
             }
-            if (filteredJournal.length) {
-                jHtml = '<table><thead><tr><th onclick="sortTable(this,0)">Time</th><th onclick="sortTable(this,1)">Symbol</th><th onclick="sortTable(this,2)">Pattern</th><th onclick="sortTable(this,3)">Action</th><th onclick="sortTable(this,4)">Status</th><th onclick="sortTable(this,5)">Entry</th><th onclick="sortTable(this,6)">SL</th><th onclick="sortTable(this,7)">Target</th><th onclick="sortTable(this,8)">RR</th><th onclick="sortTable(this,9)">P&L %</th></tr></thead><tbody>';
-                filteredJournal.forEach(j => {
-                    const pnlv = j['P&L %'] || '-';
-                    const ts = j.Timestamp || '';
-                    let time = '';
-                    if (ts) {
-                        const p = ts.split(' ');
-                        const dp = p[0] ? p[0].split('-') : [];
-                        const tp = p[1] ? p[1].split(':') : [];
-                        if (dp.length === 3 && tp.length === 3)
-                            time = `${dp[2]}:${dp[1]}:${dp[0].slice(-2)}-${tp[0]}:${tp[1]}`;
-                    }
-                    const act = j.Action || '';
-                    const st = j.Status || '';
-                    let badge = 'badge-open';
-                    if (act.startsWith('EXIT')) badge = 'badge-closed';
-                    else if (st === 'FAILED') badge = 'badge-failed';
-                    else if (st === 'MUTATED') badge = 'badge-mutated';
-                    let pnlBadge = '';
-                    if (pnlv !== '-') {
-                        const pn = parseFloat(pnlv);
-                        pnlBadge = pn >= 0 ? 'badge-profit' : 'badge-loss';
-                    }
-                    const entryVal = j['Entry'] || '';
-                    const slVal = j['SL'] || '';
-                    const targetVal = j['Target'] || '';
-                    const rrVal = j['RR'] || '';
-                    jHtml += `<tr><td style="font-size:11px">${time}</td><td>${j.Symbol||''}</td><td>${j.Pattern||''}</td><td><span class="badge ${badge}">${act}</span></td><td>${st}</td><td>${entryVal}</td><td>${slVal}</td><td>${targetVal}</td><td>${rrVal}</td><td><span class="badge ${pnlBadge}">${pnlv}</span></td></tr>`;
+
+            if (journalOutcomeFilter !== 'all') {
+                filteredJournal = filteredJournal.filter(j => {
+                    let pnlv = parseFloat(j.PnL_Rs || j.pnl || 0);
+                    const outcome = (j.Outcome || j.Status || '').toUpperCase();
+                    if (journalOutcomeFilter === 'win') return pnlv > 0 || outcome.includes('PROFIT') || outcome.includes('TARGET');
+                    if (journalOutcomeFilter === 'loss') return pnlv < 0 || outcome.includes('SL_HIT') || outcome.includes('LOSS');
+                    if (journalOutcomeFilter === 'active') return outcome.includes('ACTIVE') || outcome.includes('OPEN');
+                    return true;
                 });
-                jHtml += '</tbody></table>';
+            }
+
+            if (journalSearchQuery) {
+                filteredJournal = filteredJournal.filter(j => {
+                    const blob = `${j.Symbol || ''} ${j.Pattern || ''} ${j.Outcome || ''} ${j.Analysis_Remarks || ''} ${j.Self_Learning_Lesson || ''}`.toLowerCase();
+                    return blob.includes(journalSearchQuery);
+                });
+            }
+
+            jHtml = `<div class="journal-controls-bar" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:12px;background:#161b22;padding:8px 12px;border-radius:6px;border:1px solid #30363d;">
+                <input type="text" id="journal-search" value="${journalSearchQuery.replace(/"/g, '&quot;')}" placeholder="🔍 Search Symbol, Pattern, Remarks..." oninput="onJournalSearch(this.value)" style="flex:1;min-width:180px;background:#0d1117;border:1px solid #30363d;color:#c9d1d9;padding:5px 10px;border-radius:4px;font-size:12px">
+                
+                <label style="font-size:11px;color:#8b949e">Outcome:</label>
+                <select onchange="onJournalOutcomeFilter(this.value)" class="filter-select" style="font-size:12px;padding:4px 8px">
+                    <option value="all" ${journalOutcomeFilter==='all'?'selected':''}>All Outcomes</option>
+                    <option value="win" ${journalOutcomeFilter==='win'?'selected':''}>🟢 Wins Only</option>
+                    <option value="loss" ${journalOutcomeFilter==='loss'?'selected':''}>🔴 Losses Only</option>
+                    <option value="active" ${journalOutcomeFilter==='active'?'selected':''}>🔵 Active Only</option>
+                </select>
+
+                <label style="font-size:11px;color:#8b949e">Rows per page:</label>
+                <select onchange="onJournalPageSize(this.value)" class="filter-select" style="font-size:12px;padding:4px 8px">
+                    <option value="10" ${journalPageSize===10?'selected':''}>10</option>
+                    <option value="25" ${journalPageSize===25?'selected':''}>25</option>
+                    <option value="50" ${journalPageSize===50?'selected':''}>50</option>
+                    <option value="100" ${journalPageSize===100?'selected':''}>100</option>
+                    <option value="all" ${journalPageSize===999999?'selected':''}>All</option>
+                </select>
+            </div>`;
+
+            if (filteredJournal.length) {
+                let wins = 0, losses = 0, totalPnl = 0;
+                filteredJournal.forEach(j => {
+                    let pnlv = parseFloat(j.PnL_Rs || j.pnl || j['P&L %'] || 0);
+                    if (!isNaN(pnlv)) {
+                        totalPnl += pnlv;
+                        if (pnlv > 0) wins++;
+                        else if (pnlv < 0) losses++;
+                    }
+                });
+                const totalTrades = filteredJournal.length;
+                const winRate = totalTrades > 0 ? ((wins / totalTrades) * 100).toFixed(1) : '0.0';
+
+                jHtml += `<div class="journal-stats-summary" style="display:flex;gap:12px;margin-bottom:12px;background:#161b22;padding:10px 14px;border-radius:8px;border:1px solid #30363d;">
+                    <div style="flex:1;text-align:center;"><div style="font-size:11px;color:#8b949e">Filtered Trades</div><div style="font-size:15px;font-weight:bold;color:#58a6ff">${totalTrades}</div></div>
+                    <div style="flex:1;text-align:center;"><div style="font-size:11px;color:#8b949e">Win Rate</div><div style="font-size:15px;font-weight:bold;color:#3fb950">${winRate}%</div></div>
+                    <div style="flex:1;text-align:center;"><div style="font-size:11px;color:#8b949e">Wins / Losses</div><div style="font-size:15px;font-weight:bold;color:#c9d1d9">${wins} W / ${losses} L</div></div>
+                    <div style="flex:1;text-align:center;"><div style="font-size:11px;color:#8b949e">Net PnL (₹)</div><div style="font-size:15px;font-weight:bold;color:${totalPnl >= 0 ? '#3fb950' : '#f85149'}">${totalPnl >= 0 ? '+' : ''}${totalPnl.toFixed(2)}</div></div>
+                </div>`;
+
+                const totalFiltered = filteredJournal.length;
+                const pageSize = journalPageSize;
+                const totalPages = Math.max(1, Math.ceil(totalFiltered / (pageSize === 999999 ? totalFiltered || 1 : pageSize)));
+                if (journalCurrentPage > totalPages) journalCurrentPage = totalPages;
+                const currentPage = journalCurrentPage;
+                
+                const startIdx = pageSize === 999999 ? 0 : (currentPage - 1) * pageSize;
+                const endIdx = pageSize === 999999 ? totalFiltered : Math.min(startIdx + pageSize, totalFiltered);
+                const pageItems = filteredJournal.slice(startIdx, endIdx);
+
+                jHtml += '<div style="overflow-x:auto"><table><thead><tr>' +
+                    '<th onclick="sortTable(this,0)">Date/Time</th>' +
+                    '<th onclick="sortTable(this,1)">Symbol</th>' +
+                    '<th onclick="sortTable(this,2)">Side</th>' +
+                    '<th onclick="sortTable(this,3)">TF</th>' +
+                    '<th onclick="sortTable(this,4)">Pattern</th>' +
+                    '<th onclick="sortTable(this,5)">Entry</th>' +
+                    '<th onclick="sortTable(this,6)">Exit</th>' +
+                    '<th onclick="sortTable(this,7)">PnL (₹)</th>' +
+                    '<th onclick="sortTable(this,8)">PnL (%)</th>' +
+                    '<th onclick="sortTable(this,9)">Outcome</th>' +
+                    '<th>Remarks & Self-Learning Lesson</th>' +
+                    '</tr></thead><tbody>';
+
+                pageItems.forEach(j => {
+                    const tid = j.id || j.trade_id || 0;
+                    const dateStr = j.Date || (j.Entry_Time || j.Timestamp || '').split(' ')[0] || '';
+                    const timeStr = (j.Entry_Time || j.Timestamp || '').split(' ')[1] || dateStr;
+                    const sym = j.Symbol || j.contract || '';
+                    const side = j.Side || (sym.includes('PE') ? 'PE' : 'CE');
+                    const tf = j.Timeframe || j.timeframe || j.entry_tf || '75min';
+                    const pat = j.Pattern || j.pattern || 'BASE_ABCD';
+                    const entryPx = j.Entry_Price || j.Entry || j.entry_spot || '-';
+                    const exitPx = j.Exit_Price || j.exit_price || '-';
+                    const pnlRs = j.PnL_Rs !== undefined ? j.PnL_Rs : (j.pnl !== undefined ? j.pnl : '-');
+                    const pnlPct = j.PnL_Pct || j['P&L %'] || (j.pnl_pct ? `${j.pnl_pct}%` : '-');
+                    const outcome = j.Outcome || j.Status || 'COMPLETED';
+                    const remarks = j.Analysis_Remarks || '';
+                    const lesson = j.Self_Learning_Lesson || '';
+
+                    let pnlBadge = 'badge-open';
+                    if (pnlRs !== '-') {
+                        const prs = parseFloat(pnlRs);
+                        if (!isNaN(prs)) pnlBadge = prs >= 0 ? 'badge-profit' : 'badge-loss';
+                    }
+
+                    jHtml += `<tr>
+                        <td style="font-size:11px">${dateStr}<br><span style="color:#8b949e">${timeStr}</span></td>
+                        <td><strong>${sym}</strong></td>
+                        <td><span class="badge ${side === 'PE' || side === 'BEAR' ? 'badge-loss' : 'badge-profit'}">${side}</span></td>
+                        <td><span class="badge" style="background:#21262d;color:#58a6ff;border:1px solid #30363d">${tf}</span></td>
+                        <td><span style="font-family:monospace;font-size:11px">${pat}</span></td>
+                        <td>${entryPx}</td>
+                        <td>${exitPx}</td>
+                        <td><span class="badge ${pnlBadge}">${pnlRs}</span></td>
+                        <td>${pnlPct}</td>
+                        <td><span class="badge ${pnlBadge}">${outcome}</span></td>
+                        <td style="min-width:280px">
+                            <div style="font-size:11px;color:#8b949e;margin-bottom:4px">${remarks}</div>
+                            <div style="display:flex;gap:4px">
+                                <input type="text" class="journal-lesson-input" value="${lesson.replace(/"/g, '&quot;')}" placeholder="Add self-learning lesson..." style="flex:1;background:#0d1117;border:1px solid #30363d;color:#c9d1d9;padding:4px 8px;border-radius:4px;font-size:11px">
+                                <button onclick="saveJournalLesson(this, ${tid}, '${sym}', '${dateStr}')" style="background:#238636;color:#fff;border:none;padding:4px 8px;border-radius:4px;cursor:pointer;font-size:11px;font-weight:600">💾 Save</button>
+                            </div>
+                        </td>
+                    </tr>`;
+                });
+                jHtml += '</tbody></table></div>';
+
+                jHtml += `<div class="journal-pagination-bar" style="display:flex;justify-content:space-between;align-items:center;margin-top:12px;padding:8px 0;font-size:12px;color:#8b949e">
+                    <div>Showing <span style="color:#c9d1d9">${totalFiltered ? startIdx + 1 : 0}</span> to <span style="color:#c9d1d9">${endIdx}</span> of <span style="color:#c9d1d9">${totalFiltered}</span> entries</div>
+                    <div style="display:flex;gap:4px;align-items:center">
+                        <button onclick="changeJournalPage(1)" ${currentPage === 1 ? 'disabled' : ''} style="background:#21262d;color:#c9d1d9;border:1px solid #30363d;padding:3px 10px;border-radius:4px;cursor:pointer">« First</button>
+                        <button onclick="changeJournalPage(${currentPage - 1})" ${currentPage === 1 ? 'disabled' : ''} style="background:#21262d;color:#c9d1d9;border:1px solid #30363d;padding:3px 10px;border-radius:4px;cursor:pointer">‹ Prev</button>
+                        <span style="padding:0 8px">Page <strong style="color:#58a6ff">${currentPage}</strong> of <strong style="color:#c9d1d9">${totalPages}</strong></span>
+                        <button onclick="changeJournalPage(${currentPage + 1})" ${currentPage === totalPages ? 'disabled' : ''} style="background:#21262d;color:#c9d1d9;border:1px solid #30363d;padding:3px 10px;border-radius:4px;cursor:pointer">Next ›</button>
+                        <button onclick="changeJournalPage(${totalPages})" ${currentPage === totalPages ? 'disabled' : ''} style="background:#21262d;color:#c9d1d9;border:1px solid #30363d;padding:3px 10px;border-radius:4px;cursor:pointer">Last »</button>
+                    </div>
+                </div>`;
             } else {
-                jHtml = '<p class="empty-state">No journal entries yet</p>';
+                jHtml += '<p class="empty-state">No matching journal entries found</p>';
             }
             document.getElementById('journal-body').innerHTML = jHtml;
             renderScanTab();
@@ -1706,6 +1890,8 @@
                                 <option value="index">Index</option>
                                 <option value="nifty50">Nifty 50</option>
                             </select>
+                            <button onclick="exportJournalCSV()" style="background:#238636;color:#fff;border:none;padding:4px 10px;border-radius:4px;cursor:pointer;font-size:12px;font-weight:600">📥 Export CSV</button>
+                            <button onclick="exportJournalExcel()" style="background:#1f6beb;color:#fff;border:none;padding:4px 10px;border-radius:4px;cursor:pointer;font-size:12px;font-weight:600">📊 Export Excel</button>
                             <button class="clear-logs-btn" onclick="clearJournal()">Clear</button>
                         </div>
                     </div>

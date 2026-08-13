@@ -1,0 +1,473 @@
+"""
+Bullish price action pattern detectors: 5 anchor patterns (engulfing, LL sweep,
+hammer baby, harami, two higher highs), A-B-C-D breakout scanner, and trend
+continuation re-entry (Page 16).
+Extracted from trading_core.py (2026-08-11).
+"""
+import logging
+import pandas as pd
+from datetime import datetime as dt
+
+from targets import (
+    find_profit_targets, check_left_side_rule,
+    calculate_sl_buffer, calculate_position_size, calc_rr
+)
+from timeframe_utils import get_adaptive_lookback, resample_timeframe, trading_days_between, is_live_candle_near_close
+
+def clean_timestamp(ts):
+    """Clean ISO timestamp string by stripping timezone offsets (+05:30), seconds, and T separator."""
+    if not ts or ts == '-':
+        return ""
+    s = str(ts).split('+')[0].split('.')[0].replace('T', ' ').strip()
+    p = s.split(' ')
+    if len(p) == 2:
+        date_part, time_part = p[0], p[1]
+        t_parts = time_part.split(':')
+        if len(t_parts) >= 2:
+            return f"{date_part} {t_parts[0]}:{t_parts[1]}"
+    return s
+
+# ──────────────────────────────────────────────
+#  ANCHOR (A-FORMATION) DETECTION — 5 PATTERNS
+# ──────────────────────────────────────────────
+
+def find_anchor_bullish_engulfing(df):
+    """A = bullish engulfing candle. Bearish candle-1, then bullish candle that wraps its body+wick."""
+    if len(df) < 5:
+        return None
+    bearish_candle, bull_anchor = df.iloc[-4], df.iloc[-3]
+    if not (float(bearish_candle['close']) < float(bearish_candle['open'])):
+        return None
+    if not (float(bull_anchor['close']) > float(bull_anchor['open'])):
+        return None
+    if not (float(bull_anchor['open']) <= float(bearish_candle['close']) and float(bull_anchor['close']) > float(bearish_candle['high'])):
+        return None
+    a_low = float(bull_anchor['low'])
+    anchor_close = float(bull_anchor['close'])
+    sl_val = calculate_sl_buffer(a_low, side="BULL")
+    return {"Pattern": "BULL_A_ABCD_Engulf", "Close": anchor_close, "SL": sl_val, "Signal": "A_Formation", "CandleATime": str(bull_anchor.get('date', ''))}
+
+def find_anchor_ll_sweep(df):
+    """
+    A = Low 2 (second lower low).
+    Rules:
+      1. Need > 2 candles (at least 3 candles gap) between Low 1 and Low 2.
+      2. In-between candles must NOT close below Low 1 (wicks allowed).
+      3. Low 2 sweeps below Low 1.
+    """
+    if len(df) < 30:
+        return None
+
+    search_range = df.iloc[-29:-7]
+    if search_range.empty:
+        return None
+
+    low_1_idx = search_range['low'].idxmin()
+    low_1 = float(df.loc[low_1_idx, 'low'])
+
+    sweep_idx = df.index[-4]
+
+    pos_low_1 = df.index.get_loc(low_1_idx)
+    pos_sweep = df.index.get_loc(sweep_idx)
+    if (pos_sweep - pos_low_1 - 1) < 3:
+        return None
+
+    inbetween_df = df.iloc[pos_low_1 + 1 : pos_sweep]
+    if not inbetween_df.empty:
+        if (inbetween_df['close'] < low_1).any():
+            return None
+
+    sweep_candle, bounce_candle, confirm_candle_1, confirm_candle_2 = df.iloc[-4], df.iloc[-3], df.iloc[-2], df.iloc[-1]
+    sweep_low = float(sweep_candle['low'])
+    is_red = float(sweep_candle['close']) < float(sweep_candle['open'])
+    is_green = float(sweep_candle['close']) >= float(sweep_candle['open'])
+
+    # Var 1: Red sweep candle (dips/closes below Low 1, recovered by bounce candle)
+    v1 = is_red and (sweep_low < low_1) and (float(sweep_candle['close']) > low_1)
+    v2 = is_red and (float(sweep_candle['close']) < low_1) and (float(bounce_candle['close']) > low_1)
+    
+    # Var 2 (Page 10): Green/Neutral wick sweep candle (wick pierces Low 1, body closes green above Low 1)
+    v3 = is_green and (sweep_low < low_1) and (float(sweep_candle['close']) > low_1)
+
+    pattern_name = "BULL_A_LL_Sweep_Var1" if (v1 or v2) else "BULL_A_LL_Sweep_Var2"
+
+    anchor_close = float(bounce_candle['close'])
+    sl_val = calculate_sl_buffer(sweep_low, side="BULL")
+    return {"Pattern": pattern_name, "Close": anchor_close, "SL": sl_val, "Signal": "Low2_Formation", "CandleATime": str(sweep_candle.get('date', ''))}
+
+def find_anchor_hammer_baby(df):
+    """A = baby/hammer candle completely inside bearish mother's body, with long lower wick."""
+    if len(df) < 5:
+        return None
+    mother_candle, baby_candle, post_baby_1, post_baby_2, post_baby_3 = df.iloc[-5], df.iloc[-4], df.iloc[-3], df.iloc[-2], df.iloc[-1]
+    if not (float(mother_candle['close']) < float(mother_candle['open'])):
+        return None
+    is_green = float(baby_candle['close']) >= float(baby_candle['open'])
+    body = abs(float(baby_candle['close']) - float(baby_candle['open']))
+    lower_wick = float(min(float(baby_candle['open']), float(baby_candle['close']))) - float(baby_candle['low'])
+    upper_wick = float(baby_candle['high']) - float(max(float(baby_candle['open']), float(baby_candle['close'])))
+
+    # Lower wick must be dominant (at least 1.5x body for green, 2.0x body for red)
+    min_wick_ratio = 1.2 if is_green else 1.8
+    if lower_wick < (body * min_wick_ratio):
+        return None
+    if lower_wick <= upper_wick:
+        return None
+
+    if float(post_baby_2['close']) < float(baby_candle['low']) or float(post_baby_3['close']) < float(baby_candle['low']):
+        return None
+    anchor_close = float(baby_candle['close'])
+    b_low = float(baby_candle['low'])
+    sl_val = calculate_sl_buffer(b_low, side="BULL")
+    return {"Pattern": "BULL_A_Baby_Candle", "Close": anchor_close, "SL": sl_val, "Signal": "Baby_Formation", "CandleATime": str(baby_candle.get('date', ''))}
+
+def find_anchor_bullish_harami(df):
+    """A = bullish inside bar (cin) fully inside bearish mother body."""
+    if len(df) < 5:
+        return None
+    bearish_mother, bullish_inside, post_harami_1, post_harami_2, post_harami_3 = df.iloc[-5], df.iloc[-4], df.iloc[-3], df.iloc[-2], df.iloc[-1]
+    if not (float(bearish_mother['close']) < float(bearish_mother['open']) and float(bullish_inside['close']) > float(bullish_inside['open'])):
+        return None
+    if not (float(bullish_inside['high']) <= float(bearish_mother['open']) and float(bullish_inside['low']) >= float(bearish_mother['close'])):
+        return None
+    inside_low = float(bullish_inside['low'])
+    if float(post_harami_2['close']) < inside_low or float(post_harami_3['close']) < inside_low:
+        return None
+    anchor_close = float(bullish_inside['close'])
+    sl_val = calculate_sl_buffer(inside_low, side="BULL")
+    return {"Pattern": "BULL_A_Harami", "Close": anchor_close, "SL": sl_val, "Signal": "Harami_Formation", "CandleATime": str(bullish_inside.get('date', ''))}
+
+def find_anchor_two_higher_highs(df):
+    """Setup 3: A1 & A2 are two successive higher high candles with bullish engulfing structure."""
+    if len(df) < 5:
+        return None
+    a1, a2 = df.iloc[-4], df.iloc[-3]
+    if not (float(a1['close']) > float(a1['open']) and float(a2['close']) > float(a2['open'])):
+        return None
+    if not (float(a2['high']) > float(a1['high']) and float(a2['low']) > float(a1['low'])):
+        return None
+    a_low = min(float(a1['low']), float(a2['low']))
+    anchor_close = float(a2['close'])
+    sl_val = calculate_sl_buffer(a_low, side="BULL")
+    return {"Pattern": "BULL_A_Two_Higher_Highs", "Close": anchor_close, "SL": sl_val, "Signal": "HigherHigh_Engulf", "CandleATime": str(a2.get('date', ''))}
+
+# ──────────────────────────────────────────────
+#  ANCHOR BCD BREAKOUT SCANNER (A -> B -> C -> D)
+# ──────────────────────────────────────────────
+
+def scan_anchor_bcd_breakout(df_entry, df_anchor, anchor_tf="", entry_tf=""):
+    """
+    Two-phase A-first scanner:
+      Phase 1: Find anchor candle A (using 5 anchor detectors + base fallback).
+      Phase 2: From A, scan forward sequentially: B (breakout > A.high) ->
+               C (red retest) -> D (confirmation close > A.high).
+      Returns first complete A -> B -> C -> D pattern, or None.
+    """
+    anchor_funcs = [
+        find_anchor_bullish_engulfing,
+        find_anchor_ll_sweep,
+        find_anchor_hammer_baby,
+        find_anchor_bullish_harami,
+        find_anchor_two_higher_highs
+    ]
+
+    # ── Phase 1: Find anchor A candles ──
+    anchors = []
+    for a_idx in range(4, len(df_entry) - 3):
+        a = df_entry.iloc[a_idx]
+        sub_df = df_entry.iloc[: min(len(df_entry), a_idx + 3)]
+        sub_df_direct = df_entry.iloc[: a_idx + 1]
+
+        anchor_match = None
+        for fn in anchor_funcs:
+            res = fn(sub_df) or fn(sub_df_direct)
+            if res:
+                anchor_match = res
+                break
+
+        benchmark = float(a['high'])
+        invalidation = anchor_match["SL"] if anchor_match else calculate_sl_buffer(a['low'], side="BULL")
+        anchor_name = anchor_match["Pattern"] if anchor_match else "BULL_A_Base"
+
+        # Left-Side Rule: no close below A.low in preceding 100 candles
+        a_low = float(a['low'])
+        left_df = df_entry.iloc[max(0, a_idx - 100) : a_idx]
+        if not left_df.empty and float(left_df['close'].min()) < a_low:
+            continue
+
+        # Pre-compute targets for NoPA filter
+        t1, t2, t3 = find_profit_targets(df_anchor, benchmark, stop_loss=invalidation)
+
+        # NoPA: discard if SL/T1/T2 already closed past post-A (closing basis)
+        if t1 is not None:
+            after_a = df_entry.iloc[a_idx + 1 :]
+            if not after_a.empty:
+                if float(after_a['close'].min()) < a_low:
+                    continue
+                if float(after_a['close'].max()) >= t1:
+                    continue
+                if t2 is not None and float(after_a['close'].max()) >= t2:
+                    continue
+
+        a_time_val = anchor_match.get("CandleATime") if anchor_match and anchor_match.get("CandleATime") else str(a.get('date', ''))
+        anchors.append({
+            "idx": a_idx, "a": a, "benchmark": benchmark,
+            "invalidation": invalidation, "anchor_name": anchor_name, "a_low": a_low,
+            "t1": t1, "t2": t2, "t3": t3, "a_time": a_time_val
+        })
+
+    valid_matches = []
+    # ── Phase 2: For each anchor, scan forward B -> C -> D ──
+    for cand in reversed(anchors):
+        a_idx = cand["idx"]
+        a = cand["a"]
+        benchmark = cand["benchmark"]
+        invalidation = cand["invalidation"]
+        anchor_name = cand["anchor_name"]
+        a_low = cand["a_low"]
+
+        remaining = df_entry.iloc[a_idx + 1:]
+        if len(remaining) < 3:
+            continue
+
+        # Point B: FIRST candle after A closing above benchmark
+        b_idx = None
+        for j in range(len(remaining)):
+            if float(remaining.iloc[j]['close']) > benchmark:
+                b_idx = a_idx + 1 + j
+                break
+        if b_idx is None:
+            continue
+
+        # Point C: FIRST candle AFTER B with red retest (dips to/close to benchmark, stays above A.low)
+        c_slice = df_entry.iloc[b_idx + 1:]
+        c_idx = None
+        for j in range(len(c_slice)):
+            c_row = c_slice.iloc[j]
+            c_low = float(c_row['low'])
+            c_close = float(c_row['close'])
+            c_open = float(c_row['open'])
+            is_red = c_close < c_open
+            if (c_low <= benchmark and c_close >= a_low and is_red) or \
+               (c_low <= a_low and c_close >= a_low and c_close < float(a['open']) and is_red):
+                c_idx = b_idx + 1 + j
+                break
+        if c_idx is None:
+            continue
+
+        # Point D: FIRST GREEN candle AFTER C closing above benchmark
+        d_slice = df_entry.iloc[c_idx + 1:]
+        d_idx = None
+        is_near_close_d = False
+        for j in range(len(d_slice)):
+            curr_idx = c_idx + 1 + j
+            d_row = d_slice.iloc[j]
+            d_close = float(d_row['close'])
+            d_open = float(d_row['open'])
+            is_green = d_close > d_open
+
+            # Standard 100% Candle Close check
+            if d_close > benchmark and is_green:
+                d_idx = curr_idx
+                break
+
+            # Near-Close Live Candle D check with Dual Guards (applied ONLY to current active forming candle)
+            if curr_idx == len(df_entry) - 1 and is_green:
+                tf_to_check = entry_tf or anchor_tf
+                if tf_to_check and is_live_candle_near_close(d_row.get('date'), tf_to_check, completion_pct=0.90):
+                    # Guard 1: Benchmark Buffer Guard (+0.3%)
+                    if d_close >= (benchmark * 1.003):
+                        # Guard 2: Volume Validation Guard (80% of 20-period avg volume)
+                        vol_passed = True
+                        if 'volume' in df_entry.columns and curr_idx >= 20:
+                            avg_vol_20 = float(df_entry['volume'].iloc[curr_idx - 20 : curr_idx].mean())
+                            curr_vol = float(d_row.get('volume', 0))
+                            if avg_vol_20 > 0 and curr_vol < (0.80 * avg_vol_20):
+                                vol_passed = False
+                        if vol_passed:
+                            d_idx = curr_idx
+                            is_near_close_d = True
+                            break
+
+        if d_idx is None:
+            continue
+
+        d = df_entry.iloc[d_idx]
+
+        # Invalidation between A and D: Option A - no candle closes below A.low (A.low floor line)
+        between = df_entry.iloc[a_idx + 1 : d_idx]
+        if not between.empty and float(between['close'].min()) < a_low:
+            continue
+
+        close_price = float(d['close'])
+        sl_val = invalidation
+        t1, t2, t3 = find_profit_targets(df_anchor, close_price, stop_loss=sl_val)
+        if t1 is None or close_price >= t1:
+            continue
+
+        stage_status = "EARLY_D_ENTRY" if is_near_close_d else "FRESH_ENTRY"
+        priority_level = "HIGH_PRIORITY"
+
+        # Post-D 3-Tier Classification & Setup Freshness Filter
+        after_d = df_entry.iloc[d_idx + 1 :]
+        candles_since_d = len(df_entry) - 1 - d_idx
+        latest_close = float(df_entry.iloc[-1]['close'])
+
+        # Rule 1: Discard stale setups older than 60 candles to wait for new setup in next cycle
+        if candles_since_d > 60:
+            continue
+
+        # Rule 2: Discard if current price closed below SL floor line
+        if latest_close <= invalidation:
+            continue
+
+        if not after_d.empty:
+            # 3. Discard if SL hit in any candle after D (A.low - buffer)
+            if float(after_d['close'].min()) <= invalidation:
+                continue
+            # 4. Check if T1 has been reached after D
+            if float(after_d['close'].max()) >= t1:
+                # If T3 reached or T2 reached or no T2/T3 available -> All targets completed -> Discard
+                if (t3 is not None and float(after_d['close'].max()) >= t3) or t2 is None or float(after_d['close'].max()) >= t2:
+                    continue
+                # T1 was hit, but T2/T3 is still pending -> Qualifies as LOW PRIORITY T2 Continuation if intact
+                stage_status = "T2_CONTINUATION"
+                priority_level = "LOW_PRIORITY"
+                sl_val = t1  # Trailed SL to T1 level to protect banked gains
+
+        risk = close_price - sl_val
+        if risk <= 0 or risk < close_price * 0.002 or ((t1 - close_price) / risk) < 1.88:
+            continue
+
+        rr = (t1 - close_price) / risk if risk > 0 else 0
+        short_names = {
+            "BULL_A_ABCD_Engulf": "BE_ABCD",
+            "BULL_A_LL_Sweep": "LL_ABCD",
+            "BULL_A_LL_Sweep_Var1": "LL_ABCD",
+            "BULL_A_LL_Sweep_Var2": "LL_ABCD",
+            "BULL_A_Baby_Candle": "HAMMER_ABCD",
+            "BULL_A_Harami": "HARAMI_ABCD",
+            "BULL_A_Two_Higher_Highs": "HH_ABCD",
+            "BULL_A_Base": "BASE_ABCD"
+        }
+        pattern_label = short_names.get(anchor_name, "BASE_ABCD")
+        if is_near_close_d:
+            pattern_label += "_EARLY"
+        d_time_str = str(d.get("date", ""))
+        a_time_str = str(cand.get("a_time") or a.get("date", ""))
+
+
+        valid_matches.append({
+            "Pattern": pattern_label,
+            "SL": sl_val,
+            "T1": t1,
+            "T2": t2,
+            "T3": t3,
+            "Close": close_price,
+            "RR": round(rr, 2),
+            "CandleTime": d_time_str,
+            "CandleATime": a_time_str,
+            "Benchmark": benchmark,
+            "AnchorFloor": a_low,
+            "Direction": "BULL",
+            "Stage_Status": stage_status,
+            "Priority": priority_level,
+            "d_idx": d_idx
+        })
+
+    if not valid_matches:
+        return None
+
+    PATTERN_PRIORITY_MAP = {
+        "Engulfing": 5,
+        "LL_Sweep": 5,
+        "Baby_Candle": 4,
+        "Harami": 4,
+        "Two_Higher_Highs": 3,
+        "Base": 1  # Trend continuation / re-entry base has lowest priority
+    }
+
+    def _pattern_rank(match_obj):
+        p_name = match_obj.get("Pattern", "")
+        for k, rank in PATTERN_PRIORITY_MAP.items():
+            if k in p_name:
+                return rank
+        return 2
+
+    # Prefer LATEST formed pattern (d_idx), then Primary Reversal over Continuation Base, then HIGH_PRIORITY, then R:R
+    valid_matches.sort(key=lambda x: (x["d_idx"], _pattern_rank(x), x["Priority"] == "HIGH_PRIORITY", x["RR"]), reverse=True)
+    best_latest = valid_matches[0]
+    best_latest.pop("d_idx", None)
+    return best_latest
+
+
+# ──────────────────────────────────────────────
+#  SHARED ENGINE UTILITIES (identical between engines)
+# ──────────────────────────────────────────────
+
+
+def scan_trend_continuation_reentry(df_entry, df_anchor):
+    """
+    Setup Page 16 (Bullish Trend Continuation + Re-Entry):
+    1. Context: Established Uptrend (Higher Highs & Higher Lows in preceding window).
+    2. Retest: Price pulls back to prior swing support level.
+    3. Trigger: Bullish Engulfing or Reclaim candle forms at support.
+    4. Execution: Immediate Re-entry on the next candle close (No BCD delay).
+    """
+    if len(df_entry) < 20:
+        return None
+
+    lookback = df_entry.iloc[-25:-2]
+    if lookback.empty or len(lookback) < 10:
+        return None
+
+    mid_point = len(lookback) // 2
+    part1 = lookback.iloc[:mid_point]
+    part2 = lookback.iloc[mid_point:]
+
+    if not (part2['high'].max() > part1['high'].max() and part2['low'].min() > part1['low'].min()):
+        return None
+
+    trigger_candle = df_entry.iloc[-2]
+    current_candle = df_entry.iloc[-1]
+
+    is_green_trigger = float(trigger_candle['close']) > float(trigger_candle['open'])
+    if not is_green_trigger:
+        return None
+
+    support_level = float(part2['low'].min())
+    trigger_low = float(trigger_candle['low'])
+    trigger_close = float(trigger_candle['close'])
+
+    if not (trigger_low <= (support_level * 1.015) and trigger_close >= support_level):
+        return None
+
+    entry_price = float(current_candle['close'])
+    sl_val = round(trigger_low - max(0.50, trigger_low * 0.02), 2)
+
+    if entry_price <= sl_val:
+        return None
+
+    t1, t2, t3 = find_profit_targets(df_anchor, entry_price, stop_loss=sl_val)
+    if t1 is None or t1 <= entry_price:
+        return None
+
+    risk = entry_price - sl_val
+    if risk <= 0 or risk < entry_price * 0.002 or ((t1 - entry_price) / risk) < 1.88:
+        return None
+
+    rr = (t1 - entry_price) / risk
+    return {
+        "Pattern": "TREND_CONT_BULL",
+        "SL": sl_val,
+        "T1": t1,
+        "T2": t2,
+        "T3": t3,
+        "Entry": entry_price,
+        "Close": entry_price,
+        "RR": round(rr, 2),
+        "Signal": "Immediate_ReEntry",
+        "D_time": str(current_candle.get("date", "")),
+        "A_time": str(trigger_candle.get("date", ""))
+    }
+

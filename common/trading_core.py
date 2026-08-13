@@ -58,6 +58,21 @@ INDEX_REGISTRY = {
     "SENSEX": {"token": 265, "lot_size": 10, "strike_step": 100, "tradingsymbol": "BSE SENSEX", "exchange": "BFO"}
 }
 
+def match_registry_symbol(registry, tradingsymbol):
+    """Return the registry key that best matches a tradingsymbol, longest-match first.
+
+    Fixes the mislabel bug where 'NIFTY' matched inside 'BANKNIFTY26AUG57700PE'
+    before 'BANKNIFTY' was checked (dict iteration order is insertion order).
+    Returns None when nothing matches.
+    """
+    if not registry or not tradingsymbol:
+        return None
+    raw = str(tradingsymbol).replace(" ", "").upper()
+    for sym in sorted(registry.keys(), key=len, reverse=True):
+        if sym.replace(" ", "").upper() in raw:
+            return sym
+    return None
+
 def get_adaptive_lookback(timeframe_str, asset_class="STOCK_SPOT", user_lookback=None):
     """
     Priority Hierarchy:
@@ -542,7 +557,8 @@ def find_anchor_bullish_engulfing(df):
     a_low = float(bull_anchor['low'])
     anchor_close = float(bull_anchor['close'])
     sl_val = calculate_sl_buffer(a_low, side="BULL")
-    return {"Pattern": "BULL_A_ABCD_Engulf", "Close": anchor_close, "SL": sl_val, "Signal": "A_Formation", "CandleATime": str(bull_anchor.get('date', ''))}
+    return {"Pattern": "BULL_A_ABCD_Engulf", "Close": anchor_close, "SL": sl_val, "Signal": "A_Formation", "CandleATime": str(bull_anchor.get('date', '')),
+            "BenchmarkPrice": float(bull_anchor['high']), "AnchorLow": a_low}
 
 def find_anchor_ll_sweep(df):
     """
@@ -590,7 +606,10 @@ def find_anchor_ll_sweep(df):
 
     anchor_close = float(bounce_candle['close'])
     sl_val = calculate_sl_buffer(sweep_low, side="BULL")
-    return {"Pattern": pattern_name, "Close": anchor_close, "SL": sl_val, "Signal": "Low2_Formation", "CandleATime": str(sweep_candle.get('date', ''))}
+    # BenchmarkPrice = A candle's (Low 2 sweep candle) high — per blueprint Setup 2
+    return {"Pattern": pattern_name, "Close": anchor_close, "SL": sl_val, "Signal": "Low2_Formation",
+            "CandleATime": str(sweep_candle.get('date', '')),
+            "BenchmarkPrice": float(sweep_candle['high']), "AnchorLow": float(sweep_candle['low'])}
 
 def find_anchor_hammer_baby(df):
     """A = baby/hammer candle completely inside bearish mother's body, with long lower wick."""
@@ -616,7 +635,10 @@ def find_anchor_hammer_baby(df):
     anchor_close = float(baby_candle['close'])
     b_low = float(baby_candle['low'])
     sl_val = calculate_sl_buffer(b_low, side="BULL")
-    return {"Pattern": "BULL_A_Baby_Candle", "Close": anchor_close, "SL": sl_val, "Signal": "Baby_Formation", "CandleATime": str(baby_candle.get('date', ''))}
+    # BenchmarkPrice = A candle's (baby/hammer candle) high — per blueprint Setup 4
+    return {"Pattern": "BULL_A_Baby_Candle", "Close": anchor_close, "SL": sl_val, "Signal": "Baby_Formation",
+            "CandleATime": str(baby_candle.get('date', '')),
+            "BenchmarkPrice": float(baby_candle['high']), "AnchorLow": float(baby_candle['low'])}
 
 def find_anchor_bullish_harami(df):
     """A = bullish inside bar (cin) fully inside bearish mother body."""
@@ -632,7 +654,10 @@ def find_anchor_bullish_harami(df):
         return None
     anchor_close = float(bullish_inside['close'])
     sl_val = calculate_sl_buffer(inside_low, side="BULL")
-    return {"Pattern": "BULL_A_Harami", "Close": anchor_close, "SL": sl_val, "Signal": "Harami_Formation", "CandleATime": str(bullish_inside.get('date', ''))}
+    # BenchmarkPrice = A candle's (inside bar) high — per blueprint Setup 5
+    return {"Pattern": "BULL_A_Harami", "Close": anchor_close, "SL": sl_val, "Signal": "Harami_Formation",
+            "CandleATime": str(bullish_inside.get('date', '')),
+            "BenchmarkPrice": float(bullish_inside['high']), "AnchorLow": inside_low}
 
 def find_anchor_two_higher_highs(df):
     """Setup 3: A1 & A2 are two successive higher high candles with bullish engulfing structure."""
@@ -646,20 +671,28 @@ def find_anchor_two_higher_highs(df):
     a_low = min(float(a1['low']), float(a2['low']))
     anchor_close = float(a2['close'])
     sl_val = calculate_sl_buffer(a_low, side="BULL")
-    return {"Pattern": "BULL_A_Two_Higher_Highs", "Close": anchor_close, "SL": sl_val, "Signal": "HigherHigh_Engulf", "CandleATime": str(a2.get('date', ''))}
+    return {"Pattern": "BULL_A_Two_Higher_Highs", "Close": anchor_close, "SL": sl_val, "Signal": "HigherHigh_Engulf", "CandleATime": str(a2.get('date', '')),
+            "BenchmarkPrice": float(a2['high']), "AnchorLow": a_low}
 
 # ──────────────────────────────────────────────
 #  ANCHOR BCD BREAKOUT SCANNER (A -> B -> C -> D)
 # ──────────────────────────────────────────────
 
-def scan_anchor_bcd_breakout(df_entry, df_anchor):
+def scan_anchor_bcd_breakout(df_entry, df_anchor, anchor_tf="", entry_tf=""):
     """
     Two-phase A-first scanner:
       Phase 1: Find anchor candle A (using 5 anchor detectors + base fallback).
       Phase 2: From A, scan forward sequentially: B (breakout > A.high) ->
                C (red retest) -> D (confirmation close > A.high).
       Returns first complete A -> B -> C -> D pattern, or None.
+    Close-basis: last candle may still be forming — trimmed before scan.
     """
+    # Close-basis enforcement: strip the last (still-forming) candle
+    if df_entry is not None and len(df_entry) > 1:
+        df_entry = df_entry.iloc[:-1].copy()
+    if df_anchor is not None and len(df_anchor) > 1:
+        df_anchor = df_anchor.iloc[:-1].copy()
+
     anchor_funcs = [
         find_anchor_bullish_engulfing,
         find_anchor_ll_sweep,
@@ -682,12 +715,15 @@ def scan_anchor_bcd_breakout(df_entry, df_anchor):
                 anchor_match = res
                 break
 
-        benchmark = float(a['high'])
+        # Use the anchor's own declared BenchmarkPrice (A candle's high) if available,
+        # otherwise fall back to a['high']. Fixes Setup 2/4/5 where a_idx != actual A candle.
+        benchmark = anchor_match["BenchmarkPrice"] if (anchor_match and "BenchmarkPrice" in anchor_match) else float(a['high'])
         invalidation = anchor_match["SL"] if anchor_match else calculate_sl_buffer(a['low'], side="BULL")
         anchor_name = anchor_match["Pattern"] if anchor_match else "BULL_A_Base"
 
         # Left-Side Rule: no close below A.low in preceding 100 candles
-        a_low = float(a['low'])
+        # Use actual A candle's low from anchor function (fixes a_idx != actual A candle for Setup 2/3/4/5)
+        a_low = float(anchor_match["AnchorLow"]) if (anchor_match and "AnchorLow" in anchor_match) else float(a['low'])
         left_df = df_entry.iloc[max(0, a_idx - 100) : a_idx]
         if not left_df.empty and float(left_df['close'].min()) < a_low:
             continue
@@ -840,6 +876,8 @@ def scan_anchor_bcd_breakout(df_entry, df_anchor):
             "Direction": "BULL",
             "Stage_Status": stage_status,
             "Priority": priority_level,
+            "anchor_tf": anchor_tf,
+            "entry_tf": entry_tf,
             "d_idx": d_idx
         })
 
@@ -908,7 +946,13 @@ def fetch_and_resample_candles(kite, token, from_date, to_date, timeframe_str):
     fetch_tf = get_fetch_timeframe(timeframe_str)
     cache_key = (token, str(from_date), str(to_date), fetch_tf)
     now = time.time()
-    
+
+    # Evict stale cache entries to prevent unbounded memory growth
+    if len(_HISTORICAL_CANDLE_CACHE) > 500:
+        stale = [k for k, (_, ts) in _HISTORICAL_CANDLE_CACHE.items() if now - ts > _CACHE_TTL_SECONDS]
+        for k in stale:
+            del _HISTORICAL_CANDLE_CACHE[k]
+
     if cache_key in _HISTORICAL_CANDLE_CACHE:
         cached_df, timestamp = _HISTORICAL_CANDLE_CACHE[cache_key]
         if now - timestamp < _CACHE_TTL_SECONDS:
@@ -975,12 +1019,29 @@ def live_execution_enabled(flag_path):
 
 NFO_CACHE_FILE = paths.NFO_CACHE_FILE
 
+_nfo_cache_df = None
+_nfo_cache_mtime = 0
+
+def _get_nfo_cache():
+    """Load NFO instruments cache CSV once, re-read only when file changes on disk."""
+    global _nfo_cache_df, _nfo_cache_mtime
+    if not os.path.exists(NFO_CACHE_FILE):
+        return pd.DataFrame()
+    try:
+        mtime = os.path.getmtime(NFO_CACHE_FILE)
+        if _nfo_cache_df is None or mtime != _nfo_cache_mtime:
+            _nfo_cache_df = pd.read_csv(NFO_CACHE_FILE)
+            _nfo_cache_mtime = mtime
+        return _nfo_cache_df
+    except Exception:
+        return pd.DataFrame()
+
 def get_option_lot_size(contract):
     """Look up actual lot size from NFO instruments cache, not from registry."""
     try:
-        if not os.path.exists(NFO_CACHE_FILE):
+        df = _get_nfo_cache()
+        if df.empty:
             return None
-        df = pd.read_csv(NFO_CACHE_FILE)
         row = df[df['tradingsymbol'] == contract]
         if not row.empty:
             return int(row.iloc[0]['lot_size'])
@@ -1002,8 +1063,8 @@ def contract_is_expired(contract):
         return False
     c = str(contract).strip().upper()
     try:
-        if os.path.exists(NFO_CACHE_FILE):
-            df = pd.read_csv(NFO_CACHE_FILE)
+        df = _get_nfo_cache()
+        if not df.empty:
             row = df[df['tradingsymbol'] == c]
             if not row.empty:
                 exp_str = str(row.iloc[0]['expiry'])
@@ -1096,15 +1157,21 @@ def close_stock_position(kite, pos, live_market=True, product=None):
 
 EXECUTED_EXITS_FILE = paths.EXECUTED_EXITS_FILE
 EXECUTED_EXITS = {}
+_EXECUTED_EXITS_MTIME = 0
 
 def load_executed_exits():
-    global EXECUTED_EXITS
-    if os.path.exists(EXECUTED_EXITS_FILE):
-        try:
+    """Load executed exits from disk, using mtime to skip re-reads when file hasn't changed."""
+    global EXECUTED_EXITS, _EXECUTED_EXITS_MTIME
+    if not os.path.exists(EXECUTED_EXITS_FILE):
+        return
+    try:
+        mtime = os.path.getmtime(EXECUTED_EXITS_FILE)
+        if mtime != _EXECUTED_EXITS_MTIME:
             with open(EXECUTED_EXITS_FILE, "r", encoding="utf-8") as f:
                 EXECUTED_EXITS = json.load(f)
-        except Exception:
-            EXECUTED_EXITS = {}
+            _EXECUTED_EXITS_MTIME = mtime
+    except Exception:
+        EXECUTED_EXITS = {}
 
 def save_executed_exit(contract, order_id, details=None):
     global EXECUTED_EXITS
@@ -1316,7 +1383,7 @@ def sync_kite_positions(kite, registry, positions_dict, lock, engine, timeframe_
     try:
         kite_pos = kite.positions()
         for p in kite_pos.get("net", []):
-            sym = next((s for s in registry if s in p.get("tradingsymbol", "")), None)
+            sym = match_registry_symbol(registry, p.get("tradingsymbol", ""))
             if not sym:
                 continue
             nq = int(p.get("quantity", 0))
@@ -1561,11 +1628,11 @@ def lookup_scan_sl_target(contract, symbol, engine, kite=None, entry_price=0, ti
     except Exception:
         pass
 
-    paths = {"index": "output/monitor/scan_display_index.json", "nifty50": "output/monitor/scan_display_data.json"}
-    path = paths.get(engine)
-    if path and os.path.exists(path):
+    display_paths = {"index": paths.SCAN_DISPLAY_INDEX_FILE, "nifty50": paths.SCAN_DISPLAY_FILE}
+    display_path = display_paths.get(engine)
+    if display_path and os.path.exists(display_path):
         try:
-            with open(path) as f:
+            with open(display_path) as f:
                 data = json.load(f)
             for section in ("staged_trades", "carry_forward", "active_live"):
                 for trade in data.get(section, []):
@@ -1626,7 +1693,8 @@ def write_scan_display_data(staged, active, display_file, engine_name=None):
             if rr_val is None and entry is not None and sl is not None and t1 is not None:
                 try:
                     risk = abs(float(entry) - float(sl))
-                    rr_val = (abs(float(t1) - float(entry)) / risk) if risk > 0 else 0.0
+                    risk_min = max(0.01, abs(float(entry)) * 0.005)
+                    rr_val = (abs(float(t1) - float(entry)) / risk) if risk >= risk_min else 0.0
                 except Exception:
                     rr_val = 0.0
             rr_num = float(rr_val) if (rr_val is not None and str(rr_val).strip() != "") else 0.0
@@ -1845,7 +1913,7 @@ def reconcile_positions(kite, registry, positions_dict, lock, engine, timeframe_
         kite_pos = kite.positions()
         for plist in [kite_pos.get("day", []), kite_pos.get("net", [])]:
             for p in plist:
-                sym = next((s for s in registry if s in p.get("tradingsymbol", "")), None)
+                sym = match_registry_symbol(registry, p.get("tradingsymbol", ""))
                 if sym and abs(int(p.get("quantity", 0))) > 0:
                     kite_symbols.add(sym)
     except Exception as e:
@@ -2838,7 +2906,8 @@ def find_anchor_bearish_engulfing(df):
     a_high = float(bear_anchor['high'])
     anchor_close = float(bear_anchor['close'])
     sl_val = calculate_sl_buffer(a_high, side="BEAR")
-    return {"Pattern": "BEAR_A_ABCD_Engulf", "Close": anchor_close, "SL": sl_val, "Signal": "Bear_A_Formation", "CandleATime": str(bear_anchor.get('date', ''))}
+    return {"Pattern": "BEAR_A_ABCD_Engulf", "Close": anchor_close, "SL": sl_val, "Signal": "Bear_A_Formation", "CandleATime": str(bear_anchor.get('date', '')),
+            "AnchorHigh": a_high, "AnchorLow": float(bear_anchor['low'])}
 
 def find_anchor_hh_sweep(df):
     """
@@ -2893,7 +2962,11 @@ def find_anchor_hh_sweep(df):
 
     anchor_close = float(rejection_candle['close'])
     sl_val = calculate_sl_buffer(sweep_high, side="BEAR")
-    return {"Pattern": pattern_name, "Close": anchor_close, "SL": sl_val, "Signal": "High2_Formation", "CandleATime": str(sweep_candle.get('date', ''))}
+    # BenchmarkPrice = A candle's (High 2 sweep candle) low — per blueprint Setup 2 bear
+    return {"Pattern": pattern_name, "Close": anchor_close, "SL": sl_val, "Signal": "High2_Formation",
+            "CandleATime": str(sweep_candle.get('date', '')),
+            "BenchmarkPrice": float(sweep_candle['low']),
+            "AnchorHigh": float(sweep_candle['high']), "AnchorLow": float(sweep_candle['low'])}
 
 def find_anchor_two_lower_lows(df):
     """Setup 3 (Bearish): A1 & A2 are two successive lower low bearish candles."""
@@ -2907,7 +2980,8 @@ def find_anchor_two_lower_lows(df):
     a_high = max(float(a1['high']), float(a2['high']))
     anchor_close = float(a2['close'])
     sl_val = calculate_sl_buffer(a_high, side="BEAR")
-    return {"Pattern": "BEAR_A_Two_Lower_Lows", "Close": anchor_close, "SL": sl_val, "Signal": "LowerLow_Engulf", "CandleATime": str(a2.get('date', ''))}
+    return {"Pattern": "BEAR_A_Two_Lower_Lows", "Close": anchor_close, "SL": sl_val, "Signal": "LowerLow_Engulf", "CandleATime": str(a2.get('date', '')),
+            "AnchorHigh": a_high, "AnchorLow": float(a2['low'])}
 
 def find_anchor_shooting_star_baby(df):
     """Setup 4 (Bearish): A = shooting star / baby candle inside bullish mother body, with long upper wick."""
@@ -2930,7 +3004,11 @@ def find_anchor_shooting_star_baby(df):
     anchor_close = float(baby_candle['close'])
     b_high = float(baby_candle['high'])
     sl_val = calculate_sl_buffer(b_high, side="BEAR")
-    return {"Pattern": "BEAR_A_ShootingStar_Baby", "Close": anchor_close, "SL": sl_val, "Signal": "ShootingStar_Formation", "CandleATime": str(baby_candle.get('date', ''))}
+    # BenchmarkPrice = A candle's (shooting star) low — per blueprint Setup 4 bear
+    return {"Pattern": "BEAR_A_ShootingStar_Baby", "Close": anchor_close, "SL": sl_val, "Signal": "ShootingStar_Formation",
+            "CandleATime": str(baby_candle.get('date', '')),
+            "BenchmarkPrice": float(baby_candle['low']),
+            "AnchorHigh": float(baby_candle['high']), "AnchorLow": float(baby_candle['low'])}
 
 def find_anchor_bearish_harami(df):
     """Setup 5 (Bearish): A = bearish inside bar fully inside bullish mother body."""
@@ -2946,7 +3024,11 @@ def find_anchor_bearish_harami(df):
         return None
     anchor_close = float(bearish_inside['close'])
     sl_val = calculate_sl_buffer(inside_high, side="BEAR")
-    return {"Pattern": "BEAR_A_Harami", "Close": anchor_close, "SL": sl_val, "Signal": "Bear_Harami_Formation", "CandleATime": str(bearish_inside.get('date', ''))}
+    # BenchmarkPrice = A candle's (bearish inside bar) low — per blueprint Setup 5 bear
+    return {"Pattern": "BEAR_A_Harami", "Close": anchor_close, "SL": sl_val, "Signal": "Bear_Harami_Formation",
+            "CandleATime": str(bearish_inside.get('date', '')),
+            "BenchmarkPrice": float(bearish_inside['low']),
+            "AnchorHigh": inside_high, "AnchorLow": float(bearish_inside['low'])}
 
 
 # ──────────────────────────────────────────────
@@ -2959,7 +3041,14 @@ def scan_anchor_bcd_breakout_bearish(df_entry, df_anchor):
       Phase 1: Find anchor candle A (using 5 bearish detectors + base fallback).
       Phase 2: From A, scan forward sequentially: B (breakout < A.low) ->
                C (green retest) -> D (confirmation close < A.low).
+    Close-basis: last candle may still be forming — trimmed before scan.
     """
+    # Close-basis enforcement: strip the last (still-forming) candle
+    if df_entry is not None and len(df_entry) > 1:
+        df_entry = df_entry.iloc[:-1].copy()
+    if df_anchor is not None and len(df_anchor) > 1:
+        df_anchor = df_anchor.iloc[:-1].copy()
+
     if df_entry is None or df_entry.empty or df_anchor is None or df_anchor.empty:
         return None
 
@@ -2992,8 +3081,9 @@ def scan_anchor_bcd_breakout_bearish(df_entry, df_anchor):
         if not det_result and not is_bear_candle:
             continue
 
-        a_high = float(anchor_candle['high'])
-        a_low = float(anchor_candle['low'])
+        # Use actual A candle's high/low from anchor function (fixes anchor_idx != actual A candle for Setup 2/3/4/5)
+        a_high = float(det_result["AnchorHigh"]) if (det_result and "AnchorHigh" in det_result) else float(anchor_candle['high'])
+        a_low = float(det_result["AnchorLow"]) if (det_result and "AnchorLow" in det_result) else float(anchor_candle['low'])
         a_close = float(anchor_candle['close'])
         a_date = det_result.get("CandleATime") if det_result and det_result.get("CandleATime") else anchor_candle.get('date', '')
 
@@ -3117,6 +3207,11 @@ def scan_trend_continuation_reentry(df_entry, df_anchor):
     3. Trigger: Bullish Engulfing or Reclaim candle forms at support.
     4. Execution: Immediate Re-entry on the next candle close (No BCD delay).
     """
+    # Close-basis enforcement: strip the last (still-forming) candle
+    if df_entry is not None and len(df_entry) > 1:
+        df_entry = df_entry.iloc[:-1].copy()
+    if df_anchor is not None and len(df_anchor) > 1:
+        df_anchor = df_anchor.iloc[:-1].copy()
     if len(df_entry) < 20:
         return None
 
@@ -3182,6 +3277,11 @@ def scan_trend_continuation_reentry_bearish(df_entry, df_anchor):
     3. Trigger: Bearish Engulfing or Rejection candle forms at resistance.
     4. Execution: Immediate Re-entry / Short on the next candle close (No BCD delay).
     """
+    # Close-basis enforcement: strip the last (still-forming) candle
+    if df_entry is not None and len(df_entry) > 1:
+        df_entry = df_entry.iloc[:-1].copy()
+    if df_anchor is not None and len(df_anchor) > 1:
+        df_anchor = df_anchor.iloc[:-1].copy()
     if len(df_entry) < 20:
         return None
 

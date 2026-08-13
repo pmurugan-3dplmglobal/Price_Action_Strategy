@@ -19,6 +19,7 @@ from trading_core import (
     log_to_journal,
     scan_anchor_bcd_breakout_generic,
     get_adaptive_lookback,
+    get_fetch_timeframe,
     resample_timeframe,
     sync_stock_tokens,
     write_scan_display_data as shared_write_display,
@@ -131,32 +132,14 @@ def run_scan(kite):
     from_date = (dt.now() - timedelta(days=min(effective_lookback, 2000))).strftime("%Y-%m-%d")
     to_date = dt.now().strftime("%Y-%m-%d")
     scanners = [
-        (PROFILE["scanner_label"], lambda df_e, df_a: scan_anchor_bcd_breakout_generic(df_e, df_a, side=PROFILE["side"])),
+        (PROFILE["scanner_label"], lambda df_e, df_a: scan_anchor_bcd_breakout_generic(df_e, df_a, side=PROFILE["side"], anchor_tf=TIMEFRAME_ANCHOR, entry_tf=TIMEFRAME_ENTRY)),
     ]
     results = []
     results_lock = threading.Lock()
     symbols_list, token_map = get_universe_symbols_and_tokens(kite, TARGET_INDEX)
     scan_order = sorted(symbols_list)
     logging.info(f"Executing {PROFILE['side']} Scan for Universe '{TARGET_INDEX}' ({len(scan_order)} symbols) on timeframe '{TIMEFRAME_ENTRY}'...")
-    tf_clean = str(TIMEFRAME_ENTRY).lower()
-    if tf_clean in ["week", "weekly", "w", "1w", "day", "d", "1d"]:
-        fetch_tf = "day"
-    elif tf_clean in ["3hr", "3h", "180min", "180minute", "4h", "4hour", "240min", "240minute", "1hr", "1h", "60min", "60minute"]:
-        fetch_tf = "60minute"
-    elif tf_clean in ["75min", "75mins", "75m", "75minute", "75minutes"]:
-        fetch_tf = "15minute"
-    elif tf_clean in ["30min", "30mins", "30m", "30minute", "30minutes"]:
-        fetch_tf = "30minute"
-    elif tf_clean in ["15min", "15mins", "15m", "15minute", "15minutes"]:
-        fetch_tf = "15minute"
-    elif tf_clean in ["10min", "10mins", "10m", "10minute", "10minutes"]:
-        fetch_tf = "10minute"
-    elif tf_clean in ["5min", "5mins", "5m", "5minute", "5minutes"]:
-        fetch_tf = "5minute"
-    elif tf_clean in ["3min", "3mins", "3m", "3minute", "3minutes"]:
-        fetch_tf = "3minute"
-    else:
-        fetch_tf = "day"
+    fetch_tf = get_fetch_timeframe(TIMEFRAME_ENTRY)
 
     with ThreadPoolExecutor(max_workers=10) as pool:
         futures = {}
@@ -168,9 +151,9 @@ def run_scan(kite):
                     results.append({"Symbol": symbol, "Pattern": "NO_TOKEN"})
                 continue
             futures[pool.submit(
-                lambda t=tok: pd.DataFrame(kite.historical_data(t, from_date, to_date, fetch_tf))
+                lambda t=tok, fd=from_date, td=to_date, tf=fetch_tf: pd.DataFrame(kite.historical_data(t, fd, td, tf))
             )] = symbol
-            time.sleep(0.2)
+            time.sleep(0.05)
         for f in as_completed(futures):
             symbol = futures[f]
             try:
@@ -229,6 +212,8 @@ def run_scan(kite):
                             "rr": r.get("RR", 0.0),
                             "pattern": r.get("Pattern"),
                             "timeframe": TIMEFRAME_ENTRY,
+                            "anchor_tf": r.get("anchor_tf", TIMEFRAME_ANCHOR),
+                            "entry_tf": r.get("entry_tf", TIMEFRAME_ENTRY),
                             "side": PROFILE["display_side"],
                             "entry_time": clean_timestamp(r.get("CandleATime") or r.get("CandleTime")),
                             "candle_a_time": clean_timestamp(r.get("CandleATime") or r.get("CandleTime"))
@@ -254,6 +239,8 @@ def run_scan(kite):
                 "rr": r.get("RR", 0.0),
                 "pattern": r.get("Pattern"),
                 "timeframe": TIMEFRAME_ENTRY,
+                "anchor_tf": r.get("anchor_tf", TIMEFRAME_ANCHOR),
+                "entry_tf": r.get("entry_tf", TIMEFRAME_ENTRY),
                 "side": PROFILE["display_side"],
                 "entry_time": c_time,
                 "candle_a_time": c_time

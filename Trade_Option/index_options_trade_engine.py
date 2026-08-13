@@ -37,7 +37,8 @@ from trading_core import (
     monitor_active_positions as shared_monitor_positions,
     sanitize_entry_time,
     simulate_trade_outcome as shared_simulate,
-    INDEX_REGISTRY
+    INDEX_REGISTRY,
+    match_registry_symbol
 )
 
 LIVE_MARKET_DEPLOYMENT = True
@@ -249,9 +250,9 @@ def execute_highest_rr_trade(kite, staged):
                     return
                 pos["trade_id"], _created = trade_db.create_trade("index", best["symbol"], {k: v for k, v in pos.items() if k != "trade_id"})
                 ACTIVE_POSITIONS[best["symbol"]] = pos
+        trade_db.record_executed_pattern("index", key, {"contract": best["contract"], "entry": best["entry_spot"]})
         ok = execute_index_entry(kite, pos)
         if ok:
-            trade_db.record_executed_pattern("index", key, {"contract": best["contract"], "entry": best["entry_spot"]})
             profit = round((best.get("t3") or best.get("t1") or 0) - best["entry_spot"], 2)
             rr_best = best.get("rr", "")
             if live_ok:
@@ -273,9 +274,11 @@ def execute_highest_rr_trade(kite, staged):
                     logging.info(f"[BACKTEST] Trade outcome: {sim['result']} | {sim['detail']}")
             logging.info(f"EXECUTED best cycle trade: {best['symbol']} {best['side']} | {best['pattern']} | max-profit={profit}")
         else:
-            ACTIVE_POSITIONS.pop(best["symbol"], None)
+            with position_lock:
+                ACTIVE_POSITIONS.pop(best["symbol"], None)
             if pos.get("trade_id"):
                 trade_db.update_trade(pos["trade_id"], {"status": "FAILED", "updated_at": dt.now().strftime("%Y-%m-%d %H:%M:%S")})
+            logging.warning(f"Order placement failed for {best['contract']}. Locked pattern {key} to prevent rate-limit spam loops.")
     else:
         cp = best["entry_spot"]
         contract = best.get("contract", "")
@@ -305,6 +308,7 @@ def monitor_active_positions(kite):
 # ──────────────────────────────────────────────
 
 def main_scan_loop(kite):
+    trade_db.run_db_housekeeping()
     active = trade_db.get_active_trades("index")
     seen_symbols = set()
     for t in active:
@@ -335,7 +339,7 @@ def main_scan_loop(kite):
         for p in all_positions:
             if p["exchange"] != "NFO" or int(p["quantity"]) == 0:
                 continue
-            symbol = next((s for s in INDEX_REGISTRY if s in p["tradingsymbol"]), None)
+            symbol = match_registry_symbol(INDEX_REGISTRY, p["tradingsymbol"])
             if not symbol or symbol in ACTIVE_POSITIONS:
                 continue
             nq = abs(int(p["quantity"]))

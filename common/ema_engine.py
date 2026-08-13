@@ -42,8 +42,10 @@ logger = _setup_ema_logger()
 def _save_ema_status():
     try:
         os.makedirs(os.path.dirname(EMA_STATUS_FILE), exist_ok=True)
-        with open(EMA_STATUS_FILE, "w") as f:
+        tmp_file = EMA_STATUS_FILE + ".tmp"
+        with open(tmp_file, "w", encoding="utf-8") as f:
             json.dump(_ema_engine_running, f, indent=2)
+        os.replace(tmp_file, EMA_STATUS_FILE)
     except Exception as e:
         logger.error(f"Failed to save EMA status file: {e}")
 
@@ -268,8 +270,10 @@ def execute_ema_scan_cycle(timeframe="1d", is_options_mode=True, target_universe
             },
             "last_updated": time.strftime("%Y-%m-%d %H:%M:%S")
         }
-        with open(out_file, "w") as f:
+        tmp_file = out_file + ".tmp"
+        with open(tmp_file, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2)
+        os.replace(tmp_file, out_file)
 
         logger.info(f"EMA Scan cycle completed for universe='{target_universe}': {len(results)} setups found.")
         return results

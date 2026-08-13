@@ -1011,7 +1011,7 @@ issues:
       1. Updated common/ema_engine.py to accept target_universe parameter and integrate get_universe_symbols_and_tokens from equity_universe for dynamic symbol lookup.
       2. Updated PROGRAMS config_fields in Trade_Option/app_option_Trade.py and Trade_Stock/app_Sock_Trade.py to include Target Universe dropdown (ALL, NIFTY50, NIFTY_NEXT_100, NIFTY_MIDCAP_100, NIFTY_SMALLCAP_250, INDEX_OPTIONS) and 60minute timeframe.
       3. Updated /api/programs/ema_engine/start endpoint in both app services to extract target_universe and pass to start_ema_engine.
-       4. Verified with AST syntax parsing and scratch/run_full_regression_test.py (10/10 tests passed).
+      4. Verified with AST syntax parsing and scratch/run_full_regression_test.py (10/10 tests passed).
     status: RESOLVED
   - id: ISSUE-045
     title: Codebase Cleanup (dead aliases, canonical paths, deduplication, docs accuracy)
@@ -1067,8 +1067,8 @@ issues:
       1. Updated get_universe_symbols_and_tokens in common/equity_universe.py to aggregate ALL 239 unique symbols across all registered index lists and STOCK_REGISTRY when target_index_name is "ALL".
       2. Added INDEX_OPTIONS (NIFTY, BANKNIFTY, SENSEX) to INDICES_REGISTRY_MAP and resolved tokens against INDEX_REGISTRY and kite.instruments("NSE") segment "INDICES".
       3. Updated execute_ema_scan_cycle in common/ema_engine.py to always call get_universe_symbols_and_tokens for all target_universe values (including "ALL").
-       4. Verified with standalone python script (ALL count: 239 symbols) and scratch/run_full_regression_test.py (10/10 tests passed).
-     status: RESOLVED
+      4. Verified with standalone python script (ALL count: 239 symbols) and scratch/run_full_regression_test.py (10/10 tests passed).
+    status: RESOLVED
   - id: ISSUE-047
     title: Entry Price Shows "-" in Scan Tab for Manually-Edited/Override Positions
     severity: MEDIUM
@@ -1097,7 +1097,7 @@ issues:
       3. Positions tab inline edit row gained an Entry input, threaded through editRow()/saveEdit() and
          included in the update-position payload.
       4. Verified with ast.parse, node --check on both templates, and scratch/run_full_regression_test.py (10/10).
-     status: RESOLVED
+    status: RESOLVED
   - id: ISSUE-048
     title: EMA Export Produces Empty or Scan-Tab (Wrong Source) Data
     severity: MEDIUM
@@ -1128,7 +1128,7 @@ issues:
          longer empty, and falls back to entry/sl fields for EMA rows.
       4. Verified via in-process route calls (7 EMA rows in both exports), ast.parse, node --check, and
          scratch/run_full_regression_test.py (10/10).
-     status: RESOLVED
+    status: RESOLVED
   - id: ISSUE-049
     title: EMA Scan Tab Shows No Trades (Results Wiped Empty Every Cycle)
     severity: HIGH
@@ -1244,3 +1244,333 @@ issues:
          dicts so the dashboard can show Anchor TF vs Entry TF for each signal.
       Verified: scratch/run_full_regression_test.py 10/10 passed.
     status: RESOLVED
+  - id: ISSUE-052
+    title: False CANDLE_CLOSE_SL Exit After Trailing - Historical Pre-Trail Candles Re-Judged Against Raised SL
+    severity: HIGH
+    category: Monitor / Position Management
+    family: DATA_INTEGRITY
+    date_reported: "2026-08-12"
+    symptom: |
+      LT26AUG4050PE (bought 2026-08-10 @ 57.95, SL=48.0, T1=74.15) was SELLed at 10:28:26 @ ~80.25
+      (qty 175) while premium was trading ~80, even though the trigger logged was
+      "SL [CANDLE_CLOSE_SL (75min Bar @ 2026-08-10 13:00:00+05:30)]: LT at 50.6" and the DB booked
+      pnl -12.68%. Sequence from bull_nifty50_scanner.log:
+      10:27:18 TRAIL-1 LT: SL=BE (57.95)   -> 10:28:26 CANDLE_CLOSE_SL exit.
+    root_cause: |
+      monitor_active_positions CANDLE_CLOSE_SL scan iterates ALL post-entry candles (2-day fetch
+      window) and compares each close against the CURRENT current_sl. After TRAIL-1 raised SL from
+      48.0 to 57.95 (breakeven), the entry-day 13:00-14:15 75min bar (close 50.60, formed BEFORE T1
+      was touched and long before the trail existed) retroactively appeared to breach the new SL,
+      so the very next monitor pass exited. Same failure class as ISSUE-040: historical bars
+      evaluated against a live-updated SL. The live fill was ~80.25 (profitable); the -12.68% PnL
+      used the stale 50.60 bar close as the exit price.
+    affected_files:
+      - common/position_monitor.py
+      - Trade_Option/app_option_Trade.py
+      - scratch/run_full_regression_test.py
+      - ISSUE_MANAGEMENT.yaml
+    resolution: |
+      1. Added get_sl_floor_time() in common/position_monitor.py: returns sl_set_time when present,
+         else falls back to sanitized entry_time (fresh positions keep legacy behaviour - initial SL
+         applies to all post-entry candles).
+      2. CANDLE_CLOSE_SL normal scan now skips any candle older than the SL floor
+         (is_candle_before_entry(c_date, sl_floor)); trailing can no longer resurrect pre-trail dips.
+         The 09:45 failsafe prev-bar check also honours the floor.
+      3. TRAIL-1 / TRAIL-2 in position_monitor.py AND the failsafe trailing block in
+         app_option_Trade.py now stamp sl_set_time = dt.now() into the in-memory position and
+         trade_db when the SL is raised.
+      4. Exit PnL bookkeeping now prefers live_ltp over the historical breach-bar close for SL,
+         T1-full-exit, and T3 exits, so booked PnL reflects the real fill.
+      5. Added Regression Test 11 (Trailed-SL Floor Guard): asserts a pre-trail entry-day candle is
+         skipped while a post-trail candle is still evaluated.
+      Verified: ast.parse all files; scratch/run_full_regression_test.py 11/11 "FLOW" checks pass
+         (Test 8 data-only failure: pre-existing expired ACTIVE NIFTY2681124650PE, expiry 08-11).
+    status: RESOLVED
+  - id: ISSUE-053
+    title: Expired/Exited Positions Persist as ACTIVE & BUY-able (Missing update_trade_status + no purge wiring)
+    severity: HIGH
+    category: DB Integrity / Dashboard UI
+    family: DATA_INTEGRITY
+    date_reported: "2026-08-12"
+    symptom: |
+      [Index] Scan & Active Trades still shows NIFTY2681124650PE (NIFTY 24650 PE, weekly expiry
+      2026-08-11) as an ACTIVE, BUY-able trade ~24h after it was exited. The contract was closed on
+      2026-08-10 12:15:35 (EMERGENCY_HARD_SL, exit order 260810190774095 qty 130, LTP 92.85 vs SL
+      94.47) yet trade id=19 stayed status=ACTIVE in trades_db.json / active_positions_db.json with
+      symbol stored as the full contract string (NIFTY2681124650PE) and entry_spot: 0.
+    root_cause: |
+      1. trade_db.update_trade_status(...) is called by index_options_trade_engine.py:332 and
+         stock_options_trade_engine.py:690 (KITE_MANUAL_EXIT zero-qty sync) but the function DID NOT
+         EXIST in common/trade_db.py - every call raised AttributeError that was silently swallowed,
+         so closed positions stayed ACTIVE forever.
+      2. trade_db.purge_expired_positions() and dedupe_active_positions() existed but had ZERO call
+         sites - expired contracts were never purged at startup or in the dashboard refresh loop.
+      3. api update/buy paths stored the raw contract string as the DB symbol instead of resolving the
+         real underlying registry symbol (e.g. NIFTY).
+      4. Dashboard renderScanTab BUY cell had no expiry or executed-exit check, so an expired/exited
+         contract rendered a green BUY button.
+    affected_files:
+      - common/trade_db.py
+      - Trade_Option/index_options_trade_engine.py
+      - Trade_Option/stock_options_trade_engine.py
+      - Trade_Option/app_option_Trade.py
+      - Trade_Option/templates/index.html
+      - Trade_Stock/app_Sock_Trade.py
+      - Trade_Stock/templates/index.html
+      - scratch/run_full_regression_test.py
+      - ISSUE_MANAGEMENT.yaml
+    resolution: |
+      1. Added missing update_trade_status(tid, status, exit_price, exit_reason, ...) to common/trade_db.py
+         so both engine KITE_MANUAL_EXIT calls now actually flip the DB row to COMPLETED.
+      2. Added trade_db.reconcile_with_executed_exits(exit_orders) marking ACTIVE rows COMPLETED when a
+         matching executed-exit order exists with a timestamp >= row created_at (re-entry safe), plus
+         run_db_housekeeping() combining dedupe + reconcile + purge.
+      3. Wired run_db_housekeeping() into index_options_trade_engine.main_scan_loop, the stock engine
+         recovery block, and both dashboard refresh_data() loops.
+      4. Added app_option_Trade.resolve_underlying() / app_Sock_Trade.resolve_underlying() so DB symbol
+         resolves to the real registry underlying instead of the contract string; applied to
+         api_update_position create-path and api_buy_scanned_trade.
+      5. _failsafe_exit_mark now falls back to find_active_trade_id(contract) when scan "id" is missing,
+         so failsafe SL/T exits always sync the DB row even without a tid lookup.
+      6. Dashboard UI: /api/status now exposes executed_exits + expired_contracts; renderScanTab shows a
+         disabled EXPIRED (purple) / EXITED (amber) badge instead of BUY for those contracts in both
+         5050 and 5051 dashboards.
+      7. Regression Test 8 now runs run_db_housekeeping() first and asserts no ACTIVE row has a matching
+         key in executed_exit_orders.json.
+      Verified: ast.parse all edited Python files; Test-8 auto-reconciled stale id=19 to COMPLETED
+      (exit_time 2026-08-10 12:15:35, EXECUTED_EXIT_ORDER); scratch/run_full_regression_test.py 11/11 PASS.
+    status: RESOLVED
+  - id: ISSUE-054
+    title: Scan Export Shows Mislabeled "NIFTY | BANKNIFTY26AUG57700PE" Active Row With Degenerate RR
+    severity: MEDIUM
+    category: Symbol Resolution / Display Integrity
+    family: BUG_FIX
+    date_reported: "2026-08-12"
+    symptom: |
+      The scan export Active section shows "NIFTY | BANKNIFTY26AUG57700PE" - the underlying is
+      mislabeled as NIFTY even though the instrument is a BANKNIFTY option - and the row carries a
+      degenerate RR of 610.93. The position (entry 467.95, SL 467.68, T1 632.9) has an SL ~0.27 below
+      entry, so (T1-entry)/(entry-SL) explodes to ~611.
+    root_cause: |
+      1. Registry matching used next((s for s in registry if s in tradingsymbol), None) at 6 sites; dict
+         iteration order places 'NIFTY' before 'BANKNIFTY', so 'NIFTY' matched the substring inside
+         'BANKNIFTY26AUG57700PE' and was returned as the symbol.
+      2. RR is computed as (T1-entry)/risk with only a risk>0 guard; when SL ~= entry (risk ~0.27 vs
+         entry 467.95) the ratio becomes astronomically large instead of being suppressed as meaningless.
+    affected_files:
+      - common/registries.py
+      - common/trading_core.py
+      - common/resolve.py
+      - common/display_writer.py
+      - Trade_Option/index_options_trade_engine.py
+      - Trade_Option/stock_options_trade_engine.py
+      - Trade_Option/templates/index.html
+      - Trade_Stock/templates/index.html
+    resolution: |
+      1. Added match_registry_symbol(registry, tradingsymbol) (common/registries.py + common/trading_core.py)
+         and _match_registry_symbol (common/resolve.py) which sort registry keys longest-first, so the
+         longest matching underlying wins (BANKNIFTY before NIFTY). Applied to all 6 former
+         next(...) sites: trading_core.py sync_kite_positions + reconcile_positions, resolve.py
+         sync_kite_positions + reconcile_positions, and both option trade engines' scan-symbol mapping.
+      2. Added a degenerate-risk RR guard in build_trade (trading_core.py / resolve.py / display_writer.py):
+         risk < max(0.01, |entry|*0.005) now yields RR 0.0 instead of the exploding value. Both dashboard
+         templates (renderScanTab) apply the same riskMin threshold when recomputing RR client-side.
+      3. Corrected the existing DB row id=29 (symbol NIFTY -> BANKNIFTY) in output/monitor/trades.sqlite3.
+      4. Also fixed pre-existing YAML indentation bugs in ISSUE_MANAGEMENT.yaml that made it unparsable
+         (ISSUE-044/046/047/048/052 blocks).
+      Verified: ast.parse all edited files; match_registry_symbol returns BANKNIFTY for
+      BANKNIFTY26AUG57700PE; RR guard yields 0.0 for the degenerate case and correct values otherwise;
+      scratch/run_full_regression_test.py 11/11 PASS; both dashboards restarted and index engine
+      restarted (recovered position now logged as BANKNIFTY).
+    status: RESOLVED
+
+  - id: ISSUE-055
+    title: Code Quality Audit & Crash-Safe Persistence Enhancement Pass
+    severity: ENHANCEMENT
+    category: Code Quality & Persistence Integrity
+    family: ENHANCEMENT
+    date_reported: "2026-08-12"
+    symptom: |
+      Code quality audit identified:
+      1. Missing contract_is_expired import in common/display_writer.py (would raise NameError when write_scan_display_data processes active trades).
+      2. Direct file writes using open(..., 'w') in display_writer.py and ema_engine.py had potential race condition truncation risk if read mid-write by Flask.
+      3. Bare except: clauses in app_option_Trade.py and app_Sock_Trade.py swallowed system exceptions like KeyboardInterrupt.
+    root_cause: |
+      1. Function contract_is_expired was referenced in display_writer.py without an explicit import from position_monitor.py.
+      2. Non-atomic file writes truncated display JSON files before dumping content.
+      3. Legacy bare except: syntax present in config and position loading functions.
+    affected_files:
+      - common/display_writer.py
+      - common/ema_engine.py
+      - Trade_Option/app_option_Trade.py
+      - Trade_Stock/app_Sock_Trade.py
+      - ISSUE_MANAGEMENT.yaml
+    resolution: |
+      1. Added from position_monitor import contract_is_expired to common/display_writer.py.
+      2. Updated file persistence in common/display_writer.py and common/ema_engine.py to use atomic file writes (tmp_file + os.replace).
+      3. Replaced bare except: clauses with except Exception: in Trade_Option/app_option_Trade.py and Trade_Stock/app_Sock_Trade.py.
+      4. Ran check_code_quality.py audit script and verified scratch/run_full_regression_test.py (11/11 PASSED).
+    status: RESOLVED
+
+  - id: FEATURE-056
+    title: Live Near-Close Candle D Early Entry Engine (90% Completion + Dual Guards)
+    severity: ENHANCEMENT
+    category: Strategy & Live Execution
+    family: ENHANCEMENT
+    date_reported: "2026-08-13"
+    symptom: |
+      Waiting for 100% candle close on Candle D caused breakout slippage (3-4% price jump in final 60s of bar or next open).
+    root_cause: |
+      Need an early confirmation mechanism for the active forming candle during live market hours without breaking strict 100% close rules for historical completed bars.
+    affected_files:
+      - common/timeframe_utils.py
+      - common/patterns_bull.py
+      - common/patterns_bear.py
+      - Trade_Stock/stock_reversal_scanner.py
+      - scratch/run_full_regression_test.py
+      - ISSUE_MANAGEMENT.yaml
+    resolution: |
+      1. Created get_tf_minutes() and is_live_candle_near_close(candle_date, tf, completion_pct=0.90) in common/timeframe_utils.py to evaluate active forming candles.
+      2. Updated scan_anchor_bcd_breakout in common/patterns_bull.py and scan_anchor_bcd_breakout_bearish in common/patterns_bear.py:
+         - Historical completed bars (i < len-1) maintain strict 100% Candle Close basis.
+         - Active live forming bar (i == len-1) evaluates near-close window (>=90% progress) with Dual Guards:
+           a) Benchmark Buffer Guard (+0.3% above benchmark for Bullish, -0.3% for Bearish).
+           b) Volume Validation Guard (current volume >= 80% of 20-period average volume).
+      3. Tagged near-close setups as stage_status="EARLY_D_ENTRY" and pattern labels as *_EARLY.
+      4. Verified timing logic via scratch/test_near_close_d.py and passed all non-API regression tests.
+    status: RESOLVED
+
+  - id: FEATURE-057
+    title: Interactive Trade Journal & Self-Learning Dashboard Tab (SQLite + CSV Dual Sync)
+    severity: ENHANCEMENT
+    category: Dashboard UI & Trade Analytics
+    family: ENHANCEMENT
+    date_reported: "2026-08-13"
+    symptom: |
+      Trade Journal lacked dedicated Timeframe column, inline Self-Learning lesson editor, and live summary statistics on the web UI.
+    root_cause: |
+      Need an interactive self-learning terminal integrated into both Option and Stock dashboards backed by SQLite storage with automatic CSV sync to G:\Poovendan\AI\Trading\Share\Account_Status_leaning\daily_trade_journal.csv.
+    affected_files:
+      - common/trade_db.py
+      - common/daily_trade_journal.py
+      - Trade_Option/app_option_Trade.py
+      - Trade_Option/templates/index.html
+      - Trade_Stock/app_Sock_Trade.py
+      - Trade_Stock/templates/index.html
+      - ISSUE_MANAGEMENT.yaml
+    resolution: |
+      1. Added update_self_learning_lesson(trade_id, lesson_text) in common/trade_db.py to persist user post-trade lessons in SQLite (trades.sqlite3).
+      2. Updated daily_trade_journal.py to maintain explicit Timeframe column (15m, 30m, 60m, 75m, 1d) and auto-sync SQLite journal entries to G:\Poovendan\AI\Trading\Share\Account_Status_leaning\daily_trade_journal.csv.
+      3. Added /api/journal/get, /api/journal/sync, /api/journal/update API endpoints in both app_option_Trade.py (Port 5050) and app_Sock_Trade.py (Port 5051).
+      4. Redesigned Trade Journal UI tab: added Summary Performance Bar (Total Trades, Win Rate %, Net PnL ₹, Wins/Losses), explicit TF column, and an inline Self-Learning Lesson text editor with 💾 Save button in each trade row.
+      5. Verified syntax and regression tests passed.
+    status: RESOLVED
+
+  - id: FEATURE-058
+    title: Instant Trade Journal CSV Export Functionality (Web UI & API Endpoint)
+    severity: ENHANCEMENT
+    category: Dashboard UI & Data Export
+    family: ENHANCEMENT
+    date_reported: "2026-08-13"
+    symptom: |
+      Users could not export the formatted Trade Journal entries directly to a CSV file from the web UI dashboard.
+    root_cause: |
+      Need an explicit export endpoint and UI button on the Trade Journal tab to download complete journal history (including Date, Symbol, Side, Timeframe, Pattern, Entry/Exit Prices, PnL %, Remarks, and Lessons).
+    affected_files:
+      - Trade_Option/app_option_Trade.py
+      - Trade_Option/templates/index.html
+      - Trade_Stock/app_Sock_Trade.py
+      - Trade_Stock/templates/index.html
+      - ISSUE_MANAGEMENT.yaml
+    resolution: |
+      1. Added /api/journal/export endpoint in app_option_Trade.py and app_Sock_Trade.py returning a downloadable CSV attachment (trade_journal_export_YYYY_MM_DD_HHMM.csv).
+      2. Added exportJournalCSV() JS function and green 📥 Export CSV button on the Trade Journal header in both dashboards.
+      3. Verified all 12 regression tests passed cleanly.
+    status: RESOLVED
+
+  - id: FEATURE-059
+    title: Interactive Search, Multi-Filter & Smooth Pagination Engine for Trade Journal
+    severity: ENHANCEMENT
+    category: Dashboard UI & Navigation
+    family: ENHANCEMENT
+    date_reported: "2026-08-13"
+    symptom: |
+      Navigating through large trade journals was tedious without search, outcome filtering, or page size controls.
+    root_cause: |
+      Need an interactive control bar with real-time text search (Symbol/Pattern/Remarks/Lessons), outcome filter (Wins/Losses/Active), page size selector (10, 25, 50, 100, All), and page navigation bar (First, Prev, Page X of Y, Next, Last).
+    affected_files:
+      - Trade_Option/templates/index.html
+      - Trade_Stock/templates/index.html
+      - ISSUE_MANAGEMENT.yaml
+    resolution: |
+      1. Added onJournalSearch(), onJournalOutcomeFilter(), onJournalPageSize(), and changeJournalPage() event handlers in both templates.
+      2. Integrated live search filter, outcome filter, and dataset slicing into renderJournal().
+      3. Added a Controls Bar at the top of the Trade Journal tab and a Pagination Navigation Bar at the bottom.
+      4. Verified 100% V8 JavaScript syntax compilation and passed all 12 regression tests.
+    status: RESOLVED
+
+  - id: ISSUE-060
+    title: Fix Target Inheritance & Re-Derive SL/Targets on Contract Flip (CIPLA26AUG1460CE Trigger Analysis)
+    severity: BUG
+    category: Position Monitoring & Execution
+    family: BUG
+    date_reported: "2026-08-13"
+    symptom: |
+      SELL order triggered for CIPLA AUG 1460 CE NFO at 24.60 shortly after entry at 24.40.
+    root_cause: |
+      An earlier PE position (CIPLA26AUG1460PE) had entry 17.70 and T3 target 24.85. When the user switched/bought CIPLA26AUG1460CE at 24.40, sync_kite_positions updated the contract name to CIPLA26AUG1460CE under symbol CIPLA but retained the old PE target thresholds (T3=24.85). At 11:30:36 IST, CE LTP touched 25.05 (>= T3 24.85), triggering an automatic T3 Target Hit Market Sell Order at 24.60.
+    affected_files:
+      - common/resolve.py
+      - ISSUE_MANAGEMENT.yaml
+    resolution: |
+      1. Analyzed SQLite trade database (ID 36 vs ID 45) and engine logs showing the exact trigger sequence at 11:30:36 IST ("T3 exit (25.05 >= T3 24.85)").
+      2. Updated sync_kite_positions in common/resolve.py: when a contract mismatch/flip is detected (stored_contract != live_contract), fresh SL and Target thresholds are immediately re-derived relative to the new contract and new entry price.
+      3. Verified all 12 regression tests passed with 100% success.
+    status: RESOLVED
+
+  - id: ISSUE-061
+    title: Auto-Clear Executed Exit Guard on Position Re-Entry (COALINDIA26AUG420CE Exit Block Analysis)
+    severity: BUG
+    category: Position Monitoring & Execution
+    family: BUG
+    date_reported: "2026-08-13"
+    symptom: |
+      COALINDIA26AUG420CE Emergency SL hit at 11:44:28 IST but no sell order was sent to Zerodha Kite.
+    root_cause: |
+      An earlier trade in COALINDIA26AUG420CE on 2026-08-11 had saved an exit order record (260811190789256) in executed_exit_orders.json. When the user re-entered COALINDIA26AUG420CE today, sync_kite_positions synced the active position but did not call clear_executed_exit(contract). As a result, when Emergency SL triggered today, is_contract_exit_executed blocked the exit as a duplicate.
+    affected_files:
+      - common/resolve.py
+      - ISSUE_MANAGEMENT.yaml
+    resolution: |
+      1. Cleared the stale COALINDIA26AUG420CE record from executed_exit_orders.json using clear_executed_exit.
+      2. Updated sync_kite_positions in common/resolve.py to automatically invoke position_monitor.clear_executed_exit(contract) whenever an active position is synced/re-entered from Zerodha Kite.
+      3. Verified all 12 regression tests passed with 100% success.
+    status: RESOLVED
+
+  - id: ISSUE-062
+    title: Prevent Zerodha API Order Rate Limit Retry Spam Loops on Entry Failure
+    severity: BUG
+    category: Trade Execution & Rate Limiting
+    family: BUG
+    date_reported: "2026-08-13"
+    symptom: |
+      Index engine logged: "Entry failed for SENSEX2681377900PE: Maximum allowed order requests exceeded" repeatedly every 5 seconds.
+    root_cause: |
+      When an entry order placement failed (e.g. margin shortfall or initial rate limit), index_options_trade_engine.py did not call trade_db.record_executed_pattern. On the subsequent scan cycle (5-8 seconds later), the engine re-detected the un-recorded pattern and attempted kite.place_order again in a rapid loop, triggering Zerodha's backend rate limiter ("Maximum allowed order requests exceeded").
+    affected_files:
+      - Trade_Option/index_options_trade_engine.py
+      - Trade_Option/stock_options_trade_engine.py
+      - ISSUE_MANAGEMENT.yaml
+    resolution: |
+      1. Updated execute_highest_rr_trade in index_options_trade_engine.py and stock_options_trade_engine.py to record pattern execution (record_executed_pattern) upon order attempt.
+      2. Ensured failed order attempts clean up ACTIVE_POSITIONS and set DB trade status to FAILED rather than retrying every 5 seconds.
+      3. Verified all 12 regression tests passed with 100% success.
+    status: RESOLVED
+
+
+
+
+
+
+
+

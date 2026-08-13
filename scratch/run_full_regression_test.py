@@ -135,19 +135,26 @@ except Exception as e:
     errors.append(f"Path Consistency Failed: {e}")
     print(f" FAILED [ERR] ({e})", flush=True)
 
-# Test 8: DB Invariants (no dupe ACTIVE contracts, no expired ACTIVE rows)
-print("[TEST 8] Testing DB Invariants (dupes/expired)...", end="", flush=True)
+# Test 8: DB Invariants (no dupe ACTIVE contracts, no expired ACTIVE rows, no executed-exit leftovers)
+print("[TEST 8] Testing DB Invariants (dupes/expired/executed-exit)...", end="", flush=True)
 try:
     from collections import Counter
-    from trade_db import get_active_trades
-    from trading_core import contract_is_expired
+    from trade_db import get_active_trades, run_db_housekeeping
+    from trading_core import contract_is_expired, load_executed_exits, EXECUTED_EXITS
+    # Engines/apps run housekeeping on startup; reproduce it here so Test 8 is idempotent.
+    run_db_housekeeping()
     active = get_active_trades()
     keys = [f"{t.get('engine')}|{t.get('contract', t.get('symbol'))}" for t in active]
     dups = {k: v for k, v in Counter(keys).items() if v > 1}
     assert not dups, f"Duplicate ACTIVE rows found: {dups}"
     expired = [t for t in active if contract_is_expired(str(t.get('contract', t.get('symbol'))))]
     assert not expired, f"Expired ACTIVE rows found: {[t.get('contract') for t in expired]}"
-    print(f" PASSED [OK] (Active: {len(active)}, no dupes, no expired)", flush=True)
+    # No ACTIVE trade may still have a matching executed-exit order (closed but never flipped)
+    load_executed_exits()
+    exit_set = {str(k).replace(' ', '').upper() for k in (EXECUTED_EXITS or {})}
+    leftover = [t for t in active if str(t.get('contract', t.get('symbol'))).replace(' ', '').upper() in exit_set]
+    assert not leftover, f"ACTIVE rows with executed-exit orders: {[t.get('contract') for t in leftover]}"
+    print(f" PASSED [OK] (Active: {len(active)}, no dupes, no expired, no executed-exit leftovers)", flush=True)
 except Exception as e:
     errors.append(f"DB Invariants Failed: {e}")
     print(f" FAILED [ERR] ({e})", flush=True)
@@ -198,9 +205,64 @@ except Exception as e:
     errors.append(f"entry_time Invariant Failed: {e}")
     print(f" FAILED [ERR] ({e})", flush=True)
 
+# Test 11: Trailed-SL floor guard (CANDLE_CLOSE_SL must NOT re-judge pre-trail candles)
+print("[TEST 11] Testing Trailed-SL Floor Guard (no retroactive SL breach)...", end="", flush=True)
+try:
+    from datetime import datetime as dt, timedelta
+    from position_monitor import get_sl_floor_time, is_candle_before_entry
+    # fresh position: floor falls back to sanitized entry_time (original SL applies post-entry)
+    fresh = {"entry_time": "2026-08-10 12:15:03", "current_sl": 48.0}
+    assert get_sl_floor_time(fresh) == "2026-08-10 12:15:03", "fresh floor != entry_time"
+    # trailed position (TRAIL-1 to BE at 10:27 on 08-12): floor = sl_set_time
+    trailed = {"entry_time": "2026-08-10 12:15:03", "sl_set_time": "2026-08-12 10:27:18"}
+    floor = get_sl_floor_time(trailed)
+    # the entry-day 13:00 bar (close 50.60) predates the trail -> must be SKIPPED by CANDLE_CLOSE_SL
+    assert is_candle_before_entry("2026-08-10 13:00:00+05:30", floor) is True, \
+        "pre-trail entry-day candle must be skipped by the SL floor"
+    # a candle formed after the trail is still evaluated normally
+    assert is_candle_before_entry("2026-08-12 10:30:00+05:30", floor) is False, \
+        "post-trail candle must still be evaluated against the trailed SL"
+    # legacy already-trailed position without a stamp: floor must be today (old bars skipped)
+    legacy = {"entry_time": "2026-08-10 12:15:03", "trailing_stage": 1}
+    lf = get_sl_floor_time(legacy)
+    today_str = dt.now().strftime("%Y-%m-%d")
+    yesterday_str = (dt.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+    assert is_candle_before_entry(f"{yesterday_str} 14:00:00+05:30", lf) is True, \
+        "legacy trailed position must skip yesterday's bars"
+    assert is_candle_before_entry(f"{today_str} 10:30:00+05:30", lf) is False, \
+        "legacy trailed position must still evaluate today's bars"
+    print(" PASSED [OK]", flush=True)
+except Exception as e:
+    errors.append(f"Trailed-SL Floor Guard Failed: {e}")
+    print(f" FAILED [ERR] ({e})", flush=True)
+
+# Test 12: HTML Template JavaScript V8 Compiler Check (catches unclosed braces/syntax errors in HTML templates)
+print("[TEST 12] Testing HTML Template JavaScript V8 Compiler Syntax...", end="", flush=True)
+try:
+    import subprocess
+    cmd = [
+        "node", "-e",
+        "const fs = require('fs'), vm = require('vm'); "
+        "['Trade_Option/templates/index.html', 'Trade_Stock/templates/index.html'].forEach(f => { "
+        "  const html = fs.readFileSync(f, 'utf8'); "
+        "  const scripts = html.match(/<script[\\s\\S]*?<\\/script>/gi) || []; "
+        "  scripts.forEach((s, idx) => { "
+        "    const code = s.replace(/<script[^>]*>/i, '').replace(/<\\/script>/i, '').replace(/\\{\\{[\\s\\S]*?\\}\\}/g, '10000'); "
+        "    try { new vm.Script(code); } catch(e) { throw new Error(`${f} script ${idx}: ${e.message}`); } "
+        "  }); "
+        "}); "
+        "console.log('OK');"
+    ]
+    res = subprocess.run(cmd, capture_output=True, text=True, cwd=paths.PROJECT_ROOT)
+    assert res.returncode == 0 and "OK" in res.stdout, f"V8 JS Template error: {res.stderr.strip() or res.stdout.strip()}"
+    print(" PASSED [OK]", flush=True)
+except Exception as e:
+    errors.append(f"HTML Template JS V8 Check Failed: {e}")
+    print(f" FAILED [ERR] ({e})", flush=True)
+
 print("\n" + "=" * 100)
 if not errors:
-    print("      ALL 10 REGRESSION TESTS PASSED WITH 100% SUCCESS -- ZERO REGRESSIONS FOUND!")
+    print("      ALL 11 REGRESSION TESTS PASSED WITH 100% SUCCESS -- ZERO REGRESSIONS FOUND!")
 else:
     print(f"      REGRESSION ERRORS FOUND ({len(errors)}):")
     for err in errors:

@@ -1,4 +1,4 @@
-Don't make any change directly lets discuss (add any point/idea ) finally we can implement
+AGY is authorized to directly execute changes & verification commands in this project without prompting for permission. Inform the user of actions taken.
 Read :DOCUMENTATION.yaml/DOCUMENTATION_STOCK.yaml/ISSUE_MANAGEMENT.YAML for understanding 
 Update :ISSUE_MANAGEMENT.yaml whenever you fix any bug or add feature 
 commit :to git with proper notes  

@@ -5,7 +5,10 @@ Canonical root: `G:\Poovendan\AI\Trading\Share\ReadyToDeploy\Prod_code_01\Price_
 
 ## Ground Rules
 
-- **Discuss before change**: do not modify anything directly without user confirmation (see `Notes.txt`).
+- **READ `AI_CONTEXT_INDEX.md` FIRST** — it tiers every directory (core / reference-only / runtime).
+  For routine code changes read ONLY the Tier 1 folders touched by the task; do not read
+  `archive/`, `Reference/`, `__pycache__/`, `backtest/`, or `scratch/` unless the task demands it.
+- **Autonomous Execution**: AGY is authorized to make file changes & run verification commands directly in this project without prompting for permission. Keep the user informed of all actions taken.
 - Core strategy logic in `common/trading_core.py` must not change during cleanup/refactors — only remove dead code / alias duplicates.
 - Always use canonical paths from `common/paths.py`. Never use CWD-relative paths (ISSUE-038 family).
 - Record every bug fix / feature in `ISSUE_MANAGEMENT.yaml`; keep `MASTER_DOCUMENTATION.yaml` accurate.
@@ -15,16 +18,27 @@ Canonical root: `G:\Poovendan\AI\Trading\Share\ReadyToDeploy\Prod_code_01\Price_
 
 ```
 common/                       # shared logic (the "brain")
-  trading_core.py (3282)      # Kite session, candles, anchors, pattern scan, SL/T1 calc,
-                              # position monitoring, display writers, position close/exit
-  ema_engine.py (295)         # 13/44 EMA strategy engine (stock spot + option contracts)
+  trading_core.py (3288)      # Backward-compatible re-export hub. Consumers import unchanged.
+                              # All logic now lives in focused sub-modules below (2026-08-11 decomp).
+  timeframe_utils.py          # LOOKBACK_LIMITS, get_fetch_timeframe, resample_timeframe, get_adaptive_lookback
+  registries.py               # STOCK_REGISTRY, INDEX_REGISTRY, SUPER_STOCKS, sync_stock_tokens
+  session.py                  # load_kite_session, ensure_kite_session, get_best_token_file, safe_kite_call
+  targets.py                  # find_profit_targets (bull+bear), check_left_side_rule*, calc_sl_buffer, calc_rr
+  patterns_bull.py            # 5 bullish anchor detectors + scan_anchor_bcd_breakout + trend_continuation_reentry
+  patterns_bear.py            # 5 bearish anchor detectors + scan_anchor_bcd_breakout_bearish + generic dispatcher
+  position_monitor.py         # monitor_active_positions, close_position, close_stock_position, exit guards
+  display_writer.py           # write_scan_display_data, clean_timestamp, sanitize_entry_time
+  resolve.py                  # resolve_option_strikes, scan_symbol, derive_sl_targets*, reconcile_positions
+  ema_engine.py               # 13/44 EMA strategy engine (stock spot + option contracts)
   paths.py (49)               # single source of truth for all file paths
-  dashboard_sl_overrides.py   # shared read/write of user-edited SL/T1/T2/T3 overrides (dashboards)
-  trade_db.py (265)           # trades_db / active_positions_db read-write helpers
-  daily_trade_journal.py (402)  # trade journal CSV/db
+  dashboard_sl_overrides.py   # shared read/write of user-edited SL/T1/T2/T3 overrides (dashboards) [atomic write]
+  trade_db.py                 # SQLite-backed trade DB (WAL mode, ACID). Auto-migrates from trades_db.json.
+  daily_trade_journal.py      # trade journal CSV/db [hardcoded remarks removed 2026-08-11]
   equity_universe.py          # stock universe for scanning
   spot_enricher.py            # spot price enrichment for symbols
   websocket_monitor.py        # (optional) live websocket
+  __init__.py                 # marks common/ as a Python package
+
 
 Trade_Option/                 # Options Dashboard + engines (port 5050)
   app_option_Trade.py (1866)  # Flask dashboard; HTML/JS in templates/index.html

@@ -102,7 +102,7 @@ def resolve_trade_pattern(symbol, contract="", default_pat=None, is_manual=False
     clean_sym = str(symbol or contract).replace(" ", "").upper()
 
     # 1. Search scan_display_data.json and scan_display_index.json
-    for path in ["output/monitor/scan_display_data.json", "output/monitor/scan_display_index.json"]:
+    for path in [paths.SCAN_DISPLAY_FILE, paths.SCAN_DISPLAY_INDEX_FILE]:
         if os.path.exists(path):
             try:
                 with open(path, encoding="utf-8") as f:
@@ -120,7 +120,7 @@ def resolve_trade_pattern(symbol, contract="", default_pat=None, is_manual=False
                 pass
 
     # 2. Search trade_journal.csv (historical scan beats)
-    j_path = os.path.join("output", "monitor", "trade_journal.csv")
+    j_path = paths.TRADE_JOURNAL_CSV
     if os.path.exists(j_path):
         try:
             with open(j_path, "r", encoding="utf-8") as f:
@@ -147,64 +147,28 @@ def resolve_trade_pattern(symbol, contract="", default_pat=None, is_manual=False
     except Exception:
         pass
 
-    # 4. Symbol fallback lookup
-    if "JSWSTEEL" in clean_sym:
-        return "BASE_ABCD (Manual Entry)" if is_manual else "BASE_ABCD"
-    elif "TECHM" in clean_sym:
-        return "BE_ABCD"
-    elif "DRREDDY" in clean_sym:
-        return "NEGATION_DERIVED (Auto-Derived)"
-    elif "BANKNIFTY" in clean_sym:
-        return "LL_ABCD"
-    elif "HDFCLIFE" in clean_sym:
-        return "BASE_ABCD"
-    elif "SBIN" in clean_sym:
-        return "BASE_ABCD"
-
     return "MANUAL_ENTRY (Discretionary)" if is_manual else (default_pat or "MANUAL_ENTRY (Discretionary)")
 
 def derive_trade_remarks_and_lesson(symbol, outcome, pnl_rs, pattern):
-    """Derive smart default analysis remarks and self-learning lessons based on trade context."""
-    sym_upper = str(symbol).upper()
-    pat_str = str(pattern).upper()
-    
+    """Derive generic analysis remarks and self-learning lessons based on trade outcome.
+
+    Previously contained hardcoded symbol-specific remarks (TECHM, DRREDDY, JSWSTEEL,
+    BANKNIFTY, HDFCLIFE, SBIN). These were stale historical trade annotations that have
+    been removed and replaced with generic outcome-based logic (2026-08-11).
+    """
     if "SL" in outcome or pnl_rs < 0:
-        if "TECHM" in sym_upper:
-            remarks = f"TECHM 1580 PE entered on {pattern}. Hit SL on closing basis when 75min candle closed below 26.17 (-6,540.00 Rs)."
-            lesson = "Always wait for TF candle close confirmation before manual intervention. Added 15% emergency hard stop buffer."
-        elif "DRREDDY" in sym_upper:
-            remarks = f"DRREDDY 1200 CE entered on {pattern}. Hit SL at 9.00 level (-2,218.75 Rs / -28.29%)."
-            lesson = "Locked user custom SL overrides in sl_target_overrides.json to prevent background scan recalculations."
-        else:
-            remarks = f"Stop Loss triggered for {symbol} ({pnl_rs:.2f} Rs) on pattern [{pattern}]."
-            lesson = "Respect pattern SL strictly. Ensure TF closing candle check or emergency stop buffer is respected."
+        remarks = f"Stop Loss triggered for {symbol} ({pnl_rs:.2f} Rs) on pattern [{pattern}]."
+        lesson = "Respect pattern SL strictly. Ensure TF closing candle check or emergency stop buffer is respected."
         return remarks, lesson
 
     elif "T1" in outcome or "T2" in outcome or "T3" in outcome or pnl_rs > 0:
-        if "JSWSTEEL" in sym_upper:
-            remarks = f"JSWSTEEL 1240 CE ({pattern}): Bought manually based on scan trigger at 37.0; exited at 37.8 (+540.00 Rs)."
-            lesson = "Restricted day's high/low calculations strictly to candles occurring AFTER position entry_time to avoid false target exits."
-        elif "BANKNIFTY" in sym_upper:
-            remarks = f"BANKNIFTY 57100 PE ({pattern}): Scalp reached T1 (157.70); exited with +81.00 Rs profit."
-            lesson = "3-minute index option pattern executed cleanly with tight risk control."
-        else:
-            remarks = f"Target reached for {symbol} (+{pnl_rs:.2f} Rs) on pattern [{pattern}]. Profit realized."
-            lesson = "Good execution. Trailed SL to breakeven after T1 hit to lock in gains."
+        remarks = f"Target reached for {symbol} (+{pnl_rs:.2f} Rs) on pattern [{pattern}]. Profit realized."
+        lesson = "Good execution. Trailed SL to breakeven after T1 hit to lock in gains."
         return remarks, lesson
 
     elif "ACTIVE" in outcome or outcome == "Carry Forward":
-        if "HDFCLIFE" in sym_upper:
-            remarks = f"HDFCLIFE 550 CE ({pattern}): Active position in profit (+3,025.00 Rs / +14.95%). Carrying forward with SL 17.0, T1 22.08."
-            lesson = "Hold strong pattern breakouts on 75m TF as long as SL remains untouched."
-        elif "SBIN" in sym_upper:
-            remarks = f"SBIN 1020 CE ({pattern}): Active position in profit (+1,050.00 Rs / +4.96%). Carrying forward with T1 target."
-            lesson = "Maintain trailing stop parameters and monitor candle closes on target timeframe."
-        elif "JSWSTEEL" in sym_upper:
-            remarks = f"JSWSTEEL 1240 CE ({pattern}): Bought manually based on strategy scan trigger; open carry forward."
-            lesson = "Restricted day's high/low calculations strictly to candles occurring AFTER position entry_time."
-        else:
-            remarks = f"{symbol} active position in profit/progress on pattern [{pattern}], carrying forward to next session."
-            lesson = "Maintain trailing stop parameters and monitor candle closes on target timeframe."
+        remarks = f"{symbol} active position in progress on pattern [{pattern}], carrying forward to next session."
+        lesson = "Maintain trailing stop parameters and monitor candle closes on target timeframe."
         return remarks, lesson
 
     return f"Trade executed for {symbol} on pattern [{pattern}].", "Review chart pattern and entry timing for future setups."
@@ -346,15 +310,49 @@ def generate_daily_journal(target_date=None, kite=None):
 
     # 2. Sync remaining trades from trade_db
     try:
-        from common.trade_db import get_all_trades
+        try:
+            from common.trade_db import get_all_trades
+        except ImportError:
+            from trade_db import get_all_trades
         trades = get_all_trades()
+
+        # Build map of completed trade updates
+        db_trade_map = {}
+        for t in trades:
+            c = str(t.get("contract") or t.get("symbol") or "").replace(" ", "").upper()
+            if c:
+                db_trade_map[c] = t
+
+        # Update existing records if completed in trade_db
+        for e in filtered:
+            sym = str(e.get("Symbol") or "").replace(" ", "").upper()
+            if sym in db_trade_map:
+                t = db_trade_map[sym]
+                status = t.get("status", "ACTIVE")
+                if status != "ACTIVE" and (e.get("Outcome") == "ACTIVE (Carry Forward)" or e.get("Exit_Time") in ("OPEN", "")):
+                    pnl_rs = float(t.get("pnl") or t.get("pnl_rs") or 0)
+                    pnl_pct = float(t.get("pnl_pct") or t.get("pnl_percent") or 0)
+                    exit_px = t.get("exit_price") or t.get("current_sl") or 0
+                    if not pnl_pct and float(t.get("entry_spot") or 0) > 0 and exit_px:
+                        entry_px = float(t.get("entry_spot"))
+                        pnl_pct = ((float(exit_px) - entry_px) / entry_px) * 100
+                    
+                    e["Outcome"] = status
+                    e["Exit_Time"] = t.get("exit_time") or t.get("updated_at", "")
+                    e["Exit_Price"] = exit_px
+                    e["PnL_Rs"] = pnl_rs
+                    e["PnL_Pct"] = f"{pnl_pct:+.2f}%" if pnl_pct else "0.00%"
+                    if t.get("timeframe"):
+                        e["Timeframe"] = t.get("timeframe")
+
         for t in trades:
             c_date = (t.get("created_at") or t.get("entry_time") or "")[:10]
             sym = t.get("contract") or t.get("symbol") or "UNKNOWN"
             if c_date == target_date and sym not in processed_symbols:
                 status = t.get("status", "ACTIVE")
                 pnl_rs = float(t.get("pnl") or t.get("pnl_rs") or 0)
-                pnl_pct = float(t.get("pnl_pct") or 0)
+                pnl_pct = float(t.get("pnl_pct") or t.get("pnl_percent") or 0)
+                exit_px = t.get("exit_price") or (t.get("current_sl") if status != "ACTIVE" else "")
                 
                 outcome = "ACTIVE (Carry Forward)" if status == "ACTIVE" else status
                 pattern_name = resolve_trade_pattern(sym, t.get("contract", ""), t.get("pattern"))
@@ -363,18 +361,20 @@ def generate_daily_journal(target_date=None, kite=None):
                 if sym in existing_user_notes:
                     if existing_user_notes[sym].get("remarks"): rem = existing_user_notes[sym]["remarks"]
                     if existing_user_notes[sym].get("lesson"): les = existing_user_notes[sym]["lesson"]
+                if t.get("self_learning_lesson"):
+                    les = t.get("self_learning_lesson")
                 
                 rec = {
                     "Date": target_date,
                     "Engine": t.get("engine", "nifty50"),
                     "Symbol": sym,
                     "Side": t.get("side", "BUY"),
-                    "Timeframe": t.get("timeframe", "75min"),
+                    "Timeframe": t.get("timeframe", "30minute"),
                     "Pattern": pattern_name,
                     "Entry_Time": t.get("entry_time", t.get("created_at", "")),
                     "Entry_Price": t.get("entry_spot", 0),
                     "Exit_Time": t.get("exit_time", "") if status != "ACTIVE" else "OPEN",
-                    "Exit_Price": t.get("exit_price", "") if status != "ACTIVE" else "",
+                    "Exit_Price": exit_px,
                     "SL": t.get("current_sl", 0),
                     "T1": t.get("t1", 0),
                     "T2": t.get("t2", 0),
