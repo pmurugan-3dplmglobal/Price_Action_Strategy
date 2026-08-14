@@ -32,14 +32,15 @@ CONFIG_FILE = paths.PROGRAM_CONFIG_FILE
 TOKEN_FILE = paths.TOKEN_FILE
 
 def get_kite_credentials():
-    """Read Kite API key/secret from program_config.json or token file."""
-    api_key, api_secret = "", ""
+    """Read Kite API key/secret from environment, program_config.json, or token file."""
+    api_key = os.environ.get("KITE_API_KEY", "")
+    api_secret = os.environ.get("KITE_API_SECRET", "")
     if os.path.exists(CONFIG_FILE):
         try:
             with open(CONFIG_FILE) as f:
                 cfg = json.load(f)
-            api_key = cfg.get("api_key", "")
-            api_secret = cfg.get("api_secret", "")
+            if not api_key: api_key = cfg.get("api_key", "")
+            if not api_secret: api_secret = cfg.get("api_secret", "")
         except Exception:
             pass
     if not api_key and os.path.exists(TOKEN_FILE):
@@ -47,6 +48,7 @@ def get_kite_credentials():
             with open(TOKEN_FILE) as f:
                 td = json.load(f)
             api_key = td.get("api_key", "")
+            if not api_secret: api_secret = td.get("api_secret", "")
         except Exception:
             pass
     return api_key, api_secret
@@ -63,7 +65,32 @@ def main():
 
     api_key, api_secret = get_kite_credentials()
     if not api_key or not api_secret:
-        logging.error("api_key/api_secret missing in program_config.json")
+        logging.warning("api_key/api_secret not found in program_config.json or environment.")
+        try:
+            if not api_key:
+                api_key = input("Enter your Kite API Key: ").strip()
+            if not api_secret:
+                api_secret = input("Enter your Kite API Secret: ").strip()
+            if api_key and api_secret:
+                cfg = {}
+                if os.path.exists(CONFIG_FILE):
+                    try:
+                        with open(CONFIG_FILE) as f:
+                            cfg = json.load(f)
+                    except Exception:
+                        pass
+                cfg["api_key"] = api_key
+                cfg["api_secret"] = api_secret
+                os.makedirs(os.path.dirname(CONFIG_FILE), exist_ok=True)
+                with open(CONFIG_FILE, "w") as f:
+                    json.dump(cfg, f, indent=2)
+                logging.info(f"Saved credentials to {CONFIG_FILE}")
+        except Exception as prompt_err:
+            logging.error(f"Failed to read credentials: {prompt_err}")
+            return
+
+    if not api_key or not api_secret:
+        logging.error("API Key and Secret are required to generate access token.")
         return
 
     try:

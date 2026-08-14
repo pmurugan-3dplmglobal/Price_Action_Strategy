@@ -1,0 +1,33 @@
+{
+  "api_key": "YOUR_KITE_API_KEY",
+  "api_secret": "YOUR_KITE_API_SECRET",
+  "nifty50": {
+    "timeframe_entry": "15minute",
+    "timeframe_anchor": "75min",
+    "lookback_days": 30,
+    "scan_interval": 300,
+    "risk_percent": 1,
+    "capital": 100000,
+    "strike_range": 0
+  },
+  "ema_engine": {
+    "timeframe": "1d",
+    "target_universe": "ALL",
+    "scan_interval": 300
+  },
+  "index": {
+    "timeframe_entry": "5minute",
+    "timeframe_anchor": "15minute",
+    "lookback_days": 30,
+    "scan_interval": 15,
+    "risk_percent": 1,
+    "capital": 100000,
+    "strike_range": 0
+  },
+  "bear_trade": {
+    "product_type": "CNC",
+    "target_index": "NIFTY50",
+    "timeframe": "day",
+    "lookback_days": 500
+  }
+}

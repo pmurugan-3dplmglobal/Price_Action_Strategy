@@ -52,10 +52,12 @@ app = Flask(__name__)
 
 
 def get_kite_credentials():
-    """Read Kite API key/secret from config or token file."""
+    """Read Kite API key/secret from environment, config, or token file."""
+    api_key = os.environ.get("KITE_API_KEY", "")
+    api_secret = os.environ.get("KITE_API_SECRET", "")
     cfg = load_config()
-    api_key = cfg.get("api_key", "")
-    api_secret = cfg.get("api_secret", "")
+    if not api_key: api_key = cfg.get("api_key", "")
+    if not api_secret: api_secret = cfg.get("api_secret", "")
     if (not api_key or not api_secret) and os.path.exists(TOKEN_FILE):
         try:
             with open(TOKEN_FILE) as f:
@@ -309,7 +311,8 @@ def check_token_valid():
 
 def get_login_url():
     api_key, _ = get_kite_credentials()
-    kite = KiteConnect(api_key=api_key)
+    if not api_key:
+        return ""
     return f"https://kite.zerodha.com/connect/login?api_key={api_key}"
 
 def exchange_request_token(request_token):
@@ -825,7 +828,25 @@ def api_token_check():
 
 @app.route("/api/token/url")
 def api_token_url():
-    return jsonify({"url": get_login_url()})
+    url = get_login_url()
+    if not url:
+        return jsonify({"url": "", "error": "Kite API Key is missing. Please save your API Key & Secret below or configure input/program_config.json."})
+    return jsonify({"url": url})
+
+@app.route("/api/token/save-credentials", methods=["POST"])
+def api_token_save_credentials():
+    data = request.get_json(force=True, silent=True) or {}
+    api_key = str(data.get("api_key", "")).strip()
+    api_secret = str(data.get("api_secret", "")).strip()
+    if not api_key or not api_secret:
+        return jsonify({"ok": False, "error": "Both API Key and API Secret are required."})
+    cfg = load_config()
+    cfg["api_key"] = api_key
+    cfg["api_secret"] = api_secret
+    os.makedirs(os.path.dirname(CONFIG_FILE), exist_ok=True)
+    with open(CONFIG_FILE, "w") as f:
+        json.dump(cfg, f, indent=2)
+    return jsonify({"ok": True, "url": get_login_url()})
 
 @app.route("/api/token/callback", methods=["GET", "POST"])
 def api_token_callback():

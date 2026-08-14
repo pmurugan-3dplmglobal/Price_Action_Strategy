@@ -1361,16 +1361,49 @@
             document.getElementById('token-gen-btn').style.display = 'none';
             document.getElementById('token-feedback').textContent = '';
             const box = document.getElementById('token-url-box');
+            const credsBox = document.getElementById('token-creds-box');
+            if (credsBox) credsBox.style.display = 'none';
             try {
                 const r = await fetch('/api/token/url');
                 const d = await r.json();
                 if (d.url) {
                     box.innerHTML = `<a href="${d.url}" target="_blank" style="color:#58a6ff;font-size:13px;font-weight:bold;text-decoration:underline;word-break:break-all;">🔗 Click Here to Log In on Zerodha Kite</a>`;
                 } else {
-                    box.textContent = 'Error loading URL';
+                    if (credsBox) credsBox.style.display = 'block';
+                    box.innerHTML = `<span style="color:#f85149;font-weight:bold;">⚠️ ${d.error || 'API Key is missing. Please save credentials below.'}</span>`;
                 }
             } catch(e) {
-                box.textContent = 'Failed to load login URL';
+                box.textContent = 'Failed to load login URL: ' + e.message;
+            }
+        }
+
+        async function saveCredentials() {
+            const k = document.getElementById('token-api-key-input').value.trim();
+            const s = document.getElementById('token-api-secret-input').value.trim();
+            const fb = document.getElementById('token-feedback');
+            if (!k || !s) { fb.textContent = 'Please enter both API Key and Secret'; fb.style.color = '#f85149'; return; }
+            fb.textContent = 'Saving credentials...';
+            fb.style.color = '#8b949e';
+            try {
+                const r = await fetch('/api/token/save-credentials', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({api_key: k, api_secret: s})
+                });
+                const d = await r.json();
+                if (d.ok) {
+                    fb.textContent = 'Credentials saved! Generating login URL...';
+                    fb.style.color = '#3fb950';
+                    const credsBox = document.getElementById('token-creds-box');
+                    if (credsBox) credsBox.style.display = 'none';
+                    showTokenPanel();
+                } else {
+                    fb.textContent = 'Error: ' + d.error;
+                    fb.style.color = '#f85149';
+                }
+            } catch(e) {
+                fb.textContent = 'Error saving credentials: ' + e.message;
+                fb.style.color = '#f85149';
             }
         }
 
@@ -1676,6 +1709,14 @@
             <button id="token-gen-btn" class="token-gen-btn" onclick="showTokenPanel()" style="display:none">Generate Token</button>
         </div>
         <div id="token-panel" class="token-panel" style="display:none">
+            <div id="token-creds-box" style="display:none;margin-bottom:12px;background:#161b22;padding:12px;border-radius:6px;border:1px solid #d29922;">
+                <div style="font-size:12px;color:#e3b341;font-weight:bold;margin-bottom:8px;">⚠️ Kite API Credentials Missing (input/program_config.json)</div>
+                <div style="display:flex;gap:8px;margin-bottom:8px;">
+                    <input type="text" id="token-api-key-input" class="token-input" placeholder="Enter Kite API Key" style="flex:1;">
+                    <input type="password" id="token-api-secret-input" class="token-input" placeholder="Enter Kite API Secret" style="flex:1;">
+                </div>
+                <button class="token-submit-btn" onclick="saveCredentials()" style="width:100%;">Save Credentials & Generate Link</button>
+            </div>
             <div class="token-step">
                 <span class="token-step-num">1</span>
                 <span>Open this URL and log in to Kite:</span>
