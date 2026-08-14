@@ -209,6 +209,7 @@ def execute_index_entry(kite, pos):
         return True
     try:
         c_str = str(pos['contract']).upper()
+        clear_executed_exit(pos['contract'])
         target_exch = "BFO" if ("SENSEX" in c_str or "BSE" in c_str) else "NFO"
         q_key = f"{target_exch}:{pos['contract']}"
         q = kite.quote([q_key])
@@ -367,6 +368,7 @@ def main_scan_loop(kite):
                 "position_type": "option",
                 "benchmark": 0, "anchor_floor": 0, "direction": "BULL"
             }
+            clear_executed_exit(p["tradingsymbol"])
             pos["trade_id"], _created = trade_db.create_trade("index", symbol, {k: v for k, v in pos.items() if k != "trade_id"})
             scan_sl = lookup_scan_sl_target(p["tradingsymbol"], symbol, "index", kite, pos["entry_spot"], TIMEFRAME_ENTRY, TIMEFRAME_ANCHOR)
             if scan_sl:

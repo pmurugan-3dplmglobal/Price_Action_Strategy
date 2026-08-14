@@ -41,6 +41,7 @@ from trading_core import (
     monitor_active_positions as shared_monitor_positions,
     sanitize_entry_time,
     simulate_trade_outcome as shared_simulate,
+    clear_executed_exit,
     STOCK_REGISTRY,
     match_registry_symbol
 )
@@ -360,6 +361,8 @@ def execute_highest_rr_trade(kite, staged):
             ACTIVE_POSITIONS[sym] = pos
         save_state()
     trade_db.record_executed_pattern("nifty50", key, {"contract": contract, "entry": cp})
+    clear_executed_exit(contract)
+    clear_executed_exit(sym)
     if live_ok:
         try:
             q = kite.quote(f"{kite.EXCHANGE_NFO}:{contract}")
@@ -724,6 +727,8 @@ def main():
                             "entry_time": dt.now().isoformat(),
                             "position_type": "stock"
                         }
+                    clear_executed_exit(p["tradingsymbol"])
+                    clear_executed_exit(symbol)
                     pos["trade_id"], _created = trade_db.create_trade("nifty50", symbol, {k: v for k, v in pos.items() if k != "trade_id"})
                     scan_sl = lookup_scan_sl_target(p["tradingsymbol"], symbol, "nifty50", kite, pos["entry_spot"], TIMEFRAME_ENTRY, TIMEFRAME_ANCHOR)
                     if scan_sl:

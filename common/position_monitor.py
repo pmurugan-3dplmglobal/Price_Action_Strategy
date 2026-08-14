@@ -111,8 +111,36 @@ def close_stock_position(kite, pos, live_market=True, product=None):
         return
     if is_contract_exit_executed(contract):
         prev = EXECUTED_EXITS.get(contract, {})
-        logging.info(f"[EXIT GUARD BLOCK] {contract} stock exit order already submitted (Order ID: {prev.get('order_id')}). Skipping duplicate exit call.")
-        return
+        oid = prev.get("order_id")
+        prev_ts = prev.get("timestamp")
+        
+        is_reentry = False
+        pos_entry_time = pos.get("entry_time") or ""
+        if pos_entry_time and prev_ts:
+            try:
+                p_dt = dt.fromisoformat(pos_entry_time.split("+")[0])
+                e_dt = dt.fromisoformat(prev_ts.split("+")[0])
+                if p_dt > e_dt:
+                    is_reentry = True
+            except Exception:
+                pass
+
+        has_live_qty = False
+        if kite and live_market:
+            try:
+                for kp in kite.positions().get("net", []):
+                    if kp.get("tradingsymbol") == contract and abs(int(kp.get("quantity", 0))) > 0:
+                        has_live_qty = True
+                        break
+            except Exception:
+                pass
+
+        if is_reentry or has_live_qty:
+            logging.info(f"[EXIT GUARD RESET] Stock {contract} is an active position / re-entry (entry_time={pos_entry_time} vs exit_ts={prev_ts}, live_qty={has_live_qty}). Resetting stale exit guard order {oid}.")
+            clear_executed_exit(contract)
+        else:
+            logging.info(f"[EXIT GUARD BLOCK] {contract} stock exit order already submitted (Order ID: {prev.get('order_id')}). Skipping duplicate exit call.")
+            return
     target_product = product
     try:
         if kite:
@@ -275,7 +303,35 @@ def close_position(kite, pos, live_market=True, product=None):
     if is_contract_exit_executed(contract):
         prev = EXECUTED_EXITS.get(contract, {})
         oid = prev.get("order_id")
-        if oid and kite and live_market:
+        prev_ts = prev.get("timestamp")
+        
+        # Check if current position entry_time is newer than the saved exit order timestamp
+        is_reentry = False
+        pos_entry_time = pos.get("entry_time") or ""
+        if pos_entry_time and prev_ts:
+            try:
+                p_dt = dt.fromisoformat(pos_entry_time.split("+")[0])
+                e_dt = dt.fromisoformat(prev_ts.split("+")[0])
+                if p_dt > e_dt:
+                    is_reentry = True
+            except Exception:
+                pass
+
+        # Also check if kite positions confirm we still hold an active long position (quantity > 0)
+        has_live_qty = False
+        if kite and live_market:
+            try:
+                for kp in kite.positions().get("net", []):
+                    if kp.get("tradingsymbol") == contract and abs(int(kp.get("quantity", 0))) > 0:
+                        has_live_qty = True
+                        break
+            except Exception:
+                pass
+
+        if is_reentry or has_live_qty:
+            logging.info(f"[EXIT GUARD RESET] Contract {contract} is an active position / re-entry (entry_time={pos_entry_time} vs exit_ts={prev_ts}, live_qty={has_live_qty}). Resetting stale exit guard {oid}.")
+            clear_executed_exit(contract)
+        elif oid and kite and live_market:
             o_status = None
             try:
                 orders = kite.orders()

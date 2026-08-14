@@ -1592,6 +1592,27 @@ issues:
       5. Updated fetch_instruments in index_options_trade_engine.py to persist NFO/BFO combined instrument dump to NFO_CACHE_FILE for cache lookups.
     status: RESOLVED
 
+  ISSUE-064:
+    title: Re-entered contracts blocked by stale exit guard order IDs (e.g. BANKNIFTY26AUG57600CE)
+    date: 2026-08-14
+    category: RISK_EXECUTION
+    severity: HIGH
+    description: >
+      When a contract had an executed exit earlier in the trading session (e.g. at 09:45 AM), its Order ID
+      was saved in executed_exit_orders.json. If the same contract was subsequently re-entered later in the day,
+      the stale exit record was not cleared and is_contract_exit_executed considered the previous COMPLETE order
+      as proof that the current position had already exited, skipping the market sell order entirely.
+    resolution: >
+      1. Updated close_position and close_stock_position in common/position_monitor.py and common/trading_core.py
+         to verify if the active position is a re-entry (entry_time > exit timestamp) or if live Kite net positions
+         still hold quantity > 0. If so, automatically reset the stale exit guard and place the sell order.
+      2. Updated execute_index_entry, execute_highest_rr_trade, and main_scan_loop recovery in
+         Trade_Option/index_options_trade_engine.py and Trade_Option/stock_options_trade_engine.py to explicitly
+         call clear_executed_exit(contract) on entry and sync.
+      3. Cleared stale exit guard record for BANKNIFTY26AUG57600CE.
+    status: RESOLVED
+
+
 
 
 
