@@ -10,6 +10,10 @@ logs/
 output/
 input/*.txt
 input/*.flag
+**/input/*.txt
+**/input/*.flag
+Trade_Option/input/
+Trade_Stock/input/
 .DS_Store
 *.log
 
