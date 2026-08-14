@@ -266,7 +266,7 @@ registries:
   indices:
     NIFTY: {token: 256265, lot_size: 65, strike_step: 50, exchange: "NFO"}
     BANKNIFTY: {token: 260105, lot_size: 30, strike_step: 100, exchange: "NFO"}
-    SENSEX: {token: 265, lot_size: 10, strike_step: 100, exchange: "BFO"}
+    SENSEX: {token: 265, lot_size: 20, strike_step: 100, exchange: "BFO"}
   stocks:
     count: 50
     constituents: "All 50 Nifty 50 stocks with auto-sync from Zerodha NSE instrument master"

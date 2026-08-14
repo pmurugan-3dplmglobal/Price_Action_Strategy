@@ -83,10 +83,10 @@ def sync_kite_positions(kite, registry, positions_dict, lock, engine, timeframe_
             contract = p["tradingsymbol"]
             pos_key = contract
             entry = float(p.get("net_price") or p.get("buy_price") or p.get("average_price") or 0)
-            lot_size = registry.get(sym, {}).get("lot_size", 1)
+            import position_monitor
+            lot_size = position_monitor.get_option_lot_size(contract) or registry.get(sym, {}).get("lot_size", 1)
             is_stock = p.get("exchange", "") == "NSE"
             
-            import position_monitor
             position_monitor.clear_executed_exit(contract)
             with lock:
                 target_key = pos_key if pos_key in positions_dict else (sym if sym in positions_dict and positions_dict[sym].get("contract") == contract else None)
@@ -913,7 +913,7 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                     "index_token": config["token"], "strike": strike, "entry_spot": result_ce["Close"],
                     "current_sl": result_ce["SL"], "t1": result_ce["T1"], "t2": result_ce["T2"],
                     "t3": result_ce["T3"], "rr": result_ce.get("RR"), "trailing_stage": 0,
-                    "lot_size": config["lot_size"], "position_size": pos_size,
+                    "lot_size": ce.get("lot_size") or config.get("lot_size", 1), "position_size": pos_size,
                     "pattern": result_ce["Pattern"], "timeframe": timeframe_entry, "side": "CE",
                     "strike_step": config["strike_step"], "entry_time": candle_time,
                     "candle_a_time": candle_a_time,
@@ -955,7 +955,7 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                     "index_token": config["token"], "strike": strike, "entry_spot": result_pe["Close"],
                     "current_sl": result_pe["SL"], "t1": result_pe["T1"], "t2": result_pe["T2"],
                     "t3": result_pe["T3"], "rr": result_pe.get("RR"), "trailing_stage": 0,
-                    "lot_size": config["lot_size"], "position_size": pos_size,
+                    "lot_size": pe.get("lot_size") or config.get("lot_size", 1), "position_size": pos_size,
                     "pattern": result_pe["Pattern"], "timeframe": timeframe_entry, "side": "PE",
                     "strike_step": config["strike_step"], "entry_time": candle_time,
                     "candle_a_time": candle_a_time,
@@ -1106,7 +1106,8 @@ def resolve_option_strikes(nfo_instruments, base_symbol, spot_price, step_size, 
                 c = df.iloc[0]
             else:
                 continue
-            out.append({"strike": strike, "token": int(c['instrument_token']), "tradingsymbol": c['tradingsymbol']})
+            c_lot = int(c['lot_size']) if 'lot_size' in c and pd.notna(c['lot_size']) else None
+            out.append({"strike": strike, "token": int(c['instrument_token']), "tradingsymbol": c['tradingsymbol'], "lot_size": c_lot})
         except Exception as e:
             logging.error(f"Strike resolution error for {base_symbol} {option_type} @ {strike}: {e}")
             continue

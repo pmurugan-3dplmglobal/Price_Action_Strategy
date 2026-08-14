@@ -1565,6 +1565,31 @@ issues:
       1. Updated execute_highest_rr_trade in index_options_trade_engine.py and stock_options_trade_engine.py to record pattern execution (record_executed_pattern) upon order attempt.
       2. Ensured failed order attempts clean up ACTIVE_POSITIONS and set DB trade status to FAILED rather than retrying every 5 seconds.
       3. Verified all 12 regression tests passed with 100% success.
+  - id: ISSUE-063
+    title: SENSEX Derivative Lot Size Update (20) & BFO Instrument Resolution
+    severity: BUG
+    category: Index Options Trade Execution
+    family: BUG
+    date_reported: "2026-08-14"
+    symptom: |
+      index: Entry failed for SENSEX2682077800PE: `quantity` should be multiple of 20.
+    root_cause: |
+      BSE SENSEX options lot size was revised by SEBI/BSE from 10 to 20. INDEX_REGISTRY in common/registries.py, common/trading_core.py, and common/timeframe_utils.py had the previous lot size of 10 hardcoded. Additionally, scan_symbol assigned config["lot_size"] instead of dynamic contract lot size from instrument dump/cache, and index engine position recovery only checked NFO exchange instead of both NFO and BFO.
+    affected_files:
+      - common/registries.py
+      - common/trading_core.py
+      - common/timeframe_utils.py
+      - common/resolve.py
+      - Trade_Option/index_options_trade_engine.py
+      - MASTER_DOCUMENTATION.yaml
+      - AI_CONTEXT_INDEX.md
+      - ISSUE_MANAGEMENT.yaml
+    resolution: |
+      1. Updated SENSEX lot_size from 10 to 20 in INDEX_REGISTRY across common/registries.py, common/trading_core.py, common/timeframe_utils.py, and documentation.
+      2. Updated resolve_option_strikes and scan_symbol in common/resolve.py & common/trading_core.py to propagate and use dynamic lot_size from instrument data / get_option_lot_size(contract).
+      3. Updated execute_index_entry in index_options_trade_engine.py to dynamically verify lot size via pos["lot_size"], get_option_lot_size, and INDEX_REGISTRY.
+      4. Updated index_options_trade_engine.py sync_positions to include both NFO and BFO exchanges, ensuring SENSEX open positions are properly synced and tracked.
+      5. Updated fetch_instruments in index_options_trade_engine.py to persist NFO/BFO combined instrument dump to NFO_CACHE_FILE for cache lookups.
     status: RESOLVED
 
 

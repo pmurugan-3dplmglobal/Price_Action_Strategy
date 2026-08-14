@@ -9,6 +9,7 @@ __pycache__/
 logs/
 output/
 input/*.txt
+input/*.flag
 .DS_Store
 *.log
 

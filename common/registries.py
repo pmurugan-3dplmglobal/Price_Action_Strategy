@@ -104,5 +104,5 @@ def sync_stock_tokens(kite):
 INDEX_REGISTRY = {
     "NIFTY": {"token": 256265, "lot_size": 65, "strike_step": 50, "tradingsymbol": "NIFTY 50", "exchange": "NFO"},
     "BANKNIFTY": {"token": 260105, "lot_size": 30, "strike_step": 100, "tradingsymbol": "NIFTY BANK", "exchange": "NFO"},
-    "SENSEX": {"token": 265, "lot_size": 10, "strike_step": 100, "tradingsymbol": "BSE SENSEX", "exchange": "BFO"}
+    "SENSEX": {"token": 265, "lot_size": 20, "strike_step": 100, "tradingsymbol": "BSE SENSEX", "exchange": "BFO"}
 }

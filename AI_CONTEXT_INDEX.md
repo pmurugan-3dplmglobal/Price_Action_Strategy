@@ -15,7 +15,7 @@ when a task explicitly needs them**.
   first valid pattern with R:R >= 1.88 triggers the setup. Bull shorthands:
   BULL_ENG / BULL_LL / BULL_2HH / BULL_HAM / BULL_HAR / BULL_BASE; bear mirrors BEAR_*.
 - **Coverage**: Index Options (NIFTY token 256265 lot 65, BANKNIFTY token 260105 lot 30,
-  SENSEX token 265 lot 10 via **BFO** exchange — NIFTY/BANKNIFTY via NFO), Stock Options
+  SENSEX token 265 lot 20 via **BFO** exchange — NIFTY/BANKNIFTY via NFO), Stock Options
   (50 Nifty 50 constituents), Stock Spot Bull & Bear reversals, plus a Stock EMA Engine
   (13 EMA / 44 EMA crossover, `common/ema_engine.py`, default SL=44EMA, T1=1.5RR, T2=2.5RR,
   T3=3.5RR; on 5050 scans stocks→ATM option contracts, on 5051 scans stock spot symbols).

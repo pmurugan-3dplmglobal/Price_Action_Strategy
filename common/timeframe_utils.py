@@ -93,7 +93,7 @@ def is_live_candle_near_close(candle_date, timeframe_str, completion_pct=0.90):
 INDEX_REGISTRY = {
     "NIFTY": {"token": 256265, "lot_size": 65, "strike_step": 50, "tradingsymbol": "NIFTY 50", "exchange": "NFO"},
     "BANKNIFTY": {"token": 260105, "lot_size": 30, "strike_step": 100, "tradingsymbol": "NIFTY BANK", "exchange": "NFO"},
-    "SENSEX": {"token": 265, "lot_size": 10, "strike_step": 100, "tradingsymbol": "BSE SENSEX", "exchange": "BFO"}
+    "SENSEX": {"token": 265, "lot_size": 20, "strike_step": 100, "tradingsymbol": "BSE SENSEX", "exchange": "BFO"}
 }
 
 def get_adaptive_lookback(timeframe_str, asset_class="STOCK_SPOT", user_lookback=None):

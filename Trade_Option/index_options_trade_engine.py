@@ -38,7 +38,8 @@ from trading_core import (
     sanitize_entry_time,
     simulate_trade_outcome as shared_simulate,
     INDEX_REGISTRY,
-    match_registry_symbol
+    match_registry_symbol,
+    get_option_lot_size
 )
 
 LIVE_MARKET_DEPLOYMENT = True
@@ -46,6 +47,7 @@ LOOKBACK_DAYS = 30
 INITIAL_CAPITAL = 100000.0
 MAX_RISK_PERCENT = 1.0
 TOKEN_FILE = paths.TOKEN_FILE
+NFO_CACHE_FILE = paths.NFO_CACHE_FILE
 SCAN_INTERVAL_SECONDS = 15
 
 TIMEFRAME_ENTRY = "3minute"
@@ -93,6 +95,9 @@ def fetch_instruments(kite):
             bfo = []
         combined = (nfo if nfo else []) + (bfo if bfo else [])
         instrument_dump = pd.DataFrame(combined)
+        if not instrument_dump.empty:
+            os.makedirs(os.path.dirname(NFO_CACHE_FILE), exist_ok=True)
+            instrument_dump.to_csv(NFO_CACHE_FILE, index=False)
         logging.info(f"Synced {len(instrument_dump)} NFO/BFO contracts.")
     except Exception as e:
         err_msg = str(e) if str(e).strip() else type(e).__name__
@@ -122,9 +127,11 @@ def resolve_option_contract(base_symbol, spot_price, step_size, option_type, exp
         sub = df[df['expiry'] == target_expiry]
         if not sub.empty:
             c = sub.iloc[0]
-            return {"token": int(c['instrument_token']), "tradingsymbol": c['tradingsymbol'], "expiry": str(target_expiry)}
+            c_lot = int(c['lot_size']) if 'lot_size' in c and pd.notna(c['lot_size']) else None
+            return {"token": int(c['instrument_token']), "tradingsymbol": c['tradingsymbol'], "expiry": str(target_expiry), "lot_size": c_lot}
         c = df.iloc[0]
-        return {"token": int(c['instrument_token']), "tradingsymbol": c['tradingsymbol'], "expiry": str(c['expiry'])}
+        c_lot = int(c['lot_size']) if 'lot_size' in c and pd.notna(c['lot_size']) else None
+        return {"token": int(c['instrument_token']), "tradingsymbol": c['tradingsymbol'], "expiry": str(c['expiry']), "lot_size": c_lot}
     except Exception as e:
         logging.error(f"Contract resolution error: {e}")
         return None
@@ -211,10 +218,11 @@ def execute_index_entry(kite, pos):
         if depth and len(depth) > 0:
             ask = float(depth[0].get("price", 0))
         price = round((ask if ask > 0 else ltp) * 1.005, 1)
+        lot_sz = pos.get("lot_size") or get_option_lot_size(pos["contract"]) or INDEX_REGISTRY.get(pos.get("symbol", ""), {}).get("lot_size", 1)
         kite.place_order(
             variety=kite.VARIETY_REGULAR, tradingsymbol=pos["contract"],
             exchange=target_exch, transaction_type=kite.TRANSACTION_TYPE_BUY,
-            quantity=pos["lot_size"] * pos["position_size"], order_type=kite.ORDER_TYPE_LIMIT,
+            quantity=lot_sz * pos["position_size"], order_type=kite.ORDER_TYPE_LIMIT,
             price=price, product=kite.PRODUCT_NRML
         )
         return True
@@ -337,13 +345,14 @@ def main_scan_loop(kite):
                 ACTIVE_POSITIONS.pop(sym, None)
 
         for p in all_positions:
-            if p["exchange"] != "NFO" or int(p["quantity"]) == 0:
+            if p["exchange"] not in ("NFO", "BFO") or int(p["quantity"]) == 0:
                 continue
             symbol = match_registry_symbol(INDEX_REGISTRY, p["tradingsymbol"])
             if not symbol or symbol in ACTIVE_POSITIONS:
                 continue
             nq = abs(int(p["quantity"]))
-            lots = nq // INDEX_REGISTRY[symbol]["lot_size"]
+            reg_lot = get_option_lot_size(p["tradingsymbol"]) or INDEX_REGISTRY[symbol]["lot_size"]
+            lots = nq // reg_lot
             if lots == 0:
                 continue
             side = "CE" if "CE" in p["tradingsymbol"] else "PE"
@@ -351,7 +360,7 @@ def main_scan_loop(kite):
                 "contract": p["tradingsymbol"], "option_token": int(p["instrument_token"]),
                 "entry_spot": float(p.get("net_price") or p.get("buy_price") or p.get("average_price") or 0), "current_sl": 0,
                 "t1": 0, "t2": 0, "t3": 0, "trailing_stage": 0,
-                "lot_size": INDEX_REGISTRY[symbol]["lot_size"], "position_size": lots,
+                "lot_size": reg_lot, "position_size": lots,
                 "pattern": "KITE_RECOVERED", "side": side,
                 "timeframe": TIMEFRAME_ENTRY,
                 "entry_time": dt.now().isoformat(),
