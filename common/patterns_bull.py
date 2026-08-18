@@ -179,14 +179,41 @@ def find_anchor_two_higher_highs(df):
 #  ANCHOR BCD BREAKOUT SCANNER (A -> B -> C -> D)
 # ──────────────────────────────────────────────
 
-def scan_anchor_bcd_breakout(df_entry, df_anchor, anchor_tf="", entry_tf=""):
+def scan_anchor_bcd_breakout(df_entry, df_anchor, anchor_tf="", entry_tf="", enable_swing_filter=None, swing_min_waves=3, swing_min_r2=0.55):
     """
-    Two-phase A-first scanner:
-      Phase 1: Find anchor candle A (using 5 anchor detectors + base fallback).
+    Two-phase A-first scanner with Institutional Phase 0 Parabolic Multi-Swing Filter:
+      Phase 0: Multi-Swing Parabolic decay fitting (>= 3 waves, R^2 >= 0.55) & Terminal Base on df_anchor.
+      Phase 1: Find anchor candle A (at or after the terminal base low).
       Phase 2: From A, scan forward sequentially: B (breakout > A.high) ->
                C (red retest) -> D (confirmation close > A.high).
       Returns first complete A -> B -> C -> D pattern, or None.
     """
+    if df_entry is None or df_entry.empty or df_anchor is None or df_anchor.empty:
+        return None
+
+    swing_meta = {"swing_waves": 0, "terminal_base": False, "terminal_date": ""}
+    if enable_swing_filter is None:
+        try:
+            import json, paths, os
+            if os.path.exists(paths.PROGRAM_CONFIG_FILE):
+                with open(paths.PROGRAM_CONFIG_FILE, "r", encoding="utf-8") as f:
+                    cfg_all = json.load(f)
+                enable_swing_filter = bool(cfg_all.get("daily", {}).get("enable_swing_filter", True))
+                swing_min_waves = int(cfg_all.get("daily", {}).get("swing_min_waves", swing_min_waves))
+                swing_min_r2 = float(cfg_all.get("daily", {}).get("swing_min_r2", swing_min_r2))
+        except Exception:
+            enable_swing_filter = False
+
+    if enable_swing_filter:
+        sw_res = detect_parabolic_multi_swings(df_anchor, side="BULL", min_swings=swing_min_waves, min_r2=swing_min_r2, max_bars_after_terminal=20)
+        if not sw_res.get("matched", False):
+            return None
+        swing_meta = {
+            "swing_waves": sw_res.get("valid_arch_count", 0),
+            "terminal_base": sw_res.get("has_terminal_base", False),
+            "terminal_date": sw_res.get("terminal_swing_date", "")
+        }
+
     anchor_funcs = [
         find_anchor_bullish_engulfing,
         find_anchor_ll_sweep,
@@ -234,6 +261,12 @@ def scan_anchor_bcd_breakout(df_entry, df_anchor, anchor_tf="", entry_tf=""):
                     continue
 
         a_time_val = anchor_match.get("CandleATime") if anchor_match and anchor_match.get("CandleATime") else str(a.get('date', ''))
+        
+        # Sequence gatekeeper: Anchor A must be formed at or after terminal swing base date
+        if swing_meta["terminal_date"] and a_time_val:
+            if str(clean_timestamp(a_time_val)) < str(clean_timestamp(swing_meta["terminal_date"])):
+                continue
+
         anchors.append({
             "idx": a_idx, "a": a, "benchmark": benchmark,
             "invalidation": invalidation, "anchor_name": anchor_name, "a_low": a_low,
@@ -422,6 +455,8 @@ def scan_anchor_bcd_breakout(df_entry, df_anchor, anchor_tf="", entry_tf=""):
     valid_matches.sort(key=lambda x: (x["d_idx"], _pattern_rank(x), x["Priority"] == "HIGH_PRIORITY", x["RR"]), reverse=True)
     best_latest = valid_matches[0]
     best_latest.pop("d_idx", None)
+    best_latest["swing_waves"] = swing_meta.get("swing_waves", 0)
+    best_latest["terminal_base"] = swing_meta.get("terminal_base", False)
     return best_latest
 
 

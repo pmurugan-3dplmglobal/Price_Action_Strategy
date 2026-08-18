@@ -170,10 +170,11 @@ def find_anchor_bearish_harami(df):
 #  BEARISH BREAKOUT SCANNER (A -> B -> C -> D)
 # ──────────────────────────────────────────────
 
-def scan_anchor_bcd_breakout_bearish(df_entry, df_anchor, anchor_tf="", entry_tf=""):
+def scan_anchor_bcd_breakout_bearish(df_entry, df_anchor, anchor_tf="", entry_tf="", enable_swing_filter=None, swing_min_waves=3, swing_min_r2=0.55):
     """
-    Two-phase A-first Bearish scanner:
-      Phase 1: Find anchor candle A (using 5 bearish detectors + base fallback).
+    Two-phase A-first Bearish scanner with Institutional Phase 0 Parabolic Multi-Swing Filter:
+      Phase 0: Multi-Swing Parabolic decay fitting (>= 3 waves, R^2 >= 0.55) & Terminal Base on df_anchor.
+      Phase 1: Find anchor candle A (at or after the terminal base high).
       Phase 2: From A, scan forward sequentially: B (breakout < A.low) ->
                C (green retest) -> D (confirmation close < A.low).
     """
@@ -182,6 +183,29 @@ def scan_anchor_bcd_breakout_bearish(df_entry, df_anchor, anchor_tf="", entry_tf
 
     if len(df_anchor) < 10 or len(df_entry) < 10:
         return None
+
+    swing_meta = {"swing_waves": 0, "terminal_base": False, "terminal_date": ""}
+    if enable_swing_filter is None:
+        try:
+            import json, paths, os
+            if os.path.exists(paths.PROGRAM_CONFIG_FILE):
+                with open(paths.PROGRAM_CONFIG_FILE, "r", encoding="utf-8") as f:
+                    cfg_all = json.load(f)
+                enable_swing_filter = bool(cfg_all.get("bear_trade", {}).get("enable_swing_filter", True))
+                swing_min_waves = int(cfg_all.get("bear_trade", {}).get("swing_min_waves", swing_min_waves))
+                swing_min_r2 = float(cfg_all.get("bear_trade", {}).get("swing_min_r2", swing_min_r2))
+        except Exception:
+            enable_swing_filter = False
+
+    if enable_swing_filter:
+        sw_res = detect_parabolic_multi_swings(df_anchor, side="BEAR", min_swings=swing_min_waves, min_r2=swing_min_r2, max_bars_after_terminal=20)
+        if not sw_res.get("matched", False):
+            return None
+        swing_meta = {
+            "swing_waves": sw_res.get("valid_arch_count", 0),
+            "terminal_base": sw_res.get("has_terminal_base", False),
+            "terminal_date": sw_res.get("terminal_swing_date", "")
+        }
 
     detectors = [
         find_anchor_bearish_engulfing,
@@ -213,6 +237,11 @@ def scan_anchor_bcd_breakout_bearish(df_entry, df_anchor, anchor_tf="", entry_tf
         a_low = float(anchor_candle['low'])
         a_close = float(anchor_candle['close'])
         a_date = det_result.get("CandleATime") if det_result and det_result.get("CandleATime") else anchor_candle.get('date', '')
+
+        # Sequence gatekeeper: Anchor A must be formed at or after terminal swing base date
+        if swing_meta["terminal_date"] and a_date:
+            if str(a_date) < str(swing_meta["terminal_date"]):
+                continue
 
         anchor_entry_matches = df_entry[df_entry['date'] == a_date] if 'date' in df_entry.columns else pd.DataFrame()
         if anchor_entry_matches.empty:
@@ -351,6 +380,8 @@ def scan_anchor_bcd_breakout_bearish(df_entry, df_anchor, anchor_tf="", entry_tf
 
     if best_match:
         best_match.pop("d_idx", None)
+        best_match["swing_waves"] = swing_meta.get("swing_waves", 0)
+        best_match["terminal_base"] = swing_meta.get("terminal_base", False)
     return best_match
 
 
