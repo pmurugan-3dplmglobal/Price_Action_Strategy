@@ -102,7 +102,9 @@ def write_scan_display_data(staged, active, display_file, engine_name=None):
                 "candle_tf_time": t.get("candle_tf_time", ""),
                 "benchmark": t.get("benchmark"),
                 "anchor_floor": t.get("anchor_floor"),
-                "direction": t.get("direction", "BULL")
+                "direction": t.get("direction", "BULL"),
+                "swing_waves": t.get("swing_waves", t.get("valid_arch_count", 0)),
+                "terminal_base": bool(t.get("terminal_base", t.get("has_terminal_base", False)))
             }
         new_staged = [build_trade(t, t.get("pattern", "BE_ABCD"), t.get("entry_time", now_str), None, is_staged=True) for t in (staged or [])]
         carry_fwd = []

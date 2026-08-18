@@ -728,7 +728,18 @@
                     actCell = `<td style="text-align:center"><button class="btn-buy" onclick="buyScannedTrade(this, '${t.symbol||''}', '${t.contract||''}', '${t.side||'CE'}', ${t.entry_spot||0}, ${t.current_sl||t.sl||0}, ${t.t1||0}, ${t.t2||0}, ${t.t3||0}, '${eng}', '${t.timeframe||''}', '${(t.candle_a_time||'').replace(/'/g,"")}', '${(t.entry_time||'').replace(/'/g,"")}', ${t.benchmark||0}, ${t.anchor_floor||0}, '${t.direction||'BULL'}')" style="background:#2ea043;color:#ffffff;border:none;padding:4px 12px;border-radius:4px;font-weight:bold;cursor:pointer;font-size:11px">BUY</button></td>`;
                 }
 
-                return `<tr><td>${t.symbol||''}</td><td style="font-size:11px">${t.contract||''}</td><td>${t.side||''}</td><td>${entry}</td><td>${sl}</td><td>${t1v}</td><td>${t2v}</td><td>${t3v}</td><td style="font-size:11px">${atFormatted}</td><td style="font-size:11px">${etFormatted}</td><td><span class="badge ${resultBadge}">${res}</span></td><td>${cf}</td><td>${rr}</td>${chartCell}${actCell}</tr>`;
+                let swingBadge = '';
+                if (t.swing_waves && Number(t.swing_waves) > 0) {
+                    let baseTag = t.terminal_base ? ' • Base' : '';
+                    swingBadge = ` <span class="badge" style="background:#8957e5;color:#ffffff;font-size:10px;margin-left:4px;" title="Parabolic Multi-Swings: ${t.swing_waves} waves${t.terminal_base ? ' + Terminal Base Absorption' : ''}">🌊 ${t.swing_waves}S${baseTag}</span>`;
+                }
+
+                return `<tr><td>${t.symbol||''}</td><td style="font-size:11px">${t.contract||''}</td><td>${t.side||''}</td><td>${entry}</td><td>${sl}</td><td>${t1v}</td><td>${t2v}</td><td>${t3v}</td><td style="font-size:11px">${atFormatted}</td><td style="font-size:11px">${etFormatted}</td><td><span class="badge ${resultBadge}">${res}</span>${swingBadge}</td><td>${cf}</td><td>${rr}</td>${chartCell}${actCell}</tr>`;
+            }
+
+            if (window._scanCleared) {
+                document.getElementById('scan-reports-body').innerHTML = '<p class="empty-state">No scan trades yet. Run a scan cycle or wait for next cycle.</p>';
+                return;
             }
 
             const engines = filter === 'all' ? ['daily', 'bear_trade'] : [filter];
@@ -737,32 +748,9 @@
             engines.forEach(eng => {
                 const data = sd[eng] || {};
                 const staged = (data.staged_trades && data.staged_trades.length) ? data.staged_trades : (data.all_staged_today || []);
-                const carryFwd = data.carry_forward || [];
-                const activeLive = data.active_live || [];
-
-                if (staged.length > 0) window._scanCleared = false;
-
-                let allTrades = [...staged, ...carryFwd, ...activeLive];
-
-                if (!window._scanCleared) {
-                    const posDict = (d && d.positions) ? d.positions : {};
-                    for (let k in posDict) {
-                        const p = posDict[k];
-                        if (!p) continue;
-                        const pSide = String(p.side || '').toUpperCase();
-                        const pEngine = p.engine || (pSide === 'BEAR' || pSide === 'SELL' ? 'bear_trade' : 'daily');
-                        if (pEngine === eng) {
-                            const pSL = parseFloat(p.current_sl || p.sl || 0);
-                            const pT1 = parseFloat(p.t1 || 0);
-                            if (pSL > 0 && pT1 > 0) {
-                                allTrades.push({ ...p, carry_forward: true, engine: pEngine });
-                            }
-                        }
-                    }
-                }
 
                 const tradeMap = new Map();
-                allTrades.forEach(t => {
+                staged.forEach(t => {
                     const slVal = parseFloat(t.current_sl || t.sl || 0);
                     const t1Val = parseFloat(t.t1 || 0);
                     if (slVal <= 0 || t1Val <= 0) return; // Only include trades with intact SL & Targets
@@ -778,7 +766,7 @@
                 const finalTrades = Array.from(tradeMap.values());
                 const engLabel = eng === 'daily' ? 'Stock Bullish' : 'Stock Bearish';
                 if (finalTrades.length) {
-                    scanHtml += '<div class="scan-section-title">[' + engLabel + '] Scan & Active Trades (' + finalTrades.length + ')</div>';
+                    scanHtml += '<div class="scan-section-title">[' + engLabel + '] Today\'s Scanned Setups (' + finalTrades.length + ')</div>';
                     scanHtml += '<div style="overflow-x:auto"><table><thead><tr>' + colHeaders + '</tr></thead><tbody>';
                     finalTrades.forEach(t => { scanHtml += tradeRow(t, 'badge-open', eng); });
                     scanHtml += '</tbody></table></div>';
@@ -1287,7 +1275,10 @@
                     const inputs = document.querySelectorAll(`.config-input[data-prog="${pid}"]`);
                     inputs.forEach(inp => {
                         const field = inp.getAttribute('data-field');
-                        if (progCfg[field] !== undefined) inp.value = progCfg[field];
+                        if (progCfg[field] !== undefined) {
+                            const val = progCfg[field];
+                            inp.value = (typeof val === 'boolean') ? String(val).toLowerCase() : val;
+                        }
                     });
                 }
 

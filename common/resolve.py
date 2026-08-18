@@ -11,6 +11,7 @@ from datetime import datetime as dt, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import pandas as pd
 import paths
+from swing_detection import detect_parabolic_multi_swings
 
 def _match_registry_symbol(registry, tradingsymbol):
     """Return the registry key that best matches a tradingsymbol, longest-match first.
@@ -51,6 +52,9 @@ def load_program_config_for_engine(cfg_section, extra_fields=None):
                 ("scan_interval", "SCAN_INTERVAL_SECONDS"),
                 ("risk_percent", "MAX_RISK_PERCENT"),
                 ("capital", "INITIAL_CAPITAL"),
+                ("enable_swing_filter", "ENABLE_SWING_FILTER"),
+                ("swing_min_waves", "SWING_MIN_WAVES"),
+                ("swing_min_r2", "SWING_MIN_R2"),
             ]:
                 if src_key in cfg:
                     applied[dst_key] = cfg[src_key]
@@ -882,95 +886,140 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
         df_pe_a = dfs.get(("pe", "anchor"), pd.DataFrame())
         if df_ce_e.empty or df_pe_e.empty:
             continue
+
+        cfg_engine = load_program_config_for_engine(engine_name)
+        enable_swing = bool(cfg_engine.get("ENABLE_SWING_FILTER", False))
+        swing_min_w = int(cfg_engine.get("SWING_MIN_WAVES", 3))
+        swing_r2 = float(cfg_engine.get("SWING_MIN_R2", 0.55))
+
+        swing_meta_ce = {"swing_waves": 0, "terminal_base": False}
+        swing_meta_pe = {"swing_waves": 0, "terminal_base": False}
+        if enable_swing:
+            if not df_ce_e.empty:
+                sw_ce = detect_parabolic_multi_swings(df_ce_e, side="BULL", min_swings=swing_min_w, min_r2=swing_r2)
+                if not sw_ce.get("matched", False):
+                    df_ce_e = pd.DataFrame()
+                else:
+                    swing_meta_ce = {"swing_waves": sw_ce.get("valid_arch_count", 0), "terminal_base": sw_ce.get("has_terminal_base", False)}
+
+            if not df_pe_e.empty:
+                sw_pe = detect_parabolic_multi_swings(df_pe_e, side="BULL", min_swings=swing_min_w, min_r2=swing_r2)
+                if not sw_pe.get("matched", False):
+                    df_pe_e = pd.DataFrame()
+                else:
+                    swing_meta_pe = {"swing_waves": sw_pe.get("valid_arch_count", 0), "terminal_base": sw_pe.get("has_terminal_base", False)}
+
+        if df_ce_e.empty and df_pe_e.empty:
+            continue
+
         matched = False
         for name, scanner in entry_scanners:
             if matched:
                 break
-            result_ce = scanner(df_ce_e, df_ce_a)
-            if result_ce:
-                candle_time = str(result_ce.get("CandleTime") or df_ce_e.iloc[-1]['date'])
-                if result_ce["Close"] < 300 and result_ce["T1"] > result_ce["Close"] * 5:
-                    log_fn(ce['tradingsymbol'], result_ce["Pattern"], timeframe_entry,
-                           "SCAN_MATCH", "NO_TARGETS", "Stale ITM regime targets",
-                           entry=result_ce["Close"], sl=result_ce["SL"],
-                           target=0, rr=0, event_time=candle_time)
+            if not df_ce_e.empty:
+                result_ce = scanner(df_ce_e, df_ce_a)
+                if result_ce:
+                    candle_time = str(result_ce.get("CandleTime") or df_ce_e.iloc[-1]['date'])
+                    candle_a_time = str(result_ce.get("CandleATime", ""))
+                    # Enforce Anchor A occurs at or after the 4th/terminal swing base
+                    if enable_swing and swing_meta_ce["terminal_date"] and candle_a_time:
+                        if str(candle_a_time) < str(swing_meta_ce["terminal_date"]):
+                            logging.info(f"CE SKIP {ce['tradingsymbol']}: Anchor A ({candle_a_time}) preceded terminal swing base ({swing_meta_ce['terminal_date']})")
+                            continue
+
+                    if result_ce["Close"] < 300 and result_ce["T1"] > result_ce["Close"] * 5:
+                        log_fn(ce['tradingsymbol'], result_ce["Pattern"], timeframe_entry,
+                               "SCAN_MATCH", "NO_TARGETS", "Stale ITM regime targets",
+                               entry=result_ce["Close"], sl=result_ce["SL"],
+                               target=0, rr=0, event_time=candle_time)
+                        matched = True
+                        break
+                    key = f"{symbol}|{result_ce['Pattern']}|CE|{strike}"
+                    if not is_anchor_valid_and_active(df_ce_a, candle_a_time or candle_time, result_ce.get("SL"), result_ce.get("T1")):
+                        invalid_reason = get_anchor_invalidation_reason(df_ce_a, candle_a_time or candle_time, result_ce.get("SL"), result_ce.get("T1"))
+                        skip_reason = f"already completed {invalid_reason} (skip)" if invalid_reason else "already completed (skip)"
+                        logging.info(f"CE MATCH {skip_reason}: {ce['tradingsymbol']} | {result_ce['Pattern']}")
+                        matched = True
+                        break
+                    pos_size = calculate_position_size(current_spot, result_ce["SL"])
+                    rr_str = f"RR: {result_ce['RR']}" if result_ce.get('RR') else ""
+                    logging.info(f"CYCLE MATCH staged: {ce['tradingsymbol']} | {result_ce['Pattern']} | CE | Strike {strike} | Size: {pos_size} | Entry: {result_ce['Close']:.2f} | SL: {result_ce['SL']:.2f} | T1: {result_ce['T1']} | T2: {result_ce['T2']} | T3: {result_ce['T3']} | RR: {result_ce.get('RR', '')} | Swings:{swing_meta_ce['swing_waves']} | A:{candle_a_time} D:{candle_time}")
+                    trade_data = {
+                        "symbol": symbol, "contract": ce['tradingsymbol'], "option_token": ce['token'],
+                        "index_token": config["token"], "strike": strike, "entry_spot": result_ce["Close"],
+                        "current_sl": result_ce["SL"], "t1": result_ce["T1"], "t2": result_ce["T2"],
+                        "t3": result_ce["T3"], "rr": result_ce.get("RR"), "trailing_stage": 0,
+                        "lot_size": ce.get("lot_size") or config.get("lot_size", 1), "position_size": pos_size,
+                        "pattern": result_ce["Pattern"], "timeframe": timeframe_entry, "side": "CE",
+                        "strike_step": config["strike_step"], "entry_time": candle_time,
+                        "candle_a_time": candle_a_time,
+                        "benchmark": result_ce.get("Benchmark"), "anchor_floor": result_ce.get("AnchorFloor"),
+                        "direction": result_ce.get("Direction", "BULL"),
+                        "swing_waves": swing_meta_ce["swing_waves"],
+                        "terminal_base": swing_meta_ce["terminal_base"]
+                    }
+                    trade_db.stage_cycle_trade(engine_name, trade_data)
+                    trades.append(trade_data)
+                    log_fn(ce['tradingsymbol'], result_ce['Pattern'], timeframe_entry,
+                           "SCAN_MATCH", "STAGED", f"Side=CE Strike={strike} RR={result_ce.get('RR','')} Swings={swing_meta_ce['swing_waves']}",
+                           entry=result_ce['Close'], sl=result_ce['SL'],
+                           target=result_ce.get('T3',''), rr=result_ce.get('RR',''),
+                           event_time=candle_time)
                     matched = True
                     break
-                key = f"{symbol}|{result_ce['Pattern']}|CE|{strike}"
-                candle_a_time = str(result_ce.get("CandleATime", ""))
-                if not is_anchor_valid_and_active(df_ce_a, candle_a_time or candle_time, result_ce.get("SL"), result_ce.get("T1")):
-                    invalid_reason = get_anchor_invalidation_reason(df_ce_a, candle_a_time or candle_time, result_ce.get("SL"), result_ce.get("T1"))
-                    skip_reason = f"already completed {invalid_reason} (skip)" if invalid_reason else "already completed (skip)"
-                    logging.info(f"CE MATCH {skip_reason}: {ce['tradingsymbol']} | {result_ce['Pattern']}")
+
+            if not df_pe_e.empty:
+                result_pe = scanner(df_pe_e, df_pe_a)
+                if result_pe:
+                    candle_time = str(result_pe.get("CandleTime") or df_pe_e.iloc[-1]['date'])
+                    candle_a_time = str(result_pe.get("CandleATime", ""))
+                    # Enforce Anchor A occurs at or after the 4th/terminal swing base
+                    if enable_swing and swing_meta_pe["terminal_date"] and candle_a_time:
+                        if str(candle_a_time) < str(swing_meta_pe["terminal_date"]):
+                            logging.info(f"PE SKIP {pe['tradingsymbol']}: Anchor A ({candle_a_time}) preceded terminal swing base ({swing_meta_pe['terminal_date']})")
+                            continue
+
+                    if result_pe["Close"] < 300 and result_pe["T1"] > result_pe["Close"] * 5:
+                        log_fn(pe['tradingsymbol'], result_pe["Pattern"], timeframe_entry,
+                               "SCAN_MATCH", "NO_TARGETS", "Stale ITM regime targets",
+                               entry=result_pe["Close"], sl=result_pe["SL"],
+                               target=0, rr=0, event_time=candle_time)
+                        matched = True
+                        break
+                    key = f"{symbol}|{result_pe['Pattern']}|PE|{strike}"
+                    candle_a_time = str(result_pe.get("CandleATime", ""))
+                    if not is_anchor_valid_and_active(df_pe_a, candle_a_time or candle_time, result_pe.get("SL"), result_pe.get("T1")):
+                        invalid_reason = get_anchor_invalidation_reason(df_pe_a, candle_a_time or candle_time, result_pe.get("SL"), result_pe.get("T1"))
+                        skip_reason = f"already completed {invalid_reason} (skip)" if invalid_reason else "already completed (skip)"
+                        logging.info(f"PE MATCH {skip_reason}: {pe['tradingsymbol']} | {result_pe['Pattern']}")
+                        matched = True
+                        break
+                    pos_size = calculate_position_size(current_spot, result_pe["SL"])
+                    candle_a_time = str(result_pe.get("CandleATime", ""))
+                    logging.info(f"CYCLE MATCH staged: {pe['tradingsymbol']} | {result_pe['Pattern']} | PE | Strike {strike} | Size: {pos_size} | Entry: {result_pe['Close']:.2f} | SL: {result_pe['SL']:.2f} | T1: {result_pe['T1']} | T2: {result_pe['T2']} | T3: {result_pe['T3']} | RR: {result_pe.get('RR', '')} | Swings:{swing_meta_pe['swing_waves']} | A:{candle_a_time} D:{candle_time}")
+                    trade_data = {
+                        "symbol": symbol, "contract": pe['tradingsymbol'], "option_token": pe['token'],
+                        "index_token": config["token"], "strike": strike, "entry_spot": result_pe["Close"],
+                        "current_sl": result_pe["SL"], "t1": result_pe["T1"], "t2": result_pe["T2"],
+                        "t3": result_pe["T3"], "rr": result_pe.get("RR"), "trailing_stage": 0,
+                        "lot_size": pe.get("lot_size") or config.get("lot_size", 1), "position_size": pos_size,
+                        "pattern": result_pe["Pattern"], "timeframe": timeframe_entry, "side": "PE",
+                        "strike_step": config["strike_step"], "entry_time": candle_time,
+                        "candle_a_time": candle_a_time,
+                        "benchmark": result_pe.get("Benchmark"), "anchor_floor": result_pe.get("AnchorFloor"),
+                        "direction": result_pe.get("Direction", "BULL"),
+                        "swing_waves": swing_meta_pe["swing_waves"],
+                        "terminal_base": swing_meta_pe["terminal_base"]
+                    }
+                    trade_db.stage_cycle_trade(engine_name, trade_data)
+                    trades.append(trade_data)
+                    log_fn(pe['tradingsymbol'], result_pe['Pattern'], timeframe_entry,
+                           "SCAN_MATCH", "STAGED", f"Side=PE Strike={strike} RR={result_pe.get('RR','')} Swings={swing_meta_pe['swing_waves']}",
+                           entry=result_pe['Close'], sl=result_pe['SL'],
+                           target=result_pe.get('T3',''), rr=result_pe.get('RR',''),
+                           event_time=candle_time)
                     matched = True
                     break
-                pos_size = calculate_position_size(current_spot, result_ce["SL"])
-                rr_str = f"RR: {result_ce['RR']}" if result_ce.get('RR') else ""
-                candle_a_time = str(result_ce.get("CandleATime", ""))
-                logging.info(f"CYCLE MATCH staged: {ce['tradingsymbol']} | {result_ce['Pattern']} | CE | Strike {strike} | Size: {pos_size} | Entry: {result_ce['Close']:.2f} | SL: {result_ce['SL']:.2f} | T1: {result_ce['T1']} | T2: {result_ce['T2']} | T3: {result_ce['T3']} | RR: {result_ce.get('RR', '')} | A:{candle_a_time} D:{candle_time}")
-                trade_data = {
-                    "symbol": symbol, "contract": ce['tradingsymbol'], "option_token": ce['token'],
-                    "index_token": config["token"], "strike": strike, "entry_spot": result_ce["Close"],
-                    "current_sl": result_ce["SL"], "t1": result_ce["T1"], "t2": result_ce["T2"],
-                    "t3": result_ce["T3"], "rr": result_ce.get("RR"), "trailing_stage": 0,
-                    "lot_size": ce.get("lot_size") or config.get("lot_size", 1), "position_size": pos_size,
-                    "pattern": result_ce["Pattern"], "timeframe": timeframe_entry, "side": "CE",
-                    "strike_step": config["strike_step"], "entry_time": candle_time,
-                    "candle_a_time": candle_a_time,
-                    "benchmark": result_ce.get("Benchmark"), "anchor_floor": result_ce.get("AnchorFloor"),
-                    "direction": result_ce.get("Direction", "BULL")
-                }
-                trade_db.stage_cycle_trade(engine_name, trade_data)
-                trades.append(trade_data)
-                log_fn(ce['tradingsymbol'], result_ce['Pattern'], timeframe_entry,
-                       "SCAN_MATCH", "STAGED", f"Side=CE Strike={strike} RR={result_ce.get('RR','')}",
-                       entry=result_ce['Close'], sl=result_ce['SL'],
-                       target=result_ce.get('T3',''), rr=result_ce.get('RR',''),
-                       event_time=candle_time)
-                matched = True
-                break
-            result_pe = scanner(df_pe_e, df_pe_a)
-            if result_pe:
-                candle_time = str(result_pe.get("CandleTime") or df_pe_e.iloc[-1]['date'])
-                if result_pe["Close"] < 300 and result_pe["T1"] > result_pe["Close"] * 5:
-                    log_fn(pe['tradingsymbol'], result_pe["Pattern"], timeframe_entry,
-                           "SCAN_MATCH", "NO_TARGETS", "Stale ITM regime targets",
-                           entry=result_pe["Close"], sl=result_pe["SL"],
-                           target=0, rr=0, event_time=candle_time)
-                    matched = True
-                    break
-                key = f"{symbol}|{result_pe['Pattern']}|PE|{strike}"
-                candle_a_time = str(result_pe.get("CandleATime", ""))
-                if not is_anchor_valid_and_active(df_pe_a, candle_a_time or candle_time, result_pe.get("SL"), result_pe.get("T1")):
-                    invalid_reason = get_anchor_invalidation_reason(df_pe_a, candle_a_time or candle_time, result_pe.get("SL"), result_pe.get("T1"))
-                    skip_reason = f"already completed {invalid_reason} (skip)" if invalid_reason else "already completed (skip)"
-                    logging.info(f"PE MATCH {skip_reason}: {pe['tradingsymbol']} | {result_pe['Pattern']}")
-                    matched = True
-                    break
-                pos_size = calculate_position_size(current_spot, result_pe["SL"])
-                candle_a_time = str(result_pe.get("CandleATime", ""))
-                logging.info(f"CYCLE MATCH staged: {pe['tradingsymbol']} | {result_pe['Pattern']} | PE | Strike {strike} | Size: {pos_size} | Entry: {result_pe['Close']:.2f} | SL: {result_pe['SL']:.2f} | T1: {result_pe['T1']} | T2: {result_pe['T2']} | T3: {result_pe['T3']} | RR: {result_pe.get('RR', '')} | A:{candle_a_time} D:{candle_time}")
-                trade_data = {
-                    "symbol": symbol, "contract": pe['tradingsymbol'], "option_token": pe['token'],
-                    "index_token": config["token"], "strike": strike, "entry_spot": result_pe["Close"],
-                    "current_sl": result_pe["SL"], "t1": result_pe["T1"], "t2": result_pe["T2"],
-                    "t3": result_pe["T3"], "rr": result_pe.get("RR"), "trailing_stage": 0,
-                    "lot_size": pe.get("lot_size") or config.get("lot_size", 1), "position_size": pos_size,
-                    "pattern": result_pe["Pattern"], "timeframe": timeframe_entry, "side": "PE",
-                    "strike_step": config["strike_step"], "entry_time": candle_time,
-                    "candle_a_time": candle_a_time,
-                    "benchmark": result_pe.get("Benchmark"), "anchor_floor": result_pe.get("AnchorFloor"),
-                    "direction": result_pe.get("Direction", "BULL")
-                }
-                trade_db.stage_cycle_trade(engine_name, trade_data)
-                trades.append(trade_data)
-                log_fn(pe['tradingsymbol'], result_pe['Pattern'], timeframe_entry,
-                       "SCAN_MATCH", "STAGED", f"Side=PE Strike={strike} RR={result_pe.get('RR','')}",
-                       entry=result_pe['Close'], sl=result_pe['SL'],
-                       target=result_pe.get('T3',''), rr=result_pe.get('RR',''),
-                       event_time=candle_time)
-                matched = True
-                break
         for name, scanner in anchor_scanners:
             res_ce = scanner(df_ce_a) if not df_ce_a.empty else None
             if res_ce:

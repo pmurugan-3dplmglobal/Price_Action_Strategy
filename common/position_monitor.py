@@ -129,7 +129,7 @@ def close_stock_position(kite, pos, live_market=True, product=None):
         if kite and live_market:
             try:
                 for kp in kite.positions().get("net", []):
-                    if kp.get("tradingsymbol") == contract and abs(int(kp.get("quantity", 0))) > 0:
+                    if kp.get("tradingsymbol") == contract and int(kp.get("quantity", 0)) > 0:
                         has_live_qty = True
                         break
             except Exception:
@@ -146,7 +146,7 @@ def close_stock_position(kite, pos, live_market=True, product=None):
         if kite:
             net_positions = kite.positions().get("net", [])
             for p in net_positions:
-                if p.get("tradingsymbol") == contract and abs(int(p.get("quantity", 0))) > 0:
+                if p.get("tradingsymbol") == contract and int(p.get("quantity", 0)) > 0:
                     prod = p.get("product")
                     if prod:
                         target_product = prod
@@ -322,7 +322,7 @@ def close_position(kite, pos, live_market=True, product=None):
         if kite and live_market:
             try:
                 for kp in kite.positions().get("net", []):
-                    if kp.get("tradingsymbol") == contract and abs(int(kp.get("quantity", 0))) > 0:
+                    if kp.get("tradingsymbol") == contract and int(kp.get("quantity", 0)) > 0:
                         has_live_qty = True
                         break
             except Exception:

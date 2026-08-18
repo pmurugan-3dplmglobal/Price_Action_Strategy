@@ -111,11 +111,10 @@ PROGRAMS = {
         "config_fields": {
             "timeframe_entry": {"label": "Entry Timeframe", "type": "select", "options": ["3minute","5minute","10minute","15minute","30minute","60minute","75min","day"], "default": "3minute"},
             "timeframe_anchor": {"label": "Anchor Timeframe", "type": "select", "options": ["3minute","5minute","10minute","15minute","30minute","60minute","75min","day"], "default": "15minute"},
-            "lookback_days": {"label": "Lookback Days", "type": "number", "default": 30},
-            "scan_interval": {"label": "Scan Interval (s)", "type": "number", "default": 15},
-            "risk_percent": {"label": "Risk %", "type": "number", "default": 1.0},
             "capital": {"label": "Capital", "type": "number", "default": 100000.0},
-            "strike_range": {"label": "Strike Range (±)", "type": "number", "default": 0}
+            "strike_range": {"label": "Strike Range (±)", "type": "number", "default": 0},
+            "enable_swing_filter": {"label": "Swing Filter", "type": "select", "options": ["true", "false"], "default": "true"},
+            "swing_min_waves": {"label": "Min Swings", "type": "number", "default": 3}
         }
     },
     "nifty50": {
@@ -127,11 +126,10 @@ PROGRAMS = {
         "config_fields": {
             "timeframe_entry": {"label": "Entry Timeframe", "type": "select", "options": ["3minute","5minute","10minute","15minute","30minute","60minute","75min","day"], "default": "15minute"},
             "timeframe_anchor": {"label": "Anchor Timeframe", "type": "select", "options": ["3minute","5minute","10minute","15minute","30minute","60minute","75min","day"], "default": "30minute"},
-            "lookback_days": {"label": "Lookback Days", "type": "number", "default": 30},
-            "scan_interval": {"label": "Scan Interval (s)", "type": "number", "default": 300},
-            "risk_percent": {"label": "Risk %", "type": "number", "default": 1.0},
             "capital": {"label": "Capital", "type": "number", "default": 100000.0},
-            "strike_range": {"label": "Strike Range (±)", "type": "number", "default": 0}
+            "strike_range": {"label": "Strike Range (±)", "type": "number", "default": 0},
+            "enable_swing_filter": {"label": "Swing Filter", "type": "select", "options": ["true", "false"], "default": "true"},
+            "swing_min_waves": {"label": "Min Swings", "type": "number", "default": 3}
         }
     },
     "ema_engine": {
@@ -142,8 +140,7 @@ PROGRAMS = {
         "log_file": EMA_LOG_FILE,
         "config_fields": {
             "timeframe": {"label": "Timeframe", "type": "select", "options": ["1d", "60minute", "30minute", "15minute", "5minute"], "default": "1d"},
-            "target_universe": {"label": "Target Universe", "type": "select", "options": ["ALL", "NIFTY50", "NIFTY_NEXT_100", "NIFTY_MIDCAP_100", "NIFTY_SMALLCAP_250", "INDEX_OPTIONS"], "default": "ALL"},
-            "scan_interval": {"label": "Scan Interval (s)", "type": "number", "default": 300}
+            "target_universe": {"label": "Target Universe", "type": "select", "options": ["ALL", "NIFTY50", "NIFTY_NEXT_100", "NIFTY_MIDCAP_100", "NIFTY_SMALLCAP_250", "INDEX_OPTIONS"], "default": "ALL"}
         }
     }
 }
@@ -249,13 +246,18 @@ def save_config(prog_id, data):
     cleaned = {}
     for k, v in data.items():
         if isinstance(v, str):
-            try:
-                if "." in v:
-                    cleaned[k] = float(v)
-                else:
-                    cleaned[k] = int(v)
-            except (ValueError, TypeError):
-                cleaned[k] = v
+            if v.lower() == "true":
+                cleaned[k] = True
+            elif v.lower() == "false":
+                cleaned[k] = False
+            else:
+                try:
+                    if "." in v:
+                        cleaned[k] = float(v)
+                    else:
+                        cleaned[k] = int(v)
+                except (ValueError, TypeError):
+                    cleaned[k] = v
         else:
             cleaned[k] = v
     cfg[prog_id] = cleaned
@@ -938,6 +940,14 @@ def api_scan_clear():
                 json.dump({}, fh)
     except Exception:
         pass
+    try:
+        import trade_db
+        for eng in ["nifty50", "index", "daily", "bear_trade"]:
+            trade_db.clear_cycle_trades(eng)
+    except Exception:
+        pass
+    _file_mtime_cache.clear()
+    _parsed_json_cache.clear()
     with data_lock:
         for k in ["nifty50", "index", "daily", "bear_trade"]:
             cached_data["scan_display"][k] = {"staged_trades": [], "all_staged_today": [], "carry_forward": [], "active_live": [], "cleared_at": now_str}

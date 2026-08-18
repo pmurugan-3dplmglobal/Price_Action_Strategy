@@ -8,6 +8,54 @@ meta:
   purpose: Document operational failures, root causes, regression fixes, and system enhancements.
 
 issues:
+  - id: ISSUE-054
+    title: Scan Clear Persistence Fix (Cycle DB, In-Memory Caches & UI Polling Decoupling)
+    severity: MEDIUM
+    category: Dashboard UI / State Reset
+    family: DATA_INTEGRITY
+    date_reported: "2026-08-18"
+    symptom: |
+      Clicking "Clear" on Today's Scan table resulted in old/staged trades and active positions suddenly re-appearing within 1-2 seconds.
+    root_cause: |
+      1. api_scan_clear in app_option_Trade.py & app_Sock_Trade.py did not clear the SQLite cycle trade staging store (trade_db.clear_cycle_trades) or flush in-memory JSON caches (_parsed_json_cache / _file_mtime_cache).
+      2. In templates/index.html, renderScanSection merged active portfolio positions (d.positions) into the scan table during 1-second background polling, overriding window._scanCleared.
+    affected_files:
+      - Trade_Option/app_option_Trade.py
+      - Trade_Stock/app_Sock_Trade.py
+      - Trade_Option/templates/index.html
+      - Trade_Stock/templates/index.html
+    resolution: |
+      1. Updated api_scan_clear to call trade_db.clear_cycle_trades across all engines, write clean empty structures to all 4 display files, and clear _file_mtime_cache & _parsed_json_cache.
+      2. Guarded renderScanSection in templates/index.html with window._scanCleared check at function entry, preventing active position injection until a fresh scan cycle is triggered.
+    status: COMPLETED
+
+  - id: FEATURE-002
+    title: Parabolic Multi-Swing Cascade Filter (enable_swing_filter)
+    severity: ENHANCEMENT
+    category: Strategy & Noise Filter
+    date_reported: "2026-08-18"
+    symptom: |
+      Need for an institutional-grade exhaustion filter requiring >= 3 cascading parabolic waves (polynomial regression R^2 >= 0.55) and terminal base absorption before Anchor A and BCD breakout entry.
+    root_cause: |
+      New structural price action filter designed to eliminate falling knives and premature bottom-fishing traps.
+    affected_files:
+      - common/swing_detection.py
+      - common/trading_core.py
+      - common/display_writer.py
+      - common/resolve.py
+      - Trade_Stock/stock_reversal_scanner.py
+      - input/program_config.json
+      - Trade_Stock/templates/index.html
+      - Trade_Option/templates/index.html
+      - scratch/run_full_regression_test.py
+    resolution: |
+      1. Implemented common/swing_detection.py with is_parabolic_arch_enhanced, extract_swing_pivots, validate_parabolic_cascade_structure, and detect_parabolic_multi_swings.
+      2. Configured toggleable flag enable_swing_filter, swing_min_waves: 3, and swing_min_r2: 0.55 across daily, bear_trade, nifty50, and index sections in input/program_config.json.
+      3. Wired Phase 0 filter into stock_reversal_scanner.py (Stock Dashboard) and common/resolve.py scan_symbol (Option Dashboard engines).
+      4. Serialized swing_waves and terminal_base fields in display_writer.py and rendered visual badges in stock and option dashboards.
+      5. Added Test 13 in scratch/run_full_regression_test.py verifying 100% test pass.
+    status: COMPLETED
+
   - id: FEATURE-001
     title: Stock EMA Engine & EMA Scan Tab (13 EMA / 44 EMA Crossover)
     severity: ENHANCEMENT
@@ -1592,9 +1640,9 @@ issues:
       5. Updated fetch_instruments in index_options_trade_engine.py to persist NFO/BFO combined instrument dump to NFO_CACHE_FILE for cache lookups.
     status: RESOLVED
 
-  ISSUE-064:
+  - id: ISSUE-064
     title: Re-entered contracts blocked by stale exit guard order IDs (e.g. BANKNIFTY26AUG57600CE)
-    date: 2026-08-14
+    date_reported: 2026-08-14
     category: RISK_EXECUTION
     severity: HIGH
     description: >
@@ -1602,7 +1650,7 @@ issues:
       was saved in executed_exit_orders.json. If the same contract was subsequently re-entered later in the day,
       the stale exit record was not cleared and is_contract_exit_executed considered the previous COMPLETE order
       as proof that the current position had already exited, skipping the market sell order entirely.
-    resolution: >
+    resolution: |
       1. Updated close_position and close_stock_position in common/position_monitor.py and common/trading_core.py
          to verify if the active position is a re-entry (entry_time > exit timestamp) or if live Kite net positions
          still hold quantity > 0. If so, automatically reset the stale exit guard and place the sell order.
@@ -1612,7 +1660,55 @@ issues:
       3. Cleared stale exit guard record for BANKNIFTY26AUG57600CE.
     status: RESOLVED
 
+  - id: ISSUE-065
+    title: NameError 'clear_executed_exit' Is Not Defined in index_options_trade_engine.py
+    severity: HIGH
+    category: Index Options Trade Execution
+    family: BUG_FIX
+    date_reported: "2026-08-18"
+    symptom: |
+      Index engine threw error: "index: Entry failed for BANKNIFTY26AUG57200CE: name 'clear_executed_exit' is not defined".
+    root_cause: |
+      clear_executed_exit was called in execute_index_entry (line 212) and sync_positions (line 371) inside
+      Trade_Option/index_options_trade_engine.py but was omitted from the "from trading_core import (...)" import block.
+      Similarly, stock_options_trade_engine.py referenced avg_rr in execute_highest_rr_trade without defining it from best dict.
+    affected_files:
+      - Trade_Option/index_options_trade_engine.py
+      - Trade_Option/stock_options_trade_engine.py
+      - ISSUE_MANAGEMENT.yaml
+    resolution: |
+      1. Added clear_executed_exit to trading_core import block in Trade_Option/index_options_trade_engine.py.
+      2. Defined avg_rr = best.get("rr", 0) in execute_highest_rr_trade in Trade_Option/stock_options_trade_engine.py.
+      3. Populated entry_time for active trade ID 460 in trades.sqlite3.
+      4. Verified all 12 regression tests in scratch/run_full_regression_test.py passed with 100% success.
+    status: RESOLVED
 
+  - id: ISSUE-066
+    title: Hammer / Baby Candle & Shooting Star Anchor Pattern Precision Refinement
+    severity: MEDIUM
+    category: Price Action Pattern Recognition
+    family: FEATURE_ENHANCEMENT
+    date_reported: "2026-08-18"
+    symptom: |
+      Spinning tops or neutral Dojis with non-trivial opposite wicks could pass the basic lower_wick > upper_wick
+      rule without ensuring strong directional conviction near the extremes of the candle.
+    root_cause: |
+      find_anchor_hammer_baby and find_anchor_shooting_star_baby previously lacked an upper/lower shadow percentage
+      ceiling and close position ratio check, allowing balanced candles (e.g. spinning tops) with small body differentials
+      to qualify.
+    affected_files:
+      - common/patterns_bull.py
+      - common/patterns_bear.py
+      - common/trading_core.py
+      - ISSUE_MANAGEMENT.yaml
+    resolution: |
+      1. Added Upper Wick Capping for Bullish Hammer/Baby: upper_wick <= 35% of total range and upper_wick <= 50% of lower_wick.
+      2. Added Close Conviction Ratio for Bullish Hammer/Baby: (close - low) / total_range >= 0.60, ensuring close in upper 40%.
+      3. Added Lower Wick Capping for Bearish Shooting Star/Baby: lower_wick <= 35% of total range and lower_wick <= 50% of upper_wick.
+      4. Added Close Conviction Ratio for Bearish Shooting Star/Baby: (close - low) / total_range <= 0.40, ensuring close in lower 40%.
+      5. Enforced mother candle directional color check (Close < Open for Bullish, Close > Open for Bearish).
+      6. Verified 100% test pass on scratch/run_full_regression_test.py.
+    status: RESOLVED
 
 
 

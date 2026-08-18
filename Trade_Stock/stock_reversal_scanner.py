@@ -24,7 +24,8 @@ from trading_core import (
     sync_stock_tokens,
     write_scan_display_data as shared_write_display,
     clean_timestamp,
-    STOCK_REGISTRY
+    STOCK_REGISTRY,
+    detect_parabolic_multi_swings
 )
 from equity_universe import get_universe_symbols_and_tokens, is_liquid_cash_stock
 
@@ -50,6 +51,9 @@ TARGET_INDEX = "NIFTY50"
 LOOKBACK_DAYS = 120
 TIMEFRAME_ENTRY = "day"
 TIMEFRAME_ANCHOR = "day"
+ENABLE_SWING_FILTER = True
+SWING_MIN_WAVES = 3
+SWING_MIN_R2 = 0.55
 
 OUTPUT_FILE = f"output/exports/{PROFILE['export_prefix']}{dt.now().strftime('%Y%m%d_%H%M')}.csv"
 
@@ -176,9 +180,38 @@ def run_scan(kite):
             df_a = df_e.copy()
             latest = df_e.iloc[-1]
             matched = False
+
+            # Phase 0: Parabolic Multi-Swing Cascade Filter
+            swing_meta = {}
+            if ENABLE_SWING_FILTER:
+                swing_res = detect_parabolic_multi_swings(
+                    df_e,
+                    side=PROFILE["side"],
+                    min_swings=SWING_MIN_WAVES,
+                    min_r2=SWING_MIN_R2,
+                    max_bars_after_terminal=20
+                )
+                if not swing_res.get("matched", False):
+                    logging.info(f"Skipping {symbol} - failed parabolic swing cascade filter ({swing_res.get('reason', 'unmatched')})")
+                    with results_lock:
+                        results.append({"Symbol": symbol, "Pattern": "SWING_FILTER_SKIPPED"})
+                    continue
+                swing_meta = {
+                    "swing_waves": swing_res.get("valid_arch_count", 0),
+                    "terminal_base": swing_res.get("has_terminal_base", False),
+                    "terminal_date": swing_res.get("terminal_swing_date", "")
+                }
+
             for name, scanner_func in scanners:
                 result = scanner_func(df_e, df_a)
                 if result:
+                    candle_a_time = clean_timestamp(result.get("CandleATime") or result.get("CandleTime") or "")
+                    # Enforce Anchor A occurs at or after the 4th/terminal swing base
+                    if ENABLE_SWING_FILTER and swing_meta.get("terminal_date") and candle_a_time:
+                        if str(candle_a_time) < str(swing_meta["terminal_date"]):
+                            logging.info(f"Skipping {symbol} - Anchor A ({candle_a_time}) preceded terminal swing base ({swing_meta['terminal_date']})")
+                            continue
+
                     entry_px = float(result.get("Close") or result.get("Entry") or result.get("entry") or 0.0)
                     result["Close"] = entry_px
                     result["Entry"] = entry_px
@@ -190,17 +223,19 @@ def run_scan(kite):
                     result["Latest_Open"] = round(float(latest['open']), 2)
                     result["Volume"] = int(latest.get('volume', 0))
                     result["Pattern_Name"] = name
+                    result["swing_waves"] = swing_meta.get("swing_waves", 0)
+                    result["terminal_base"] = swing_meta.get("terminal_base", False)
                     with results_lock:
                         results.append(result)
-                    logging.info(f"  -> {PROFILE['match_prefix']}: {symbol} | {result['Pattern']} | Entry: {entry_px:.2f} | SL: {result['SL']:.2f} | T1: {result['T1']:.2f} | RR: {result['RR']:.2f}")
+                    logging.info(f"  -> {PROFILE['match_prefix']}: {symbol} | {result['Pattern']} | Entry: {entry_px:.2f} | SL: {result['SL']:.2f} | T1: {result['T1']:.2f} | RR: {result['RR']:.2f} | Swings: {result['swing_waves']}")
                     log_to_journal(symbol, result["Pattern"], TIMEFRAME_ENTRY,
                                    PROFILE["journal_tag"], "MATCHED",
-                                   f"Entry={entry_px:.2f} SL={result['SL']:.2f} RR={result['RR']:.2f}",
+                                   f"Entry={entry_px:.2f} SL={result['SL']:.2f} RR={result['RR']:.2f} Swings={result['swing_waves']}",
                                    entry=entry_px, sl=result['SL'],
                                    target=result.get('T3',''), rr=result['RR'])
                     c_time = clean_timestamp(result.get("CandleATime") or result.get("CandleTime") or dt.now().strftime("%Y-%m-%d %H:%M"))
                     with position_lock:
-                        all_disp = [r for r in results if r.get("Pattern") and r.get("Pattern") not in ["NO_MATCH", "ERROR", "NO_DATA"]]
+                        all_disp = [r for r in results if r.get("Pattern") and r.get("Pattern") not in ["NO_MATCH", "ERROR", "NO_DATA", "ILLIQUID_SKIPPED", "SWING_FILTER_SKIPPED"]]
                         formatted_all = [{
                             "symbol": r.get("Symbol") or r.get("symbol", ""),
                             "contract": r.get("Symbol") or r.get("symbol", ""),
@@ -216,7 +251,9 @@ def run_scan(kite):
                             "entry_tf": r.get("entry_tf", TIMEFRAME_ENTRY),
                             "side": PROFILE["display_side"],
                             "entry_time": clean_timestamp(r.get("CandleATime") or r.get("CandleTime")),
-                            "candle_a_time": clean_timestamp(r.get("CandleATime") or r.get("CandleTime"))
+                            "candle_a_time": clean_timestamp(r.get("CandleATime") or r.get("CandleTime")),
+                            "swing_waves": r.get("swing_waves", 0),
+                            "terminal_base": r.get("terminal_base", False)
                         } for r in all_disp if r.get("Symbol") or r.get("symbol")]
                         shared_write_display(formatted_all, dict(ACTIVE_POSITIONS), SCAN_DISPLAY_FILE, "nifty50")
                     matched = True
@@ -226,7 +263,7 @@ def run_scan(kite):
                     results.append({"Symbol": symbol, "Pattern": "NO_MATCH"})
     formed_display = []
     for r in results:
-        if r.get("Pattern") and r.get("Pattern") not in ["NO_MATCH", "ERROR", "NO_DATA"]:
+        if r.get("Pattern") and r.get("Pattern") not in ["NO_MATCH", "ERROR", "NO_DATA", "ILLIQUID_SKIPPED", "SWING_FILTER_SKIPPED"]:
             c_time = clean_timestamp(r.get("CandleATime") or r.get("CandleTime") or r.get("Scan_Date"))
             formed_display.append({
                 "symbol": r.get("Symbol"),
@@ -243,7 +280,9 @@ def run_scan(kite):
                 "entry_tf": r.get("entry_tf", TIMEFRAME_ENTRY),
                 "side": PROFILE["display_side"],
                 "entry_time": c_time,
-                "candle_a_time": c_time
+                "candle_a_time": c_time,
+                "swing_waves": r.get("swing_waves", 0),
+                "terminal_base": r.get("terminal_base", False)
             })
     if formed_display:
         with position_lock:
@@ -262,6 +301,8 @@ def export_results(results):
             "T2": r.get("T2", ""),
             "T3": r.get("T3", ""),
             "R_R_Ratio": round(r.get("RR", 0), 2) if r.get("RR") else "",
+            "Swing_Waves": r.get("swing_waves", ""),
+            "Terminal_Base": "YES" if r.get("terminal_base") else "NO",
             "Latest_Close": r.get("Latest_Close", ""),
             "Latest_High": r.get("Latest_High", ""),
             "Latest_Low": r.get("Latest_Low", ""),
@@ -307,15 +348,25 @@ def print_summary(results):
     print("=" * 80)
 
 def load_program_config():
+    global TIMEFRAME_ENTRY, TIMEFRAME_ANCHOR, LOOKBACK_DAYS, TARGET_INDEX, ENABLE_SWING_FILTER, SWING_MIN_WAVES, SWING_MIN_R2
     try:
-        cfg_path = os.path.join(os.path.dirname(__file__), "input", "program_config.json")
+        cfg_path = paths.PROGRAM_CONFIG_FILE
         if os.path.exists(cfg_path):
-            with open(cfg_path) as f:
+            with open(cfg_path, encoding="utf-8") as f:
                 cfg = json.load(f).get(PROFILE["config_section"], {})
             if "timeframe" in cfg:
-                globals().update({"TIMEFRAME_ENTRY": cfg["timeframe"], "TIMEFRAME_ANCHOR": cfg["timeframe"]})
-            if "lookback_days" in cfg: globals().update({"LOOKBACK_DAYS": int(cfg["lookback_days"])})
-            if "target_index" in cfg: globals().update({"TARGET_INDEX": str(cfg["target_index"])})
+                TIMEFRAME_ENTRY = cfg["timeframe"]
+                TIMEFRAME_ANCHOR = cfg["timeframe"]
+            if "lookback_days" in cfg:
+                LOOKBACK_DAYS = int(cfg["lookback_days"])
+            if "target_index" in cfg:
+                TARGET_INDEX = str(cfg["target_index"])
+            if "enable_swing_filter" in cfg:
+                ENABLE_SWING_FILTER = bool(cfg["enable_swing_filter"])
+            if "swing_min_waves" in cfg:
+                SWING_MIN_WAVES = int(cfg["swing_min_waves"])
+            if "swing_min_r2" in cfg:
+                SWING_MIN_R2 = float(cfg["swing_min_r2"])
     except Exception as e:
         logging.warning(f"Config load: {e}")
 

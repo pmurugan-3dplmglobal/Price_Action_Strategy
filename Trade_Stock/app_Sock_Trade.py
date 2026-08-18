@@ -126,7 +126,8 @@ PROGRAMS = {
                 "options": ["day", "week", "4hr", "1hr", "75min", "30min", "15min"],
                 "default": "day"
             },
-            "lookback_days": {"label": "Lookback Days", "type": "number", "default": 120}
+            "enable_swing_filter": {"label": "Swing Filter", "type": "select", "options": ["true", "false"], "default": "true"},
+            "swing_min_waves": {"label": "Min Swings", "type": "number", "default": 3}
         }
     },
     "bear_trade": {
@@ -154,7 +155,8 @@ PROGRAMS = {
                 "options": ["day", "week", "4hr", "1hr", "75min", "30min", "15min"],
                 "default": "day"
             },
-            "lookback_days": {"label": "Lookback Days", "type": "number", "default": 120}
+            "enable_swing_filter": {"label": "Swing Filter", "type": "select", "options": ["true", "false"], "default": "true"},
+            "swing_min_waves": {"label": "Min Swings", "type": "number", "default": 3}
         }
     },
     "ema_engine": {
@@ -165,8 +167,7 @@ PROGRAMS = {
         "log_file": EMA_LOG_FILE,
         "config_fields": {
             "timeframe": {"label": "Timeframe", "type": "select", "options": ["1d", "60minute", "30minute", "15minute", "5minute"], "default": "1d"},
-            "target_universe": {"label": "Target Universe", "type": "select", "options": ["ALL", "NIFTY50", "NIFTY_NEXT_100", "NIFTY_MIDCAP_100", "NIFTY_SMALLCAP_250", "INDEX_OPTIONS"], "default": "ALL"},
-            "scan_interval": {"label": "Scan Interval (s)", "type": "number", "default": 300}
+            "target_universe": {"label": "Target Universe", "type": "select", "options": ["ALL", "NIFTY50", "NIFTY_NEXT_100", "NIFTY_MIDCAP_100", "NIFTY_SMALLCAP_250", "INDEX_OPTIONS"], "default": "ALL"}
         }
     }
 }
@@ -266,13 +267,18 @@ def save_config(prog_id, data):
     cleaned = {}
     for k, v in data.items():
         if isinstance(v, str):
-            try:
-                if "." in v:
-                    cleaned[k] = float(v)
-                else:
-                    cleaned[k] = int(v)
-            except (ValueError, TypeError):
-                cleaned[k] = v
+            if v.lower() == "true":
+                cleaned[k] = True
+            elif v.lower() == "false":
+                cleaned[k] = False
+            else:
+                try:
+                    if "." in v:
+                        cleaned[k] = float(v)
+                    else:
+                        cleaned[k] = int(v)
+                except (ValueError, TypeError):
+                    cleaned[k] = v
         else:
             cleaned[k] = v
     cfg[prog_id] = cleaned
@@ -866,6 +872,14 @@ def api_scan_clear():
                 json.dump({}, fh)
     except Exception:
         pass
+    try:
+        import trade_db
+        for eng in ["daily", "bear_trade", "nifty50", "index"]:
+            trade_db.clear_cycle_trades(eng)
+    except Exception:
+        pass
+    _file_mtime_cache.clear()
+    _parsed_json_cache.clear()
     with data_lock:
         for k in ["daily", "bear_trade", "nifty50", "index"]:
             cached_data["scan_display"][k] = {"staged_trades": [], "all_staged_today": [], "carry_forward": [], "active_live": [], "cleared_at": now_str}

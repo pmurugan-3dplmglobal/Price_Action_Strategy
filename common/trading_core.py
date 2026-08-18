@@ -612,28 +612,46 @@ def find_anchor_ll_sweep(df):
             "BenchmarkPrice": float(sweep_candle['high']), "AnchorLow": float(sweep_candle['low'])}
 
 def find_anchor_hammer_baby(df):
-    """A = baby/hammer candle completely inside bearish mother's body, with long lower wick."""
+    """A = baby/hammer/dragonfly candle inside/at bearish mother base with strong lower wick rejection."""
     if len(df) < 5:
         return None
     mother_candle, baby_candle, post_baby_1, post_baby_2, post_baby_3 = df.iloc[-5], df.iloc[-4], df.iloc[-3], df.iloc[-2], df.iloc[-1]
     if not (float(mother_candle['close']) < float(mother_candle['open'])):
         return None
     is_green = float(baby_candle['close']) >= float(baby_candle['open'])
-    body = abs(float(baby_candle['close']) - float(baby_candle['open']))
-    lower_wick = float(min(float(baby_candle['open']), float(baby_candle['close']))) - float(baby_candle['low'])
-    upper_wick = float(baby_candle['high']) - float(max(float(baby_candle['open']), float(baby_candle['close'])))
+    b_open = float(baby_candle['open'])
+    b_close = float(baby_candle['close'])
+    b_high = float(baby_candle['high'])
+    b_low = float(baby_candle['low'])
 
-    # Lower wick must be dominant (at least 1.5x body for green, 2.0x body for red)
+    total_range = b_high - b_low
+    if total_range <= 0:
+        return None
+
+    body = abs(b_close - b_open)
+    lower_wick = min(b_open, b_close) - b_low
+    upper_wick = b_high - max(b_open, b_close)
+
+    # 1. Lower wick must be dominant relative to body (at least 1.2x for green, 1.8x for red)
     min_wick_ratio = 1.2 if is_green else 1.8
     if lower_wick < (body * min_wick_ratio):
         return None
     if lower_wick <= upper_wick:
         return None
 
-    if float(post_baby_2['close']) < float(baby_candle['low']) or float(post_baby_3['close']) < float(baby_candle['low']):
+    # 2. Upper wick cap: Upper wick must not exceed 35% of total candle range or 50% of lower wick (filters spinning tops)
+    if upper_wick > (total_range * 0.35) or upper_wick > (lower_wick * 0.50):
         return None
-    anchor_close = float(baby_candle['close'])
-    b_low = float(baby_candle['low'])
+
+    # 3. Close conviction: Close must finish in upper 40% of the total candle span (>= 0.60 from low)
+    close_position = (b_close - b_low) / total_range
+    if close_position < 0.60:
+        return None
+
+    # 4. Multi-bar stability guard: Subsequent candles must not breach the anchor low
+    if float(post_baby_2['close']) < b_low or float(post_baby_3['close']) < b_low:
+        return None
+    anchor_close = b_close
     sl_val = calculate_sl_buffer(b_low, side="BULL")
     # BenchmarkPrice = A candle's (baby/hammer candle) high — per blueprint Setup 4
     return {"Pattern": "BULL_A_Baby_Candle", "Close": anchor_close, "SL": sl_val, "Signal": "Baby_Formation",
@@ -1125,7 +1143,7 @@ def close_stock_position(kite, pos, live_market=True, product=None):
         if kite and live_market:
             try:
                 for kp in kite.positions().get("net", []):
-                    if kp.get("tradingsymbol") == contract and abs(int(kp.get("quantity", 0))) > 0:
+                    if kp.get("tradingsymbol") == contract and int(kp.get("quantity", 0)) > 0:
                         has_live_qty = True
                         break
             except Exception:
@@ -1142,7 +1160,7 @@ def close_stock_position(kite, pos, live_market=True, product=None):
         if kite:
             net_positions = kite.positions().get("net", [])
             for p in net_positions:
-                if p.get("tradingsymbol") == contract and abs(int(p.get("quantity", 0))) > 0:
+                if p.get("tradingsymbol") == contract and int(p.get("quantity", 0)) > 0:
                     prod = p.get("product")
                     if prod:
                         target_product = prod
@@ -1318,7 +1336,7 @@ def close_position(kite, pos, live_market=True, product=None):
         if kite and live_market:
             try:
                 for kp in kite.positions().get("net", []):
-                    if kp.get("tradingsymbol") == contract and abs(int(kp.get("quantity", 0))) > 0:
+                    if kp.get("tradingsymbol") == contract and int(kp.get("quantity", 0)) > 0:
                         has_live_qty = True
                         break
             except Exception:
@@ -3041,25 +3059,47 @@ def find_anchor_two_lower_lows(df):
             "AnchorHigh": a_high, "AnchorLow": float(a2['low'])}
 
 def find_anchor_shooting_star_baby(df):
-    """Setup 4 (Bearish): A = shooting star / baby candle inside bullish mother body, with long upper wick."""
+    """Setup 4 (Bearish): A = shooting star / baby candle inside/at bullish mother peak with strong upper wick rejection."""
     if len(df) < 5:
         return None
     mother_candle, baby_candle, post_baby_1, post_baby_2, post_baby_3 = df.iloc[-5], df.iloc[-4], df.iloc[-3], df.iloc[-2], df.iloc[-1]
+    if not (float(mother_candle['close']) > float(mother_candle['open'])):
+        return None
     is_red = float(baby_candle['close']) <= float(baby_candle['open'])
-    body = abs(float(baby_candle['close']) - float(baby_candle['open']))
-    upper_wick = float(baby_candle['high']) - float(max(float(baby_candle['open']), float(baby_candle['close'])))
-    lower_wick = float(min(float(baby_candle['open']), float(baby_candle['close']))) - float(baby_candle['low'])
+    b_open = float(baby_candle['open'])
+    b_close = float(baby_candle['close'])
+    b_high = float(baby_candle['high'])
+    b_low = float(baby_candle['low'])
 
+    total_range = b_high - b_low
+    if total_range <= 0:
+        return None
+
+    body = abs(b_close - b_open)
+    upper_wick = b_high - max(b_open, b_close)
+    lower_wick = min(b_open, b_close) - b_low
+
+    # 1. Upper wick must be dominant relative to body (at least 1.2x for red, 1.8x for green)
     min_wick_ratio = 1.2 if is_red else 1.8
     if upper_wick < (body * min_wick_ratio):
         return None
     if upper_wick <= lower_wick:
         return None
 
-    if float(post_baby_2['close']) > float(baby_candle['high']) or float(post_baby_3['close']) > float(baby_candle['high']):
+    # 2. Lower wick cap: Lower wick must not exceed 35% of total candle range or 50% of upper wick (filters spinning tops)
+    if lower_wick > (total_range * 0.35) or lower_wick > (upper_wick * 0.50):
         return None
-    anchor_close = float(baby_candle['close'])
-    b_high = float(baby_candle['high'])
+
+    # 3. Close conviction: Close must finish in lower 40% of the total candle span (<= 0.40 from low)
+    close_position = (b_close - b_low) / total_range
+    if close_position > 0.40:
+        return None
+
+    # 4. Multi-bar stability guard: Subsequent candles must not breach the anchor high
+    if float(post_baby_2['close']) > b_high or float(post_baby_3['close']) > b_high:
+        return None
+
+    anchor_close = b_close
     sl_val = calculate_sl_buffer(b_high, side="BEAR")
     # BenchmarkPrice = A candle's (shooting star) low — per blueprint Setup 4 bear
     return {"Pattern": "BEAR_A_ShootingStar_Baby", "Close": anchor_close, "SL": sl_val, "Signal": "ShootingStar_Formation",
@@ -3411,5 +3451,12 @@ def scan_anchor_bcd_breakout_generic(df_entry, df_anchor, side="BULL"):
             res = scan_trend_continuation_reentry(df_entry, df_anchor)
         return res
 
-
-
+# ──────────────────────────────────────────────
+#  PARABOLIC MULTI-SWING CASCADE MODULE RE-EXPORTS
+# ──────────────────────────────────────────────
+from swing_detection import (
+    is_parabolic_arch_enhanced,
+    extract_swing_pivots,
+    validate_parabolic_cascade_structure,
+    detect_parabolic_multi_swings
+)

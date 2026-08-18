@@ -329,6 +329,7 @@ def execute_highest_rr_trade(kite, staged):
         logging.info(f"Best cycle trade {key} already executed; skipping")
         return
     cp = best["entry_spot"]
+    avg_rr = best.get("rr", 0)
     strike_step = best.get("strike_step", 50)
     pos_size = calculate_position_size(cp, best["current_sl"])
     target_strike = strike if strike else int(round(cp / strike_step) * strike_step)
@@ -696,7 +697,7 @@ def main():
                         ACTIVE_POSITIONS.pop(sym, None)
 
                 for p in all_positions:
-                    if p["exchange"] not in ("NFO", "NSE") or int(p.get("quantity", 0)) == 0:
+                    if p["exchange"] not in ("NFO", "NSE") or int(p.get("quantity", 0)) <= 0:
                         continue
                     symbol = match_registry_symbol(STOCK_REGISTRY, p["tradingsymbol"])
                     if not symbol or symbol in ACTIVE_POSITIONS:

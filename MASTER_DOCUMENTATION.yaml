@@ -32,6 +32,7 @@ architecture:
   directory:
     common:
       paths.py: "Single source of truth for canonical system file paths across engines and dashboards (TRADES_DB, ACTIVE_POSITIONS_DB, SCAN_DISPLAY_*, TOKEN_FILE, etc.)"
+      swing_detection.py: "Institutional-grade Phase 0 Parabolic Multi-Swing Cascade Filter (is_parabolic_arch_enhanced, extract_swing_pivots, validate_parabolic_cascade_structure, detect_parabolic_multi_swings) enforcing polynomial curvature R^2 >= 0.55, cascading wave progression, and terminal base absorption."
       ema_engine.py: "13 EMA & 44 EMA crossover scanner and display output builder for options (5050) and stock spot (5051) modes"
       trading_core.py: "Centralized strategy core: scan_anchor_bcd_breakout_generic, 5 Bullish + 5 Bearish anchor detectors, find_profit_targets, find_profit_targets_bearish, resample_timeframe (4h), get_adaptive_lookback, STOCK_REGISTRY (50 stocks), INDEX_REGISTRY (NIFTY, BANKNIFTY, SENSEX), _HISTORICAL_CANDLE_CACHE (TTL RAM caching), is_market_open (09:15-15:30 IST execution guard), session loading, journal writer"
       trade_db.py: "Thread-safe JSON trade database, cycle staging, duplicate active position rejection, expired position purging, and executed pattern deduplication"
@@ -169,6 +170,17 @@ backtest_suite:
       expiry_purge: "purge_expired_positions() automatically clears expired option contracts."
       entry_time_sanitization: "sanitize_entry_time() guarantees entry_time represents the true execution timestamp to prevent pre-buy candle evaluation errors."
       one_click_buy_preservation: "1-Click BUY captures and preserves candle_a_time, benchmark, anchor_floor, and direction while guarding against expired contract purchases."
+
+    swing_filter_rule:
+      rule_name: "Phase 0 Parabolic Multi-Swing Cascade & Terminal Base Filter (enable_swing_filter)"
+      fundamental_principle: "Requires >= 3 cascading swing waves forming parabolic decay curves (R^2 >= 0.55) and terminal base absorption before Anchor A can form."
+      timeframe_scope: "STRICTLY EVALUATED ON ANCHOR TIMEFRAME (df_anchor for options, stock chart for spot)."
+      requirements:
+        - "Polynomial Regression: Fits y = ax^2 + bx + c requiring concave down dome (a < 0) for Bullish and concave up cup (a > 0) for Bearish with R^2 >= 0.55."
+        - "Cascade Progression: Extrema of each wave must progressively decay (Lower Highs + Lower Lows for Bullish setups)."
+        - "Point 4 Terminal Base: Identifies flat consolidation / base absorption at Point 4 (pct_diff < 2%)."
+        - "Recency Constraint (max_bars_after_terminal): Terminal swing base must be recent (<= 15 bars for Options, <= 20 bars for Stocks)."
+        - "Sequential Trigger: Anchor Candle A timestamp MUST be >= Terminal Swing Date."
 
     anchor_selection_and_invalidation:
       rule_name: "Universal Anchor Validity & Activity Rule (is_anchor_valid_and_active)"

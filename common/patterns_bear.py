@@ -12,6 +12,12 @@ from targets import (
     find_profit_targets_bearish, check_left_side_rule_bearish,
     calculate_sl_buffer
 )
+from swing_detection import (
+    is_parabolic_arch_enhanced,
+    extract_swing_pivots,
+    validate_parabolic_cascade_structure,
+    detect_parabolic_multi_swings
+)
 
 def find_anchor_bearish_engulfing(df):
     """Setup 1 (Bearish): A = bearish engulfing candle. Bullish candle-1, then bearish candle wrapping body+wick."""
@@ -99,25 +105,47 @@ def find_anchor_two_lower_lows(df):
     return {"Pattern": "BEAR_A_Two_Lower_Lows", "Close": anchor_close, "SL": sl_val, "Signal": "LowerLow_Engulf", "CandleATime": str(a2.get('date', ''))}
 
 def find_anchor_shooting_star_baby(df):
-    """Setup 4 (Bearish): A = shooting star / baby candle inside bullish mother body, with long upper wick."""
+    """Setup 4 (Bearish): A = shooting star / baby candle inside/at bullish mother peak with strong upper wick rejection."""
     if len(df) < 5:
         return None
     mother_candle, baby_candle, post_baby_1, post_baby_2, post_baby_3 = df.iloc[-5], df.iloc[-4], df.iloc[-3], df.iloc[-2], df.iloc[-1]
+    if not (float(mother_candle['close']) > float(mother_candle['open'])):
+        return None
     is_red = float(baby_candle['close']) <= float(baby_candle['open'])
-    body = abs(float(baby_candle['close']) - float(baby_candle['open']))
-    upper_wick = float(baby_candle['high']) - float(max(float(baby_candle['open']), float(baby_candle['close'])))
-    lower_wick = float(min(float(baby_candle['open']), float(baby_candle['close']))) - float(baby_candle['low'])
+    b_open = float(baby_candle['open'])
+    b_close = float(baby_candle['close'])
+    b_high = float(baby_candle['high'])
+    b_low = float(baby_candle['low'])
 
+    total_range = b_high - b_low
+    if total_range <= 0:
+        return None
+
+    body = abs(b_close - b_open)
+    upper_wick = b_high - max(b_open, b_close)
+    lower_wick = min(b_open, b_close) - b_low
+
+    # 1. Upper wick must be dominant relative to body (at least 1.2x for red, 1.8x for green)
     min_wick_ratio = 1.2 if is_red else 1.8
     if upper_wick < (body * min_wick_ratio):
         return None
     if upper_wick <= lower_wick:
         return None
 
-    if float(post_baby_2['close']) > float(baby_candle['high']) or float(post_baby_3['close']) > float(baby_candle['high']):
+    # 2. Lower wick cap: Lower wick must not exceed 35% of total candle range or 50% of upper wick (filters spinning tops)
+    if lower_wick > (total_range * 0.35) or lower_wick > (upper_wick * 0.50):
         return None
-    anchor_close = float(baby_candle['close'])
-    b_high = float(baby_candle['high'])
+
+    # 3. Close conviction: Close must finish in lower 40% of the total candle span (<= 0.40 from low)
+    close_position = (b_close - b_low) / total_range
+    if close_position > 0.40:
+        return None
+
+    # 4. Multi-bar stability guard: Subsequent candles must not breach the anchor high
+    if float(post_baby_2['close']) > b_high or float(post_baby_3['close']) > b_high:
+        return None
+
+    anchor_close = b_close
     sl_val = calculate_sl_buffer(b_high, side="BEAR")
     return {"Pattern": "BEAR_A_ShootingStar_Baby", "Close": anchor_close, "SL": sl_val, "Signal": "ShootingStar_Formation", "CandleATime": str(baby_candle.get('date', ''))}
 

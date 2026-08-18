@@ -260,9 +260,36 @@ except Exception as e:
     errors.append(f"HTML Template JS V8 Check Failed: {e}")
     print(f" FAILED [ERR] ({e})", flush=True)
 
+# Test 13: Parabolic Multi-Swing Curve Math & Structure Detection
+print("[TEST 13] Testing Parabolic Multi-Swing Curve Math & Structure Detection...", end="", flush=True)
+try:
+    from swing_detection import (
+        is_parabolic_arch_enhanced,
+        detect_parabolic_multi_swings
+    )
+    import numpy as np
+    import pandas as pd
+    
+    # Synthetic concave down parabolic arch: y = -0.5*(x-5)^2 + 100
+    x = np.arange(11)
+    y = -0.5 * (x - 5)**2 + 100
+    df_synthetic = pd.DataFrame({
+        "close": y,
+        "high": y + 0.5,
+        "low": y - 0.5,
+        "open": y
+    })
+    
+    assert is_parabolic_arch_enhanced(df_synthetic, min_r2=0.55, side="BULL") is True, "Synthetic dome must match BULL parabolic arch"
+    assert is_parabolic_arch_enhanced(df_synthetic, min_r2=0.55, side="BEAR") is False, "Synthetic dome must not match BEAR cup"
+    print(" PASSED [OK]", flush=True)
+except Exception as e:
+    errors.append(f"Parabolic Multi-Swing Test Failed: {e}")
+    print(f" FAILED [ERR] ({e})", flush=True)
+
 print("\n" + "=" * 100)
 if not errors:
-    print("      ALL 11 REGRESSION TESTS PASSED WITH 100% SUCCESS -- ZERO REGRESSIONS FOUND!")
+    print("      ALL REGRESSION TESTS PASSED WITH 100% SUCCESS -- ZERO REGRESSIONS FOUND!")
 else:
     print(f"      REGRESSION ERRORS FOUND ({len(errors)}):")
     for err in errors:

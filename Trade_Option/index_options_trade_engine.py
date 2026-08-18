@@ -39,7 +39,8 @@ from trading_core import (
     simulate_trade_outcome as shared_simulate,
     INDEX_REGISTRY,
     match_registry_symbol,
-    get_option_lot_size
+    get_option_lot_size,
+    clear_executed_exit
 )
 
 LIVE_MARKET_DEPLOYMENT = True
@@ -346,7 +347,7 @@ def main_scan_loop(kite):
                 ACTIVE_POSITIONS.pop(sym, None)
 
         for p in all_positions:
-            if p["exchange"] not in ("NFO", "BFO") or int(p["quantity"]) == 0:
+            if p["exchange"] not in ("NFO", "BFO") or int(p["quantity"]) <= 0:
                 continue
             symbol = match_registry_symbol(INDEX_REGISTRY, p["tradingsymbol"])
             if not symbol or symbol in ACTIVE_POSITIONS:
