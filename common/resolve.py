@@ -892,22 +892,30 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
         swing_min_w = int(cfg_engine.get("SWING_MIN_WAVES", 3))
         swing_r2 = float(cfg_engine.get("SWING_MIN_R2", 0.55))
 
-        swing_meta_ce = {"swing_waves": 0, "terminal_base": False}
-        swing_meta_pe = {"swing_waves": 0, "terminal_base": False}
+        swing_meta_ce = {"swing_waves": 0, "terminal_base": False, "terminal_date": ""}
+        swing_meta_pe = {"swing_waves": 0, "terminal_base": False, "terminal_date": ""}
         if enable_swing:
-            if not df_ce_e.empty:
-                sw_ce = detect_parabolic_multi_swings(df_ce_e, side="BULL", min_swings=swing_min_w, min_r2=swing_r2)
+            if not df_ce_a.empty:
+                sw_ce = detect_parabolic_multi_swings(df_ce_a, side="BULL", min_swings=swing_min_w, min_r2=swing_r2, max_bars_after_terminal=20)
                 if not sw_ce.get("matched", False):
                     df_ce_e = pd.DataFrame()
                 else:
-                    swing_meta_ce = {"swing_waves": sw_ce.get("valid_arch_count", 0), "terminal_base": sw_ce.get("has_terminal_base", False)}
+                    swing_meta_ce = {
+                        "swing_waves": sw_ce.get("valid_arch_count", 0),
+                        "terminal_base": sw_ce.get("has_terminal_base", False),
+                        "terminal_date": sw_res_date if (sw_res_date := sw_ce.get("terminal_swing_date")) else ""
+                    }
 
-            if not df_pe_e.empty:
-                sw_pe = detect_parabolic_multi_swings(df_pe_e, side="BULL", min_swings=swing_min_w, min_r2=swing_r2)
+            if not df_pe_a.empty:
+                sw_pe = detect_parabolic_multi_swings(df_pe_a, side="BULL", min_swings=swing_min_w, min_r2=swing_r2, max_bars_after_terminal=20)
                 if not sw_pe.get("matched", False):
                     df_pe_e = pd.DataFrame()
                 else:
-                    swing_meta_pe = {"swing_waves": sw_pe.get("valid_arch_count", 0), "terminal_base": sw_pe.get("has_terminal_base", False)}
+                    swing_meta_pe = {
+                        "swing_waves": sw_pe.get("valid_arch_count", 0),
+                        "terminal_base": sw_pe.get("has_terminal_base", False),
+                        "terminal_date": sw_res_date_pe if (sw_res_date_pe := sw_pe.get("terminal_swing_date")) else ""
+                    }
 
         if df_ce_e.empty and df_pe_e.empty:
             continue
