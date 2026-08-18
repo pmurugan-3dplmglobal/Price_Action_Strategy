@@ -696,20 +696,15 @@ def find_anchor_two_higher_highs(df):
 #  ANCHOR BCD BREAKOUT SCANNER (A -> B -> C -> D)
 # ──────────────────────────────────────────────
 
-def scan_anchor_bcd_breakout(df_entry, df_anchor, anchor_tf="", entry_tf=""):
+def scan_anchor_bcd_breakout(df_entry, df_anchor, anchor_tf="", entry_tf="", *args, **kwargs):
     """
     Two-phase A-first scanner:
+      Phase 0: Multi-Swing Parabolic cascade filter on df_anchor.
       Phase 1: Find anchor candle A (using 5 anchor detectors + base fallback).
-      Phase 2: From A, scan forward sequentially: B (breakout > A.high) ->
-               C (red retest) -> D (confirmation close > A.high).
-      Returns first complete A -> B -> C -> D pattern, or None.
-    Close-basis: last candle may still be forming — trimmed before scan.
+      Phase 2: From A, scan forward sequentially: B -> C -> D.
     """
-    # Close-basis enforcement: strip the last (still-forming) candle
-    if df_entry is not None and len(df_entry) > 1:
-        df_entry = df_entry.iloc[:-1].copy()
-    if df_anchor is not None and len(df_anchor) > 1:
-        df_anchor = df_anchor.iloc[:-1].copy()
+    import patterns_bull
+    return patterns_bull.scan_anchor_bcd_breakout(df_entry, df_anchor, anchor_tf=anchor_tf, entry_tf=entry_tf, *args, **kwargs)
 
     anchor_funcs = [
         find_anchor_bullish_engulfing,
@@ -3132,22 +3127,15 @@ def find_anchor_bearish_harami(df):
 #  BEARISH BREAKOUT SCANNER (A -> B -> C -> D)
 # ──────────────────────────────────────────────
 
-def scan_anchor_bcd_breakout_bearish(df_entry, df_anchor):
+def scan_anchor_bcd_breakout_bearish(df_entry, df_anchor, anchor_tf="", entry_tf="", *args, **kwargs):
     """
     Two-phase A-first Bearish scanner:
+      Phase 0: Multi-Swing Parabolic cascade filter on df_anchor.
       Phase 1: Find anchor candle A (using 5 bearish detectors + base fallback).
-      Phase 2: From A, scan forward sequentially: B (breakout < A.low) ->
-               C (green retest) -> D (confirmation close < A.low).
-    Close-basis: last candle may still be forming — trimmed before scan.
+      Phase 2: From A, scan forward sequentially: B -> C -> D.
     """
-    # Close-basis enforcement: strip the last (still-forming) candle
-    if df_entry is not None and len(df_entry) > 1:
-        df_entry = df_entry.iloc[:-1].copy()
-    if df_anchor is not None and len(df_anchor) > 1:
-        df_anchor = df_anchor.iloc[:-1].copy()
-
-    if df_entry is None or df_entry.empty or df_anchor is None or df_anchor.empty:
-        return None
+    import patterns_bear
+    return patterns_bear.scan_anchor_bcd_breakout_bearish(df_entry, df_anchor, anchor_tf=anchor_tf, entry_tf=entry_tf, *args, **kwargs)
 
     if len(df_anchor) < 10 or len(df_entry) < 10:
         return None
