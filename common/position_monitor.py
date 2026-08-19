@@ -109,10 +109,29 @@ def close_stock_position(kite, pos, live_market=True, product=None):
     if not contract:
         logging.error("close_stock_position failed: missing contract/symbol name")
         return
+
+    qty = pos.get("position_size", pos.get("quantity", 1))
+
+    # Live position quantity verification & already-closed guard
+    if kite and live_market:
+        try:
+            net_positions = kite.positions().get("net", [])
+            for p in net_positions:
+                if p.get("tradingsymbol") == contract:
+                    live_held = int(p.get("quantity", 0))
+                    if live_held <= 0:
+                        logging.info(f"[ALREADY CLOSED] Stock {contract} has {live_held} quantity in Kite net positions. Skipping duplicate exit.")
+                        save_executed_exit(contract, "ALREADY_CLOSED", {"status": "ZERO_QTY"})
+                        return
+                    qty = min(qty, live_held)
+                    break
+        except Exception as p_err:
+            logging.warning(f"Could not verify live net quantity for stock {contract}: {p_err}")
+
     if is_contract_exit_executed(contract):
         prev = EXECUTED_EXITS.get(contract, {})
-        oid = prev.get("order_id")
-        prev_ts = prev.get("timestamp")
+        oid = str(prev.get("order_id", ""))
+        prev_ts = prev.get("timestamp", "")
         
         is_reentry = False
         pos_entry_time = pos.get("entry_time") or ""
@@ -125,22 +144,56 @@ def close_stock_position(kite, pos, live_market=True, product=None):
             except Exception:
                 pass
 
-        has_live_qty = False
-        if kite and live_market:
-            try:
-                for kp in kite.positions().get("net", []):
-                    if kp.get("tradingsymbol") == contract and int(kp.get("quantity", 0)) > 0:
-                        has_live_qty = True
-                        break
-            except Exception:
-                pass
-
-        if is_reentry or has_live_qty:
-            logging.info(f"[EXIT GUARD RESET] Stock {contract} is an active position / re-entry (entry_time={pos_entry_time} vs exit_ts={prev_ts}, live_qty={has_live_qty}). Resetting stale exit guard order {oid}.")
+        if is_reentry:
+            logging.info(f"[EXIT GUARD RESET] Stock {contract} is a fresh re-entry (entry_time={pos_entry_time} > exit_ts={prev_ts}). Resetting stale exit guard order {oid}.")
             clear_executed_exit(contract)
+        elif oid and kite and live_market and oid != "ALREADY_CLOSED":
+            o_status = None
+            try:
+                orders = kite.orders()
+                for o in orders:
+                    if str(o.get("order_id")) == str(oid):
+                        o_status = o.get("status")
+                        break
+                if o_status in ["OPEN", "TRIGGER PENDING"]:
+                    elapsed_secs = 999
+                    if prev_ts:
+                        try:
+                            elapsed_secs = (dt.now() - dt.fromisoformat(prev_ts.split("+")[0])).total_seconds()
+                        except Exception:
+                            pass
+                    if elapsed_secs < 15:
+                        logging.info(f"[EXIT GUARD BLOCK] Stock {contract} exit order {oid} is {o_status} (placed {elapsed_secs:.0f}s ago). Waiting for fill.")
+                        return
+                    logging.warning(f"[PENDING LIMIT EXIT DETECTED] Stock order {oid} for {contract} is OPEN/UNFILLED after {elapsed_secs:.0f}s. Cancelling and executing fallback...")
+                    try:
+                        kite.cancel_order(variety=kite.VARIETY_REGULAR, order_id=oid)
+                    except Exception as c_err:
+                        logging.warning(f"Could not cancel pending order {oid}: {c_err}")
+                    clear_executed_exit(contract)
+                elif o_status in ["CANCELLED", "REJECTED", "EXPIRED", "CANCELLED ALL"]:
+                    elapsed_secs = 0
+                    if prev_ts:
+                        try:
+                            elapsed_secs = (dt.now() - dt.fromisoformat(prev_ts.split("+")[0])).total_seconds()
+                        except Exception:
+                            pass
+                    if elapsed_secs < 30:
+                        logging.info(f"[EXIT GUARD COOLDOWN] Stock order {oid} for {contract} was {o_status} ({elapsed_secs:.0f}s ago). Backing off before retry.")
+                        return
+                    logging.warning(f"[EXIT GUARD RESET] Stock order {oid} for {contract} was {o_status} > 30s ago. Retrying exit.")
+                    clear_executed_exit(contract)
+                else:
+                    logging.info(f"[EXIT GUARD BLOCK] Stock {contract} exit order {oid} is {o_status or 'UNKNOWN'}. Skipping duplicate exit call.")
+                    return
+            except Exception as check_err:
+                logging.debug(f"Could not verify exit order status for {contract}: {check_err}")
+                logging.info(f"[EXIT GUARD BLOCK] Stock {contract} exit order {oid} status could not be verified. Skipping duplicate exit call.")
+                return
         else:
-            logging.info(f"[EXIT GUARD BLOCK] {contract} stock exit order already submitted (Order ID: {prev.get('order_id')}). Skipping duplicate exit call.")
+            logging.info(f"[EXIT GUARD BLOCK] Stock {contract} exit order already submitted (Order ID: {prev.get('order_id')}). Skipping duplicate exit call.")
             return
+
     target_product = product
     try:
         if kite:
@@ -160,7 +213,6 @@ def close_stock_position(kite, pos, live_market=True, product=None):
         ltp = q[f"{kite.EXCHANGE_NSE}:{contract}"]["last_price"]
         bid = q[f"{kite.EXCHANGE_NSE}:{contract}"]["depth"]["buy"][0]["price"]
         price = round((bid if bid > 0 else ltp) * 0.995, 1)
-        qty = pos.get("position_size", pos.get("quantity", 1))
         try:
             oid = kite.place_order(
                 variety=kite.VARIETY_REGULAR, tradingsymbol=contract,
@@ -183,8 +235,10 @@ def close_stock_position(kite, pos, live_market=True, product=None):
                 save_executed_exit(contract, oid, {"type": "LIMIT_ALT", "price": price, "qty": qty})
                 logging.info(f"Fallback stock exit SUCCESS for {contract} with product {alt_product} (Order ID: {oid})")
             except Exception as alt_err:
+                save_executed_exit(contract, "REJECTED_ERROR", {"error": str(alt_err)})
                 logging.error(f"Fallback stock exit failed for {contract}: {alt_err}")
     except Exception as e:
+        save_executed_exit(contract, "REJECTED_ERROR", {"error": str(e)})
         logging.error(f"Stock exit failed for {contract}: {e}")
 
 EXECUTED_EXITS_FILE = paths.EXECUTED_EXITS_FILE
@@ -245,6 +299,19 @@ def is_market_open():
     t_now = now.time()
     return datetime_time(9, 15) <= t_now <= datetime_time(15, 30)
 
+def is_new_entry_allowed(live_execution_active=True):
+    """Check if new trade entries are allowed.
+    If live_execution_active is False (offline/scan-only/after-market mode), returns True to allow scanning & research anytime.
+    If live_execution_active is True, restricts new entries strictly to Mon-Fri 09:15 to 15:20 IST.
+    """
+    if not live_execution_active:
+        return True
+    now = dt.now()
+    if now.weekday() >= 5:
+        return False
+    t_now = now.time()
+    return datetime_time(9, 15) <= t_now <= datetime_time(15, 20)
+
 def close_position(kite, pos, live_market=True, product=None):
     contract = pos.get("contract") or pos.get("tradingsymbol")
     if not contract:
@@ -274,6 +341,22 @@ def close_position(kite, pos, live_market=True, product=None):
 
     qty = pos.get("quantity") or (get_option_lot_size(contract) or pos.get("lot_size", 1)) * pos.get("position_size", 1)
 
+    # Live position quantity verification & already-closed guard
+    if kite and live_market:
+        try:
+            net_positions = kite.positions().get("net", [])
+            for p in net_positions:
+                if p.get("tradingsymbol") == contract:
+                    live_held = int(p.get("quantity", 0))
+                    if live_held <= 0:
+                        logging.info(f"[ALREADY CLOSED] {contract} has {live_held} quantity in Kite net positions. Skipping exit order.")
+                        save_executed_exit(contract, "ALREADY_CLOSED", {"status": "ZERO_QTY"})
+                        return
+                    qty = min(qty, live_held)
+                    break
+        except Exception as p_err:
+            logging.warning(f"Could not verify live net quantity for {contract}: {p_err}")
+
     if kite and live_market and not is_market_open():
         logging.info(f"[MARKET CLOSED] Skipping live Zerodha exit order for {contract} outside market hours (09:15-15:30 IST). Position status logged.")
         return
@@ -302,8 +385,8 @@ def close_position(kite, pos, live_market=True, product=None):
 
     if is_contract_exit_executed(contract):
         prev = EXECUTED_EXITS.get(contract, {})
-        oid = prev.get("order_id")
-        prev_ts = prev.get("timestamp")
+        oid = str(prev.get("order_id", ""))
+        prev_ts = prev.get("timestamp", "")
         
         # Check if current position entry_time is newer than the saved exit order timestamp
         is_reentry = False
@@ -317,21 +400,10 @@ def close_position(kite, pos, live_market=True, product=None):
             except Exception:
                 pass
 
-        # Also check if kite positions confirm we still hold an active long position (quantity > 0)
-        has_live_qty = False
-        if kite and live_market:
-            try:
-                for kp in kite.positions().get("net", []):
-                    if kp.get("tradingsymbol") == contract and int(kp.get("quantity", 0)) > 0:
-                        has_live_qty = True
-                        break
-            except Exception:
-                pass
-
-        if is_reentry or has_live_qty:
-            logging.info(f"[EXIT GUARD RESET] Contract {contract} is an active position / re-entry (entry_time={pos_entry_time} vs exit_ts={prev_ts}, live_qty={has_live_qty}). Resetting stale exit guard {oid}.")
+        if is_reentry:
+            logging.info(f"[EXIT GUARD RESET] Contract {contract} is a fresh re-entry (entry_time={pos_entry_time} > exit_ts={prev_ts}). Resetting stale exit guard {oid}.")
             clear_executed_exit(contract)
-        elif oid and kite and live_market:
+        elif oid and kite and live_market and oid != "ALREADY_CLOSED":
             o_status = None
             try:
                 orders = kite.orders()
@@ -340,7 +412,16 @@ def close_position(kite, pos, live_market=True, product=None):
                         o_status = o.get("status")
                         break
                 if o_status in ["OPEN", "TRIGGER PENDING"]:
-                    logging.warning(f"[PENDING LIMIT EXIT DETECTED] Order {oid} for {contract} is OPEN/UNFILLED. Cancelling order and executing aggressive Marketable LIMIT exit fallback...")
+                    elapsed_secs = 999
+                    if prev_ts:
+                        try:
+                            elapsed_secs = (dt.now() - dt.fromisoformat(prev_ts.split("+")[0])).total_seconds()
+                        except Exception:
+                            pass
+                    if elapsed_secs < 15:
+                        logging.info(f"[EXIT GUARD BLOCK] {contract} exit order {oid} is {o_status} (placed {elapsed_secs:.0f}s ago). Waiting for fill.")
+                        return
+                    logging.warning(f"[PENDING LIMIT EXIT DETECTED] Order {oid} for {contract} has been OPEN for {elapsed_secs:.0f}s. Cancelling order and executing aggressive Marketable LIMIT exit fallback...")
                     try:
                         kite.cancel_order(variety=kite.VARIETY_REGULAR, order_id=oid)
                     except Exception as c_err:
@@ -357,7 +438,16 @@ def close_position(kite, pos, live_market=True, product=None):
                     logging.info(f"Fallback Marketable LIMIT exit SUCCESS for {contract} at price {fallback_price} on exchange {target_exch} (Order ID: {m_oid})")
                     return
                 elif o_status in ["CANCELLED", "REJECTED", "EXPIRED", "CANCELLED ALL"]:
-                    logging.warning(f"[EXIT GUARD RESET] Order {oid} for {contract} is {o_status}. Clearing exit guard and retrying exit.")
+                    elapsed_secs = 0
+                    if prev_ts:
+                        try:
+                            elapsed_secs = (dt.now() - dt.fromisoformat(prev_ts.split("+")[0])).total_seconds()
+                        except Exception:
+                            pass
+                    if elapsed_secs < 30:
+                        logging.info(f"[EXIT GUARD COOLDOWN] Order {oid} for {contract} was {o_status} ({elapsed_secs:.0f}s ago). Backing off before retry.")
+                        return
+                    logging.warning(f"[EXIT GUARD RESET] Order {oid} for {contract} was {o_status} > 30s ago ({elapsed_secs:.0f}s). Retrying exit.")
                     clear_executed_exit(contract)
                 else:
                     logging.info(f"[EXIT GUARD BLOCK] {contract} exit order {oid} is {o_status or 'UNKNOWN'}. Skipping duplicate exit call.")
@@ -396,6 +486,7 @@ def close_position(kite, pos, live_market=True, product=None):
             save_executed_exit(contract, oid, {"type": "LIMIT_FALLBACK", "price": fallback_price, "qty": qty})
             logging.info(f"Fallback Marketable LIMIT exit SUCCESS for {contract} on exchange {target_exch} at price {fallback_price} with product {target_product}")
         except Exception as m_err:
+            save_executed_exit(contract, "REJECTED_ERROR", {"error": str(m_err)})
             logging.error(f"Fallback exit failed for {contract}: {m_err}")
 
 def _load_program_config_file():
@@ -508,6 +599,21 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
         logging.debug(f"[FAILSAFE PAUSED BEFORE {failsafe_start_str} AM] Automated active position exit checks paused until {failsafe_start_str} AM.")
         return
 
+    # Update WebSocket subscriptions for active positions
+    ws_mon = None
+    try:
+        from websocket_monitor import get_global_ws_monitor
+        ws_mon = get_global_ws_monitor(
+            getattr(kite, "api_key", None),
+            getattr(kite, "access_token", None),
+            failsafe_start_time=failsafe_start_str
+        )
+        if ws_mon:
+            ws_mon.update_subscriptions(positions_dict)
+    except Exception as ws_init_err:
+        logging.debug(f"[WEBSOCKET] ws_mon init error: {ws_init_err}")
+        ws_mon = None
+
     with lock:
         items = list(positions_dict.items())
 
@@ -548,18 +654,24 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
             is_stock = pos.get("position_type") == "stock"
             current_sl = float(pos.get("current_sl", 0))
 
-            # Fetch live quote for LTP
+            # Fetch live quote: Try WebSocket tick first (sub-millisecond), fallback to REST quote
             live_ltp = 0.0
-            try:
-                contract_name = pos.get("contract") or pos.get("symbol") or sym
-                exch = "NSE" if is_stock else ("BFO" if ("SENSEX" in c_str or "BSE" in c_str) else "NFO")
-                q_key = f"{exch}:{contract_name}"
-                q_res = kite.quote([q_key])
-                if q_key in q_res:
-                    q_info = q_res[q_key]
-                    live_ltp = float(q_info.get("last_price", 0))
-            except Exception as q_err:
-                logging.debug(f"Live quote fetch error for {sym}: {q_err}")
+            if ws_mon and token:
+                ws_ltp, is_fresh = ws_mon.get_ltp(token, max_age_seconds=15.0)
+                if ws_ltp > 0 and is_fresh:
+                    live_ltp = ws_ltp
+
+            if live_ltp <= 0 and kite:
+                try:
+                    contract_name = pos.get("contract") or pos.get("symbol") or sym
+                    exch = "NSE" if is_stock else ("BFO" if ("SENSEX" in c_str or "BSE" in c_str) else "NFO")
+                    q_key = f"{exch}:{contract_name}"
+                    q_res = kite.quote([q_key])
+                    if q_key in q_res:
+                        q_info = q_res[q_key]
+                        live_ltp = float(q_info.get("last_price", 0))
+                except Exception as q_err:
+                    logging.debug(f"Live quote fetch error for {sym}: {q_err}")
 
             # Compute High (hp) strictly for candles AFTER trade entry_time + live_ltp
             entry_time_str = sanitize_entry_time(pos)
@@ -704,7 +816,9 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                     to_clear.append(sym)
                     continue
                 elif pos.get("trailing_stage", 0) == 0:
-                    new_sl = pos.get("entry_spot", 0)
+                    curr_sl = float(pos.get("current_sl") or 0.0)
+                    entry_s = float(pos.get("entry_spot") or 0.0)
+                    new_sl = max(curr_sl, entry_s) if str(pos.get("side","CE")).upper() in ["CE", "BUY", "BULL"] else min(curr_sl, entry_s) if curr_sl > 0 else entry_s
                     sl_stamp = dt.now().isoformat()
                     with lock:
                         if sym in positions_dict:
@@ -720,7 +834,9 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                         trade_db.update_trade(tid, {"trailing_stage": 1, "current_sl": new_sl, "sl_set_time": sl_stamp})
 
             if pos.get("trailing_stage", 0) == 1 and t2_val and hp >= (t2_val - buf_t2):
-                new_sl = t1_val or pos.get("entry_spot", 0)
+                curr_sl = float(pos.get("current_sl") or 0.0)
+                target_base = float(t1_val or pos.get("entry_spot") or 0.0)
+                new_sl = max(curr_sl, target_base) if str(pos.get("side","CE")).upper() in ["CE", "BUY", "BULL"] else min(curr_sl, target_base) if curr_sl > 0 else target_base
                 sl_stamp = dt.now().isoformat()
                 with lock:
                     if sym in positions_dict:

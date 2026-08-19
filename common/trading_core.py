@@ -3,6 +3,7 @@ import json
 import logging
 import csv
 import time
+import threading
 from datetime import datetime as dt, timedelta, time as datetime_time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import pandas as pd
@@ -150,81 +151,11 @@ def resample_timeframe(df, timeframe_str):
         logging.warning(f"Resampling failed for {timeframe_str}: {e}")
         return df
 
-SUPER_STOCKS = [
-    "RELIANCE", "TCS", "HDFCBANK", "ICICIBANK", "INFY",
-    "ITC", "SBIN", "BHARTIARTL", "LT", "WIPRO"
-]
+from registries import STOCK_REGISTRY, INDEX_REGISTRY, SUPER_STOCKS, sync_stock_tokens, sync_fno_stock_registry, match_registry_symbol
 
-STOCK_REGISTRY = {
-    "ADANIENT": {"token": 112129, "lot_size": 250, "strike_step": 50},
-    "ADANIPORTS": {"token": 3861249, "lot_size": 400, "strike_step": 20},
-    "APOLLOHOSP": {"token": 415745, "lot_size": 125, "strike_step": 100},
-    "ASIANPAINT": {"token": 60417, "lot_size": 200, "strike_step": 20},
-    "AXISBANK": {"token": 1510401, "lot_size": 625, "strike_step": 10},
-    "BAJAJ-AUTO": {"token": 4267777, "lot_size": 125, "strike_step": 100},
-    "BAJAJFINSV": {"token": 4268545, "lot_size": 500, "strike_step": 20},
-    "BAJFINANCE": {"token": 81153, "lot_size": 125, "strike_step": 100},
-    "BEL": {"token": 54017, "lot_size": 1000, "strike_step": 5},
-    "BHARTIARTL": {"token": 2714625, "lot_size": 950, "strike_step": 20},
-    "CIPLA": {"token": 177665, "lot_size": 650, "strike_step": 20},
-    "COALINDIA": {"token": 5215745, "lot_size": 1250, "strike_step": 10},
-    "DRREDDY": {"token": 225537, "lot_size": 625, "strike_step": 20},
-    "EICHERMOT": {"token": 232961, "lot_size": 175, "strike_step": 50},
-    "ETERNAL": {"token": 1304833, "lot_size": 2425, "strike_step": 5},
-    "GRASIM": {"token": 315393, "lot_size": 400, "strike_step": 20},
-    "HCLTECH": {"token": 1837313, "lot_size": 700, "strike_step": 20},
-    "HDFCBANK": {"token": 341249, "lot_size": 550, "strike_step": 10},
-    "HDFCLIFE": {"token": 119553, "lot_size": 1100, "strike_step": 10},
-    "HINDALCO": {"token": 348417, "lot_size": 1400, "strike_step": 10},
-    "HINDUNILVR": {"token": 3404801, "lot_size": 300, "strike_step": 20},
-    "ICICIBANK": {"token": 1270529, "lot_size": 700, "strike_step": 10},
-    "INDIGO": {"token": 2865921, "lot_size": 300, "strike_step": 50},
-    "INFY": {"token": 408065, "lot_size": 400, "strike_step": 20},
-    "ITC": {"token": 424961, "lot_size": 1600, "strike_step": 5},
-    "JIOFIN": {"token": 21806081, "lot_size": 2000, "strike_step": 5},
-    "JSWSTEEL": {"token": 3001857, "lot_size": 675, "strike_step": 10},
-    "KOTAKBANK": {"token": 492033, "lot_size": 400, "strike_step": 20},
-    "LT": {"token": 2939649, "lot_size": 300, "strike_step": 50},
-    "M&M": {"token": 519937, "lot_size": 350, "strike_step": 20},
-    "MARUTI": {"token": 2800641, "lot_size": 50, "strike_step": 100},
-    "MAXHEALTH": {"token": 5728513, "lot_size": 525, "strike_step": 10},
-    "NESTLEIND": {"token": 4543233, "lot_size": 500, "strike_step": 20},
-    "NTPC": {"token": 2977281, "lot_size": 3000, "strike_step": 5},
-    "ONGC": {"token": 633601, "lot_size": 3850, "strike_step": 5},
-    "POWERGRID": {"token": 3834113, "lot_size": 3600, "strike_step": 5},
-    "RELIANCE": {"token": 738561, "lot_size": 250, "strike_step": 20},
-    "SBILIFE": {"token": 5633, "lot_size": 750, "strike_step": 20},
-    "SBIN": {"token": 7795201, "lot_size": 1500, "strike_step": 10},
-    "SHRIRAMFIN": {"token": 3184129, "lot_size": 300, "strike_step": 20},
-    "SUNPHARMA": {"token": 857857, "lot_size": 700, "strike_step": 20},
-    "TATACONSUM": {"token": 3465729, "lot_size": 550, "strike_step": 20},
-    "TATASTEEL": {"token": 897537, "lot_size": 5500, "strike_step": 2},
-    "TMPV": {"token": 884737, "lot_size": 1600, "strike_step": 10},
-    "TCS": {"token": 2953217, "lot_size": 175, "strike_step": 50},
-    "TECHM": {"token": 3418369, "lot_size": 600, "strike_step": 20},
-    "TITAN": {"token": 895745, "lot_size": 375, "strike_step": 50},
-    "TRENT": {"token": 5064961, "lot_size": 150, "strike_step": 100},
-    "ULTRACEMCO": {"token": 2952193, "lot_size": 100, "strike_step": 100},
-    "VEDL": {"token": 0, "lot_size": 1000, "strike_step": 5},
-    "WIPRO": {"token": 969473, "lot_size": 1500, "strike_step": 5}
-}
-
-def sync_stock_tokens(kite):
-    try:
-        instruments = kite.instruments("NSE")
-        df = pd.DataFrame(instruments)
-        if not df.empty:
-            df['tradingsymbol'] = df['tradingsymbol'].str.strip()
-            df['segment'] = df['segment'].str.strip()
-            synced = 0
-            for sym in STOCK_REGISTRY:
-                m = df[(df['tradingsymbol'] == sym) & (df['segment'] == 'NSE')]
-                if not m.empty:
-                    STOCK_REGISTRY[sym]["token"] = int(m.iloc[0]['instrument_token'])
-                    synced += 1
-            logging.info(f"Synced tokens for {synced} stocks")
-    except Exception as e:
-        logging.error(f"Stock token sync failed: {e}")
+def sync_fno_stock_registry(kite, target_universe="FNO_ALL"):
+    import registries
+    return registries.sync_fno_stock_registry(kite, target_universe)
 
 # ──────────────────────────────────────────────
 #  SESSION & UTILITIES
@@ -475,25 +406,28 @@ def calculate_position_size(spot_price, stop_loss, capital=100000.0, risk_percen
 def calculate_sl_buffer(price_level, side="BULL"):
     """
     Asset-adaptive & price-tiered Stop Loss buffer:
-    - For Cheap Options (price < 50): max(0.15, price * 0.02)  (e.g., 0.15 - 0.20 pt buffer for ~7.50 options)
-    - For Mid Options (50 <= price < 200): max(0.50, price * 0.015)
-    - For High Options / Stock Spot (200 <= price < 500): max(1.00, price * 0.01)
-    - For Index Spot (price >= 500): max(2.00, price * 0.005)
+    - For Ultra-Cheap Options (price < 10): max(0.40, price * 0.10) (prevents premature bid-ask spread whipsaws)
+    - For Cheap Options (10 <= price < 50): max(0.60, price * 0.04) (0.60 - 2.00 pt buffer)
+    - For Mid Options (50 <= price < 200): max(1.00, price * 0.02)
+    - For High Options / Stock Spot (200 <= price < 500): max(1.50, price * 0.01)
+    - For Index Spot / High Stocks (price >= 500): max(2.50, price * 0.005)
     """
     price = float(price_level)
-    if price < 50:
-        buffer = max(0.15, price * 0.02)
+    if price < 10:
+        buffer = max(0.40, price * 0.10)
+    elif price < 50:
+        buffer = max(0.60, price * 0.04)
     elif price < 200:
-        buffer = max(0.50, price * 0.015)
+        buffer = max(1.00, price * 0.02)
     elif price < 500:
-        buffer = max(1.00, price * 0.01)
+        buffer = max(1.50, price * 0.01)
     else:
-        buffer = max(2.00, price * 0.005)
+        buffer = max(2.50, price * 0.005)
 
     if str(side).upper() == "BEAR":
         return round(price + buffer, 2)
     else:
-        return round(price - buffer, 2)
+        return round(max(0.05, price - buffer), 2)
 
 def check_circuit_and_spread_shield(kite, symbol, exchange="NSE", side="BUY"):
     """
@@ -1118,10 +1052,29 @@ def close_stock_position(kite, pos, live_market=True, product=None):
     if not contract:
         logging.error("close_stock_position failed: missing contract/symbol name")
         return
+
+    qty = pos.get("position_size", pos.get("quantity", 1))
+
+    # Live position quantity verification & already-closed guard
+    if kite and live_market:
+        try:
+            net_positions = kite.positions().get("net", [])
+            for p in net_positions:
+                if p.get("tradingsymbol") == contract:
+                    live_held = int(p.get("quantity", 0))
+                    if live_held <= 0:
+                        logging.info(f"[ALREADY CLOSED] Stock {contract} has {live_held} quantity in Kite net positions. Skipping duplicate exit.")
+                        save_executed_exit(contract, "ALREADY_CLOSED", {"status": "ZERO_QTY"})
+                        return
+                    qty = min(qty, live_held)
+                    break
+        except Exception as p_err:
+            logging.warning(f"Could not verify live net quantity for stock {contract}: {p_err}")
+
     if is_contract_exit_executed(contract):
         prev = EXECUTED_EXITS.get(contract, {})
-        oid = prev.get("order_id")
-        prev_ts = prev.get("timestamp")
+        oid = str(prev.get("order_id", ""))
+        prev_ts = prev.get("timestamp", "")
         
         is_reentry = False
         pos_entry_time = pos.get("entry_time") or ""
@@ -1134,22 +1087,56 @@ def close_stock_position(kite, pos, live_market=True, product=None):
             except Exception:
                 pass
 
-        has_live_qty = False
-        if kite and live_market:
-            try:
-                for kp in kite.positions().get("net", []):
-                    if kp.get("tradingsymbol") == contract and int(kp.get("quantity", 0)) > 0:
-                        has_live_qty = True
-                        break
-            except Exception:
-                pass
-
-        if is_reentry or has_live_qty:
-            logging.info(f"[EXIT GUARD RESET] Stock {contract} is an active position / re-entry (entry_time={pos_entry_time} vs exit_ts={prev_ts}, live_qty={has_live_qty}). Resetting stale exit guard order {oid}.")
+        if is_reentry:
+            logging.info(f"[EXIT GUARD RESET] Stock {contract} is a fresh re-entry (entry_time={pos_entry_time} > exit_ts={prev_ts}). Resetting stale exit guard order {oid}.")
             clear_executed_exit(contract)
+        elif oid and kite and live_market and oid != "ALREADY_CLOSED":
+            o_status = None
+            try:
+                orders = kite.orders()
+                for o in orders:
+                    if str(o.get("order_id")) == str(oid):
+                        o_status = o.get("status")
+                        break
+                if o_status in ["OPEN", "TRIGGER PENDING"]:
+                    elapsed_secs = 999
+                    if prev_ts:
+                        try:
+                            elapsed_secs = (dt.now() - dt.fromisoformat(prev_ts.split("+")[0])).total_seconds()
+                        except Exception:
+                            pass
+                    if elapsed_secs < 15:
+                        logging.info(f"[EXIT GUARD BLOCK] Stock {contract} exit order {oid} is {o_status} (placed {elapsed_secs:.0f}s ago). Waiting for fill.")
+                        return
+                    logging.warning(f"[PENDING LIMIT EXIT DETECTED] Stock order {oid} for {contract} is OPEN/UNFILLED after {elapsed_secs:.0f}s. Cancelling and executing fallback...")
+                    try:
+                        kite.cancel_order(variety=kite.VARIETY_REGULAR, order_id=oid)
+                    except Exception as c_err:
+                        logging.warning(f"Could not cancel pending order {oid}: {c_err}")
+                    clear_executed_exit(contract)
+                elif o_status in ["CANCELLED", "REJECTED", "EXPIRED", "CANCELLED ALL"]:
+                    elapsed_secs = 0
+                    if prev_ts:
+                        try:
+                            elapsed_secs = (dt.now() - dt.fromisoformat(prev_ts.split("+")[0])).total_seconds()
+                        except Exception:
+                            pass
+                    if elapsed_secs < 30:
+                        logging.info(f"[EXIT GUARD COOLDOWN] Stock order {oid} for {contract} was {o_status} ({elapsed_secs:.0f}s ago). Backing off before retry.")
+                        return
+                    logging.warning(f"[EXIT GUARD RESET] Stock order {oid} for {contract} was {o_status} > 30s ago. Retrying exit.")
+                    clear_executed_exit(contract)
+                else:
+                    logging.info(f"[EXIT GUARD BLOCK] Stock {contract} exit order {oid} is {o_status or 'UNKNOWN'}. Skipping duplicate exit call.")
+                    return
+            except Exception as check_err:
+                logging.debug(f"Could not verify exit order status for {contract}: {check_err}")
+                logging.info(f"[EXIT GUARD BLOCK] Stock {contract} exit order {oid} status could not be verified. Skipping duplicate exit call.")
+                return
         else:
-            logging.info(f"[EXIT GUARD BLOCK] {contract} stock exit order already submitted (Order ID: {prev.get('order_id')}). Skipping duplicate exit call.")
+            logging.info(f"[EXIT GUARD BLOCK] Stock {contract} exit order already submitted (Order ID: {prev.get('order_id')}). Skipping duplicate exit call.")
             return
+
     target_product = product
     try:
         if kite:
@@ -1169,7 +1156,6 @@ def close_stock_position(kite, pos, live_market=True, product=None):
         ltp = q[f"{kite.EXCHANGE_NSE}:{contract}"]["last_price"]
         bid = q[f"{kite.EXCHANGE_NSE}:{contract}"]["depth"]["buy"][0]["price"]
         price = round((bid if bid > 0 else ltp) * 0.995, 1)
-        qty = pos.get("position_size", pos.get("quantity", 1))
         try:
             oid = kite.place_order(
                 variety=kite.VARIETY_REGULAR, tradingsymbol=contract,
@@ -1192,8 +1178,10 @@ def close_stock_position(kite, pos, live_market=True, product=None):
                 save_executed_exit(contract, oid, {"type": "LIMIT_ALT", "price": price, "qty": qty})
                 logging.info(f"Fallback stock exit SUCCESS for {contract} with product {alt_product} (Order ID: {oid})")
             except Exception as alt_err:
+                save_executed_exit(contract, "REJECTED_ERROR", {"error": str(alt_err)})
                 logging.error(f"Fallback stock exit failed for {contract}: {alt_err}")
     except Exception as e:
+        save_executed_exit(contract, "REJECTED_ERROR", {"error": str(e)})
         logging.error(f"Stock exit failed for {contract}: {e}")
 
 EXECUTED_EXITS_FILE = paths.EXECUTED_EXITS_FILE
@@ -1254,6 +1242,19 @@ def is_market_open():
     t_now = now.time()
     return datetime_time(9, 15) <= t_now <= datetime_time(15, 30)
 
+def is_new_entry_allowed(live_execution_active=True):
+    """Check if new trade entries are allowed.
+    If live_execution_active is False (offline/scan-only/after-market mode), returns True to allow scanning & research anytime.
+    If live_execution_active is True, restricts new entries strictly to Mon-Fri 09:15 to 15:20 IST.
+    """
+    if not live_execution_active:
+        return True
+    now = dt.now()
+    if now.weekday() >= 5:
+        return False
+    t_now = now.time()
+    return datetime_time(9, 15) <= t_now <= datetime_time(15, 20)
+
 def close_position(kite, pos, live_market=True, product=None):
     contract = pos.get("contract") or pos.get("tradingsymbol")
     if not contract:
@@ -1283,6 +1284,22 @@ def close_position(kite, pos, live_market=True, product=None):
 
     qty = pos.get("quantity") or (get_option_lot_size(contract) or pos.get("lot_size", 1)) * pos.get("position_size", 1)
 
+    # Live position quantity verification & already-closed guard
+    if kite and live_market:
+        try:
+            net_positions = kite.positions().get("net", [])
+            for p in net_positions:
+                if p.get("tradingsymbol") == contract:
+                    live_held = int(p.get("quantity", 0))
+                    if live_held <= 0:
+                        logging.info(f"[ALREADY CLOSED] {contract} has {live_held} quantity in Kite net positions. Skipping exit order.")
+                        save_executed_exit(contract, "ALREADY_CLOSED", {"status": "ZERO_QTY"})
+                        return
+                    qty = min(qty, live_held)
+                    break
+        except Exception as p_err:
+            logging.warning(f"Could not verify live net quantity for {contract}: {p_err}")
+
     if kite and live_market and not is_market_open():
         logging.info(f"[MARKET CLOSED] Skipping live Zerodha exit order for {contract} outside market hours (09:15-15:30 IST). Position status logged.")
         return
@@ -1311,8 +1328,8 @@ def close_position(kite, pos, live_market=True, product=None):
 
     if is_contract_exit_executed(contract):
         prev = EXECUTED_EXITS.get(contract, {})
-        oid = prev.get("order_id")
-        prev_ts = prev.get("timestamp")
+        oid = str(prev.get("order_id", ""))
+        prev_ts = prev.get("timestamp", "")
         
         # Check if current position entry_time is newer than the saved exit order timestamp
         is_reentry = False
@@ -1326,21 +1343,10 @@ def close_position(kite, pos, live_market=True, product=None):
             except Exception:
                 pass
 
-        # Also check if kite positions confirm we still hold an active long position (quantity > 0)
-        has_live_qty = False
-        if kite and live_market:
-            try:
-                for kp in kite.positions().get("net", []):
-                    if kp.get("tradingsymbol") == contract and int(kp.get("quantity", 0)) > 0:
-                        has_live_qty = True
-                        break
-            except Exception:
-                pass
-
-        if is_reentry or has_live_qty:
-            logging.info(f"[EXIT GUARD RESET] Contract {contract} is an active position / re-entry (entry_time={pos_entry_time} vs exit_ts={prev_ts}, live_qty={has_live_qty}). Resetting stale exit guard {oid}.")
+        if is_reentry:
+            logging.info(f"[EXIT GUARD RESET] Contract {contract} is a fresh re-entry (entry_time={pos_entry_time} > exit_ts={prev_ts}). Resetting stale exit guard {oid}.")
             clear_executed_exit(contract)
-        elif oid and kite and live_market:
+        elif oid and kite and live_market and oid != "ALREADY_CLOSED":
             o_status = None
             try:
                 orders = kite.orders()
@@ -1349,7 +1355,16 @@ def close_position(kite, pos, live_market=True, product=None):
                         o_status = o.get("status")
                         break
                 if o_status in ["OPEN", "TRIGGER PENDING"]:
-                    logging.warning(f"[PENDING LIMIT EXIT DETECTED] Order {oid} for {contract} is OPEN/UNFILLED. Cancelling order and executing aggressive Marketable LIMIT exit fallback...")
+                    elapsed_secs = 999
+                    if prev_ts:
+                        try:
+                            elapsed_secs = (dt.now() - dt.fromisoformat(prev_ts.split("+")[0])).total_seconds()
+                        except Exception:
+                            pass
+                    if elapsed_secs < 15:
+                        logging.info(f"[EXIT GUARD BLOCK] {contract} exit order {oid} is {o_status} (placed {elapsed_secs:.0f}s ago). Waiting for fill.")
+                        return
+                    logging.warning(f"[PENDING LIMIT EXIT DETECTED] Order {oid} for {contract} has been OPEN for {elapsed_secs:.0f}s. Cancelling order and executing aggressive Marketable LIMIT exit fallback...")
                     try:
                         kite.cancel_order(variety=kite.VARIETY_REGULAR, order_id=oid)
                     except Exception as c_err:
@@ -1366,7 +1381,16 @@ def close_position(kite, pos, live_market=True, product=None):
                     logging.info(f"Fallback Marketable LIMIT exit SUCCESS for {contract} at price {fallback_price} on exchange {target_exch} (Order ID: {m_oid})")
                     return
                 elif o_status in ["CANCELLED", "REJECTED", "EXPIRED", "CANCELLED ALL"]:
-                    logging.warning(f"[EXIT GUARD RESET] Order {oid} for {contract} is {o_status}. Clearing exit guard and retrying exit.")
+                    elapsed_secs = 0
+                    if prev_ts:
+                        try:
+                            elapsed_secs = (dt.now() - dt.fromisoformat(prev_ts.split("+")[0])).total_seconds()
+                        except Exception:
+                            pass
+                    if elapsed_secs < 30:
+                        logging.info(f"[EXIT GUARD COOLDOWN] Order {oid} for {contract} was {o_status} ({elapsed_secs:.0f}s ago). Backing off before retry.")
+                        return
+                    logging.warning(f"[EXIT GUARD RESET] Order {oid} for {contract} was {o_status} > 30s ago ({elapsed_secs:.0f}s). Retrying exit.")
                     clear_executed_exit(contract)
                 else:
                     logging.info(f"[EXIT GUARD BLOCK] {contract} exit order {oid} is {o_status or 'UNKNOWN'}. Skipping duplicate exit call.")
@@ -1405,6 +1429,7 @@ def close_position(kite, pos, live_market=True, product=None):
             save_executed_exit(contract, oid, {"type": "LIMIT_FALLBACK", "price": fallback_price, "qty": qty})
             logging.info(f"Fallback Marketable LIMIT exit SUCCESS for {contract} on exchange {target_exch} at price {fallback_price} with product {target_product}")
         except Exception as m_err:
+            save_executed_exit(contract, "REJECTED_ERROR", {"error": str(m_err)})
             logging.error(f"Fallback exit failed for {contract}: {m_err}")
 
 def load_program_config_for_engine(cfg_section, extra_fields=None):
@@ -1988,6 +2013,10 @@ def reconcile_positions(kite, registry, positions_dict, lock, engine, timeframe_
     except Exception as e:
         logging.warning(f"Kite position fetch for reconciliation failed: {e}")
     import trade_db
+    try:
+        trade_db.reconcile_broker_live_positions(kite)
+    except Exception as e:
+        logging.warning(f"[RECONCILE] Live broker reconcile error: {e}")
     db_active = {t["symbol"] for t in trade_db.get_active_trades(engine) if t.get("symbol") in registry}
     with lock:
         stale_zero = [s for s, p in list(positions_dict.items())
@@ -2186,14 +2215,20 @@ def find_newest_valid_anchor(df):
                     }
     return None
 
+from session import TokenBucketRateLimiter, _GLOBAL_KITE_RATE_LIMITER
+
 def safe_kite_call(func, *args, retries=3, delay=0.8, **kwargs):
+    _GLOBAL_KITE_RATE_LIMITER.acquire()
     for attempt in range(retries):
         try:
             return func(*args, **kwargs)
         except Exception as err:
             err_str = str(err).lower()
-            if "too many" in err_str or "requests" in err_str or "access_token" in err_str or "api_key" in err_str or "429" in err_str:
-                time.sleep(delay * (attempt + 1))
+            if "too many" in err_str or "requests" in err_str or "429" in err_str:
+                time.sleep(delay * (attempt + 1.5))
+                _GLOBAL_KITE_RATE_LIMITER.acquire()
+            elif "access_token" in err_str or "api_key" in err_str:
+                time.sleep(delay)
             else:
                 raise err
     return func(*args, **kwargs)
@@ -2204,16 +2239,48 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                 active_positions, position_lock, trade_db, strike_range,
                 log_fn):
     trades = []
+    current_spot = 0.0
+    token = config.get("token")
     try:
-        spot_quote = safe_kite_call(kite.ltp, [config["token"]])
-        current_spot = float(list(spot_quote.values())[0]["last_price"])
+        spot_quote = safe_kite_call(kite.ltp, [f"NSE:{symbol}"])
+        if f"NSE:{symbol}" in spot_quote:
+            current_spot = float(spot_quote[f"NSE:{symbol}"]["last_price"])
+            real_tok = spot_quote[f"NSE:{symbol}"].get("instrument_token")
+            if real_tok and token != real_tok:
+                token = int(real_tok)
+                config["token"] = token
+        else:
+            spot_quote = safe_kite_call(kite.ltp, [token])
+            current_spot = float(list(spot_quote.values())[0]["last_price"])
     except Exception:
-        try:
-            df_spot = safe_kite_call(fetch_and_resample_candles, kite, config["token"], from_entry, to_entry, timeframe_entry)
-            if df_spot.empty:
+        pass
+
+    try:
+        df_spot = safe_kite_call(fetch_and_resample_candles, kite, config["token"], from_entry, to_entry, timeframe_entry)
+        if df_spot is not None and not df_spot.empty:
+            if current_spot <= 0:
+                current_spot = float(df_spot.iloc[-1]['close'])
+        else:
+            if current_spot <= 0:
                 return []
-            current_spot = float(df_spot.iloc[-1]['close'])
-        except Exception as e:
+    except Exception as e:
+        err_str = str(e).lower()
+        if "invalid token" in err_str or "not found" in err_str:
+            try:
+                q = kite.quote([f"NSE:{symbol}"])
+                if f"NSE:{symbol}" in q:
+                    real_tok = int(q[f"NSE:{symbol}"]["instrument_token"])
+                    config["token"] = real_tok
+                    from registries import STOCK_REGISTRY
+                    if symbol in STOCK_REGISTRY:
+                        STOCK_REGISTRY[symbol]["token"] = real_tok
+                    df_spot = safe_kite_call(fetch_and_resample_candles, kite, real_tok, from_entry, to_entry, timeframe_entry)
+                    if df_spot is not None and not df_spot.empty and current_spot <= 0:
+                        current_spot = float(df_spot.iloc[-1]['close'])
+            except Exception as auto_e:
+                logging.warning(f"Spot auto-repair failed for {symbol}: {auto_e}")
+                return []
+        if current_spot <= 0 and (df_spot is None or df_spot.empty):
             logging.warning(f"Spot data failed for {symbol}: {e}")
             return []
     ce_list = resolve_fn(symbol, current_spot, config['strike_step'], "CE", strike_range)
@@ -2457,6 +2524,21 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
         logging.debug(f"[FAILSAFE PAUSED BEFORE {failsafe_start_str} AM] Automated active position exit checks paused until {failsafe_start_str} AM.")
         return
 
+    # Update WebSocket subscriptions for active positions
+    ws_mon = None
+    try:
+        from websocket_monitor import get_global_ws_monitor
+        ws_mon = get_global_ws_monitor(
+            getattr(kite, "api_key", None),
+            getattr(kite, "access_token", None),
+            failsafe_start_time=failsafe_start_str
+        )
+        if ws_mon:
+            ws_mon.update_subscriptions(positions_dict)
+    except Exception as ws_init_err:
+        logging.debug(f"[WEBSOCKET] ws_mon init error: {ws_init_err}")
+        ws_mon = None
+
     with lock:
         items = list(positions_dict.items())
 
@@ -2497,18 +2579,24 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
             is_stock = pos.get("position_type") == "stock"
             current_sl = float(pos.get("current_sl", 0))
 
-            # Fetch live quote for LTP
+            # Fetch live quote: Try WebSocket tick first (sub-millisecond), fallback to REST quote
             live_ltp = 0.0
-            try:
-                contract_name = pos.get("contract") or pos.get("symbol") or sym
-                exch = "NSE" if is_stock else ("BFO" if ("SENSEX" in c_str or "BSE" in c_str) else "NFO")
-                q_key = f"{exch}:{contract_name}"
-                q_res = kite.quote([q_key])
-                if q_key in q_res:
-                    q_info = q_res[q_key]
-                    live_ltp = float(q_info.get("last_price", 0))
-            except Exception as q_err:
-                logging.debug(f"Live quote fetch error for {sym}: {q_err}")
+            if ws_mon and token:
+                ws_ltp, is_fresh = ws_mon.get_ltp(token, max_age_seconds=15.0)
+                if ws_ltp > 0 and is_fresh:
+                    live_ltp = ws_ltp
+
+            if live_ltp <= 0 and kite:
+                try:
+                    contract_name = pos.get("contract") or pos.get("symbol") or sym
+                    exch = "NSE" if is_stock else ("BFO" if ("SENSEX" in c_str or "BSE" in c_str) else "NFO")
+                    q_key = f"{exch}:{contract_name}"
+                    q_res = kite.quote([q_key])
+                    if q_key in q_res:
+                        q_info = q_res[q_key]
+                        live_ltp = float(q_info.get("last_price", 0))
+                except Exception as q_err:
+                    logging.debug(f"Live quote fetch error for {sym}: {q_err}")
 
             # Compute High (hp) strictly for candles AFTER trade entry_time + live_ltp
             entry_time_str = sanitize_entry_time(pos)
@@ -2641,7 +2729,9 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                     to_clear.append(sym)
                     continue
                 elif pos.get("trailing_stage", 0) == 0:
-                    new_sl = pos.get("entry_spot", 0)
+                    curr_sl = float(pos.get("current_sl") or 0.0)
+                    entry_s = float(pos.get("entry_spot") or 0.0)
+                    new_sl = max(curr_sl, entry_s) if str(pos.get("side","CE")).upper() in ["CE", "BUY", "BULL"] else min(curr_sl, entry_s) if curr_sl > 0 else entry_s
                     with lock:
                         if sym in positions_dict:
                             positions_dict[sym]["current_sl"] = new_sl
@@ -2655,7 +2745,9 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                         trade_db.update_trade(tid, {"trailing_stage": 1, "current_sl": new_sl})
 
             if pos.get("trailing_stage", 0) == 1 and t2_val and hp >= (t2_val - buf_t2):
-                new_sl = t1_val or pos.get("entry_spot", 0)
+                curr_sl = float(pos.get("current_sl") or 0.0)
+                target_base = float(t1_val or pos.get("entry_spot") or 0.0)
+                new_sl = max(curr_sl, target_base) if str(pos.get("side","CE")).upper() in ["CE", "BUY", "BULL"] else min(curr_sl, target_base) if curr_sl > 0 else target_base
                 with lock:
                     if sym in positions_dict:
                         positions_dict[sym]["current_sl"] = new_sl
@@ -3423,18 +3515,18 @@ def scan_trend_continuation_reentry_bearish(df_entry, df_anchor):
         "A_time": str(trigger_candle.get("date", ""))
     }
 
-def scan_anchor_bcd_breakout_generic(df_entry, df_anchor, side="BULL"):
+def scan_anchor_bcd_breakout_generic(df_entry, df_anchor, side="BULL", anchor_tf="", entry_tf="", **kwargs):
     """
     Unified A-first breakout scanner supporting both BULLISH and BEARISH reversals,
     plus fast Trend Continuation Re-entries (Pages 16 & 17).
     """
     if str(side).upper() == "BEAR":
-        res = scan_anchor_bcd_breakout_bearish(df_entry, df_anchor)
+        res = scan_anchor_bcd_breakout_bearish(df_entry, df_anchor, anchor_tf=anchor_tf, entry_tf=entry_tf, **kwargs)
         if not res:
             res = scan_trend_continuation_reentry_bearish(df_entry, df_anchor)
         return res
     else:
-        res = scan_anchor_bcd_breakout(df_entry, df_anchor)
+        res = scan_anchor_bcd_breakout(df_entry, df_anchor, anchor_tf=anchor_tf, entry_tf=entry_tf, **kwargs)
         if not res:
             res = scan_trend_continuation_reentry(df_entry, df_anchor)
         return res

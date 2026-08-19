@@ -17,6 +17,7 @@ from trading_core import (
     close_position as shared_close_position,
     close_stock_position as shared_close_stock_position,
     clear_executed_exit,
+    is_contract_exit_executed,
     log_to_journal
 )
 from ema_engine import (
@@ -109,27 +110,30 @@ PROGRAMS = {
         "color": "#58a6ff",
         "log_file": INDEX_LOG_FILE,
         "config_fields": {
-            "timeframe_entry": {"label": "Entry Timeframe", "type": "select", "options": ["3minute","5minute","10minute","15minute","30minute","60minute","75min","day"], "default": "3minute"},
-            "timeframe_anchor": {"label": "Anchor Timeframe", "type": "select", "options": ["3minute","5minute","10minute","15minute","30minute","60minute","75min","day"], "default": "15minute"},
+            "timeframe_entry": {"label": "Entry Timeframe", "type": "select", "options": ["3minute","5minute","10minute","15minute","30minute","60minute","75min","4hr","day","week"], "default": "3minute"},
+            "timeframe_anchor": {"label": "Anchor Timeframe", "type": "select", "options": ["3minute","5minute","10minute","15minute","30minute","60minute","75min","4hr","day","week"], "default": "15minute"},
             "capital": {"label": "Capital", "type": "number", "default": 100000.0},
-            "strike_range": {"label": "Strike Range (±)", "type": "number", "default": 0},
+            "strike_range": {"label": "Strike Range (±)", "type": "number", "default": 1},
             "enable_swing_filter": {"label": "Swing Filter", "type": "select", "options": ["true", "false"], "default": "true"},
-            "swing_min_waves": {"label": "Min Swings", "type": "number", "default": 3}
+            "swing_min_waves": {"label": "Min Swings", "type": "number", "default": 2},
+            "strict_macro_gate": {"label": "Strict Macro Gate (13 EMA)", "type": "select", "options": ["false", "true"], "default": "false"}
         }
     },
     "nifty50": {
         "name": "Stock Options Trade Engine",
         "file": "Trade_Option/stock_options_trade_engine.py",
-        "desc": "Scans Nifty 50 stock options, picks best setup & executes",
+        "desc": "Scans F&O stock options (210+ liquid underlyings), picks best setup & executes",
         "color": "#3fb950",
         "log_file": NIFTY50_LOG_FILE,
         "config_fields": {
-            "timeframe_entry": {"label": "Entry Timeframe", "type": "select", "options": ["3minute","5minute","10minute","15minute","30minute","60minute","75min","day"], "default": "15minute"},
-            "timeframe_anchor": {"label": "Anchor Timeframe", "type": "select", "options": ["3minute","5minute","10minute","15minute","30minute","60minute","75min","day"], "default": "30minute"},
+            "target_universe": {"label": "Target Universe", "type": "select", "options": ["FNO_ALL", "NIFTY50", "NIFTY_NEXT_100", "NIFTY_MIDCAP_100"], "default": "FNO_ALL"},
+            "timeframe_entry": {"label": "Entry Timeframe", "type": "select", "options": ["3minute","5minute","10minute","15minute","30minute","60minute","75min","4hr","day","week"], "default": "15minute"},
+            "timeframe_anchor": {"label": "Anchor Timeframe", "type": "select", "options": ["3minute","5minute","10minute","15minute","30minute","60minute","75min","4hr","day","week"], "default": "30minute"},
             "capital": {"label": "Capital", "type": "number", "default": 100000.0},
-            "strike_range": {"label": "Strike Range (±)", "type": "number", "default": 0},
+            "strike_range": {"label": "Strike Range (±)", "type": "number", "default": 1},
             "enable_swing_filter": {"label": "Swing Filter", "type": "select", "options": ["true", "false"], "default": "true"},
-            "swing_min_waves": {"label": "Min Swings", "type": "number", "default": 3}
+            "swing_min_waves": {"label": "Min Swings", "type": "number", "default": 2},
+            "strict_macro_gate": {"label": "Strict Macro Gate (13 EMA)", "type": "select", "options": ["false", "true"], "default": "false"}
         }
     },
     "ema_engine": {
@@ -139,7 +143,7 @@ PROGRAMS = {
         "color": "#a371f7",
         "log_file": EMA_LOG_FILE,
         "config_fields": {
-            "timeframe": {"label": "Timeframe", "type": "select", "options": ["1d", "60minute", "30minute", "15minute", "5minute"], "default": "1d"},
+            "timeframe": {"label": "Timeframe", "type": "select", "options": ["1d", "4hr", "60minute", "30minute", "15minute", "5minute"], "default": "1d"},
             "target_universe": {"label": "Target Universe", "type": "select", "options": ["ALL", "NIFTY50", "NIFTY_NEXT_100", "NIFTY_MIDCAP_100", "NIFTY_SMALLCAP_250", "INDEX_OPTIONS"], "default": "ALL"}
         }
     }
@@ -726,6 +730,9 @@ def refresh_data(single_run=False):
                                 # TASK 1: Pause automated exit execution if user is actively editing this symbol on the UI
                                 elif clean_sym in ACTIVE_EDIT_LOCKS:
                                     logging.info(f"[FAILSAFE PAUSED] {contract_name} is currently being edited on UI. Automated exit execution paused.")
+                                # TASK 1b: Skip if exit order has already been executed/submitted
+                                elif is_contract_exit_executed(contract_name):
+                                    pass
                                 # TASK 2: Execute SL exit ONLY IF below 0.5% buffer AND (previous candle closed below SL OR emergency deep break)
                                 elif ltp_val > 0 and sl_val > 0 and is_below_buffer and (prev_closed_below or is_deep_break):
                                     logging.warning(f"[FAILSAFE MONITOR EXIT SL CONFIRMED] {contract_name} LTP={ltp_val} <= Buffered SL={sl_buffered} (Prev Close Below: {prev_closed_below}, Deep Break: {is_deep_break})")
@@ -775,9 +782,7 @@ def refresh_data(single_run=False):
             auto_export_if_new_month()
         time.sleep(REFRESH_SECONDS)
 
-# Dashboard HTML/JS extracted to templates/index.html (keeps the Python file lean and reduces AI-context load)
-with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'templates/index.html'), encoding="utf-8") as _template_f:
-    HTML_TEMPLATE = _template_f.read()
+TEMPLATE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'templates/index.html')
 
 # ──────────────────────────────────────────────
 #  FLASK ROUTES — API Endpoints
@@ -785,7 +790,9 @@ with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'templates/in
 
 @app.route("/")
 def dashboard():
-    return render_template_string(HTML_TEMPLATE, refresh=REFRESH_SECONDS, programs=PROGRAMS)
+    with open(TEMPLATE_PATH, encoding="utf-8") as _template_f:
+        tpl = _template_f.read()
+    return render_template_string(tpl, refresh=REFRESH_SECONDS, programs=PROGRAMS)
 
 @app.route("/api/status")
 def api_status():

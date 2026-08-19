@@ -16,7 +16,7 @@ import re
 import sqlite3
 import time
 import threading
-from datetime import datetime
+from datetime import datetime, datetime as dt
 
 import paths
 
@@ -448,8 +448,52 @@ def reconcile_with_executed_exits(exit_orders):
     return closed
 
 
-def run_db_housekeeping():
-    """One-shot startup cleanup: dedupe, reconcile executed exits, purge expired.
+def reconcile_broker_live_positions(kite):
+    """Auto-reconcile DB ACTIVE trades against Kite live net positions.
+    
+    If an ACTIVE trade's underlying contract has net held quantity <= 0 on Kite
+    and is not a pending staged entry, transition its status to COMPLETED.
+    Returns count of positions reconciled.
+    """
+    if kite is None:
+        return 0
+    try:
+        pos_data = kite.positions()
+        net_pos = {p.get("tradingsymbol"): p for p in pos_data.get("net", []) if p.get("tradingsymbol")}
+        day_pos = {p.get("tradingsymbol"): p for p in pos_data.get("day", []) if p.get("tradingsymbol")}
+    except Exception as e:
+        logging.warning(f"[trade_db] reconcile_broker_live_positions failed to fetch Kite positions: {e}")
+        return 0
+
+    reconciled = 0
+    now_str = dt.now().strftime("%Y-%m-%d %H:%M:%S")
+    for t in get_active_trades():
+        contract = _normalize_contract(t.get("contract") or t.get("symbol"))
+        if not contract:
+            continue
+        p_info = net_pos.get(contract) or day_pos.get(contract)
+        net_qty = int(p_info.get("quantity", 0)) if p_info else 0
+        if net_qty <= 0:
+            logging.info(f"[trade_db] Auto-reconciling zero-qty broker position: Trade #{t['id']} {contract} (Broker Net Qty: {net_qty})")
+            try:
+                update_trade_status(
+                    t["id"], "COMPLETED",
+                    exit_price=p_info.get("sell_price") or p_info.get("last_price") if p_info else None,
+                    exit_reason="BROKER_NET_QTY_ZERO_RECONCILED",
+                    details="Auto-reconciled: live broker held quantity is 0",
+                    exit_time=now_str
+                )
+                reconciled += 1
+            except Exception as e:
+                logging.warning(f"[trade_db] reconcile broker zero-qty close failed for #{t['id']} {contract}: {e}")
+
+    if reconciled > 0:
+        _sync_tab_databases()
+    return reconciled
+
+
+def run_db_housekeeping(kite=None):
+    """One-shot startup cleanup: dedupe, reconcile executed exits, purge expired, reconcile broker live qty.
 
     Called by engine startups and dashboard refresh loops so stale ACTIVE rows
     (closed-on-Zerodha / expired contracts like NIFTY2681124650PE) can never
@@ -472,6 +516,12 @@ def run_db_housekeeping():
     except Exception as e:
         logging.warning(f"[trade_db] housekeeping purge failed: {e}")
         summary["purged"] = 0
+    if kite is not None:
+        try:
+            summary["broker_reconciled"] = reconcile_broker_live_positions(kite)
+        except Exception as e:
+            logging.warning(f"[trade_db] housekeeping broker reconcile failed: {e}")
+            summary["broker_reconciled"] = 0
     if any(summary.values()):
         logging.info(f"[trade_db] housekeeping: {summary}")
     return summary

@@ -55,8 +55,9 @@ STATE_FILE = paths.monitor_file("stock_positions_state.json")
 SCAN_INTERVAL_SECONDS = 300
 STRIKE_RANGE = 0
 
-TIMEFRAME_ENTRY = "30minute"
+TIMEFRAME_ENTRY = "15minute"
 TIMEFRAME_ANCHOR = "30minute"
+TARGET_UNIVERSE = "FNO_ALL"
 BACKTEST_DATE = None
 
 ACTIVE_POSITIONS = {}
@@ -99,9 +100,8 @@ def load_state():
         try:
             with open(STATE_FILE, "r", encoding="utf-8") as f:
                 ACTIVE_POSITIONS = json.load(f)
-            logging.info(f"Recovered {len(ACTIVE_POSITIONS)} positions")
-        except Exception:
-            ACTIVE_POSITIONS = {}
+        except Exception as e:
+            logging.error(f"State load failed: {e}")
 
 NFO_CACHE_FILE = paths.NFO_CACHE_FILE
 
@@ -109,18 +109,9 @@ def sync_instruments(kite):
     global NFO_INSTRUMENTS
     def _do_sync():
         global NFO_INSTRUMENTS
-        instr = kite.instruments("NSE")
-        df = pd.DataFrame(instr)
-        if not df.empty:
-            df['tradingsymbol'] = df['tradingsymbol'].str.strip()
-            df['segment'] = df['segment'].str.strip()
-            synced = 0
-            for sym in STOCK_REGISTRY:
-                m = df[(df['tradingsymbol'] == sym) & (df['segment'] == 'NSE')]
-                if not m.empty:
-                    STOCK_REGISTRY[sym]["token"] = int(m.iloc[0]['instrument_token'])
-                    synced += 1
-            logging.info(f"Synced tokens for {synced} stocks")
+        from registries import sync_fno_stock_registry, sync_stock_tokens
+        sync_stock_tokens(kite)
+        sync_fno_stock_registry(kite, target_universe=TARGET_UNIVERSE)
         nfo = kite.instruments("NFO")
         try:
             bfo = kite.instruments("BFO")
@@ -132,7 +123,7 @@ def sync_instruments(kite):
             if not NFO_INSTRUMENTS.empty:
                 NFO_INSTRUMENTS['name'] = NFO_INSTRUMENTS['name'].str.strip().str.upper()
                 NFO_INSTRUMENTS['instrument_type'] = NFO_INSTRUMENTS['instrument_type'].str.strip().str.upper()
-                logging.info(f"Synced {len(NFO_INSTRUMENTS)} NFO/BFO contracts")
+                logging.info(f"Synced {len(NFO_INSTRUMENTS)} NFO/BFO contracts ({len(STOCK_REGISTRY)} F&O equities in registry)")
                 os.makedirs(os.path.dirname(NFO_CACHE_FILE), exist_ok=True)
                 NFO_INSTRUMENTS.to_csv(NFO_CACHE_FILE, index=False)
     pool = ThreadPoolExecutor(max_workers=1)
@@ -240,9 +231,10 @@ def _process_stock(kite, symbol, config, from_entry, to_entry, from_anchor, to_a
 def run_scan_cycle(kite):
     if NFO_INSTRUMENTS.empty:
         sync_instruments(kite)
-    cfg_applied = load_program_config_for_engine("nifty50", [("strike_range", "STRIKE_RANGE")])
+    cfg_applied = load_program_config_for_engine("nifty50", [("strike_range", "STRIKE_RANGE"), ("strict_macro_gate", "STRICT_MACRO_GATE")])
     for k, v in cfg_applied.items():
         if k == "STRIKE_RANGE": globals()["STRIKE_RANGE"] = int(v) if isinstance(v, (int, float)) else v
+        elif k == "STRICT_MACRO_GATE": globals()["STRICT_MACRO_GATE"] = bool(v)
         elif k in ("TIMEFRAME_ENTRY", "TIMEFRAME_ANCHOR"): globals()[k] = v
         elif k == "LIVE_MARKET_DEPLOYMENT": globals()["LIVE_MARKET_DEPLOYMENT"] = v
         elif k == "LOOKBACK_DAYS": globals()["LOOKBACK_DAYS"] = int(v)
@@ -276,19 +268,30 @@ def run_scan_cycle(kite):
         ("A5", find_anchor_two_higher_highs),
     ]
 
-    scan_order = sorted(STOCK_REGISTRY.keys())
+    from equity_universe import NIFTY50_SYMBOLS, INDICES_REGISTRY_MAP
+    if TARGET_UNIVERSE == "NIFTY50":
+        scan_order = sorted([s for s in STOCK_REGISTRY.keys() if s in NIFTY50_SYMBOLS])
+    elif TARGET_UNIVERSE in INDICES_REGISTRY_MAP:
+        univ_syms = set(INDICES_REGISTRY_MAP[TARGET_UNIVERSE])
+        scan_order = sorted([s for s in STOCK_REGISTRY.keys() if s in univ_syms])
+    else:
+        scan_order = sorted(STOCK_REGISTRY.keys())
+
     temp_stored_trades = []
 
-    with ThreadPoolExecutor(max_workers=3) as pool:
+    with ThreadPoolExecutor(max_workers=5) as pool:
         futures = {}
         for symbol in scan_order:
-            config = STOCK_REGISTRY[symbol]
+            config = STOCK_REGISTRY.get(symbol)
+            if not config or not config.get("token"):
+                continue
             with position_lock:
                 if symbol in ACTIVE_POSITIONS:
                     continue
             futures[pool.submit(_process_stock, kite, symbol, config,
                 from_entry, to_entry, from_anchor, to_anchor,
                 entry_scanners, anchor_scanners)] = symbol
+            time.sleep(0.02)
 
         for f in as_completed(futures):
             symbol = futures[f]
@@ -533,10 +536,11 @@ def main_scan_loop(kite):
             time.sleep(10)
 
 def load_program_config():
-    cfg_applied = load_program_config_for_engine("nifty50", [("strike_range", "STRIKE_RANGE")])
+    cfg_applied = load_program_config_for_engine("nifty50", [("strike_range", "STRIKE_RANGE"), ("target_universe", "TARGET_UNIVERSE")])
     for k, v in cfg_applied.items():
         if k == "STRIKE_RANGE": globals()["STRIKE_RANGE"] = int(v) if isinstance(v, (int, float)) else v
         elif k in ("TIMEFRAME_ENTRY", "TIMEFRAME_ANCHOR"): globals()[k] = v
+        elif k == "TARGET_UNIVERSE": globals()["TARGET_UNIVERSE"] = str(v).upper()
         elif k == "LIVE_MARKET_DEPLOYMENT": globals()["LIVE_MARKET_DEPLOYMENT"] = v
         elif k == "LOOKBACK_DAYS": globals()["LOOKBACK_DAYS"] = int(v)
         elif k == "SCAN_INTERVAL_SECONDS": globals()["SCAN_INTERVAL_SECONDS"] = int(v)

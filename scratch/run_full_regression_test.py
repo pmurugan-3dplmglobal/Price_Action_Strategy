@@ -75,8 +75,10 @@ try:
         "entry_time": "2026-08-03 14:45:00",
         "candle_a_time": "2026-08-03 14:45:00"
     }]
-    disp_path = paths.SCAN_DISPLAY_FILE
+    disp_path = paths.SCAN_DISPLAY_FILE + ".regression_tmp"
     write_scan_display_data(test_trades, [], disp_path, engine_name="nifty50")
+    if os.path.exists(disp_path):
+        os.remove(disp_path)
     print(" PASSED [OK]", flush=True)
 except Exception as e:
     errors.append(f"Display Serializer Failed: {e}")

@@ -21,6 +21,7 @@ from trading_core import (
     get_adaptive_lookback,
     get_fetch_timeframe,
     resample_timeframe,
+    fetch_and_resample_candles,
     sync_stock_tokens,
     write_scan_display_data as shared_write_display,
     clean_timestamp,
@@ -36,7 +37,7 @@ PROFILE = {
     "scanner_label": "S1_Anchor_BCD",
     "display_file": paths.SCAN_DISPLAY_STOCK_FILE,
     "export_prefix": "Nifty50_Daily_Scan_",
-    "log_file": "output/logs/bull_daily_scanner.log",
+    "log_file": paths.BULL_DAILY_SCAN_LOG,
     "journal_tag": "SCAN_MATCH",
     "config_section": "daily",
     "summary_title": "NIFTY 50 DAILY SCAN SUMMARY",
@@ -72,6 +73,7 @@ def _configure_logging():
             h.close()
         except Exception:
             pass
+    os.makedirs(os.path.dirname(PROFILE["log_file"]), exist_ok=True)
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(message)s",
@@ -93,7 +95,7 @@ def configure_bull():
         "scanner_label": "S1_Anchor_BCD",
         "display_file": paths.SCAN_DISPLAY_STOCK_FILE,
         "export_prefix": "Nifty50_Daily_Scan_",
-        "log_file": "output/logs/bull_daily_scanner.log",
+        "log_file": paths.BULL_DAILY_SCAN_LOG,
         "journal_tag": "SCAN_MATCH",
         "config_section": "daily",
         "summary_title": "NIFTY 50 DAILY SCAN SUMMARY",
@@ -116,7 +118,7 @@ def configure_bear():
         "scanner_label": "S1_Bear_Anchor_BCD",
         "display_file": paths.SCAN_DISPLAY_BEAR_FILE,
         "export_prefix": "Nifty50_Daily_Scan_BEAR_",
-        "log_file": "output/logs/bull_bear_daily_scanner.log",
+        "log_file": paths.BEAR_DAILY_SCAN_LOG,
         "journal_tag": "SCAN_MATCH_BEAR",
         "config_section": "bear_trade",
         "summary_title": "NIFTY 50 BEARISH DAILY SCAN SUMMARY",
@@ -143,9 +145,8 @@ def run_scan(kite):
     symbols_list, token_map = get_universe_symbols_and_tokens(kite, TARGET_INDEX)
     scan_order = sorted(symbols_list)
     logging.info(f"Executing {PROFILE['side']} Scan for Universe '{TARGET_INDEX}' ({len(scan_order)} symbols) on timeframe '{TIMEFRAME_ENTRY}'...")
-    fetch_tf = get_fetch_timeframe(TIMEFRAME_ENTRY)
 
-    with ThreadPoolExecutor(max_workers=10) as pool:
+    with ThreadPoolExecutor(max_workers=4) as pool:
         futures = {}
         for symbol in scan_order:
             tok = token_map.get(symbol, 0)
@@ -155,20 +156,19 @@ def run_scan(kite):
                     results.append({"Symbol": symbol, "Pattern": "NO_TOKEN"})
                 continue
             futures[pool.submit(
-                lambda t=tok, fd=from_date, td=to_date, tf=fetch_tf: pd.DataFrame(kite.historical_data(t, fd, td, tf))
+                fetch_and_resample_candles, kite, tok, from_date, to_date, TIMEFRAME_ENTRY
             )] = symbol
-            time.sleep(0.05)
+            time.sleep(0.15)
         for f in as_completed(futures):
             symbol = futures[f]
             try:
-                df_raw = f.result()
-                df_e = resample_timeframe(df_raw, TIMEFRAME_ENTRY)
+                df_e = f.result()
             except Exception as e:
                 logging.warning(f"Data error for {symbol}: {e}")
                 with results_lock:
                     results.append({"Symbol": symbol, "Pattern": "ERROR", "Error": str(e)})
                 continue
-            if df_e.empty:
+            if df_e is None or df_e.empty:
                 with results_lock:
                     results.append({"Symbol": symbol, "Pattern": "NO_DATA"})
                 continue
@@ -181,7 +181,7 @@ def run_scan(kite):
             latest = df_e.iloc[-1]
             matched = False
 
-            # Phase 0: Parabolic Multi-Swing Cascade Filter
+            # Phase 0: Parabolic Multi-Swing Cascade Filter (Soft Tier Scoring)
             swing_meta = {}
             if ENABLE_SWING_FILTER:
                 swing_res = detect_parabolic_multi_swings(
@@ -191,15 +191,13 @@ def run_scan(kite):
                     min_r2=SWING_MIN_R2,
                     max_bars_after_terminal=20
                 )
-                if not swing_res.get("matched", False):
-                    logging.info(f"Skipping {symbol} - failed parabolic swing cascade filter ({swing_res.get('reason', 'unmatched')})")
-                    with results_lock:
-                        results.append({"Symbol": symbol, "Pattern": "SWING_FILTER_SKIPPED"})
-                    continue
                 swing_meta = {
                     "swing_waves": swing_res.get("valid_arch_count", 0),
                     "terminal_base": swing_res.get("has_terminal_base", False),
-                    "terminal_date": swing_res.get("terminal_swing_date", "")
+                    "terminal_date": swing_res.get("terminal_swing_date", ""),
+                    "tier": swing_res.get("tier", 2),
+                    "tier_label": swing_res.get("tier_label", "TIER_2_CORE"),
+                    "tier_badge": swing_res.get("tier_badge", "🥈 T2")
                 }
 
             for name, scanner_func in scanners:
@@ -263,12 +261,13 @@ def run_scan(kite):
                     results.append({"Symbol": symbol, "Pattern": "NO_MATCH"})
     formed_display = []
     for r in results:
-        if r.get("Pattern") and r.get("Pattern") not in ["NO_MATCH", "ERROR", "NO_DATA", "ILLIQUID_SKIPPED", "SWING_FILTER_SKIPPED"]:
+        if r.get("Pattern") and r.get("Pattern") not in ["NO_MATCH", "ERROR", "NO_DATA", "NO_TOKEN", "ILLIQUID_SKIPPED", "SWING_FILTER_SKIPPED"] and r.get("T1") is not None:
             c_time = clean_timestamp(r.get("CandleATime") or r.get("CandleTime") or r.get("Scan_Date"))
             formed_display.append({
                 "symbol": r.get("Symbol"),
                 "contract": r.get("Symbol"),
                 "entry_spot": r.get("Close") or r.get("Entry"),
+                "entry_price": r.get("Close") or r.get("Entry"),
                 "current_sl": r.get("SL"),
                 "t1": r.get("T1"),
                 "t2": r.get("T2"),
@@ -282,11 +281,14 @@ def run_scan(kite):
                 "entry_time": c_time,
                 "candle_a_time": c_time,
                 "swing_waves": r.get("swing_waves", 0),
-                "terminal_base": r.get("terminal_base", False)
+                "terminal_base": r.get("terminal_base", False),
+                "tier": r.get("tier", 2),
+                "tier_label": r.get("tier_label", "TIER_2_CORE"),
+                "tier_badge": r.get("tier_badge", "🥈 T2")
             })
     if formed_display:
         with position_lock:
-            shared_write_display(formed_display, dict(ACTIVE_POSITIONS), SCAN_DISPLAY_FILE, "nifty50")
+            shared_write_display(formed_display, dict(ACTIVE_POSITIONS), PROFILE["display_file"], PROFILE["config_section"])
     return results
 
 def export_results(results):

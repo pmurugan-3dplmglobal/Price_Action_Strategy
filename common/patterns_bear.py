@@ -12,6 +12,7 @@ from targets import (
     find_profit_targets_bearish, check_left_side_rule_bearish,
     calculate_sl_buffer
 )
+from timeframe_utils import get_adaptive_lookback, resample_timeframe, trading_days_between, is_live_candle_near_close
 from swing_detection import (
     is_parabolic_arch_enhanced,
     extract_swing_pivots,
@@ -199,12 +200,13 @@ def scan_anchor_bcd_breakout_bearish(df_entry, df_anchor, anchor_tf="", entry_tf
 
     if enable_swing_filter:
         sw_res = detect_parabolic_multi_swings(df_anchor, side="BEAR", min_swings=swing_min_waves, min_r2=swing_min_r2, max_bars_after_terminal=20)
-        if not sw_res.get("matched", False):
-            return None
         swing_meta = {
             "swing_waves": sw_res.get("valid_arch_count", 0),
             "terminal_base": sw_res.get("has_terminal_base", False),
-            "terminal_date": sw_res.get("terminal_swing_date", "")
+            "terminal_date": sw_res.get("terminal_swing_date", ""),
+            "tier": sw_res.get("tier", 2),
+            "tier_label": sw_res.get("tier_label", "TIER_2_CORE"),
+            "tier_badge": sw_res.get("tier_badge", "🥈 T2")
         }
 
     detectors = [
@@ -238,8 +240,8 @@ def scan_anchor_bcd_breakout_bearish(df_entry, df_anchor, anchor_tf="", entry_tf
         a_close = float(anchor_candle['close'])
         a_date = det_result.get("CandleATime") if det_result and det_result.get("CandleATime") else anchor_candle.get('date', '')
 
-        # Sequence gatekeeper: Anchor A must be formed at or after terminal swing base date
-        if swing_meta["terminal_date"] and a_date:
+        # Sequence gatekeeper: If terminal base is confirmed, Anchor A must be formed at or after terminal base date
+        if swing_meta.get("terminal_base") and swing_meta.get("terminal_date") and a_date:
             if str(a_date) < str(swing_meta["terminal_date"]):
                 continue
 
@@ -380,8 +382,30 @@ def scan_anchor_bcd_breakout_bearish(df_entry, df_anchor, anchor_tf="", entry_tf
 
     if best_match:
         best_match.pop("d_idx", None)
-        best_match["swing_waves"] = swing_meta.get("swing_waves", 0)
-        best_match["terminal_base"] = swing_meta.get("terminal_base", False)
+        sw_waves = swing_meta.get("swing_waves", 0)
+        term_base = swing_meta.get("terminal_base", False)
+        rr_val = float(best_match.get("RR", 0.0))
+        pat_name = str(best_match.get("Pattern", ""))
+        p_is_strong = any(k in pat_name for k in ["Engulf", "HH_Sweep", "Star", "Baby"])
+
+        if sw_waves >= 3 and term_base and rr_val >= 2.5:
+            tier = 1
+            tier_label = "TIER_1_GOLD"
+            tier_badge = "🥇 T1"
+        elif sw_waves >= 2 or p_is_strong or rr_val >= 1.88:
+            tier = 2
+            tier_label = "TIER_2_CORE"
+            tier_badge = "🥈 T2"
+        else:
+            tier = 3
+            tier_label = "TIER_3_MOMENTUM"
+            tier_badge = "🥉 T3"
+
+        best_match["tier"] = tier
+        best_match["tier_label"] = tier_label
+        best_match["tier_badge"] = tier_badge
+        best_match["swing_waves"] = sw_waves
+        best_match["terminal_base"] = term_base
     return best_match
 
 
@@ -447,7 +471,12 @@ def scan_trend_continuation_reentry(df_entry, df_anchor):
         "RR": round(rr, 2),
         "Signal": "Immediate_ReEntry",
         "D_time": str(current_candle.get("date", "")),
-        "A_time": str(trigger_candle.get("date", ""))
+        "A_time": str(trigger_candle.get("date", "")),
+        "tier": 3,
+        "tier_label": "TIER_3_MOMENTUM",
+        "tier_badge": "🥉 T3",
+        "swing_waves": 1,
+        "terminal_base": False
     }
 
 def scan_trend_continuation_reentry_bearish(df_entry, df_anchor):
@@ -511,7 +540,12 @@ def scan_trend_continuation_reentry_bearish(df_entry, df_anchor):
         "RR": round(rr, 2),
         "Signal": "Immediate_ReEntry_Bear",
         "D_time": str(current_candle.get("date", "")),
-        "A_time": str(trigger_candle.get("date", ""))
+        "A_time": str(trigger_candle.get("date", "")),
+        "tier": 3,
+        "tier_label": "TIER_3_MOMENTUM",
+        "tier_badge": "🥉 T3",
+        "swing_waves": 1,
+        "terminal_base": False
     }
 
 def scan_anchor_bcd_breakout_generic(df_entry, df_anchor, side="BULL", anchor_tf="", entry_tf=""):

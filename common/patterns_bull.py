@@ -206,12 +206,13 @@ def scan_anchor_bcd_breakout(df_entry, df_anchor, anchor_tf="", entry_tf="", ena
 
     if enable_swing_filter:
         sw_res = detect_parabolic_multi_swings(df_anchor, side="BULL", min_swings=swing_min_waves, min_r2=swing_min_r2, max_bars_after_terminal=20)
-        if not sw_res.get("matched", False):
-            return None
         swing_meta = {
             "swing_waves": sw_res.get("valid_arch_count", 0),
             "terminal_base": sw_res.get("has_terminal_base", False),
-            "terminal_date": sw_res.get("terminal_swing_date", "")
+            "terminal_date": sw_res.get("terminal_swing_date", ""),
+            "tier": sw_res.get("tier", 2),
+            "tier_label": sw_res.get("tier_label", "TIER_2_CORE"),
+            "tier_badge": sw_res.get("tier_badge", "🥈 T2")
         }
 
     anchor_funcs = [
@@ -262,8 +263,8 @@ def scan_anchor_bcd_breakout(df_entry, df_anchor, anchor_tf="", entry_tf="", ena
 
         a_time_val = anchor_match.get("CandleATime") if anchor_match and anchor_match.get("CandleATime") else str(a.get('date', ''))
         
-        # Sequence gatekeeper: Anchor A must be formed at or after terminal swing base date
-        if swing_meta["terminal_date"] and a_time_val:
+        # Sequence gatekeeper: If terminal base is confirmed, Anchor A must be formed at or after terminal base date
+        if swing_meta.get("terminal_base") and swing_meta.get("terminal_date") and a_time_val:
             if str(clean_timestamp(a_time_val)) < str(clean_timestamp(swing_meta["terminal_date"])):
                 continue
 
@@ -455,8 +456,30 @@ def scan_anchor_bcd_breakout(df_entry, df_anchor, anchor_tf="", entry_tf="", ena
     valid_matches.sort(key=lambda x: (x["d_idx"], _pattern_rank(x), x["Priority"] == "HIGH_PRIORITY", x["RR"]), reverse=True)
     best_latest = valid_matches[0]
     best_latest.pop("d_idx", None)
-    best_latest["swing_waves"] = swing_meta.get("swing_waves", 0)
-    best_latest["terminal_base"] = swing_meta.get("terminal_base", False)
+
+    sw_waves = swing_meta.get("swing_waves", 0)
+    term_base = swing_meta.get("terminal_base", False)
+    p_rank = _pattern_rank(best_latest)
+    rr_val = float(best_latest.get("RR", 0.0))
+
+    if sw_waves >= 3 and term_base and rr_val >= 2.5:
+        tier = 1
+        tier_label = "TIER_1_GOLD"
+        tier_badge = "🥇 T1"
+    elif sw_waves >= 2 or p_rank >= 4 or rr_val >= 1.88:
+        tier = 2
+        tier_label = "TIER_2_CORE"
+        tier_badge = "🥈 T2"
+    else:
+        tier = 3
+        tier_label = "TIER_3_MOMENTUM"
+        tier_badge = "🥉 T3"
+
+    best_latest["tier"] = tier
+    best_latest["tier_label"] = tier_label
+    best_latest["tier_badge"] = tier_badge
+    best_latest["swing_waves"] = sw_waves
+    best_latest["terminal_base"] = term_base
     return best_latest
 
 
@@ -527,6 +550,10 @@ def scan_trend_continuation_reentry(df_entry, df_anchor):
         "RR": round(rr, 2),
         "Signal": "Immediate_ReEntry",
         "D_time": str(current_candle.get("date", "")),
-        "A_time": str(trigger_candle.get("date", ""))
+        "A_time": str(trigger_candle.get("date", "")),
+        "tier": 3,
+        "tier_label": "TIER_3_MOMENTUM",
+        "tier_badge": "🥉 T3",
+        "swing_waves": 1,
+        "terminal_base": False
     }
-

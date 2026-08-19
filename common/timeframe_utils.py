@@ -157,8 +157,22 @@ def resample_timeframe(df, timeframe_str):
                 }).dropna().reset_index()
                 groups.append(g_res)
             if groups:
-                resampled = pd.concat(groups, ignore_index=True)
-                return resampled
+                return pd.concat(groups, ignore_index=True)
+
+        if tf_s in ["4hr", "4hrs", "4h", "4hour", "240min", "240minute"]:
+            hist['trade_date'] = hist[time_col].dt.date
+            groups = []
+            for d, g in hist.groupby('trade_date'):
+                g_res = g.set_index(time_col).resample('240min', origin='start').agg({
+                    'open': 'first',
+                    'high': 'max',
+                    'low': 'min',
+                    'close': 'last',
+                    'volume': 'sum'
+                }).dropna().reset_index()
+                groups.append(g_res)
+            if groups:
+                return pd.concat(groups, ignore_index=True)
 
         hist = hist.set_index(time_col)
         resampled = hist.resample(rule, origin='start').agg({

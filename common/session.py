@@ -8,6 +8,7 @@ import json
 import logging
 import csv
 import time
+import threading
 from datetime import datetime as dt, timedelta
 import paths
 
@@ -105,14 +106,46 @@ def get_weekly_expiry(target_weekday=1):
     return (now + timedelta(days=days_ahead)).date()
 
 
+class TokenBucketRateLimiter:
+    """Thread-safe Token Bucket Rate Limiter to comply with Zerodha Kite API rate limit (3 req/sec)."""
+    def __init__(self, rate=2.8, capacity=3.0):
+        self.rate = rate          # Tokens added per second (e.g. 2.8 req/sec)
+        self.capacity = capacity  # Maximum bucket capacity
+        self.tokens = capacity
+        self.last_update = time.time()
+        self.lock = threading.Lock()
+
+    def acquire(self, tokens=1):
+        with self.lock:
+            while True:
+                now = time.time()
+                elapsed = now - self.last_update
+                self.last_update = now
+                self.tokens = min(self.capacity, self.tokens + elapsed * self.rate)
+                
+                if self.tokens >= tokens:
+                    self.tokens -= tokens
+                    return
+                # Need to wait
+                needed = tokens - self.tokens
+                wait_time = needed / self.rate
+                time.sleep(max(0.01, wait_time))
+
+_GLOBAL_KITE_RATE_LIMITER = TokenBucketRateLimiter(rate=2.8, capacity=3.0)
+
+
 def safe_kite_call(func, *args, retries=3, delay=0.8, **kwargs):
+    _GLOBAL_KITE_RATE_LIMITER.acquire()
     for attempt in range(retries):
         try:
             return func(*args, **kwargs)
         except Exception as err:
             err_str = str(err).lower()
-            if "too many" in err_str or "requests" in err_str or "access_token" in err_str or "api_key" in err_str or "429" in err_str:
-                time.sleep(delay * (attempt + 1))
+            if "too many" in err_str or "requests" in err_str or "429" in err_str:
+                time.sleep(delay * (attempt + 1.5))
+                _GLOBAL_KITE_RATE_LIMITER.acquire()
+            elif "access_token" in err_str or "api_key" in err_str:
+                time.sleep(delay)
             else:
                 raise err
     return func(*args, **kwargs)

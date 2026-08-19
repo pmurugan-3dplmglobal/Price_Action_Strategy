@@ -43,6 +43,8 @@ SCAN_DISPLAY_EMA_STOCK_FILE = monitor_file("scan_display_ema_stock.json")
 NIFTY50_LOG_FILE = log_file("bull_nifty50_scanner.log")
 INDEX_LOG_FILE = log_file("bull_index_trade_engine.log")
 EMA_LOG_FILE = log_file("ema_engine.log")
+BULL_DAILY_SCAN_LOG = log_file("bull_daily_scanner.log")
+BEAR_DAILY_SCAN_LOG = log_file("bull_bear_daily_scanner.log")
 
 # Live execution flags
 NIFTY50_LIVE_FLAG = input_file("nifty50_live.flag")

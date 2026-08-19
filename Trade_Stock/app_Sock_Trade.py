@@ -16,7 +16,8 @@ from trading_core import (
     load_kite_session,
     close_position as shared_close_position,
     close_stock_position as shared_close_stock_position,
-    clear_executed_exit
+    clear_executed_exit,
+    is_contract_exit_executed
 )
 from ema_engine import (
     start_ema_engine, stop_ema_engine, get_ema_engine_status, get_ema_scan_data,
@@ -87,10 +88,8 @@ SCAN_DISPLAY_INDEX_FILE = paths.SCAN_DISPLAY_INDEX_FILE
 SCAN_DISPLAY_BEAR_FILE = paths.SCAN_DISPLAY_BEAR_FILE
 POSITIONS_FILE = os.path.join(BASE_DIR, "output", "monitor", "positions_stock.json")
 JOURNAL_FILE = os.path.join(BASE_DIR, "output", "journal_stock.json")
-LOGS_DIR = os.path.join(BASE_DIR, "logs")
-
-DAILY_LOG_FILE = os.path.join(LOGS_DIR, "stock_bullish_reversal_scanner.log")
-BEAR_LOG_FILE = os.path.join(LOGS_DIR, "stock_bearish_reversal_scanner.log")
+DAILY_LOG_FILE = paths.BULL_DAILY_SCAN_LOG
+BEAR_LOG_FILE = paths.BEAR_DAILY_SCAN_LOG
 EMA_LOG_FILE = paths.EMA_LOG_FILE
 
 LIVE_EXECUTION_FLAG = paths.NIFTY50_LIVE_FLAG
@@ -103,7 +102,7 @@ ACTIVE_EDIT_LOCKS = set()
 PROGRAMS = {
     "daily": {
         "name": "Stock_Bullish_Reversal_Scanner",
-        "file": "stock_bullish_reversal_scanner.py",
+        "file": "Trade_Stock/stock_bullish_reversal_scanner.py",
         "desc": "Scans Nifty 50 on selected timeframe (Default: Day) for Bullish setups, exports to Excel",
         "color": "#d29922",
         "log_file": DAILY_LOG_FILE,
@@ -132,7 +131,7 @@ PROGRAMS = {
     },
     "bear_trade": {
         "name": "Stock_Bearish_Reversal_Scanner",
-        "file": "stock_bearish_reversal_scanner.py",
+        "file": "Trade_Stock/stock_bearish_reversal_scanner.py",
         "desc": "Scans predefined NSE indices on selected timeframe for Bearish setups & Negation targets",
         "color": "#f85149",
         "log_file": BEAR_LOG_FILE,
@@ -166,7 +165,7 @@ PROGRAMS = {
         "color": "#a371f7",
         "log_file": EMA_LOG_FILE,
         "config_fields": {
-            "timeframe": {"label": "Timeframe", "type": "select", "options": ["1d", "60minute", "30minute", "15minute", "5minute"], "default": "1d"},
+            "timeframe": {"label": "Timeframe", "type": "select", "options": ["1d", "4hr", "60minute", "30minute", "15minute", "5minute"], "default": "1d"},
             "target_universe": {"label": "Target Universe", "type": "select", "options": ["ALL", "NIFTY50", "NIFTY_NEXT_100", "NIFTY_MIDCAP_100", "NIFTY_SMALLCAP_250", "INDEX_OPTIONS"], "default": "ALL"}
         }
     }
@@ -638,6 +637,9 @@ def refresh_data(single_run=False):
                         else:
                             live_pnl = _pnl_memory.get(sym_str, float(p.get("pnl", 0)))
 
+                        if exch not in ("NSE", "BSE") or sym.endswith("CE") or sym.endswith("PE"):
+                            continue
+
                         # Fail-Safe Active Position Risk Monitor
                         try:
                             scan_sl = lookup_scan_sl_target(sym, sym, "daily", _kite_session, entry_pr, is_stock=True)
@@ -687,6 +689,9 @@ def refresh_data(single_run=False):
                                 # TASK 1: Pause automated exit execution if user is actively editing this symbol on the UI
                                 if clean_sym in ACTIVE_EDIT_LOCKS:
                                     logging.info(f"[FAILSAFE PAUSED] {sym} is currently being edited on UI. Automated exit execution paused.")
+                                # TASK 1b: Skip if exit order has already been executed/submitted
+                                elif is_contract_exit_executed(sym):
+                                    pass
                                 # TASK 2: Execute SL exit ONLY IF below 0.5% buffer AND (previous candle closed below SL OR emergency deep break)
                                 elif ltp_val > 0 and sl_val > 0 and is_below_buffer and (prev_closed_below or is_deep_break):
                                     logging.warning(f"[FAILSAFE MONITOR EXIT SL CONFIRMED] {sym} LTP={ltp_val} <= Buffered SL={sl_buffered} (Prev Close Below: {prev_closed_below}, Deep Break: {is_deep_break})")
@@ -708,9 +713,7 @@ def refresh_data(single_run=False):
             auto_export_if_new_month()
         time.sleep(REFRESH_SECONDS)
 
-# Dashboard HTML/JS extracted to templates/index.html (keeps the Python file lean and reduces AI-context load)
-with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'templates/index.html'), encoding="utf-8") as _template_f:
-    HTML_TEMPLATE = _template_f.read()
+TEMPLATE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'templates/index.html')
 
 # ──────────────────────────────────────────────
 #  FLASK ROUTES — API Endpoints
@@ -718,7 +721,9 @@ with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'templates/in
 
 @app.route("/")
 def dashboard():
-    return render_template_string(HTML_TEMPLATE, refresh=REFRESH_SECONDS, programs=PROGRAMS)
+    with open(TEMPLATE_PATH, encoding="utf-8") as _template_f:
+        tpl = _template_f.read()
+    return render_template_string(tpl, refresh=REFRESH_SECONDS, programs=PROGRAMS)
 
 @app.route("/api/status")
 def api_status():

@@ -728,17 +728,28 @@
                     actCell = `<td style="text-align:center"><button class="btn-buy" onclick="buyScannedTrade(this, '${t.symbol||''}', '${t.contract||''}', '${t.side||'CE'}', ${t.entry_spot||0}, ${t.current_sl||t.sl||0}, ${t.t1||0}, ${t.t2||0}, ${t.t3||0}, '${eng}', '${t.timeframe||''}', '${(t.candle_a_time||'').replace(/'/g,"")}', '${(t.entry_time||'').replace(/'/g,"")}', ${t.benchmark||0}, ${t.anchor_floor||0}, '${t.direction||'BULL'}')" style="background:#2ea043;color:#ffffff;border:none;padding:4px 12px;border-radius:4px;font-weight:bold;cursor:pointer;font-size:11px">BUY</button></td>`;
                 }
 
+                let tierBadge = '';
+                let tierNum = parseInt(t.tier || 2, 10);
+                if (tierNum === 1 || String(t.tier_badge || '').includes('T1') || String(t.tier_label || '').includes('GOLD')) {
+                    tierBadge = `<span class="badge" style="background:#238636;color:#ffffff;font-size:10px;margin-right:4px;font-weight:bold" title="Tier 1 Gold: 3-Wave Parabolic Arch + Terminal Base">🥇 T1</span>`;
+                } else if (tierNum === 2 || String(t.tier_badge || '').includes('T2') || String(t.tier_label || '').includes('CORE')) {
+                    tierBadge = `<span class="badge" style="background:#1f6feb;color:#ffffff;font-size:10px;margin-right:4px;font-weight:bold" title="Tier 2 Core: 2-Wave / High-Conviction Reversal">🥈 T2</span>`;
+                } else if (tierNum === 3 || String(t.tier_badge || '').includes('T3') || String(t.tier_label || '').includes('MOMENTUM')) {
+                    tierBadge = `<span class="badge" style="background:#8957e5;color:#ffffff;font-size:10px;margin-right:4px;font-weight:bold" title="Tier 3 Momentum: Trend Continuation Re-Entry">🥉 T3</span>`;
+                }
+
                 let swingBadge = '';
                 if (t.swing_waves && Number(t.swing_waves) > 0) {
                     let baseTag = t.terminal_base ? ' • Base' : '';
-                    swingBadge = ` <span class="badge" style="background:#8957e5;color:#ffffff;font-size:10px;margin-left:4px;" title="Parabolic Multi-Swings: ${t.swing_waves} waves${t.terminal_base ? ' + Terminal Base Absorption' : ''}">🌊 ${t.swing_waves}S${baseTag}</span>`;
+                    swingBadge = ` <span class="badge" style="background:#6e7681;color:#ffffff;font-size:10px;margin-left:4px;" title="Parabolic Multi-Swings: ${t.swing_waves} waves${t.terminal_base ? ' + Terminal Base Absorption' : ''}">🌊 ${t.swing_waves}S${baseTag}</span>`;
                 }
 
-                return `<tr><td>${t.symbol||''}</td><td style="font-size:11px">${t.contract||''}</td><td>${t.side||''}</td><td>${entry}</td><td>${sl}</td><td>${t1v}</td><td>${t2v}</td><td>${t3v}</td><td style="font-size:11px">${atFormatted}</td><td style="font-size:11px">${etFormatted}</td><td><span class="badge ${resultBadge}">${res}</span>${swingBadge}</td><td>${cf}</td><td>${rr}</td>${chartCell}${actCell}</tr>`;
+                return `<tr><td>${tierBadge}${t.symbol||''}</td><td style="font-size:11px">${t.contract||''}</td><td>${t.side||''}</td><td>${entry}</td><td>${sl}</td><td>${t1v}</td><td>${t2v}</td><td>${t3v}</td><td style="font-size:11px">${atFormatted}</td><td style="font-size:11px">${etFormatted}</td><td><span class="badge ${resultBadge}">${res}</span>${swingBadge}</td><td>${cf}</td><td>${rr}</td>${chartCell}${actCell}</tr>`;
             }
 
             if (window._scanCleared) {
-                document.getElementById('scan-reports-body').innerHTML = '<p class="empty-state">No scan trades yet. Run a scan cycle or wait for next cycle.</p>';
+                const el = document.getElementById('scan-body');
+                if (el) el.innerHTML = '<p class="empty-state">No scan trades yet. Run a scan cycle or wait for next cycle.</p>';
                 return;
             }
 
@@ -766,6 +777,7 @@
                 const finalTrades = Array.from(tradeMap.values());
                 const engLabel = eng === 'daily' ? 'Stock Bullish' : 'Stock Bearish';
                 if (finalTrades.length) {
+                    window._scanCleared = false;
                     scanHtml += '<div class="scan-section-title">[' + engLabel + '] Today\'s Scanned Setups (' + finalTrades.length + ')</div>';
                     scanHtml += '<div style="overflow-x:auto"><table><thead><tr>' + colHeaders + '</tr></thead><tbody>';
                     finalTrades.forEach(t => { scanHtml += tradeRow(t, 'badge-open', eng); });
@@ -1925,8 +1937,10 @@
                                     <option value="30minute" selected>30min (Same Entry & Anchor TF)</option>
                                     <option value="75min">75min (Anchor TF)</option>
                                     <option value="60minute">60min (Anchor TF)</option>
+                                    <option value="4hr">4hr (Anchor TF)</option>
                                     <option value="15minute">15min (Entry TF)</option>
                                     <option value="day">Daily</option>
+                                    <option value="week">Weekly</option>
                                 </select>
                             </div>
                             <div>
@@ -1962,12 +1976,15 @@
                     
                     <!-- Timeframe Dropdown Selector -->
                     <select id="modalTfSelect" onchange="switchChartTimeframe(this.value)" style="background:#21262d; color:#c9d1d9; border:1px solid #30363d; padding:5px 10px; border-radius:4px; font-weight:bold; font-size:12px; cursor:pointer;">
+                        <option value="3minute">3min TF</option>
                         <option value="5minute">5min TF</option>
                         <option value="15minute">15min TF</option>
                         <option value="30minute" selected>30min TF (Default)</option>
                         <option value="60minute">60min TF</option>
                         <option value="75min">75min TF (Anchor)</option>
+                        <option value="4hr">4hr TF (Anchor)</option>
                         <option value="day">Daily TF</option>
+                        <option value="week">Weekly TF</option>
                     </select>
 
                     <a id="modalKiteLink" href="#" target="_blank" style="background:#d29922; color:#000; text-decoration:none; padding:5px 12px; border-radius:4px; font-weight:bold; font-size:12px; display:inline-block;">Open in Zerodha Kite ↗</a>

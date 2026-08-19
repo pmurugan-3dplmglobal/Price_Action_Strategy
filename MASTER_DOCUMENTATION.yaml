@@ -6,12 +6,13 @@ meta:
   version: Prod Code v02
   platform: Zerodha Kite Connect API
   architecture: Centralized Shared Core (common/) + Dual Workspaces (Trade_Option & Trade_Stock)
-  strategy: Unified ABC Bullish & Bearish Reversal Pattern Engine
+  strategy: Unified ABC Bullish & Bearish Reversal Pattern Engine + Multi-Tiered Market Structure (T1/T2/T3)
   coverage:
     - Index Options (NIFTY, BANKNIFTY, SENSEX)
-    - Stock Options (50 Nifty 50 constituent stocks)
+    - Stock Options (210+ NSE F&O Constituent Equities dynamically discovered)
     - Stock Spot Bullish Reversals (stock_bullish_reversal_scanner.py)
     - Stock Spot Bearish Reversals (stock_bearish_reversal_scanner.py)
+    - Multi-Tier Soft Scoring (Tier 1 Gold, Tier 2 Core, Tier 3 Momentum)
 
 architecture:
   diagram: |
@@ -98,13 +99,13 @@ engines:
 
   case_b_stock_options:
     id: "nifty50"
-    name: "Nifty 50 Stock Options Engine"
+    name: "Stock Options Trade Engine"
     file: "Trade_Option/stock_options_trade_engine.py"
     asset_class: "STOCK_OPTION"
-    side: "BULL"
-    instruments: "Nifty 50 Constituent Stock Options"
+    side: "BULL / BEAR"
+    instruments: "Full NSE F&O Universe (~210+ Liquid Constituent Equities)"
     strike_range: "ATM ± X strikes (Default: 0, configurable in program_config.json / UI)"
-    defaults: {timeframe_entry: "15minute", timeframe_anchor: "30minute", risk_percent: 10.0, capital: 100000}
+    defaults: {target_universe: "FNO_ALL", timeframe_entry: "15minute", timeframe_anchor: "30minute", risk_percent: 10.0, capital: 100000}
 
   case_c_stock_spot_bull:
     id: "daily"
@@ -316,9 +317,60 @@ scan_display_anchor_fields:
   golden_rule: "UI MUST NOT re-derive A.high/A.low from candle_a_time (anchor detectors may return a different candle than the engine's a_idx benchmark). The engine's persisted benchmark is the single source of truth."
 
 sl_buffer_scaling:
-  description: "Dynamic asset & price-tiered Stop Loss buffer (calculate_sl_buffer) to prevent SL inflation on cheap option contracts"
+  description: "Dynamic asset & price-tiered Stop Loss buffer (calculate_sl_buffer) providing robust breathing room across option and equity price tiers"
   tiers:
-    cheap_options: "Price < ₹50: max(0.15, Price * 2%)  (e.g., 0.15 - 0.20 pt buffer for ~₹7.50 options)"
-    mid_options: "₹50 <= Price < ₹200: max(0.50, Price * 1.5%)"
-    high_options_stock: "₹200 <= Price < ₹500: max(1.00, Price * 1.0%)"
-    index_spot: "Price >= ₹500: max(2.00, Price * 0.5%)"
+    ultra_cheap_options: "Price < ₹10: max(0.40, Price * 10%)  (guarantees 0.40 - 0.90 pt buffer to absorb bid-ask spread and noise)"
+    cheap_options: "₹10 <= Price < ₹50: max(0.60, Price * 4%)  (0.60 - 2.00 pt buffer)"
+    mid_options: "₹50 <= Price < ₹200: max(1.00, Price * 2%)"
+    high_options_stock: "₹200 <= Price < ₹500: max(1.50, Price * 1.5%)"
+    index_spot_high_stocks: "Price >= ₹500: max(2.50, Price * 0.5%)"
+
+multi_tiered_scoring:
+  description: "Stage 0 Soft Priority Multi-Tier Model (Proposal C) classifying trade conviction based on parabolic curve decay and price action"
+  tiers:
+    tier_1_gold:
+      badge: "🥇 T1"
+      label: "TIER_1_GOLD"
+      criteria: ">= 3 Parabolic Waves (R^2 >= 0.55) + Monotonic Decay + Terminal Base Absorption + A-B-C-D Confirmation + R:R >= 2.50"
+      sizing: "100% Standard Capital"
+    tier_2_core:
+      badge: "🥈 T2"
+      label: "TIER_2_CORE"
+      criteria: ">= 2 Parabolic Waves (R^2 >= 0.50, Double Bottoms / W-patterns) OR High-Conviction Candlestick Footprint (Engulfing, Hammer Baby, LL/HH Sweep) + A-B-C-D + R:R >= 1.88"
+      sizing: "70% Standard Capital"
+    tier_3_momentum:
+      badge: "🥉 T3"
+      label: "TIER_3_MOMENTUM"
+      criteria: "Page 16/17 Trend Continuation / Immediate Re-Entry / 1-Wave Pullback + R:R >= 1.88"
+      sizing: "50% Standard Capital"
+  reference_document: "docs/STAGE_0_PARABOLIC_CASCADE_REFERENCE.md"
+
+directional_hegemony_and_arbitrage:
+  description: "3-Layer Directional Hegemony & Mutual Exclusivity Engine eliminating opposing CE/PE conflicts on the same symbol"
+  layers:
+    layer_1_spot_macro_trend:
+      rule: "Underlying Spot 13 EMA Trend Filter"
+      mechanics: "Calculates 13 EMA on Spot candles. If Spot >= 13 EMA -> Macro Bias is BULL (Favor CE). If Spot < 13 EMA -> Macro Bias is BEAR (Favor PE)."
+    layer_2_conviction_arbitrage:
+      rule: "Single-Setup Dominant Conviction Arbitrage"
+      mechanics: "Collects all matching strike candidates for a symbol, filters by Spot Macro Bias, and ranks by Tier (🥇 T1 < 🥈 T2 < 🥉 T3), R:R ratio, and ATM strike proximity. Stages ONLY the single winning setup per symbol."
+    layer_3_mutual_exclusivity:
+      rule: "Symbol & Portfolio Mutual Exclusivity Lock"
+      mechanics: "If an active CE position exists on a symbol (e.g. LT 4100 CE), opposing PE setups are automatically suppressed with audit logs until the active trade exits."
+  modes:
+    mode_1_conflict_arbiter_default: "strict_macro_gate: false — Spot 13 EMA serves as a tie-breaker when dual CE/PE form. If only one side forms at a bottom/top reversal, it is permitted and scored by Tier & R:R."
+    mode_2_strict_hard_gate: "strict_macro_gate: true — Strictly rejects any setup that is counter to the Spot 13 EMA trend, even if no opposing trade exists."
+
+system_integrity_safeguards:
+  broker_live_reconciliation: "reconcile_broker_live_positions(kite) continuously cross-verifies DB ACTIVE rows against Kite live net/day held positions. If net quantity <= 0, automatically completes and purges orphan trades."
+  rate_limit_protection: "TokenBucketRateLimiter(rate=2.8, capacity=3.0) gates all historical candle and quote requests across multi-threaded 208+ F&O universe scans, preventing HTTP 429 errors."
+  market_close_cutoff: "is_new_entry_allowed(live_execution_active) restricts new trade entries to 09:15–15:20 IST only when Live Trading is ON. When Live Trading is OFF (or post-market), scanning and trade staging remain active for research & study."
+  trailing_sl_ratchet: "Monotonic side-aware SL ratchet: new_sl = max(curr_sl, target_base) for BULL and min(curr_sl, target_base) for BEAR, preventing backward SL regression."
+  websocket_live_ticks: "ActivePositionWebSocketMonitor provides real-time streaming tick LTP feeds with sub-millisecond latency for active position trailing and stop-loss triggers, with transparent fallback to REST quotes."
+  spot_token_auto_healing: "Automatic dynamic token auto-repair: queries NSE:<SYMBOL> live quote by symbol name if a token error occurs, self-healing STOCK_REGISTRY in memory on the fly."
+
+
+
+
+
+

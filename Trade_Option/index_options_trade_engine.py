@@ -142,9 +142,10 @@ def resolve_option_contract(base_symbol, spot_price, step_size, option_type, exp
 # ──────────────────────────────────────────────
 
 def run_scan_cycle(kite):
-    cfg_applied = load_program_config_for_engine("index", [("strike_range", "STRIKE_RANGE")])
+    cfg_applied = load_program_config_for_engine("index", [("strike_range", "STRIKE_RANGE"), ("strict_macro_gate", "STRICT_MACRO_GATE")])
     for k, v in cfg_applied.items():
         if k == "STRIKE_RANGE": globals()["STRIKE_RANGE"] = int(v) if isinstance(v, (int, float)) else v
+        elif k == "STRICT_MACRO_GATE": globals()["STRICT_MACRO_GATE"] = bool(v)
         elif k in ("TIMEFRAME_ENTRY", "TIMEFRAME_ANCHOR"): globals()[k] = v
         elif k == "LIVE_MARKET_DEPLOYMENT": globals()["LIVE_MARKET_DEPLOYMENT"] = v
         elif k == "LOOKBACK_DAYS": globals()["LOOKBACK_DAYS"] = int(v)

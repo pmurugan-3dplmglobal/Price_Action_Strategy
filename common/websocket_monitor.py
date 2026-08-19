@@ -1,15 +1,18 @@
 # KiteTicker WebSocket Monitor for Active Positions
-# Integrates 09:45 AM opening volatility guard & UI Active Edit Lock
+# Integrates sub-second tick feeds, 09:45 AM opening volatility guard & UI Active Edit Lock
 import logging
 import threading
 import time
-from datetime import datetime, time as datetime_time
+from datetime import datetime as dt, time as datetime_time
+
+_GLOBAL_WS_MONITOR = None
+_WS_LOCK = threading.Lock()
 
 class ActivePositionWebSocketMonitor:
     """
     WebSocket streaming tick monitor for active positions using KiteTicker.
-    Performs 1-second tick-level monitoring with 09:45 AM Opening Market Volatility Guard
-    and UI Active Edit Lock safety protections.
+    Performs real-time tick-level monitoring with 09:45 AM Opening Market Volatility Guard,
+    automatic token subscription synchronization, and graceful fallback to REST.
     """
     def __init__(self, api_key, access_token, failsafe_start_time="09:45"):
         self.api_key = api_key
@@ -17,10 +20,11 @@ class ActivePositionWebSocketMonitor:
         self.failsafe_start_str = failsafe_start_time
         self.kws = None
         self.subscribed_tokens = set()
-        self.live_ltp_map = {}
+        self.live_ltp_map = {}  # token -> {"ltp": float, "timestamp": float}
         self.is_running = False
         self._thread = None
         self.edit_locks = set()
+        self._map_lock = threading.Lock()
         
         try:
             f_h, f_m = map(int, failsafe_start_time.split(":"))
@@ -36,18 +40,41 @@ class ActivePositionWebSocketMonitor:
         else:
             self.edit_locks.discard(clean_s)
 
+    def get_ltp(self, token, max_age_seconds=15.0):
+        """
+        Retrieve latest WebSocket LTP for token if fresh.
+        Returns: (ltp_float, is_fresh_bool)
+        """
+        if not token:
+            return 0.0, False
+        tok = int(token)
+        with self._map_lock:
+            info = self.live_ltp_map.get(tok)
+            if not info:
+                return 0.0, False
+            age = time.time() - info.get("timestamp", 0)
+            is_fresh = (age <= max_age_seconds)
+            return float(info.get("ltp", 0.0)), is_fresh
+
     def start(self):
         """Initialize and start KiteTicker WebSocket connection in background thread."""
+        if self.is_running and self.kws:
+            return
         try:
             from kiteconnect import KiteTicker
             self.kws = KiteTicker(self.api_key, self.access_token)
             
             def on_ticks(ws, ticks):
-                for t in ticks:
-                    token = t.get("instrument_token")
-                    last_price = t.get("last_price")
-                    if token and last_price:
-                        self.live_ltp_map[token] = float(last_price)
+                now_ts = time.time()
+                with self._map_lock:
+                    for t in ticks:
+                        token = t.get("instrument_token")
+                        last_price = t.get("last_price")
+                        if token and last_price:
+                            self.live_ltp_map[int(token)] = {
+                                "ltp": float(last_price),
+                                "timestamp": now_ts
+                            }
 
             def on_connect(ws, response):
                 logging.info("[WEBSOCKET] KiteTicker connected successfully.")
@@ -61,15 +88,23 @@ class ActivePositionWebSocketMonitor:
             def on_error(ws, code, reason):
                 logging.error(f"[WEBSOCKET] KiteTicker error: {code} - {reason}")
 
+            def on_reconnect(ws, attempts_count):
+                logging.info(f"[WEBSOCKET] Reconnecting KiteTicker (attempt {attempts_count})...")
+
+            def on_noreconnect(ws):
+                logging.warning("[WEBSOCKET] KiteTicker reconnection failed permanently.")
+
             self.kws.on_ticks = on_ticks
             self.kws.on_connect = on_connect
             self.kws.on_close = on_close
             self.kws.on_error = on_error
+            self.kws.on_reconnect = on_reconnect
+            self.kws.on_noreconnect = on_noreconnect
 
-            self._thread = threading.Thread(target=self.kws.connect, daemon=True)
+            self._thread = threading.Thread(target=self.kws.connect, kwargs={"threaded": False}, daemon=True)
             self._thread.start()
             self.is_running = True
-            logging.info("[WEBSOCKET] Active position tick monitor started.")
+            logging.info("[WEBSOCKET] Active position tick monitor started in background.")
         except Exception as e:
             logging.warning(f"[WEBSOCKET] Failed to initialize KiteTicker (falling back to REST): {e}")
 
@@ -82,7 +117,10 @@ class ActivePositionWebSocketMonitor:
         for sym, pos in active_positions.items():
             tok = pos.get("option_token") or pos.get("token")
             if tok:
-                current_tokens.add(int(tok))
+                try:
+                    current_tokens.add(int(tok))
+                except Exception:
+                    pass
 
         new_tokens = current_tokens - self.subscribed_tokens
         stale_tokens = self.subscribed_tokens - current_tokens
@@ -92,7 +130,7 @@ class ActivePositionWebSocketMonitor:
                 self.kws.subscribe(list(new_tokens))
                 self.kws.set_mode(self.kws.MODE_FULL, list(new_tokens))
                 self.subscribed_tokens.update(new_tokens)
-                logging.info(f"[WEBSOCKET] Subscribed to {len(new_tokens)} active position token(s).")
+                logging.info(f"[WEBSOCKET] Subscribed to {len(new_tokens)} active position token(s): {list(new_tokens)}")
             except Exception as e:
                 logging.warning(f"[WEBSOCKET] Subscription failed: {e}")
 
@@ -110,12 +148,10 @@ class ActivePositionWebSocketMonitor:
         1. Checks 09:45 AM Opening Market Volatility Guard.
         2. Checks UI Active Edit Lock.
         """
-        # Rule 1: 09:45 AM opening market volatility pause guard
-        if datetime.now().time() < self.fs_start_t:
+        if dt.now().time() < self.fs_start_t:
             logging.info(f"[WEBSOCKET FLEX PAUSE BEFORE {self.failsafe_start_str} AM] Exit check paused for {symbol}.")
             return False
 
-        # Rule 2: UI Active Edit Lock
         clean_s = str(symbol).strip().upper()
         if clean_s in self.edit_locks:
             logging.info(f"[WEBSOCKET EDIT LOCK PAUSE] Position {clean_s} is currently being edited on UI.")
@@ -132,3 +168,14 @@ class ActivePositionWebSocketMonitor:
                 logging.info("[WEBSOCKET] Active position tick monitor stopped.")
             except Exception:
                 pass
+
+
+def get_global_ws_monitor(api_key=None, access_token=None, failsafe_start_time="09:45"):
+    """Singleton getter / factory for ActivePositionWebSocketMonitor."""
+    global _GLOBAL_WS_MONITOR
+    with _WS_LOCK:
+        if _GLOBAL_WS_MONITOR is None and api_key and access_token:
+            _GLOBAL_WS_MONITOR = ActivePositionWebSocketMonitor(api_key, access_token, failsafe_start_time)
+            _GLOBAL_WS_MONITOR.start()
+        return _GLOBAL_WS_MONITOR
+

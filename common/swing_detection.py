@@ -80,7 +80,7 @@ def extract_swing_pivots(
     side: str = "BULL"
 ) -> List[int]:
     """
-    Extracts local extrema indices for swing waves.
+    Extracts local extrema indices for swing waves, ignoring dead zero-volume flatline candles.
     For BULL: extracts swing low indices L1, L2, L3, ...
     For BEAR: extracts swing high indices H1, H2, H3, ...
     """
@@ -89,23 +89,29 @@ def extract_swing_pivots(
         
     highs = df['high'].values.astype(float)
     lows = df['low'].values.astype(float)
+    volumes = df['volume'].values.astype(float) if 'volume' in df.columns else np.ones(len(df))
     n = len(df)
     
     is_bull = str(side).upper() == "BULL"
     swing_indices = []
     
     for i in range(min_candles_per_leg, n - min_candles_per_leg):
+        # Ignore dead flatline quotation bars (0 volume and high == low)
+        if volumes[i] == 0 and highs[i] == lows[i]:
+            continue
+
         if is_bull:
             window = lows[i - min_candles_per_leg : i + min_candles_per_leg + 1]
             if lows[i] == np.min(window):
-                if not swing_indices or (i - swing_indices[-1] >= min_candles_per_leg):
+                # Ensure the pivot has distinct price movement from previous pivot
+                if not swing_indices or (i - swing_indices[-1] >= min_candles_per_leg and abs(lows[i] - lows[swing_indices[-1]]) > 1e-4):
                     swing_indices.append(i)
                 elif lows[i] < lows[swing_indices[-1]]:
                     swing_indices[-1] = i
         else:
             window = highs[i - min_candles_per_leg : i + min_candles_per_leg + 1]
             if highs[i] == np.max(window):
-                if not swing_indices or (i - swing_indices[-1] >= min_candles_per_leg):
+                if not swing_indices or (i - swing_indices[-1] >= min_candles_per_leg and abs(highs[i] - highs[swing_indices[-1]]) > 1e-4):
                     swing_indices.append(i)
                 elif highs[i] > highs[swing_indices[-1]]:
                     swing_indices[-1] = i
@@ -189,11 +195,31 @@ def validate_parabolic_cascade_structure(
         (last_wave["is_arch"] or has_terminal_base)
     )
 
+    # Multi-Tier Soft Classification
+    # Tier 1 (Gold): >=3 waves + cascade progression + terminal base
+    # Tier 2 (Core): >=2 waves (or 2-wave arch) + cascade progression
+    # Tier 3 (Momentum): 1-wave or structural re-entry
+    if valid_arches >= 3 and cascade_progression and (last_wave["is_arch"] or has_terminal_base):
+        tier = 1
+        tier_label = "TIER_1_GOLD"
+        tier_badge = "🥇 T1"
+    elif valid_arches >= 2 and cascade_progression:
+        tier = 2
+        tier_label = "TIER_2_CORE"
+        tier_badge = "🥈 T2"
+    else:
+        tier = 3
+        tier_label = "TIER_3_MOMENTUM"
+        tier_badge = "🥉 T3"
+
     return {
         "valid": is_full_pattern_valid,
         "valid_arch_count": valid_arches,
         "cascade_progression": cascade_progression,
         "has_terminal_base": has_terminal_base,
+        "tier": tier,
+        "tier_label": tier_label,
+        "tier_badge": tier_badge,
         "details": wave_details
     }
 
@@ -203,30 +229,58 @@ def detect_parabolic_multi_swings(
     side: str = "BULL",
     min_swings: int = 3,
     min_candles_per_leg: int = 3,
-    min_r2: float = 0.55,
-    max_bars_after_terminal: int = 15
+    min_r2: float = 0.50,
+    max_bars_after_terminal: int = 20
 ) -> Dict[str, Any]:
     """
-    Complete end-to-end multi-swing parabolic cascade detector.
-    Enforces that:
-    1. Alternating swing waves form valid parabolic arches with cascade progression.
-    2. The terminal swing (e.g. 4th swing base) was formed RECENTLY (within max_bars_after_terminal).
+    Complete end-to-end multi-swing parabolic cascade detector with Multi-Tier Scoring.
+    Evaluates:
+    - Tier 1 (Gold): >= 3 Parabolic Waves (R^2 >= 0.55) with Terminal Absorption Base.
+    - Tier 2 (Core): >= 2 Parabolic Waves (R^2 >= 0.50) (e.g. Double Bottom / Liquidity Sweep).
+    - Tier 3 (Momentum): Trend Continuation / Structural Re-entry.
     """
-    if df is None or len(df) < (min_swings * min_candles_per_leg * 2):
-        return {"matched": False, "reason": "Insufficient candles", "valid": False}
+    if df is None or len(df) < (2 * min_candles_per_leg * 2):
+        return {"matched": False, "reason": "Insufficient candles", "valid": False, "tier": 3, "tier_label": "TIER_3_MOMENTUM", "tier_badge": "🥉 T3"}
+
+    # Strip leading dead zero-volume flatline bars from illiquid option history
+    if 'volume' in df.columns:
+        valid_mask = (df['volume'] > 0) | (df['high'] != df['low'])
+        if valid_mask.sum() >= (2 * min_candles_per_leg * 2):
+            first_valid_idx = valid_mask.idxmax()
+            if isinstance(first_valid_idx, int) and first_valid_idx > 0:
+                df = df.iloc[first_valid_idx:].reset_index(drop=True)
         
     pivots = extract_swing_pivots(df, min_candles_per_leg=min_candles_per_leg, side=side)
-    if len(pivots) < (min_swings + 1):
-        return {"matched": False, "reason": f"Insufficient swing pivots ({len(pivots)} found, need {min_swings + 1})", "valid": False}
+    if len(pivots) < 3:
+        # Fallback to lighter 2-candle pivot order to detect tighter 2-wave structures
+        pivots_light = extract_swing_pivots(df, min_candles_per_leg=2, side=side)
+        if len(pivots_light) >= 3:
+            pivots = pivots_light
+        else:
+            return {
+                "matched": False, 
+                "reason": f"Insufficient swing pivots ({len(pivots)} found, need >= 3)", 
+                "valid": False,
+                "tier": 3,
+                "tier_label": "TIER_3_MOMENTUM",
+                "tier_badge": "🥉 T3",
+                "valid_arch_count": 0,
+                "has_terminal_base": False
+            }
 
-    # Recency check: terminal swing must not be too old
+    # Recency check: terminal swing must not be excessively old
     terminal_idx = pivots[-1]
     bars_since_terminal = len(df) - 1 - terminal_idx
     if max_bars_after_terminal > 0 and bars_since_terminal > max_bars_after_terminal:
         return {
             "matched": False,
             "reason": f"Terminal swing is too old ({bars_since_terminal} bars ago, max allowed: {max_bars_after_terminal})",
-            "valid": False
+            "valid": False,
+            "tier": 3,
+            "tier_label": "TIER_3_MOMENTUM",
+            "tier_badge": "🥉 T3",
+            "valid_arch_count": 0,
+            "has_terminal_base": False
         }
         
     res = validate_parabolic_cascade_structure(
@@ -237,7 +291,8 @@ def detect_parabolic_multi_swings(
         min_r2=min_r2
     )
     
-    res["matched"] = res["valid"]
+    # Matched if Tier 1 or Tier 2 (>= 2 valid cascading arches)
+    res["matched"] = res["valid"] or (res.get("valid_arch_count", 0) >= 2)
     res["swing_indices"] = pivots
     res["terminal_swing_idx"] = terminal_idx
     res["bars_since_terminal"] = bars_since_terminal

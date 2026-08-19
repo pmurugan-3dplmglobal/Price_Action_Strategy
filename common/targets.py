@@ -157,25 +157,28 @@ def calculate_position_size(spot_price, stop_loss, capital=100000.0, risk_percen
 def calculate_sl_buffer(price_level, side="BULL"):
     """
     Asset-adaptive & price-tiered Stop Loss buffer:
-    - For Cheap Options (price < 50): max(0.15, price * 0.02)  (e.g., 0.15 - 0.20 pt buffer for ~7.50 options)
-    - For Mid Options (50 <= price < 200): max(0.50, price * 0.015)
-    - For High Options / Stock Spot (200 <= price < 500): max(1.00, price * 0.01)
-    - For Index Spot (price >= 500): max(2.00, price * 0.005)
+    - For Ultra-Cheap Options (price < 10): max(0.40, price * 0.10) (prevents premature bid-ask spread whipsaws)
+    - For Cheap Options (10 <= price < 50): max(0.60, price * 0.04) (0.60 - 2.00 pt buffer)
+    - For Mid Options (50 <= price < 200): max(1.00, price * 0.02)
+    - For High Options / Stock Spot (200 <= price < 500): max(1.50, price * 0.01)
+    - For Index Spot / High Stocks (price >= 500): max(2.50, price * 0.005)
     """
     price = float(price_level)
-    if price < 50:
-        buffer = max(0.15, price * 0.02)
+    if price < 10:
+        buffer = max(0.40, price * 0.10)
+    elif price < 50:
+        buffer = max(0.60, price * 0.04)
     elif price < 200:
-        buffer = max(0.50, price * 0.015)
+        buffer = max(1.00, price * 0.02)
     elif price < 500:
-        buffer = max(1.00, price * 0.01)
+        buffer = max(1.50, price * 0.01)
     else:
-        buffer = max(2.00, price * 0.005)
+        buffer = max(2.50, price * 0.005)
 
     if str(side).upper() == "BEAR":
         return round(price + buffer, 2)
     else:
-        return round(price - buffer, 2)
+        return round(max(0.05, price - buffer), 2)
 
 def check_circuit_and_spread_shield(kite, symbol, exchange="NSE", side="BUY"):
     """
