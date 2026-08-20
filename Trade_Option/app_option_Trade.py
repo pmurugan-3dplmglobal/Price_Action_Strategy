@@ -599,12 +599,7 @@ def refresh_data(single_run=False):
                                 engine_type = "index" if ("NIFTY" in contract_name or "BANK" in contract_name or "SENSEX" in contract_name) else "nifty50"
                                 scan_sl = next((t for t in (cached_data.get("all_trades") or []) if (t.get("contract") == contract_name or t.get("symbol") == contract_name)), None)
                                 if not scan_sl:
-                                    if contract_name in _sl_target_cache:
-                                        scan_sl = _sl_target_cache[contract_name]
-                                    else:
-                                        scan_sl = lookup_scan_sl_target(contract_name, contract_name, engine_type, _kite_session, entry_pr)
-                                        if scan_sl:
-                                            _sl_target_cache[contract_name] = scan_sl
+                                    scan_sl = lookup_scan_sl_target(contract_name, contract_name, engine_type, kite=None, entry_price=entry_pr)
                                 if scan_sl:
                                     pos_item["current_sl"] = scan_sl.get("current_sl", 0)
                                     pos_item["t1"] = scan_sl.get("t1", 0)
