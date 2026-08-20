@@ -445,7 +445,7 @@ _file_mtime_cache = {}
 _parsed_json_cache = {}
 
 def refresh_data(single_run=False):
-    global cached_data, _ltp_last_fetch, _kite_positions_last_fetch, _kite_session, _last_scan_reset
+    global cached_data, _ltp_last_fetch, _kite_positions_last_fetch, _kite_session, _last_scan_reset, _expired_cache_day, _expired_cache_set
     try:
         trade_db.run_db_housekeeping()
     except Exception:
@@ -515,7 +515,6 @@ def refresh_data(single_run=False):
             except Exception:
                 pass
             day_key = dt.now().strftime("%Y-%m-%d")
-            global _expired_cache_day, _expired_cache_set
             if _expired_cache_day != day_key:
                 try:
                     from trading_core import contract_is_expired
