@@ -965,6 +965,8 @@
                 const contract = t.contract || t.symbol || '';
                 const inKite = kitePos.some(kp => kp.contract === contract || (kp.contract && kp.contract.includes(contract)) || (contract && contract.includes(kp.contract)));
                 if (inKite) return;
+                // If real Kite positions exist, do not inject disconnected DB trades into the Active Live Positions tab
+                if (positionFilter === 'active' && kitePos.length > 0) return;
                 let st = (t.status || 'ACTIVE').toLowerCase();
                 if (positionFilter === 'active' && st !== 'active') return;
                 if (positionFilter === 'completed' && st !== 'sl_hit' && st !== 'target_hit' && st !== 'exited' && st !== 'closed') return;
