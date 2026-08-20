@@ -582,27 +582,15 @@ def refresh_data(single_run=False):
                     kite_positions = _kite_session.positions()
                     merged = []
                     net_pos = [p for p in kite_positions.get("net", []) if p.get("tradingsymbol") and int(p.get("quantity", 0)) != 0]
-                    logging.info(f"[KITE POSITIONS] Fetched {len(net_pos)} open positions from Kite: {[p.get('tradingsymbol') for p in net_pos]}")
-                    q_keys = [f"{p.get('exchange', 'NFO')}:{p.get('tradingsymbol')}" for p in net_pos]
-                    quotes_bulk = {}
-                    if q_keys:
-                        try:
-                            quotes_bulk = _kite_session.quote(q_keys)
-                        except Exception:
-                            pass
                     for p in net_pos:
                         sym = p.get("tradingsymbol", "")
                         qty = int(p.get("quantity", 0))
                         entry_pr = float(p.get("average_price", 0))
                         exch = p.get("exchange", "NFO")
-                        q_key = f"{exch}:{sym}"
                         live_ltp = float(p.get("last_price", 0))
-                        if q_key in quotes_bulk:
-                            live_ltp = float(quotes_bulk[q_key].get("last_price", live_ltp))
-
+                        live_pnl = float(p.get("pnl", 0))
                         tok_id = str(p.get("instrument_token", ""))
                         sym_str = str(sym)
-
                         if live_ltp > 0:
                             _ltp_memory[sym_str] = live_ltp
                             if tok_id:
@@ -610,14 +598,6 @@ def refresh_data(single_run=False):
                             cached_data["ltp"][sym_str] = live_ltp
                             if tok_id:
                                 cached_data["ltp"][tok_id] = live_ltp
-                        else:
-                            live_ltp = _ltp_memory.get(sym_str) or _ltp_memory.get(tok_id) or 0
-
-                        if live_ltp > 0 and entry_pr > 0:
-                            live_pnl = round((live_ltp - entry_pr) * qty, 2)
-                            _pnl_memory[sym_str] = live_pnl
-                        else:
-                            live_pnl = _pnl_memory.get(sym_str, float(p.get("pnl", 0)))
 
                         contract_name = p.get("tradingsymbol", sym)
                         pos_item = {
