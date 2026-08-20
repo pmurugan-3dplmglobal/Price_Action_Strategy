@@ -596,9 +596,9 @@ def refresh_data(single_run=False):
                         entry_pr = float(p.get("average_price", 0))
                         exch = p.get("exchange", "NFO")
                         q_key = f"{exch}:{sym}"
-                        live_ltp = 0
+                        live_ltp = float(p.get("last_price", 0))
                         if q_key in quotes_bulk:
-                            live_ltp = float(quotes_bulk[q_key].get("last_price", 0))
+                            live_ltp = float(quotes_bulk[q_key].get("last_price", live_ltp))
 
                         tok_id = str(p.get("instrument_token", ""))
                         sym_str = str(sym)
@@ -612,10 +612,6 @@ def refresh_data(single_run=False):
                                 cached_data["ltp"][tok_id] = live_ltp
                         else:
                             live_ltp = _ltp_memory.get(sym_str) or _ltp_memory.get(tok_id) or 0
-                            if live_ltp > 0:
-                                cached_data["ltp"][sym_str] = live_ltp
-                                if tok_id:
-                                    cached_data["ltp"][tok_id] = live_ltp
 
                         if live_ltp > 0 and entry_pr > 0:
                             live_pnl = round((live_ltp - entry_pr) * qty, 2)
