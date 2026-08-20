@@ -622,29 +622,30 @@ def refresh_data(single_run=False):
                         else:
                             live_pnl = _pnl_memory.get(sym_str, float(p.get("pnl", 0)))
 
+                        contract_name = p.get("tradingsymbol", sym)
+                        pos_item = {
+                            "contract": contract_name,
+                            "symbol": contract_name,
+                            "quantity": qty,
+                            "entry_price": entry_pr,
+                            "entry_spot": entry_pr,
+                            "ltp": live_ltp,
+                            "pnl": live_pnl,
+                            "exchange": exch,
+                            "source": "kite"
+                        }
+                        merged.append(pos_item)
+
                         # Fail-Safe Active Position Risk Monitor
                         try:
-                            contract_name = p.get("tradingsymbol", sym)
                             engine_type = "index" if ("NIFTY" in contract_name or "BANK" in contract_name or "SENSEX" in contract_name) else "nifty50"
                             scan_sl = lookup_scan_sl_target(contract_name, contract_name, engine_type, _kite_session, entry_pr)
-                            pos_item = {
-                                "contract": contract_name,
-                                "symbol": contract_name,
-                                "quantity": qty,
-                                "entry_price": entry_pr,
-                                "entry_spot": entry_pr,
-                                "ltp": live_ltp,
-                                "pnl": live_pnl,
-                                "exchange": exch,
-                                "source": "kite"
-                            }
                             if scan_sl:
                                 pos_item["current_sl"] = scan_sl.get("current_sl", 0)
                                 pos_item["t1"] = scan_sl.get("t1", 0)
                                 pos_item["t2"] = scan_sl.get("t2", 0)
                                 pos_item["t3"] = scan_sl.get("t3", 0)
                                 pos_item["pattern"] = scan_sl.get("pattern", "SCAN_LINKED")
-                            merged.append(pos_item)
 
                             if scan_sl:
                                 def _safe_float(v):
