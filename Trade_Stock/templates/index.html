@@ -753,8 +753,15 @@
                 return;
             }
 
+            const statusFilterEl = document.getElementById('scan-status-filter');
+            const statusFilter = statusFilterEl ? statusFilterEl.value : 'fresh';
+
             const engines = filter === 'all' ? ['daily', 'bear_trade'] : [filter];
             const todayStr = new Date().toISOString().slice(0, 10);
+
+            const expiredSet = new Set(d.expired_contracts || []);
+            const execExits = d.executed_exits || {};
+            const allTradesList = d.all_trades || [];
 
             engines.forEach(eng => {
                 const data = sd[eng] || {};
@@ -767,18 +774,58 @@
                     if (slVal <= 0 || t1Val <= 0) return; // Only include trades with intact SL & Targets
 
                     const key = (t.contract || t.symbol || '').replace(/\s+/g, '').toUpperCase();
-                    if (key && !tradeMap.has(key)) {
-                        const entryDt = t.entry_time ? String(t.entry_time).slice(0, 10) : '';
-                        const isCF = Boolean(t.carry_forward) || (entryDt && entryDt < todayStr);
-                        tradeMap.set(key, { ...t, carry_forward: isCF });
+                    const symKey = (t.symbol || '').replace(/\s+/g, '').toUpperCase();
+                    if (!key || tradeMap.has(key)) return;
+
+                    // Evaluate live price and execution state
+                    const liveLtp = parseFloat(d.ltp[key] || d.ltp[symKey] || d.ltp[t.contract] || d.ltp[t.symbol] || 0);
+                    const isExpired = expiredSet.has(key) || expiredSet.has(symKey);
+                    const isExitDone = Boolean(execExits[key] || execExits[symKey] || execExits[t.contract || '']);
+
+                    const dbMatch = allTradesList.find(dbT => {
+                        const dbK = (dbT.contract || dbT.symbol || '').replace(/\s+/g, '').toUpperCase();
+                        return dbK === key || dbK === symKey;
+                    });
+                    const dbStatus = (dbMatch?.status || '').toUpperCase();
+                    const trailingStage = parseInt(dbMatch?.trailing_stage || t.trailing_stage || 0, 10);
+                    const highPrice = Math.max(liveLtp, parseFloat(dbMatch?.high_price || t.high_price || 0));
+
+                    // T1 Hit Determination
+                    const isT1Hit = (t1Val > 0 && highPrice >= (t1Val * 0.995)) || 
+                                    (dbStatus === 'TARGET_HIT') || 
+                                    (trailingStage >= 1);
+
+                    // SL Hit Determination
+                    const isSLHit = (slVal > 0 && liveLtp > 0 && liveLtp <= slVal) || 
+                                    (dbStatus === 'SL_HIT') || 
+                                    isExitDone || 
+                                    (dbStatus === 'EXITED');
+
+                    // Filter Application
+                    if (statusFilter === 'fresh') {
+                        if (isT1Hit || isSLHit || isExpired || isExitDone || dbStatus === 'SL_HIT' || dbStatus === 'TARGET_HIT' || dbStatus === 'EXITED') {
+                            return;
+                        }
+                    } else if (statusFilter === 't1_reached') {
+                        if (!isT1Hit) return;
+                    } else if (statusFilter === 'exited') {
+                        if (!isSLHit && !isExitDone && !isExpired && dbStatus !== 'SL_HIT' && dbStatus !== 'EXITED') return;
                     }
+
+                    const entryDt = t.entry_time ? String(t.entry_time).slice(0, 10) : '';
+                    const isCF = Boolean(t.carry_forward) || (entryDt && entryDt < todayStr);
+                    tradeMap.set(key, { ...t, carry_forward: isCF, is_t1_hit: isT1Hit, is_sl_hit: isSLHit });
                 });
 
                 const finalTrades = Array.from(tradeMap.values());
                 const engLabel = eng === 'daily' ? 'Stock Bullish' : 'Stock Bearish';
                 if (finalTrades.length) {
                     window._scanCleared = false;
-                    scanHtml += '<div class="scan-section-title">[' + engLabel + '] Today\'s Scanned Setups (' + finalTrades.length + ')</div>';
+                    let statusTitle = 'Today\'s Scanned Setups';
+                    if (statusFilter === 'fresh') statusTitle = 'Fresh Scanned Setups (Pre-T1)';
+                    else if (statusFilter === 't1_reached') statusTitle = 'T1+ Reached Setups';
+                    else if (statusFilter === 'exited') statusTitle = 'Exited / SL Hit Setups';
+                    scanHtml += '<div class="scan-section-title">[' + engLabel + '] ' + statusTitle + ' (' + finalTrades.length + ')</div>';
                     scanHtml += '<div style="overflow-x:auto"><table><thead><tr>' + colHeaders + '</tr></thead><tbody>';
                     finalTrades.forEach(t => { scanHtml += tradeRow(t, 'badge-open', eng); });
                     scanHtml += '</tbody></table></div>';
@@ -1851,6 +1898,12 @@
                                 <span id="live-exec-label-idx" style="color:#8b949e;font-size:11px">IDX: OFF</span>
                                 <div id="live-exec-toggle-idx" class="toggle-switch" onclick="toggleLiveExecution('index')"></div>
                             </div>
+                            <select id="scan-status-filter" onchange="renderScanTab()" class="filter-select" style="width:auto;background:#238636;color:#ffffff;font-weight:600;border:1px solid #2ea043">
+                                <option value="fresh" selected>🟢 Fresh (Pre-T1 Only)</option>
+                                <option value="all">📋 All Scanned Setups</option>
+                                <option value="t1_reached">🎯 T1+ Reached</option>
+                                <option value="exited">🏷️ Exited / SL Hit</option>
+                            </select>
                             <select id="scan-engine-filter" onchange="renderScanTab()" class="filter-select" style="width:auto">
                                 <option value="all" selected>All</option>
                                 <option value="nifty50">Stock Spot</option>

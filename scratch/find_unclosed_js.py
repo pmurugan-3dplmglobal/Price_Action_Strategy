@@ -1,7 +1,7 @@
 import re, subprocess, tempfile, os
 
 def find_script_lines():
-    with open("Trade_Stock/app_Sock_Trade.py", "r", encoding="utf-8") as f:
+    with open("Trade_Stock/app_Stock_Trade.py", "r", encoding="utf-8") as f:
         lines = f.readlines()
 
     script1_lines = []

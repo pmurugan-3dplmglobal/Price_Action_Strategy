@@ -8,6 +8,91 @@ meta:
   purpose: Document operational failures, root causes, regression fixes, and system enhancements.
 
 issues:
+  - id: FEATURE-013
+    title: Dominant Most Profitable Strike Filter (Index Single-Strike De-Cluttering)
+    severity: ENHANCEMENT
+    category: Risk Management & Strategy Execution
+    family: STRATEGY_LIFECYCLE
+    date_reported: "2026-08-20"
+    symptom: |
+      When multiple adjacent index option strikes (e.g. NIFTY 24150 PE and 24200 PE) triggered simultaneous breakout patterns on the same wave, staging multiple strikes caused choice overload and execution confusion for the trader.
+    root_cause: |
+      Index option scans lacked a profit-potency deduplication pass across concurrent strikes on the same symbol wave.
+    affected_files:
+      - common/resolve.py
+      - common/display_writer.py
+    resolution: |
+      Implemented Dominant Profit Arbitrage ranking: Multiple candidates on the same underlying index wave are scored by `(Tier -> Max Net Target Profit (T1 - Entry) -> Max RR -> Closest ATM)`. The scan accumulator (`display_writer.py`) now groups by `(symbol, side)` and presents ONLY the single most profitable, highest-asymmetry strike (`NIFTY26AUG24200PE` with 111.55 pts profit vs 11.50 pts on 24150 PE).
+    status: COMPLETED
+
+  - id: FEATURE-012
+    title: Scan Tab Dynamic Opportunity Filter (Fresh Pre-T1 Only vs All / T1+ Reached / Exited)
+    severity: ENHANCEMENT
+    category: Dashboard UI / Trade Discovery
+    family: UI_USABILITY
+    date_reported: "2026-08-20"
+    symptom: |
+      Users browsing the Scan Tab for fresh execution opportunities had to manually inspect prices to distinguish fresh, untouched setups from setups where T1 had already been reached or SL had been breached.
+    root_cause: |
+      The Scan Tab displayed all accumulated staged breakout trades without a dedicated pre-T1 / untouched trade filter.
+    affected_files:
+      - Trade_Option/templates/index.html
+      - Trade_Stock/templates/index.html
+    resolution: |
+      Added dynamic Scan Status filter dropdown (`🟢 Fresh (Pre-T1 Only)`, `📋 All Scanned Setups`, `🎯 T1+ Reached`, `🏷️ Exited / SL Hit`) to the Scan Tab header across Option & Stock dashboards. The default `Fresh` filter strictly isolates tradeable setups where live LTP < T1, high < T1, SL is unbroken, and no exit order has occurred.
+    status: COMPLETED
+
+  - id: ISSUE-056
+    title: Morning Market Open (09:15 AM) Target Exit Unpause & T2 Terminal Exit Alignment
+    severity: MEDIUM
+    category: Risk Management & Strategy Execution
+    family: STRATEGY_LIFECYCLE
+    date_reported: "2026-08-20"
+    symptom: |
+      1. Profit target hits (T1 / T2 / T3) during the morning opening fluctuation (09:15-09:45 AM) were blocked from executing due to a premature top-level failsafe pause check.
+      2. When a position was configured with T1 and T2 (no T3), reaching T2 only trailed SL to T1 rather than triggering a full profit exit.
+    root_cause: |
+      1. Top-level `if dt.now().time() < fs_start_t: return` in `monitor_active_positions` and `app_option_Trade.py` inadvertently paused target evaluations alongside stop-loss checks instead of strictly suppressing SL.
+      2. In the T2 trailing check, absence of T3 was not recognized as a terminal target state.
+    affected_files:
+      - common/position_monitor.py
+      - common/trading_core.py
+      - Trade_Option/app_option_Trade.py
+      - Trade_Stock/app_Stock_Trade.py
+    resolution: |
+      1. Decoupled target exit evaluations from the 09:45 AM failsafe SL gate: Target exits (T1 / T2 / T3) now actively trigger from 09:15 AM market open, while automated SL monitoring remains paused until 09:45 AM.
+      2. Added terminal T2 full exit (`EXIT_T2` with `TARGET_HIT`) whenever `T3` is not configured or <= 0 across both common engines and dashboard failsafe loops.
+    status: COMPLETED
+
+  - id: ISSUE-055
+    title: File Typo Renaming (app_Sock_Trade.py to app_Stock_Trade.py)
+    severity: LOW
+    category: Code Quality & Maintenance
+    family: CANONICAL_NAMING
+    date_reported: "2026-08-20"
+    symptom: |
+      Typo in filename `app_Sock_Trade.py` causing naming inconsistency with `Trade_Stock` directory and system documentation.
+    root_cause: |
+      Historical naming typo `app_Sock_Trade.py` remained in use across deployment scripts, process managers, tests, and documentation.
+    affected_files:
+      - Trade_Stock/app_Stock_Trade.py
+      - Trade_Stock/kill_all.ps1
+      - Trade_Option/kill_all.ps1
+      - scratch/run_full_regression_test.py
+      - scratch/check_procs.py
+      - scratch/start_services.py
+      - scratch/check_js_syntax.py
+      - scratch/balance_js_brackets.py
+      - scratch/find_unclosed_js.py
+      - deploy_to_cloud.sh
+      - CLOUD_DEPLOYMENT_GUIDE.md
+      - AGENTS.md
+      - AI_CONTEXT_INDEX.md
+      - MASTER_DOCUMENTATION.yaml
+    resolution: |
+      Renamed `Trade_Stock/app_Sock_Trade.py` to `Trade_Stock/app_Stock_Trade.py` via git mv and synchronized all import statements, systemd service descriptors, kill scripts, regression suites, and documentation.
+    status: COMPLETED
+
   - id: ISSUE-054
     title: Scan Clear Persistence Fix (Cycle DB, In-Memory Caches & UI Polling Decoupling)
     severity: MEDIUM

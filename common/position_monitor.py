@@ -595,9 +595,7 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
     except Exception:
         fs_start_t = datetime_time(9, 45)
 
-    if dt.now().time() < fs_start_t:
-        logging.debug(f"[FAILSAFE PAUSED BEFORE {failsafe_start_str} AM] Automated active position exit checks paused until {failsafe_start_str} AM.")
-        return
+    # Target monitoring runs from 09:15 AM market open; SL checks are gated inside by is_before_0945 / failsafe_start_time.
 
     # Update WebSocket subscriptions for active positions
     ws_mon = None
@@ -834,22 +832,47 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                         trade_db.update_trade(tid, {"trailing_stage": 1, "current_sl": new_sl, "sl_set_time": sl_stamp})
 
             if pos.get("trailing_stage", 0) == 1 and t2_val and hp >= (t2_val - buf_t2):
-                curr_sl = float(pos.get("current_sl") or 0.0)
-                target_base = float(t1_val or pos.get("entry_spot") or 0.0)
-                new_sl = max(curr_sl, target_base) if str(pos.get("side","CE")).upper() in ["CE", "BUY", "BULL"] else min(curr_sl, target_base) if curr_sl > 0 else target_base
-                sl_stamp = dt.now().isoformat()
-                with lock:
-                    if sym in positions_dict:
-                        positions_dict[sym]["current_sl"] = new_sl
-                        positions_dict[sym]["trailing_stage"] = 2
-                        positions_dict[sym]["sl_set_time"] = sl_stamp
-                logging.info(f"TRAIL-2 {sym}: SL=T1 ({new_sl:.2f})")
-                log_fn(sym, pos.get("pattern", ""), timeframe_entry, "TRAIL_T1", "MUTATED",
-                       f"SL={new_sl:.2f}",
-                       entry=pos.get("entry_spot", 0), sl=new_sl, target=t2_val,
-                       event_time=last.get('date'))
-                if tid:
-                    trade_db.update_trade(tid, {"trailing_stage": 2, "current_sl": new_sl, "sl_set_time": sl_stamp})
+                has_t3 = t3_val is not None and t3_val > 0
+                if not has_t3:
+                    # RULE: If T3 is NOT available, T2 is final target -> FULL EXIT at T2!
+                    logging.info(f"T2 FULL EXIT (No T3): {sym} reached {hp:.2f} (Target: {t2_val:.2f}, Buffer: {buf_t2:.2f})")
+                    if is_stock:
+                        close_stock_position(kite, pos, live, product_type)
+                    else:
+                        close_position(kite, pos, live, product_type)
+                    entry_s = pos.get("entry_spot", 0)
+                    exit_price = live_ltp if live_ltp > 0 else (cp if cp > 0 else t2_val)
+                    pnl = ((exit_price - entry_s) / entry_s * 100) if entry_s else 0
+                    log_fn(sym, pos.get("pattern", ""), pos_tf, "EXIT_T2", "CLOSED",
+                           f"T2={t2_val:.2f} (Exit @ {exit_price:.2f})", pnl,
+                           entry=entry_s, sl=pos.get("current_sl", ""), target=t2_val,
+                           event_time=last.get('date'))
+                    if tid:
+                        trade_db.update_trade(tid, {
+                            "status": "TARGET_HIT",
+                            "exit_time": dt.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            "pnl_percent": round(pnl, 2),
+                            "details": f"T2 exit ({hp:.2f} >= {t2_val - buf_t2:.2f})"
+                        })
+                    to_clear.append(sym)
+                    continue
+                else:
+                    curr_sl = float(pos.get("current_sl") or 0.0)
+                    target_base = float(t1_val or pos.get("entry_spot") or 0.0)
+                    new_sl = max(curr_sl, target_base) if str(pos.get("side","CE")).upper() in ["CE", "BUY", "BULL"] else min(curr_sl, target_base) if curr_sl > 0 else target_base
+                    sl_stamp = dt.now().isoformat()
+                    with lock:
+                        if sym in positions_dict:
+                            positions_dict[sym]["current_sl"] = new_sl
+                            positions_dict[sym]["trailing_stage"] = 2
+                            positions_dict[sym]["sl_set_time"] = sl_stamp
+                    logging.info(f"TRAIL-2 {sym}: SL=T1 ({new_sl:.2f})")
+                    log_fn(sym, pos.get("pattern", ""), timeframe_entry, "TRAIL_T1", "MUTATED",
+                           f"SL={new_sl:.2f}",
+                           entry=pos.get("entry_spot", 0), sl=new_sl, target=t2_val,
+                           event_time=last.get('date'))
+                    if tid:
+                        trade_db.update_trade(tid, {"trailing_stage": 2, "current_sl": new_sl, "sl_set_time": sl_stamp})
 
             if t3_val and hp >= (t3_val - buf_t3):
                 logging.info(f"T3 EXIT: {sym} reached {hp:.2f} (Target: {t3_val:.2f})")

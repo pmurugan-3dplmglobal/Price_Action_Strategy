@@ -23,7 +23,7 @@ try:
     import stock_bullish_reversal_scanner
     import stock_bearish_reversal_scanner
     import app_option_Trade
-    import app_Sock_Trade
+    import app_Stock_Trade
     print(" PASSED [OK]", flush=True)
 except Exception as e:
     errors.append(f"Import Failed: {e}")

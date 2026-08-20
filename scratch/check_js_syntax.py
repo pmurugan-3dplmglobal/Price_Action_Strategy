@@ -30,5 +30,5 @@ def check_html_js(filepath):
                 os.remove(tmp_path)
 
 if __name__ == "__main__":
-    check_html_js("Trade_Stock/app_Sock_Trade.py")
+    check_html_js("Trade_Stock/app_Stock_Trade.py")
     check_html_js("Trade_Option/app_option_Trade.py")

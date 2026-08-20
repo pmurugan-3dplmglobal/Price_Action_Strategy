@@ -213,6 +213,24 @@ def write_scan_display_data(staged, active, display_file, engine_name=None):
                     contract_map[key] = t
 
         deduped_staged = list(contract_map.values())
+        
+        # For Index Options: Filter out redundant strikes for the same move; retain ONLY the single most profitable winner
+        if engine_name == "index":
+            sym_side_map = {}
+            for t in deduped_staged:
+                ss_key = f"{t.get('symbol','')}_{t.get('side','')}".replace(" ", "").upper()
+                if ss_key not in sym_side_map:
+                    sym_side_map[ss_key] = t
+                else:
+                    prev = sym_side_map[ss_key]
+                    prev_profit = float(prev.get("t1") or 0) - float(prev.get("entry_spot") or 0)
+                    curr_profit = float(t.get("t1") or 0) - float(t.get("entry_spot") or 0)
+                    prev_rr = float(prev.get("rr") or 0)
+                    curr_rr = float(t.get("rr") or 0)
+                    if (curr_profit > prev_profit) or (curr_profit == prev_profit and curr_rr > prev_rr):
+                        sym_side_map[ss_key] = t
+            deduped_staged = list(sym_side_map.values())
+
         deduped_staged.sort(key=lambda x: float(x.get("rr", 0)), reverse=True)
 
         data = {

@@ -17,7 +17,7 @@ print(f"Options Dashboard PID: {p1.pid}")
 
 print("Launching Stock Dashboard on Port 5051...")
 p2 = subprocess.Popen(
-    [sys.executable, os.path.join(ROOT, "Trade_Stock", "app_Sock_Trade.py")],
+    [sys.executable, os.path.join(ROOT, "Trade_Stock", "app_Stock_Trade.py")],
     cwd=os.path.join(ROOT, "Trade_Stock"),
     stdout=subprocess.DEVNULL,
     stderr=subprocess.DEVNULL,

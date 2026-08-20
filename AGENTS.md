@@ -65,7 +65,7 @@ Trade_Option/                 # Options Dashboard + engines (port 5050)
   launcher.py
 
 Trade_Stock/                  # Stock Trade Dashboard + scanners (port 5051)
-  app_Sock_Trade.py (1668)    # Flask dashboard; HTML/JS in templates/index.html
+  app_Stock_Trade.py (1668)   # Flask dashboard; HTML/JS in templates/index.html
   stock_reversal_scanner.py (375)   # merged BULL/BEAR parameterized scanner (PROFILE-driven)
   stock_bullish_reversal_scanner.py (25)  # thin wrapper: configure_bull() + re-export
   stock_bearish_reversal_scanner.py (24)  # thin wrapper: configure_bear() + re-export
@@ -89,11 +89,11 @@ output/logs/                  # engine/scanner logs
 | Purpose | File | Port / invocation |
 |---|---|---|
 | Options Dashboard | `Trade_Option/app_option_Trade.py` | 5050 |
-| Stock Dashboard | `Trade_Stock/app_Sock_Trade.py` | 5051 |
+| Stock Dashboard | `Trade_Stock/app_Stock_Trade.py` | 5051 |
 | Stock Bull scanner | `Trade_Stock/stock_bullish_reversal_scanner.py` | direct: `python ...` |
 | Stock Bear scanner | `Trade_Stock/stock_bearish_reversal_scanner.py` | direct: `python ...` |
 | Auto export | `run_automated_export.bat` | calls exporter/daemon |
-| Kill all | `kill_all.ps1` | matches `app_option_Trade` / `app_Sock_Trade` cmdline |
+| Kill all | `kill_all.ps1` | matches `app_option_Trade` / `app_Stock_Trade` cmdline |
 
 Dashboards launch scanners as **separate processes** (`python stock_<side>_reversal_scanner.py`).
 Because `configure_bull()` / `configure_bear()` mutate the same shared `PROFILE` dict, never import
@@ -159,7 +159,7 @@ Market: `is_market_open`.
 ## Verification
 
 - Syntax: `python -c "import ast; ast.parse(open('FILE', encoding='utf-8').read())"`
-- Import smoke test: import `app_option_Trade`, `app_Sock_Trade`, `index_options_trade_engine`,
+- Import smoke test: import `app_option_Trade`, `app_Stock_Trade`, `index_options_trade_engine`,
   `stock_options_trade_engine`, both scanner wrappers, `trading_core`.
 - Regression: `python scratch/run_full_regression_test.py` (10 tests: imports, Kite auth, scanners,
   display serializers, dashboard API, trade_db, path consistency, DB invariants, engine path alignment,

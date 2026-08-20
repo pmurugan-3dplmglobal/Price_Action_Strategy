@@ -1,4 +1,4 @@
-with open("Trade_Stock/app_Sock_Trade.py", "r", encoding="utf-8") as f:
+with open("Trade_Stock/app_Stock_Trade.py", "r", encoding="utf-8") as f:
     lines = f.readlines()
 
 in_script = False

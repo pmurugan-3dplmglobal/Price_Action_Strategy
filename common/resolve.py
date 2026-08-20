@@ -12,6 +12,37 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import pandas as pd
 import paths
 from swing_detection import detect_parabolic_multi_swings
+from session import safe_kite_call, ensure_kite_session, load_kite_session
+from timeframe_utils import (
+    fetch_and_resample_candles,
+    resample_timeframe,
+    get_fetch_timeframe,
+    LOOKBACK_LIMITS
+)
+from display_writer import clean_timestamp
+from targets import (
+    find_profit_targets,
+    find_profit_targets_bearish,
+    check_left_side_rule,
+    check_left_side_rule_bearish,
+    calculate_position_size
+)
+from patterns_bull import (
+    find_anchor_bullish_engulfing,
+    find_anchor_ll_sweep,
+    find_anchor_hammer_baby,
+    find_anchor_bullish_harami,
+    find_anchor_two_higher_highs,
+    scan_anchor_bcd_breakout
+)
+from patterns_bear import (
+    find_anchor_bearish_engulfing,
+    find_anchor_hh_sweep,
+    find_anchor_shooting_star_baby,
+    find_anchor_bearish_harami,
+    find_anchor_two_lower_lows,
+    scan_anchor_bcd_breakout_bearish
+)
 
 def _match_registry_symbol(registry, tradingsymbol):
     """Return the registry key that best matches a tradingsymbol, longest-match first.
@@ -1118,13 +1149,17 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
             def _candidate_rank(c):
                 tier_val = int(c.get("tier", 2))
                 rr_val = float(c.get("rr") or 0.0)
+                ep = float(c.get("entry_spot") or 0.0)
+                t1 = float(c.get("t1") or 0.0)
+                net_profit = max(0.0, t1 - ep)
                 strike_dist = abs(float(c.get("strike", 0)) - current_spot)
-                return (tier_val, -rr_val, strike_dist)
+                # Market Expert Priority: Tier (1 Gold < 2 Core) -> Max Net Profit -> Max RR -> Closest ATM
+                return (tier_val, -net_profit, -rr_val, strike_dist)
 
             pool.sort(key=_candidate_rank)
             best_trade = pool[0]
 
-            logging.info(f"[ARBITRAGE WINNER] {symbol}: Selected {best_trade['contract']} ({best_trade['side']} | Strike {best_trade.get('strike')}) | Tier: {best_trade.get('tier_label')} | RR: {best_trade.get('rr')} | MacroBias: {macro_bias} | StrictGate: {strict_gate}")
+            logging.info(f"[ARBITRAGE WINNER] {symbol}: Selected {best_trade['contract']} ({best_trade['side']} | Strike {best_trade.get('strike')}) | Tier: {best_trade.get('tier_label')} | Profit: {float(best_trade.get('t1',0))-float(best_trade.get('entry_spot',0)):.2f} pts | RR: {best_trade.get('rr')} | MacroBias: {macro_bias} | StrictGate: {strict_gate}")
             
             live_flag = paths.INDEX_LIVE_FLAG if engine_name == "index" else paths.NIFTY50_LIVE_FLAG
             is_live = False

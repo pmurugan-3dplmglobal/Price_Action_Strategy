@@ -20,7 +20,7 @@ for p in data:
         engines.setdefault('exporter', []).append(pid)
     elif 'app_option_Trade.py' in cmd:
         engines.setdefault('app_option', []).append(pid)
-    elif 'app_Sock_Trade.py' in cmd:
+    elif 'app_Stock_Trade.py' in cmd or 'app_Sock_Trade.py' in cmd:
         engines.setdefault('app_stock', []).append(pid)
 
 print("=== ENGINE PROCESS DISCOVERY ===")

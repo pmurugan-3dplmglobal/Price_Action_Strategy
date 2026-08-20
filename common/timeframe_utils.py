@@ -237,3 +237,42 @@ def trading_days_between(start, end):
         current += timedelta(days=1)
     return days
 
+
+def fetch_and_resample_candles(kite, token, from_date, to_date, timeframe_str):
+    import time
+    fetch_tf = get_fetch_timeframe(timeframe_str)
+    cache_key = (token, str(from_date), str(to_date), fetch_tf)
+    now = time.time()
+
+    if len(_HISTORICAL_CANDLE_CACHE) > 500:
+        stale = [k for k, (_, ts) in _HISTORICAL_CANDLE_CACHE.items() if now - ts > _CACHE_TTL_SECONDS]
+        for k in stale:
+            del _HISTORICAL_CANDLE_CACHE[k]
+
+    if cache_key in _HISTORICAL_CANDLE_CACHE:
+        cached_df, timestamp = _HISTORICAL_CANDLE_CACHE[cache_key]
+        if now - timestamp < _CACHE_TTL_SECONDS:
+            return resample_timeframe(cached_df.copy(), timeframe_str)
+
+    if hasattr(kite, "timeout") and not kite.timeout:
+        kite.timeout = 10
+    raw = None
+    for attempt in range(4):
+        try:
+            raw = kite.historical_data(token, from_date, to_date, fetch_tf)
+            break
+        except Exception as e:
+            err_msg = str(e).lower()
+            if "too many requests" in err_msg or "429" in err_msg or "timeout" in err_msg or "connection" in err_msg:
+                time.sleep(0.3 * (attempt + 1))
+            else:
+                raise e
+
+    if not raw:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(raw)
+    _HISTORICAL_CANDLE_CACHE[cache_key] = (df.copy(), now)
+    return resample_timeframe(df, timeframe_str)
+
+

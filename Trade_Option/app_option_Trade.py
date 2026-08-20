@@ -724,36 +724,42 @@ def refresh_data(single_run=False):
                                     except Exception:
                                         pass
 
-                                # TASK 0: Pause automated exit execution before 09:45 AM due to opening market volatility
-                                if now_t < fs_start_t:
-                                    logging.info(f"[FAILSAFE PAUSED BEFORE {fs_start_str} AM] {contract_name} automated exit paused until {fs_start_str} AM (Current time: {now_t.strftime('%H:%M:%S')}).")
                                 # TASK 1: Pause automated exit execution if user is actively editing this symbol on the UI
-                                elif clean_sym in ACTIVE_EDIT_LOCKS:
+                                if clean_sym in ACTIVE_EDIT_LOCKS:
                                     logging.info(f"[FAILSAFE PAUSED] {contract_name} is currently being edited on UI. Automated exit execution paused.")
                                 # TASK 1b: Skip if exit order has already been executed/submitted
                                 elif is_contract_exit_executed(contract_name):
                                     pass
-                                # TASK 2: Execute SL exit ONLY IF below 0.5% buffer AND (previous candle closed below SL OR emergency deep break)
-                                elif ltp_val > 0 and sl_val > 0 and is_below_buffer and (prev_closed_below or is_deep_break):
-                                    logging.warning(f"[FAILSAFE MONITOR EXIT SL CONFIRMED] {contract_name} LTP={ltp_val} <= Buffered SL={sl_buffered} (Prev Close Below: {prev_closed_below}, Deep Break: {is_deep_break})")
-                                    pos_obj = {"contract": contract_name, "position_size": qty, "quantity": qty}
-                                    shared_close_position(_kite_session, pos_obj, True, p.get("product"))
-                                    _failsafe_exit_mark("EXIT_SL", "SL_HIT",
-                                                        f"SL hit [{('CANDLE_CLOSE_SL' if prev_closed_below else 'EMERGENCY_HARD_SL')}] | LTP {ltp_val:.2f} | SL {sl_val:.2f}", ltp_val)
-                                # 2. Check T3 Target Hit Exit
+                                # 2. Check T3 Target Hit Exit (Active from 09:15 AM)
                                 elif ltp_val > 0 and t3_val > 0 and ltp_val >= t3_val:
                                     logging.info(f"[FAILSAFE MONITOR EXIT T3] {contract_name} LTP={ltp_val} >= T3={t3_val}")
                                     pos_obj = {"contract": contract_name, "position_size": qty, "quantity": qty}
                                     shared_close_position(_kite_session, pos_obj, True, p.get("product"))
                                     _failsafe_exit_mark("EXIT_T3", "TARGET_HIT",
                                                         f"T3 exit ({ltp_val:.2f} >= T3 {t3_val:.2f})", ltp_val)
-                                # 2b. Check T1 Target Exit (No T2/T3 -> Full exit 1-2 pts early on T1 touch)
-                                elif ltp_val > 0 and t1_val > 0 and t2_val <= 0 and t3_val <= 0 and ltp_val >= (t1_val - _t1_early_buffer(t1_val)):
+                                # 2b. Check T2 Target Exit (No T3 -> Full exit on T2 touch, Active from 09:15 AM)
+                                elif ltp_val > 0 and t2_val > 0 and (t3_val <= 0 or t3_val is None) and ltp_val >= (t2_val - _t1_early_buffer(t2_val)):
+                                    logging.warning(f"[FAILSAFE MONITOR EXIT T2 (no T3)] {contract_name} LTP={ltp_val} >= T2-buffer={t2_val - _t1_early_buffer(t2_val):.2f} (Target: {t2_val:.2f})")
+                                    pos_obj = {"contract": contract_name, "position_size": qty, "quantity": qty}
+                                    shared_close_position(_kite_session, pos_obj, True, p.get("product"))
+                                    _failsafe_exit_mark("EXIT_T2", "TARGET_HIT",
+                                                        f"T2 full exit ({ltp_val:.2f} >= {t2_val - _t1_early_buffer(t2_val):.2f}, no T3)", ltp_val)
+                                # 2c. Check T1 Target Exit (No T2/T3 -> Full exit on T1 touch, Active from 09:15 AM)
+                                elif ltp_val > 0 and t1_val > 0 and t2_val <= 0 and (t3_val <= 0 or t3_val is None) and ltp_val >= (t1_val - _t1_early_buffer(t1_val)):
                                     logging.warning(f"[FAILSAFE MONITOR EXIT T1 (no T2/T3)] {contract_name} LTP={ltp_val} >= T1-buffer={t1_val - _t1_early_buffer(t1_val):.2f} (Target: {t1_val:.2f})")
                                     pos_obj = {"contract": contract_name, "position_size": qty, "quantity": qty}
                                     shared_close_position(_kite_session, pos_obj, True, p.get("product"))
                                     _failsafe_exit_mark("EXIT_T1", "TARGET_HIT",
                                                         f"T1 full exit ({ltp_val:.2f} >= {t1_val - _t1_early_buffer(t1_val):.2f}, no T2/T3)", ltp_val)
+                                # TASK 2: Execute SL exit ONLY IF after 09:45 AM AND below 0.5% buffer AND (previous candle closed below SL OR emergency deep break)
+                                elif now_t >= fs_start_t and ltp_val > 0 and sl_val > 0 and is_below_buffer and (prev_closed_below or is_deep_break):
+                                    logging.warning(f"[FAILSAFE MONITOR EXIT SL CONFIRMED] {contract_name} LTP={ltp_val} <= Buffered SL={sl_buffered} (Prev Close Below: {prev_closed_below}, Deep Break: {is_deep_break})")
+                                    pos_obj = {"contract": contract_name, "position_size": qty, "quantity": qty}
+                                    shared_close_position(_kite_session, pos_obj, True, p.get("product"))
+                                    _failsafe_exit_mark("EXIT_SL", "SL_HIT",
+                                                        f"SL hit [{('CANDLE_CLOSE_SL' if prev_closed_below else 'EMERGENCY_HARD_SL')}] | LTP {ltp_val:.2f} | SL {sl_val:.2f}", ltp_val)
+                                elif now_t < fs_start_t and ltp_val > 0 and sl_val > 0 and is_below_buffer:
+                                    logging.info(f"[FAILSAFE SL PAUSED BEFORE {fs_start_str} AM] {contract_name} SL check paused until {fs_start_str} AM (Current time: {now_t.strftime('%H:%M:%S')}).")
                                 # Track highest price reached for position
                                 prev_high = float(scan_sl.get("high_price") or 0)
                                 pos_high = max(live_ltp, prev_high)
@@ -2118,11 +2124,7 @@ def main():
     os.makedirs("output/logs", exist_ok=True)
     os.makedirs("output/monitor", exist_ok=True)
     os.makedirs("logs", exist_ok=True)
-    auto_export_if_new_month()
-    try:
-        refresh_data(single_run=True)
-    except Exception as e:
-        logging.warning(f"Initial position pre-fetch warning: {e}")
+    threading.Thread(target=auto_export_if_new_month, daemon=True).start()
     worker = threading.Thread(target=refresh_data, daemon=True)
     worker.start()
     eod_worker = threading.Thread(target=auto_eod_journal_scheduler, daemon=True)

@@ -666,9 +666,19 @@ def refresh_data(single_run=False):
                             if scan_sl:
                                 ltp_val = live_ltp
                                 sl_val = float(scan_sl.get("current_sl", 0))
-                                t3_val = float(scan_sl.get("t3", 0))
+                                t1_val = float(scan_sl.get("t1", 0) or 0)
+                                t2_val = float(scan_sl.get("t2", 0) or 0)
+                                t3_val = float(scan_sl.get("t3", 0) or 0)
 
                                 clean_sym = str(sym).replace(" ", "").upper()
+                                now_t = dt.now().time()
+                                cfg_f = load_config()
+                                fs_start_str = cfg_f.get("failsafe_start_time", "09:45")
+                                try:
+                                    f_h, f_m = map(int, fs_start_str.split(":"))
+                                    fs_start_t = datetime_time(f_h, f_m)
+                                except Exception:
+                                    fs_start_t = datetime_time(9, 45)
 
                                 sl_buffered = round(sl_val * 0.995, 2)
                                 is_below_buffer = ltp_val <= sl_buffered
@@ -686,21 +696,40 @@ def refresh_data(single_run=False):
                                     except Exception:
                                         pass
 
+                                def _t_early_buf(v):
+                                    if not v or v <= 0: return 0.0
+                                    if v <= 50: return max(0.50, round(v * 0.015, 2))
+                                    elif v <= 200: return max(1.00, round(v * 0.015, 2))
+                                    else: return max(2.00, round(v * 0.010, 2))
+
                                 # TASK 1: Pause automated exit execution if user is actively editing this symbol on the UI
                                 if clean_sym in ACTIVE_EDIT_LOCKS:
                                     logging.info(f"[FAILSAFE PAUSED] {sym} is currently being edited on UI. Automated exit execution paused.")
                                 # TASK 1b: Skip if exit order has already been executed/submitted
                                 elif is_contract_exit_executed(sym):
                                     pass
-                                # TASK 2: Execute SL exit ONLY IF below 0.5% buffer AND (previous candle closed below SL OR emergency deep break)
-                                elif ltp_val > 0 and sl_val > 0 and is_below_buffer and (prev_closed_below or is_deep_break):
-                                    logging.warning(f"[FAILSAFE MONITOR EXIT SL CONFIRMED] {sym} LTP={ltp_val} <= Buffered SL={sl_buffered} (Prev Close Below: {prev_closed_below}, Deep Break: {is_deep_break})")
-                                    pos_obj = {"contract": sym, "position_size": qty, "quantity": qty, "symbol": sym}
-                                    shared_close_stock_position(_kite_session, pos_obj, True, p.get("product"))
+                                # 2. Check T3 Target Hit Exit (Active from 09:15 AM)
                                 elif ltp_val > 0 and t3_val > 0 and ltp_val >= t3_val:
                                     logging.info(f"[FAILSAFE MONITOR EXIT T3] {sym} LTP={ltp_val} >= T3={t3_val}")
                                     pos_obj = {"contract": sym, "position_size": qty, "quantity": qty, "symbol": sym}
                                     shared_close_stock_position(_kite_session, pos_obj, True, p.get("product"))
+                                # 2b. Check T2 Target Exit (No T3 -> Full exit on T2 touch, Active from 09:15 AM)
+                                elif ltp_val > 0 and t2_val > 0 and (t3_val <= 0 or t3_val is None) and ltp_val >= (t2_val - _t_early_buf(t2_val)):
+                                    logging.warning(f"[FAILSAFE MONITOR EXIT T2 (no T3)] {sym} LTP={ltp_val} >= T2-buffer={t2_val - _t_early_buf(t2_val):.2f} (Target: {t2_val:.2f})")
+                                    pos_obj = {"contract": sym, "position_size": qty, "quantity": qty, "symbol": sym}
+                                    shared_close_stock_position(_kite_session, pos_obj, True, p.get("product"))
+                                # 2c. Check T1 Target Exit (No T2/T3 -> Full exit on T1 touch, Active from 09:15 AM)
+                                elif ltp_val > 0 and t1_val > 0 and t2_val <= 0 and (t3_val <= 0 or t3_val is None) and ltp_val >= (t1_val - _t_early_buf(t1_val)):
+                                    logging.warning(f"[FAILSAFE MONITOR EXIT T1 (no T2/T3)] {sym} LTP={ltp_val} >= T1-buffer={t1_val - _t_early_buf(t1_val):.2f} (Target: {t1_val:.2f})")
+                                    pos_obj = {"contract": sym, "position_size": qty, "quantity": qty, "symbol": sym}
+                                    shared_close_stock_position(_kite_session, pos_obj, True, p.get("product"))
+                                # TASK 2: Execute SL exit ONLY IF after 09:45 AM AND below 0.5% buffer AND (previous candle closed below SL OR emergency deep break)
+                                elif now_t >= fs_start_t and ltp_val > 0 and sl_val > 0 and is_below_buffer and (prev_closed_below or is_deep_break):
+                                    logging.warning(f"[FAILSAFE MONITOR EXIT SL CONFIRMED] {sym} LTP={ltp_val} <= Buffered SL={sl_buffered} (Prev Close Below: {prev_closed_below}, Deep Break: {is_deep_break})")
+                                    pos_obj = {"contract": sym, "position_size": qty, "quantity": qty, "symbol": sym}
+                                    shared_close_stock_position(_kite_session, pos_obj, True, p.get("product"))
+                                elif now_t < fs_start_t and ltp_val > 0 and sl_val > 0 and is_below_buffer:
+                                    logging.info(f"[FAILSAFE SL PAUSED BEFORE {fs_start_str} AM] {sym} SL check paused until {fs_start_str} AM (Current time: {now_t.strftime('%H:%M:%S')}).")
                         except Exception as fs_err:
                             logging.debug(f"Failsafe monitor error for {sym}: {fs_err}")
 
@@ -1961,11 +1990,7 @@ def main():
     os.makedirs("output/logs", exist_ok=True)
     os.makedirs("output/monitor", exist_ok=True)
     os.makedirs("logs", exist_ok=True)
-    auto_export_if_new_month()
-    try:
-        refresh_data(single_run=True)
-    except Exception as e:
-        logging.warning(f"Initial position pre-fetch warning: {e}")
+    threading.Thread(target=auto_export_if_new_month, daemon=True).start()
     worker = threading.Thread(target=refresh_data, daemon=True)
     worker.start()
     print(f"Trading Control Center starting on http://localhost:{DASHBOARD_PORT}")
