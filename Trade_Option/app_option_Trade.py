@@ -761,7 +761,7 @@ def refresh_data(single_run=False):
                         except Exception as fs_err:
                             logging.debug(f"Failsafe monitor error for {sym}: {fs_err}")
 
-                    cached_data["kite_positions"] = merged
+                cached_data["kite_positions"] = merged
             except Exception as e:
                 logging.error(f"[KITE POSITIONS ERROR] {e}")
         if single_run:
