@@ -249,13 +249,15 @@ def derive_sl_targets_for_contract(kite, contract, entry_price, timeframe_entry=
             if t1 is None or t1 <= ep:
                 t1 = round(ep + (1.88 * risk), 2)
 
+        now_iso = dt.now().isoformat()
         return {
             "entry_price": round(ep, 2) if ep else 0.0,
             "current_sl": sl_val,
             "t1": t1,
             "t2": t2,
             "t3": t3,
-            "pattern": pattern_name
+            "pattern": pattern_name,
+            "entry_time": now_iso
         }
     except Exception as e:
         logging.warning(f"Derive contract SL/Target failed for {contract}: {e}")
@@ -263,13 +265,15 @@ def derive_sl_targets_for_contract(kite, contract, entry_price, timeframe_entry=
             ep = float(entry_price)
             sl_val = round(ep * 0.90, 2)
             risk = round(ep - sl_val, 2)
+            now_iso = dt.now().isoformat()
             return {
                 "entry_price": round(ep, 2),
                 "current_sl": sl_val,
                 "t1": round(ep + 1.88 * risk, 2),
                 "t2": round(ep + 2.50 * risk, 2),
                 "t3": round(ep + 3.50 * risk, 2),
-                "pattern": "FALLBACK_10PCT_MANUAL"
+                "pattern": "FALLBACK_10PCT_MANUAL",
+                "entry_time": now_iso
             }
         return None
 
