@@ -545,13 +545,14 @@ def refresh_data(single_run=False):
                     active = trade_db.get_active_trades()
                     if active:
                         if not _kite_session:
-                            tk = check_token_valid()
-                            if tk["valid"]:
-                                td = json.load(open(TOKEN_FILE))
-                                api_key, _ = get_kite_credentials()
-                                ks = KiteConnect(api_key=api_key)
-                                ks.set_access_token(td["access_token"])
+                            try:
+                                from session import load_kite_session
+                                api_k, acc_t = load_kite_session(TOKEN_FILE)
+                                ks = KiteConnect(api_key=api_k)
+                                ks.set_access_token(acc_t)
                                 _kite_session = ks
+                            except Exception:
+                                pass
                         if _kite_session:
                             syms = []
                             for t in active:
@@ -569,17 +570,18 @@ def refresh_data(single_run=False):
             _kite_positions_last_fetch = now
             try:
                 if not _kite_session:
-                    tk = check_token_valid()
-                    if tk["valid"]:
-                        td = json.load(open(TOKEN_FILE))
-                        api_key, _ = get_kite_credentials()
-                        ks = KiteConnect(api_key=api_key)
-                        ks.set_access_token(td["access_token"])
+                    try:
+                        from session import load_kite_session
+                        api_k, acc_t = load_kite_session(TOKEN_FILE)
+                        ks = KiteConnect(api_key=api_k)
+                        ks.set_access_token(acc_t)
                         _kite_session = ks
+                    except Exception:
+                        pass
                 if _kite_session:
                     kite_positions = _kite_session.positions()
                     merged = []
-                    net_pos = [p for p in kite_positions.get("net", []) if p.get("tradingsymbol") and int(p.get("quantity", 0)) > 0]
+                    net_pos = [p for p in kite_positions.get("net", []) if p.get("tradingsymbol") and int(p.get("quantity", 0)) != 0]
                     q_keys = [f"{p.get('exchange', 'NFO')}:{p.get('tradingsymbol')}" for p in net_pos]
                     quotes_bulk = {}
                     if q_keys:
