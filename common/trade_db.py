@@ -75,35 +75,84 @@ def _init_db():
 
 
 def _migrate_from_json():
-    """One-time migration: load trades_db.json into SQLite if DB is empty."""
+    """Sync trades from trades_db.json → SQLite.
+
+    On first run (empty DB) inserts all records.
+    On subsequent runs, upserts any ACTIVE records from JSON whose status in
+    SQLite is stale (e.g. COMPLETED) or missing entirely.  This prevents the
+    scenario where the one-time guard (`count > 0 → skip`) leaves active
+    positions invisible to the dashboard.
+    """
     if not os.path.exists(TRADES_DB):
         return
     try:
-        with _get_connection() as conn:
-            count = conn.execute("SELECT COUNT(*) FROM trades").fetchone()[0]
-            if count > 0:
-                return          # Already migrated
         with open(TRADES_DB, "r", encoding="utf-8") as f:
             legacy = json.load(f)
         trades = legacy.get("trades", [])
         if not trades:
             return
+
         with _get_connection() as conn:
-            for t in trades:
-                tid = t.get("id")
-                engine = t.get("engine", "")
-                symbol = t.get("symbol", "")
-                contract = _normalize_contract(t.get("contract") or symbol)
-                status = t.get("status", "ACTIVE")
-                created_at = t.get("created_at", "")
-                updated_at = t.get("updated_at", created_at)
-                data = json.dumps(t)
-                conn.execute(
-                    "INSERT OR IGNORE INTO trades (id, engine, symbol, contract, status, data_json, created_at, updated_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                    (tid, engine, symbol, contract, status, data, created_at, updated_at)
-                )
-        logging.info(f"[trade_db] Migrated {len(trades)} trades from JSON → SQLite")
+            db_count = conn.execute("SELECT COUNT(*) FROM trades").fetchone()[0]
+
+            if db_count == 0:
+                # Fresh migration — insert everything
+                for t in trades:
+                    tid = t.get("id")
+                    engine = t.get("engine", "")
+                    symbol = t.get("symbol", "")
+                    contract = _normalize_contract(t.get("contract") or symbol)
+                    status = t.get("status", "ACTIVE")
+                    created_at = t.get("created_at", "")
+                    updated_at = t.get("updated_at", created_at)
+                    data = json.dumps(t)
+                    conn.execute(
+                        "INSERT OR IGNORE INTO trades (id, engine, symbol, contract, status, data_json, created_at, updated_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                        (tid, engine, symbol, contract, status, data, created_at, updated_at)
+                    )
+                logging.info(f"[trade_db] Migrated {len(trades)} trades from JSON → SQLite")
+            else:
+                # Incremental sync — upsert any ACTIVE JSON records
+                synced = 0
+                for t in trades:
+                    if t.get("status") != "ACTIVE":
+                        continue
+                    tid = t.get("id")
+                    contract = _normalize_contract(t.get("contract") or t.get("symbol"))
+                    if not tid and not contract:
+                        continue
+
+                    # Check if this record already exists and is already ACTIVE
+                    existing = None
+                    if tid is not None:
+                        existing = conn.execute("SELECT id, status FROM trades WHERE id=?", (tid,)).fetchone()
+                    if not existing and contract:
+                        existing = conn.execute("SELECT id, status FROM trades WHERE contract=? LIMIT 1", (contract,)).fetchone()
+
+                    if existing and existing["status"] == "ACTIVE":
+                        continue  # Already synced and active
+
+                    data = json.dumps(t)
+                    engine = t.get("engine", "")
+                    symbol = t.get("symbol", "")
+                    created_at = t.get("created_at", "")
+                    updated_at = t.get("updated_at", created_at)
+
+                    if existing:
+                        conn.execute(
+                            "UPDATE trades SET status=?, data_json=?, updated_at=? WHERE id=?",
+                            ("ACTIVE", data, updated_at, existing["id"])
+                        )
+                    else:
+                        conn.execute(
+                            "INSERT OR IGNORE INTO trades (id, engine, symbol, contract, status, data_json, created_at, updated_at) "
+                            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                            (tid, engine, symbol, contract, "ACTIVE", data, created_at, updated_at)
+                        )
+                    synced += 1
+                if synced:
+                    logging.info(f"[trade_db] Incremental sync: {synced} ACTIVE trades from JSON → SQLite")
     except Exception as e:
         logging.warning(f"[trade_db] JSON migration failed (non-fatal): {e}")
 

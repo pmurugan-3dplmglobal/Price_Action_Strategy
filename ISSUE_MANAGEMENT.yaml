@@ -4,10 +4,54 @@
 meta:
   system: Price Action Unified Strategy System
   version: Prod Code v02
-  last_updated: "2026-08-09"
+  last_updated: "2026-08-20"
   purpose: Document operational failures, root causes, regression fixes, and system enhancements.
 
 issues:
+  - id: ISSUE-074
+    title: Entry field editable in dashboard Edit mode (should be read-only)
+    severity: BUG
+    category: Dashboard UI
+    family: DASHBOARD_EDIT
+    date_reported: "2026-08-20"
+    symptom: |
+      Clicking Edit on a Live Position row made the Entry field editable as an <input>, allowing
+      accidental modification. Only SL, T1, T2, T3 should be editable.
+    root_cause: |
+      editRow() and saveEdit() in both dashboard templates rendered Entry as an editable input
+      and sent entry_price in the /api/update-position payload.
+    affected_files:
+      - Trade_Option/templates/index.html
+      - Trade_Stock/templates/index.html
+    resolution: |
+      Changed Entry cell to read-only display with 🔒 indicator in edit mode. Removed
+      entry_price from saveEdit() API payload. Applied to both Option and Stock dashboards.
+    status: COMPLETED
+
+  - id: ISSUE-073
+    title: Server trade_db SQLite migration skips ACTIVE trades (missing SL/T1/T2/T3 on cloud)
+    severity: CRITICAL
+    category: Data Sync
+    family: TRADE_DB_SYNC
+    date_reported: "2026-08-20"
+    symptom: |
+      On Oracle Cloud server (port 5050), Live Position section showed all positions with
+      SL=MISSING, T1=MISSING, T2=MISSING, T3=MISSING. Local Windows machine worked fine.
+    root_cause: |
+      trade_db.py _migrate_from_json() used a one-shot guard (`count > 0 → return`) which
+      skipped migration entirely if SQLite already had any records. The server's sqlite3
+      had 7 COMPLETED records from an earlier migration, so 9 ACTIVE records in trades_db.json
+      were never imported. Additionally, the Kite positions (CE calls) were created from the
+      local machine's trade_db which was never synced to the server's sqlite3.
+    affected_files:
+      - common/trade_db.py
+    resolution: |
+      1. Fixed _migrate_from_json() to perform incremental sync: on non-empty DBs, it now
+         upserts ACTIVE records from JSON that are missing or stale in SQLite.
+      2. Manually synced local trades.sqlite3 to server via SCP.
+      3. Restarted app_option_Trade.py on server.
+    status: COMPLETED
+
   - id: FEATURE-013
     title: Dominant Most Profitable Strike Filter (Index Single-Strike De-Cluttering)
     severity: ENHANCEMENT

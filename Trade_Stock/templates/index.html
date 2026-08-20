@@ -871,7 +871,7 @@
             const newT1 = document.getElementById('t1_'+uid)?.value;
             const newT2 = document.getElementById('t2_'+uid)?.value;
             const newT3 = document.getElementById('t3_'+uid)?.value;
-            const newEntry = document.getElementById('entry_'+uid)?.value;
+
             if (!newSl || !newT1) return;
             delete editStates[uid];
             if (Object.keys(editStates).length === 0) window._isEditing = false;
@@ -879,7 +879,7 @@
                 const r = await fetch('/api/update-position', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({engine: engine, symbol: symbol, current_sl: parseFloat(newSl), t1: parseFloat(newT1), t2: newT2 ? parseFloat(newT2) : null, t3: newT3 ? parseFloat(newT3) : null, entry_price: newEntry ? parseFloat(newEntry) : null})
+                    body: JSON.stringify({engine: engine, symbol: symbol, current_sl: parseFloat(newSl), t1: parseFloat(newT1), t2: newT2 ? parseFloat(newT2) : null, t3: newT3 ? parseFloat(newT3) : null})
                 });
                 const j = await r.json();
                 if (j.ok) {
@@ -1039,7 +1039,7 @@
                     const chartCellPos = `<td style="text-align:center"><button class="btn-chart" onclick="openChartModal('${t.contract||t.symbol||''}','${t.symbol||''}','${t.side||'CE'}',${t.entry_spot||0},${t.current_sl||t.sl||0},${t.t1||0},${t.t2||0},${t.t3||0},'${t.pattern||''}','${t.candle_a_time||''}','${t.entry_time||''}',${t.benchmark||0},${t.anchor_floor||0},'${t.direction||'BULL'}')" style="background:#1f6feb;color:#ffffff;border:none;padding:2px 6px;border-radius:4px;font-size:10px;cursor:pointer;font-weight:600;">📈 Chart</button></td>`;
                     if (es && es.active) {
                         const eng2 = t.engine === 'Index' ? 'index' : 'nifty50';
-                        entryCell = `<td><input id="entry_${uid}" value="${es.entry}" style="width:60px" oninput="editStates['${uid}'].entry=this.value" onchange="saveEdit('${uid}','${t.symbol||''}','${eng2}')"></td>`;
+                        entryCell = `<td style="color:#8b949e;">${es.entry || '---'} 🔒</td>`;
                         slCell = `<td><input id="sl_${uid}" value="${es.sl}" style="width:60px" oninput="editStates['${uid}'].sl=this.value" onchange="saveEdit('${uid}','${t.symbol||''}','${eng2}')"></td>`;
                         t1Cell = `<td><input id="t1_${uid}" value="${es.t1}" style="width:60px" oninput="editStates['${uid}'].t1=this.value" onchange="saveEdit('${uid}','${t.symbol||''}','${eng2}')"></td>`;
                         t2Cell = `<td><input id="t2_${uid}" value="${es.t2}" style="width:60px" oninput="editStates['${uid}'].t2=this.value" onchange="saveEdit('${uid}','${t.symbol||''}','${eng2}')"></td>`;
