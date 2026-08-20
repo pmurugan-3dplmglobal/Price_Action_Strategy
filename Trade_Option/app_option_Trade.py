@@ -550,12 +550,19 @@ def refresh_data(single_run=False):
                             ks = KiteConnect(api_key=api_k)
                             ks.set_access_token(acc_t)
                             _kite_session = ks
+                        except Exception as k_err:
+                            print(f"[REFRESH KITE INIT ERR] {k_err}")
+                    else:
+                        try:
+                            from session import ensure_kite_session
+                            ensure_kite_session(_kite_session, TOKEN_FILE)
                         except Exception:
                             pass
                     if _kite_session:
                         kite_positions = _kite_session.positions()
                         merged = []
                         net_pos = [p for p in kite_positions.get("net", []) if p.get("tradingsymbol") and int(p.get("quantity", 0)) != 0]
+                        print(f"[REFRESH KITE POS] net_pos count={len(net_pos)}")
                         for p in net_pos:
                             sym = p.get("tradingsymbol", "")
                             qty = int(p.get("quantity", 0))
