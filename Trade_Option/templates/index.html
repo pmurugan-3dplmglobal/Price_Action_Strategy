@@ -971,12 +971,11 @@
             const dbSeen = new Set();
             allTrades.forEach(t => {
                 const contract = t.contract || t.symbol || '';
-                const inKite = kitePos.some(kp => kp.contract === contract || kp.contract.includes(contract) || contract.includes(kp.contract));
+                const inKite = kitePos.some(kp => kp.contract === contract || (kp.contract && kp.contract.includes(contract)) || (contract && contract.includes(kp.contract)));
                 if (inKite) return;
-                let st = (t.status || '').toLowerCase();
-                if (st === 'active' && !inKite) st = 'exited';
+                let st = (t.status || 'ACTIVE').toLowerCase();
                 if (positionFilter === 'active' && st !== 'active') return;
-                if (positionFilter === 'completed' && st !== 'sl_hit' && st !== 'target_hit' && st !== 'exited') return;
+                if (positionFilter === 'completed' && st !== 'sl_hit' && st !== 'target_hit' && st !== 'exited' && st !== 'closed') return;
                 if (positionFilter === 'sl_hit' && st !== 'sl_hit') return;
 
                 const dedupKey = (contract + '_' + st + '_' + (t.entry_spot || '')).toUpperCase();
@@ -993,7 +992,8 @@
                     t1: t.t1 !== undefined && t.t1 !== null ? t.t1 : '',
                     t2: t.t2 !== undefined && t.t2 !== null ? t.t2 : '',
                     t3: t.t3 !== undefined && t.t3 !== null ? t.t3 : '',
-                    status: st === 'exited' ? 'EXITED' : (t.status || 'ACTIVE'),
+                    quantity: (t.position_size || 1) * (t.lot_size || 1),
+                    status: t.status || 'ACTIVE',
                     created_at: t.created_at || '',
                     exit_time: t.exit_time || '',
                     pnl_percent: t.pnl_percent,
