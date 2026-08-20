@@ -451,7 +451,7 @@ def refresh_data(single_run=False):
     except Exception:
         pass
     while True:
-        with data_lock:
+        try:
             pos = load_positions()
             journal = load_journal()
             cached_data["positions"] = pos
@@ -743,6 +743,8 @@ def refresh_data(single_run=False):
                         cached_data["kite_positions"] = merged
                 except Exception as e:
                     logging.error(f"[KITE POSITIONS ERROR] {e}")
+        except Exception as loop_err:
+            logging.error(f"refresh_data loop error: {loop_err}")
         if single_run:
             break
         if int(time.time()) % 3600 < REFRESH_SECONDS:
@@ -763,7 +765,7 @@ def dashboard():
 
 @app.route("/api/status")
 def api_status():
-    with data_lock:
+    try:
         prog_status = {}
         for pid in PROGRAMS:
             if pid == "ema_engine":
@@ -773,7 +775,6 @@ def api_status():
             log_lines = cached_data["log_tail"].get(pid, [])
             if not log_lines and PROGRAMS[pid].get("log_file"):
                 log_lines = tail_log(PROGRAMS[pid].get("log_file"))
-            print(f"[DEBUG_API] pid={pid} log_file={PROGRAMS[pid].get('log_file')} lines={len(log_lines)}")
             prog_status[pid] = {
                 "running": pid_running,
                 "scans": cached_data["scans"].get(pid, []),
@@ -797,6 +798,8 @@ def api_status():
             "executed_exits": cached_data.get("executed_exits", {}),
             "expired_contracts": cached_data.get("expired_contracts", [])
         })
+    except Exception as e:
+        return jsonify({"error": str(e), "programs": {}}), 500
 
 @app.route("/api/token/check")
 def api_token_check():
