@@ -539,231 +539,204 @@ def refresh_data(single_run=False):
                     pass
             cached_data["expired_contracts"] = sorted(_expired_cache_set)
             now = time.time()
-            if now - _ltp_last_fetch > 3 and cached_data["all_trades"]:
-                _ltp_last_fetch = now
+            if now - _kite_positions_last_fetch > 3:
+                _kite_positions_last_fetch = now
                 try:
-                    active = trade_db.get_active_trades()
-                    if active:
-                        if not _kite_session:
-                            try:
-                                from session import load_kite_session
-                                api_k, acc_t = load_kite_session(TOKEN_FILE)
-                                ks = KiteConnect(api_key=api_k)
-                                ks.set_access_token(acc_t)
-                                _kite_session = ks
-                            except Exception:
-                                pass
-                        if _kite_session:
-                            syms = []
-                            for t in active:
-                                tok = t.get("option_token") or t.get("index_token")
-                                if tok: syms.append(int(tok))
-                            if syms:
-                                quotes = _kite_session.quote(syms)
-                                ltp = {}
-                                for key, q in quotes.items():
-                                    ltp[key.split(":")[-1]] = q.get("last_price", 0)
-                                cached_data["ltp"] = ltp
-                except Exception:
-                    _kite_session = None
-        if now - _kite_positions_last_fetch > 3:
-            _kite_positions_last_fetch = now
-            try:
-                if not _kite_session:
-                    try:
-                        from session import load_kite_session
-                        api_k, acc_t = load_kite_session(TOKEN_FILE)
-                        ks = KiteConnect(api_key=api_k)
-                        ks.set_access_token(acc_t)
-                        _kite_session = ks
-                    except Exception:
-                        pass
-                if _kite_session:
-                    kite_positions = _kite_session.positions()
-                    merged = []
-                    net_pos = [p for p in kite_positions.get("net", []) if p.get("tradingsymbol") and int(p.get("quantity", 0)) != 0]
-                    for p in net_pos:
-                        sym = p.get("tradingsymbol", "")
-                        qty = int(p.get("quantity", 0))
-                        entry_pr = float(p.get("average_price", 0))
-                        exch = p.get("exchange", "NFO")
-                        live_ltp = float(p.get("last_price", 0))
-                        live_pnl = float(p.get("pnl", 0))
-                        tok_id = str(p.get("instrument_token", ""))
-                        sym_str = str(sym)
-                        if live_ltp > 0:
-                            _ltp_memory[sym_str] = live_ltp
-                            if tok_id:
-                                _ltp_memory[tok_id] = live_ltp
-                            cached_data["ltp"][sym_str] = live_ltp
-                            if tok_id:
-                                cached_data["ltp"][tok_id] = live_ltp
-
-                        contract_name = p.get("tradingsymbol", sym)
-                        pos_item = {
-                            "contract": contract_name,
-                            "symbol": contract_name,
-                            "quantity": qty,
-                            "entry_price": entry_pr,
-                            "entry_spot": entry_pr,
-                            "ltp": live_ltp,
-                            "pnl": live_pnl,
-                            "exchange": exch,
-                            "source": "kite"
-                        }
-                        merged.append(pos_item)
-
-                        # Fail-Safe Active Position Risk Monitor
+                    if not _kite_session:
                         try:
-                            engine_type = "index" if ("NIFTY" in contract_name or "BANK" in contract_name or "SENSEX" in contract_name) else "nifty50"
-                            scan_sl = next((t for t in (cached_data.get("all_trades") or []) if (t.get("contract") == contract_name or t.get("symbol") == contract_name)), None)
-                            if not scan_sl:
-                                scan_sl = lookup_scan_sl_target(contract_name, contract_name, engine_type, _kite_session, entry_pr)
-                            if scan_sl:
-                                pos_item["current_sl"] = scan_sl.get("current_sl", 0)
-                                pos_item["t1"] = scan_sl.get("t1", 0)
-                                pos_item["t2"] = scan_sl.get("t2", 0)
-                                pos_item["t3"] = scan_sl.get("t3", 0)
-                                pos_item["pattern"] = scan_sl.get("pattern", "SCAN_LINKED")
+                            from session import load_kite_session
+                            api_k, acc_t = load_kite_session(TOKEN_FILE)
+                            ks = KiteConnect(api_key=api_k)
+                            ks.set_access_token(acc_t)
+                            _kite_session = ks
+                        except Exception:
+                            pass
+                    if _kite_session:
+                        kite_positions = _kite_session.positions()
+                        merged = []
+                        net_pos = [p for p in kite_positions.get("net", []) if p.get("tradingsymbol") and int(p.get("quantity", 0)) != 0]
+                        for p in net_pos:
+                            sym = p.get("tradingsymbol", "")
+                            qty = int(p.get("quantity", 0))
+                            entry_pr = float(p.get("average_price", 0))
+                            exch = p.get("exchange", "NFO")
+                            live_ltp = float(p.get("last_price", 0))
+                            live_pnl = float(p.get("pnl", 0))
+                            tok_id = str(p.get("instrument_token", ""))
+                            sym_str = str(sym)
+                            if live_ltp > 0:
+                                _ltp_memory[sym_str] = live_ltp
+                                if tok_id:
+                                    _ltp_memory[tok_id] = live_ltp
+                                cached_data["ltp"][sym_str] = live_ltp
+                                if tok_id:
+                                    cached_data["ltp"][tok_id] = live_ltp
 
-                            if scan_sl:
-                                def _safe_float(v):
-                                    try:
-                                        if v is None:
-                                            return 0.0
-                                        s = str(v).strip()
-                                        return float(s) if s not in ("", "N/A", "None") else 0.0
-                                    except (TypeError, ValueError):
-                                        return 0.0
+                            contract_name = p.get("tradingsymbol", sym)
+                            pos_item = {
+                                "contract": contract_name,
+                                "symbol": contract_name,
+                                "quantity": qty,
+                                "entry_price": entry_pr,
+                                "entry_spot": entry_pr,
+                                "ltp": live_ltp,
+                                "pnl": live_pnl,
+                                "exchange": exch,
+                                "source": "kite"
+                            }
+                            merged.append(pos_item)
 
-                                def _t1_early_buffer(v):
-                                    if v <= 0:
-                                        return 0.0
-                                    if v <= 50:
-                                        return max(0.50, round(v * 0.015, 2))
-                                    elif v <= 200:
-                                        return max(1.00, round(v * 0.015, 2))
-                                    else:
-                                        return max(2.00, round(v * 0.010, 2))
+                            # Fail-Safe Active Position Risk Monitor
+                            try:
+                                engine_type = "index" if ("NIFTY" in contract_name or "BANK" in contract_name or "SENSEX" in contract_name) else "nifty50"
+                                scan_sl = next((t for t in (cached_data.get("all_trades") or []) if (t.get("contract") == contract_name or t.get("symbol") == contract_name)), None)
+                                if not scan_sl:
+                                    scan_sl = lookup_scan_sl_target(contract_name, contract_name, engine_type, _kite_session, entry_pr)
+                                if scan_sl:
+                                    pos_item["current_sl"] = scan_sl.get("current_sl", 0)
+                                    pos_item["t1"] = scan_sl.get("t1", 0)
+                                    pos_item["t2"] = scan_sl.get("t2", 0)
+                                    pos_item["t3"] = scan_sl.get("t3", 0)
+                                    pos_item["pattern"] = scan_sl.get("pattern", "SCAN_LINKED")
 
-                                def _failsafe_exit_mark(action, status, details, exit_price):
-                                    entry_s = entry_pr if entry_pr > 0 else float(scan_sl.get("entry_spot") or 0)
-                                    pnl = ((exit_price - entry_s) / entry_s * 100) if entry_s else 0
-                                    mark_tid = tid
-                                    if not mark_tid:
+                                if scan_sl:
+                                    def _safe_float(v):
                                         try:
-                                            mark_tid = trade_db.find_active_trade_id(contract_name, engine_type or None) or trade_db.find_active_trade_id(contract_name)
+                                            if v is None:
+                                                return 0.0
+                                            s = str(v).strip()
+                                            return float(s) if s not in ("", "N/A", "None") else 0.0
+                                        except (TypeError, ValueError):
+                                            return 0.0
+
+                                    def _t1_early_buffer(v):
+                                        if v <= 0:
+                                            return 0.0
+                                        if v <= 50:
+                                            return max(0.50, round(v * 0.015, 2))
+                                        elif v <= 200:
+                                            return max(1.00, round(v * 0.015, 2))
+                                        else:
+                                            return max(2.00, round(v * 0.010, 2))
+
+                                    def _failsafe_exit_mark(action, status, details, exit_price):
+                                        entry_s = entry_pr if entry_pr > 0 else float(scan_sl.get("entry_spot") or 0)
+                                        pnl = ((exit_price - entry_s) / entry_s * 100) if entry_s else 0
+                                        mark_tid = tid
+                                        if not mark_tid:
+                                            try:
+                                                mark_tid = trade_db.find_active_trade_id(contract_name, engine_type or None) or trade_db.find_active_trade_id(contract_name)
+                                            except Exception:
+                                                mark_tid = None
+                                        if mark_tid:
+                                            trade_db.update_trade(mark_tid, {
+                                                "status": status,
+                                                "exit_time": dt.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                                "pnl_percent": round(pnl, 2),
+                                                "details": details
+                                            })
+                                        try:
+                                            log_to_journal(contract_name, scan_sl.get("pattern", "SCAN_LINKED"), "15minute",
+                                                           action, "CLOSED", details, pnl,
+                                                           entry=entry_s, sl=sl_val,
+                                                           target=t1_val if t1_val else t3_val,
+                                                           event_time=dt.now().strftime("%Y-%m-%d %H:%M:%S"))
                                         except Exception:
-                                            mark_tid = None
-                                    if mark_tid:
-                                        trade_db.update_trade(mark_tid, {
-                                            "status": status,
-                                            "exit_time": dt.now().strftime("%Y-%m-%d %H:%M:%S"),
-                                            "pnl_percent": round(pnl, 2),
-                                            "details": details
-                                        })
+                                            pass
+
+                                    ltp_val = live_ltp
+                                    sl_val = _safe_float(scan_sl.get("current_sl"))
+                                    t1_val = _safe_float(scan_sl.get("t1"))
+                                    t2_val = _safe_float(scan_sl.get("t2"))
+                                    t3_val = _safe_float(scan_sl.get("t3"))
+                                    t_stage = int(scan_sl.get("trailing_stage") or 0)
+                                    tid = scan_sl.get("id")
+
+                                    clean_sym = str(contract_name).replace(" ", "").upper()
+                                    now_t = dt.now().time()
+                                    cfg_f = load_config()
+                                    fs_start_str = cfg_f.get("failsafe_start_time", "09:45")
                                     try:
-                                        log_to_journal(contract_name, scan_sl.get("pattern", "SCAN_LINKED"), "15minute",
-                                                       action, "CLOSED", details, pnl,
-                                                       entry=entry_s, sl=sl_val,
-                                                       target=t1_val if t1_val else t3_val,
-                                                       event_time=dt.now().strftime("%Y-%m-%d %H:%M:%S"))
+                                        f_h, f_m = map(int, fs_start_str.split(":"))
+                                        fs_start_t = datetime_time(f_h, f_m)
                                     except Exception:
+                                        fs_start_t = datetime_time(9, 45)
+
+                                    # Buffer & Previous Candle Confirmation for SL Exit
+                                    sl_buffered = round(sl_val * 0.995, 2)
+                                    is_below_buffer = ltp_val <= sl_buffered
+                                    is_deep_break = ltp_val <= round(sl_val * 0.985, 2)
+
+                                    prev_closed_below = False
+                                    token_id = scan_sl.get("option_token") or scan_sl.get("index_token") or scan_sl.get("token")
+                                    if token_id and _kite_session:
+                                        try:
+                                            df_hist = fetch_and_resample_candles(_kite_session, token_id, (dt.now() - timedelta(days=2)).strftime("%Y-%m-%d"), dt.now().strftime("%Y-%m-%d"), "15minute")
+                                            if len(df_hist) >= 2:
+                                                prev_close_val = float(df_hist.iloc[-2]["close"])
+                                                if prev_close_val > 0 and prev_close_val <= sl_val:
+                                                    prev_closed_below = True
+                                        except Exception:
+                                            pass
+
+                                    # TASK 1: Pause automated exit execution if user is actively editing this symbol on the UI
+                                    if clean_sym in ACTIVE_EDIT_LOCKS:
+                                        logging.info(f"[FAILSAFE PAUSED] {contract_name} is currently being edited on UI. Automated exit execution paused.")
+                                    # TASK 1b: Skip if exit order has already been executed/submitted
+                                    elif is_contract_exit_executed(contract_name):
                                         pass
+                                    # 2. Check T3 Target Hit Exit (Active from 09:15 AM)
+                                    elif ltp_val > 0 and t3_val > 0 and ltp_val >= t3_val:
+                                        logging.info(f"[FAILSAFE MONITOR EXIT T3] {contract_name} LTP={ltp_val} >= T3={t3_val}")
+                                        pos_obj = {"contract": contract_name, "position_size": qty, "quantity": qty}
+                                        shared_close_position(_kite_session, pos_obj, True, p.get("product"))
+                                        _failsafe_exit_mark("EXIT_T3", "TARGET_HIT",
+                                                            f"T3 exit ({ltp_val:.2f} >= T3 {t3_val:.2f})", ltp_val)
+                                    # 2b. Check T2 Target Exit (No T3 -> Full exit on T2 touch, Active from 09:15 AM)
+                                    elif ltp_val > 0 and t2_val > 0 and (t3_val <= 0 or t3_val is None) and ltp_val >= (t2_val - _t1_early_buffer(t2_val)):
+                                        logging.warning(f"[FAILSAFE MONITOR EXIT T2 (no T3)] {contract_name} LTP={ltp_val} >= T2-buffer={t2_val - _t1_early_buffer(t2_val):.2f} (Target: {t2_val:.2f})")
+                                        pos_obj = {"contract": contract_name, "position_size": qty, "quantity": qty}
+                                        shared_close_position(_kite_session, pos_obj, True, p.get("product"))
+                                        _failsafe_exit_mark("EXIT_T2", "TARGET_HIT",
+                                                            f"T2 full exit ({ltp_val:.2f} >= {t2_val - _t1_early_buffer(t2_val):.2f}, no T3)", ltp_val)
+                                    # 2c. Check T1 Target Exit (No T2/T3 -> Full exit on T1 touch, Active from 09:15 AM)
+                                    elif ltp_val > 0 and t1_val > 0 and t2_val <= 0 and (t3_val <= 0 or t3_val is None) and ltp_val >= (t1_val - _t1_early_buffer(t1_val)):
+                                        logging.warning(f"[FAILSAFE MONITOR EXIT T1 (no T2/T3)] {contract_name} LTP={ltp_val} >= T1-buffer={t1_val - _t1_early_buffer(t1_val):.2f} (Target: {t1_val:.2f})")
+                                        pos_obj = {"contract": contract_name, "position_size": qty, "quantity": qty}
+                                        shared_close_position(_kite_session, pos_obj, True, p.get("product"))
+                                        _failsafe_exit_mark("EXIT_T1", "TARGET_HIT",
+                                                            f"T1 full exit ({ltp_val:.2f} >= {t1_val - _t1_early_buffer(t1_val):.2f}, no T2/T3)", ltp_val)
+                                    # TASK 2: Execute SL exit ONLY IF after 09:45 AM AND below 0.5% buffer AND (previous candle closed below SL OR emergency deep break)
+                                    elif now_t >= fs_start_t and ltp_val > 0 and sl_val > 0 and is_below_buffer and (prev_closed_below or is_deep_break):
+                                        logging.warning(f"[FAILSAFE MONITOR EXIT SL CONFIRMED] {contract_name} LTP={ltp_val} <= Buffered SL={sl_buffered} (Prev Close Below: {prev_closed_below}, Deep Break: {is_deep_break})")
+                                        pos_obj = {"contract": contract_name, "position_size": qty, "quantity": qty}
+                                        shared_close_position(_kite_session, pos_obj, True, p.get("product"))
+                                        _failsafe_exit_mark("EXIT_SL", "SL_HIT",
+                                                            f"SL hit [{('CANDLE_CLOSE_SL' if prev_closed_below else 'EMERGENCY_HARD_SL')}] | LTP {ltp_val:.2f} | SL {sl_val:.2f}", ltp_val)
+                                    elif now_t < fs_start_t and ltp_val > 0 and sl_val > 0 and is_below_buffer:
+                                        logging.info(f"[FAILSAFE SL PAUSED BEFORE {fs_start_str} AM] {contract_name} SL check paused until {fs_start_str} AM (Current time: {now_t.strftime('%H:%M:%S')}).")
+                                    # Track highest price reached for position
+                                    prev_high = float(scan_sl.get("high_price") or 0)
+                                    pos_high = max(live_ltp, prev_high)
+                                    if tid and live_ltp > prev_high:
+                                        trade_db.update_trade(tid, {"high_price": live_ltp})
 
-                                ltp_val = live_ltp
-                                sl_val = _safe_float(scan_sl.get("current_sl"))
-                                t1_val = _safe_float(scan_sl.get("t1"))
-                                t2_val = _safe_float(scan_sl.get("t2"))
-                                t3_val = _safe_float(scan_sl.get("t3"))
-                                t_stage = int(scan_sl.get("trailing_stage") or 0)
-                                tid = scan_sl.get("id")
+                                    effective_entry = entry_pr if entry_pr > 0 else float(scan_sl.get("entry_spot") or 0)
 
-                                clean_sym = str(contract_name).replace(" ", "").upper()
-                                now_t = dt.now().time()
-                                cfg_f = load_config()
-                                fs_start_str = cfg_f.get("failsafe_start_time", "09:45")
-                                try:
-                                    f_h, f_m = map(int, fs_start_str.split(":"))
-                                    fs_start_t = datetime_time(f_h, f_m)
-                                except Exception:
-                                    fs_start_t = datetime_time(9, 45)
+                                    # 3. Trailing SL Stage 1 (T1 Hit -> Trail SL to Breakeven / Entry)
+                                    if t_stage == 0 and t1_val > effective_entry and pos_high >= t1_val and effective_entry > 0:
+                                        logging.info(f"[FAILSAFE TRAIL 1] {contract_name} High={pos_high} >= T1={t1_val} -> Trailing SL to Breakeven ({effective_entry})")
+                                        if tid: trade_db.update_trade(tid, {"current_sl": effective_entry, "trailing_stage": 1, "sl_set_time": dt.now().isoformat()})
+                                    # 4. Trailing SL Stage 2 (T2 Hit -> Trail SL to T1)
+                                    elif t_stage == 1 and t2_val > t1_val and pos_high >= t2_val and t1_val > 0:
+                                        logging.info(f"[FAILSAFE TRAIL 2] {contract_name} High={pos_high} >= T2={t2_val} -> Trailing SL to T1 ({t1_val})")
+                                        if tid: trade_db.update_trade(tid, {"current_sl": t1_val, "trailing_stage": 2, "sl_set_time": dt.now().isoformat()})
+                            except Exception as fs_err:
+                                logging.debug(f"Failsafe monitor error for {sym}: {fs_err}")
 
-                                # Buffer & Previous Candle Confirmation for SL Exit
-                                sl_buffered = round(sl_val * 0.995, 2)
-                                is_below_buffer = ltp_val <= sl_buffered
-                                is_deep_break = ltp_val <= round(sl_val * 0.985, 2)
-
-                                prev_closed_below = False
-                                token_id = scan_sl.get("option_token") or scan_sl.get("index_token") or scan_sl.get("token")
-                                if token_id and _kite_session:
-                                    try:
-                                        df_hist = fetch_and_resample_candles(_kite_session, token_id, (dt.now() - timedelta(days=2)).strftime("%Y-%m-%d"), dt.now().strftime("%Y-%m-%d"), "15minute")
-                                        if len(df_hist) >= 2:
-                                            prev_close_val = float(df_hist.iloc[-2]["close"])
-                                            if prev_close_val > 0 and prev_close_val <= sl_val:
-                                                prev_closed_below = True
-                                    except Exception:
-                                        pass
-
-                                # TASK 1: Pause automated exit execution if user is actively editing this symbol on the UI
-                                if clean_sym in ACTIVE_EDIT_LOCKS:
-                                    logging.info(f"[FAILSAFE PAUSED] {contract_name} is currently being edited on UI. Automated exit execution paused.")
-                                # TASK 1b: Skip if exit order has already been executed/submitted
-                                elif is_contract_exit_executed(contract_name):
-                                    pass
-                                # 2. Check T3 Target Hit Exit (Active from 09:15 AM)
-                                elif ltp_val > 0 and t3_val > 0 and ltp_val >= t3_val:
-                                    logging.info(f"[FAILSAFE MONITOR EXIT T3] {contract_name} LTP={ltp_val} >= T3={t3_val}")
-                                    pos_obj = {"contract": contract_name, "position_size": qty, "quantity": qty}
-                                    shared_close_position(_kite_session, pos_obj, True, p.get("product"))
-                                    _failsafe_exit_mark("EXIT_T3", "TARGET_HIT",
-                                                        f"T3 exit ({ltp_val:.2f} >= T3 {t3_val:.2f})", ltp_val)
-                                # 2b. Check T2 Target Exit (No T3 -> Full exit on T2 touch, Active from 09:15 AM)
-                                elif ltp_val > 0 and t2_val > 0 and (t3_val <= 0 or t3_val is None) and ltp_val >= (t2_val - _t1_early_buffer(t2_val)):
-                                    logging.warning(f"[FAILSAFE MONITOR EXIT T2 (no T3)] {contract_name} LTP={ltp_val} >= T2-buffer={t2_val - _t1_early_buffer(t2_val):.2f} (Target: {t2_val:.2f})")
-                                    pos_obj = {"contract": contract_name, "position_size": qty, "quantity": qty}
-                                    shared_close_position(_kite_session, pos_obj, True, p.get("product"))
-                                    _failsafe_exit_mark("EXIT_T2", "TARGET_HIT",
-                                                        f"T2 full exit ({ltp_val:.2f} >= {t2_val - _t1_early_buffer(t2_val):.2f}, no T3)", ltp_val)
-                                # 2c. Check T1 Target Exit (No T2/T3 -> Full exit on T1 touch, Active from 09:15 AM)
-                                elif ltp_val > 0 and t1_val > 0 and t2_val <= 0 and (t3_val <= 0 or t3_val is None) and ltp_val >= (t1_val - _t1_early_buffer(t1_val)):
-                                    logging.warning(f"[FAILSAFE MONITOR EXIT T1 (no T2/T3)] {contract_name} LTP={ltp_val} >= T1-buffer={t1_val - _t1_early_buffer(t1_val):.2f} (Target: {t1_val:.2f})")
-                                    pos_obj = {"contract": contract_name, "position_size": qty, "quantity": qty}
-                                    shared_close_position(_kite_session, pos_obj, True, p.get("product"))
-                                    _failsafe_exit_mark("EXIT_T1", "TARGET_HIT",
-                                                        f"T1 full exit ({ltp_val:.2f} >= {t1_val - _t1_early_buffer(t1_val):.2f}, no T2/T3)", ltp_val)
-                                # TASK 2: Execute SL exit ONLY IF after 09:45 AM AND below 0.5% buffer AND (previous candle closed below SL OR emergency deep break)
-                                elif now_t >= fs_start_t and ltp_val > 0 and sl_val > 0 and is_below_buffer and (prev_closed_below or is_deep_break):
-                                    logging.warning(f"[FAILSAFE MONITOR EXIT SL CONFIRMED] {contract_name} LTP={ltp_val} <= Buffered SL={sl_buffered} (Prev Close Below: {prev_closed_below}, Deep Break: {is_deep_break})")
-                                    pos_obj = {"contract": contract_name, "position_size": qty, "quantity": qty}
-                                    shared_close_position(_kite_session, pos_obj, True, p.get("product"))
-                                    _failsafe_exit_mark("EXIT_SL", "SL_HIT",
-                                                        f"SL hit [{('CANDLE_CLOSE_SL' if prev_closed_below else 'EMERGENCY_HARD_SL')}] | LTP {ltp_val:.2f} | SL {sl_val:.2f}", ltp_val)
-                                elif now_t < fs_start_t and ltp_val > 0 and sl_val > 0 and is_below_buffer:
-                                    logging.info(f"[FAILSAFE SL PAUSED BEFORE {fs_start_str} AM] {contract_name} SL check paused until {fs_start_str} AM (Current time: {now_t.strftime('%H:%M:%S')}).")
-                                # Track highest price reached for position
-                                prev_high = float(scan_sl.get("high_price") or 0)
-                                pos_high = max(live_ltp, prev_high)
-                                if tid and live_ltp > prev_high:
-                                    trade_db.update_trade(tid, {"high_price": live_ltp})
-
-                                effective_entry = entry_pr if entry_pr > 0 else float(scan_sl.get("entry_spot") or 0)
-
-                                # 3. Trailing SL Stage 1 (T1 Hit -> Trail SL to Breakeven / Entry)
-                                if t_stage == 0 and t1_val > effective_entry and pos_high >= t1_val and effective_entry > 0:
-                                    logging.info(f"[FAILSAFE TRAIL 1] {contract_name} High={pos_high} >= T1={t1_val} -> Trailing SL to Breakeven ({effective_entry})")
-                                    if tid: trade_db.update_trade(tid, {"current_sl": effective_entry, "trailing_stage": 1, "sl_set_time": dt.now().isoformat()})
-                                # 4. Trailing SL Stage 2 (T2 Hit -> Trail SL to T1)
-                                elif t_stage == 1 and t2_val > t1_val and pos_high >= t2_val and t1_val > 0:
-                                    logging.info(f"[FAILSAFE TRAIL 2] {contract_name} High={pos_high} >= T2={t2_val} -> Trailing SL to T1 ({t1_val})")
-                                    if tid: trade_db.update_trade(tid, {"current_sl": t1_val, "trailing_stage": 2, "sl_set_time": dt.now().isoformat()})
-                        except Exception as fs_err:
-                            logging.debug(f"Failsafe monitor error for {sym}: {fs_err}")
-
-                cached_data["kite_positions"] = merged
-            except Exception as e:
-                logging.error(f"[KITE POSITIONS ERROR] {e}")
+                        cached_data["kite_positions"] = merged
+                except Exception as e:
+                    logging.error(f"[KITE POSITIONS ERROR] {e}")
         if single_run:
             break
         if int(time.time()) % 3600 < REFRESH_SECONDS:
