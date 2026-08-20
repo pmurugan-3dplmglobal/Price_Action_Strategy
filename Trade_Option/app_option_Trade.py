@@ -582,6 +582,7 @@ def refresh_data(single_run=False):
                     kite_positions = _kite_session.positions()
                     merged = []
                     net_pos = [p for p in kite_positions.get("net", []) if p.get("tradingsymbol") and int(p.get("quantity", 0)) != 0]
+                    logging.info(f"[KITE POSITIONS] Fetched {len(net_pos)} open positions from Kite: {[p.get('tradingsymbol') for p in net_pos]}")
                     q_keys = [f"{p.get('exchange', 'NFO')}:{p.get('tradingsymbol')}" for p in net_pos]
                     quotes_bulk = {}
                     if q_keys:
@@ -783,8 +784,8 @@ def refresh_data(single_run=False):
                             logging.debug(f"Failsafe monitor error for {sym}: {fs_err}")
 
                     cached_data["kite_positions"] = merged
-            except Exception:
-                pass
+            except Exception as e:
+                logging.error(f"[KITE POSITIONS ERROR] {e}")
         if single_run:
             break
         if int(time.time()) % 3600 < REFRESH_SECONDS:
