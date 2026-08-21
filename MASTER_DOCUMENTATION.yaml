@@ -231,10 +231,11 @@ backtest_suite:
       sl: "A.low - buffer"
       targets: "Negation theory non-negated swing high resistance levels T1, T2, T3"
     - id: 2
-      name: "Lower Low (LL) Sweep"
-      anchor: "Sweep candle dips below Low1; bounce candle recovers & closes above sweep high"
+      name: "Lower Low (LL) Sweep (ABCD)"
+      anchor: "Two-leg swing sweep: Low 1 base -> intermediate swing rally (>= 0.8x ATR or >= 1.5%) across >= 3 candles holding above Low 1 -> Low 2 sweep dips below Low 1 -> Bullish bounce candle recovers & closes above sweep high"
       breakout: "Close > B.high"
-      sl: "Sweep Candle Low - buffer"
+      sl: "Sweep Candle Low (Low 2) - buffer"
+      swing_rule: "Enforces distinct intermediate rally to eliminate 1-leg waterfall/flat chop traps (FEATURE-014)"
     - id: 3
       name: "Two Higher Highs"
       anchor: "Two successive higher-high bullish candles (A1, A2)"
@@ -258,10 +259,11 @@ backtest_suite:
       sl: "A.high + buffer"
       targets: "Negation theory non-negated swing low support levels T1, T2, T3"
     - id: 2
-      name: "Higher High (HH) Sweep"
-      anchor: "Sweep candle rallies above High1; rejection candle closes back below"
+      name: "Higher High (HH) Sweep (ABCD)"
+      anchor: "Two-leg swing sweep: High 1 base -> intermediate swing pullback (<= High 1 - 0.8x ATR or >= 1.5%) across >= 3 candles holding below High 1 -> High 2 sweep rallies above High 1 -> Bearish rejection candle closes back below sweep low"
       breakout: "Close < B.low"
-      sl: "Sweep Candle High + buffer"
+      sl: "Sweep Candle High (High 2) + buffer"
+      swing_rule: "Enforces distinct intermediate pullback to eliminate 1-leg climax spike/flat chop traps (FEATURE-014)"
     - id: 3
       name: "Two Lower Lows"
       anchor: "Two successive lower-low bearish candles (A1, A2)"
