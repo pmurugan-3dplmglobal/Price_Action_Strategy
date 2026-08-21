@@ -276,3 +276,14 @@ def fetch_and_resample_candles(kite, token, from_date, to_date, timeframe_str):
     return resample_timeframe(df, timeframe_str)
 
 
+def fetch_option_data(kite, token, from_date, to_date, primary_tf, fallback_tf, min_candles=5):
+    """Fetch option data with primary timeframe, falling back if insufficient candles."""
+    df = fetch_and_resample_candles(kite, token, from_date, to_date, primary_tf)
+    if len(df) >= min_candles:
+        return df
+    df = fetch_and_resample_candles(kite, token, from_date, to_date, fallback_tf)
+    if len(df) >= min_candles:
+        logging.info(f"Fallback to {fallback_tf} for token {token} (only {len(df)} candles on {primary_tf})")
+    return df
+
+

@@ -15,6 +15,7 @@ from swing_detection import detect_parabolic_multi_swings
 from session import safe_kite_call, ensure_kite_session, load_kite_session
 from timeframe_utils import (
     fetch_and_resample_candles,
+    fetch_option_data,
     resample_timeframe,
     get_fetch_timeframe,
     LOOKBACK_LIMITS
