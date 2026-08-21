@@ -77,12 +77,14 @@ def is_parabolic_arch_enhanced(
 def extract_swing_pivots(
     df: pd.DataFrame, 
     min_candles_per_leg: int = 3,
-    side: str = "BULL"
+    side: str = "BULL",
+    min_atr_factor: float = 0.6
 ) -> List[int]:
     """
-    Extracts local extrema indices for swing waves, ignoring dead zero-volume flatline candles.
-    For BULL: extracts swing low indices L1, L2, L3, ...
-    For BEAR: extracts swing high indices H1, H2, H3, ...
+    Extracts local extrema indices for swing waves with ATR prominence filtering,
+    ignoring dead zero-volume flatline candles and micro-ripples.
+    For BULL: extracts distinct swing low indices L1, L2, L3, ...
+    For BEAR: extracts distinct swing high indices H1, H2, H3, ...
     """
     if df is None or len(df) < (min_candles_per_leg * 2 + 1):
         return []
@@ -92,6 +94,13 @@ def extract_swing_pivots(
     volumes = df['volume'].values.astype(float) if 'volume' in df.columns else np.ones(len(df))
     n = len(df)
     
+    # Calculate dataset-wide ATR for swing prominence threshold
+    candle_ranges = np.abs(highs - lows)
+    mean_atr = float(np.nanmean(candle_ranges)) if len(candle_ranges) > 0 else 1.0
+    if np.isnan(mean_atr) or mean_atr <= 0:
+        mean_atr = float(np.nanmean(lows) * 0.02) if len(lows) > 0 else 1.0
+    min_displacement = max(mean_atr * min_atr_factor, float(np.nanmean(lows) * 0.01) if len(lows) > 0 else 0.5)
+
     is_bull = str(side).upper() == "BULL"
     swing_indices = []
     
@@ -103,16 +112,28 @@ def extract_swing_pivots(
         if is_bull:
             window = lows[i - min_candles_per_leg : i + min_candles_per_leg + 1]
             if lows[i] == np.min(window):
-                # Ensure the pivot has distinct price movement from previous pivot
-                if not swing_indices or (i - swing_indices[-1] >= min_candles_per_leg and abs(lows[i] - lows[swing_indices[-1]]) > 1e-4):
+                # Ensure the pivot has distinct price displacement from previous pivot or swing high in between
+                if not swing_indices:
                     swing_indices.append(i)
+                elif (i - swing_indices[-1] >= min_candles_per_leg):
+                    inter_high = np.max(highs[swing_indices[-1] : i + 1])
+                    if (inter_high - lows[i] >= min_displacement) or abs(lows[i] - lows[swing_indices[-1]]) >= min_displacement:
+                        swing_indices.append(i)
+                    elif lows[i] < lows[swing_indices[-1]]:
+                        swing_indices[-1] = i
                 elif lows[i] < lows[swing_indices[-1]]:
                     swing_indices[-1] = i
         else:
             window = highs[i - min_candles_per_leg : i + min_candles_per_leg + 1]
             if highs[i] == np.max(window):
-                if not swing_indices or (i - swing_indices[-1] >= min_candles_per_leg and abs(highs[i] - highs[swing_indices[-1]]) > 1e-4):
+                if not swing_indices:
                     swing_indices.append(i)
+                elif (i - swing_indices[-1] >= min_candles_per_leg):
+                    inter_low = np.min(lows[swing_indices[-1] : i + 1])
+                    if (highs[i] - inter_low >= min_displacement) or abs(highs[i] - highs[swing_indices[-1]]) >= min_displacement:
+                        swing_indices.append(i)
+                    elif highs[i] > highs[swing_indices[-1]]:
+                        swing_indices[-1] = i
                 elif highs[i] > highs[swing_indices[-1]]:
                     swing_indices[-1] = i
                     

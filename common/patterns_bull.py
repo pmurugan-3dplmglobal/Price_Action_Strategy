@@ -83,6 +83,18 @@ def find_anchor_ll_sweep(df):
         if (inbetween_df['close'] < low_1).any():
             return None
 
+    # Calculate ATR for intermediate swing bounce check (Datta Swing criteria: visible rally between L1 and L2)
+    high_low_diff = (df['high'] - df['low']).abs()
+    atr = float(high_low_diff.iloc[max(0, pos_sweep - 14) : pos_sweep].mean()) if len(df) >= 14 else (low_1 * 0.02)
+    if atr <= 0:
+        atr = low_1 * 0.02
+
+    # Intermediate Swing Requirement: In-between candles must show a distinct swing bounce (>= 0.8x ATR or >= 1.5%)
+    inbetween_high = float(inbetween_df['high'].max()) if not inbetween_df.empty else low_1
+    min_bounce_req = low_1 + max(0.8 * atr, low_1 * 0.015)
+    if inbetween_high < min_bounce_req:
+        return None
+
     sweep_candle, bounce_candle, confirm_candle_1, confirm_candle_2 = df.iloc[-4], df.iloc[-3], df.iloc[-2], df.iloc[-1]
     sweep_low = float(sweep_candle['low'])
     is_red = float(sweep_candle['close']) < float(sweep_candle['open'])
@@ -94,6 +106,13 @@ def find_anchor_ll_sweep(df):
     
     # Var 2 (Page 10): Green/Neutral wick sweep candle (wick pierces Low 1, body closes green above Low 1)
     v3 = is_green and (sweep_low < low_1) and (float(sweep_candle['close']) > low_1)
+
+    if not (v1 or v2 or v3):
+        return None
+    if not (float(bounce_candle['close']) > float(sweep_candle['high'])):
+        return None
+    if float(confirm_candle_1['close']) < sweep_low or float(confirm_candle_2['close']) < sweep_low:
+        return None
 
     pattern_name = "BULL_A_LL_Sweep_Var1" if (v1 or v2) else "BULL_A_LL_Sweep_Var2"
 

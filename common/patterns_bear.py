@@ -66,6 +66,18 @@ def find_anchor_hh_sweep(df):
         if (inbetween_df['close'] > high_1).any():
             return None
 
+    # Calculate ATR for intermediate swing pullback check (Datta Swing criteria: visible pullback between H1 and H2)
+    high_low_diff = (df['high'] - df['low']).abs()
+    atr = float(high_low_diff.iloc[max(0, pos_sweep - 14) : pos_sweep].mean()) if len(df) >= 14 else (high_1 * 0.02)
+    if atr <= 0:
+        atr = high_1 * 0.02
+
+    # Intermediate Swing Requirement: In-between candles must show a distinct swing pullback (>= 0.8x ATR or >= 1.5%)
+    inbetween_low = float(inbetween_df['low'].min()) if not inbetween_df.empty else high_1
+    min_pullback_req = high_1 - max(0.8 * atr, high_1 * 0.015)
+    if inbetween_low > min_pullback_req:
+        return None
+
     sweep_candle, rejection_candle, confirm_candle_1, confirm_candle_2 = df.iloc[-4], df.iloc[-3], df.iloc[-2], df.iloc[-1]
     sweep_high = float(sweep_candle['high'])
     is_green = float(sweep_candle['close']) > float(sweep_candle['open'])

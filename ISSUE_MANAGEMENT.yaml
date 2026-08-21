@@ -4,10 +4,38 @@
 meta:
   system: Price Action Unified Strategy System
   version: Prod Code v02
-  last_updated: "2026-08-20"
+  last_updated: "2026-08-21"
   purpose: Document operational failures, root causes, regression fixes, and system enhancements.
 
 issues:
+  - id: FEATURE-014
+    title: ATR-Based Swing Prominence & LL/HH Sweep Intermediate Wave Verification
+    severity: ENHANCEMENT
+    category: Strategy Pattern Accuracy
+    family: SWING_PATTERN_ACCURACY
+    date_reported: "2026-08-21"
+    symptom: |
+      Lower Low (LL_ABCD) and Higher High (HH_ABCD) sweep detectors could trigger on flat, tight
+      bottom consolidations where no genuine intermediate swing bounce/pullback occurred between
+      L1/L2 or H1/H2 (e.g. single waterfall drop into tight 5-candle dead base).
+    root_cause: |
+      1. find_anchor_ll_sweep and find_anchor_hh_sweep verified candle count (>= 3) and close bounds,
+         but did not enforce a minimum ATR swing amplitude for the intermediate wave between L1/H1 and sweep.
+      2. extract_swing_pivots extracted extrema without an ATR displacement threshold, potentially
+         identifying flat micro-ripples as full macro swing waves.
+    affected_files:
+      - common/patterns_bull.py
+      - common/patterns_bear.py
+      - common/swing_detection.py
+    resolution: |
+      1. In find_anchor_ll_sweep, added ATR calculation and required in-between candles to exhibit
+         a distinct intermediate swing bounce (>= 0.8x ATR or >= 1.5% from L1). Added strict confirmation guards.
+      2. In find_anchor_hh_sweep, added symmetric intermediate swing pullback check (<= H1 - 0.8x ATR).
+      3. In extract_swing_pivots, added min_atr_factor threshold (0.6x ATR) to ensure extracted pivots have
+         genuine macro price displacement.
+      4. Verified across 13-test regression suite with 100% pass rate.
+    status: COMPLETED
+
   - id: ISSUE-074
     title: Entry field editable in dashboard Edit mode (should be read-only)
     severity: BUG
