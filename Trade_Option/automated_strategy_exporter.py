@@ -84,7 +84,7 @@ def resolve_option_strikes(symbol, spot_price, step_size, option_type, n_range):
 def dummy_log_fn(*args, **kwargs):
     pass
 
-def run_scan_for_registry(kite, registry, engine_name, timeframe, strike_range=0, max_workers=2):
+def run_scan_for_registry(kite, registry, engine_name, timeframe, strike_range=0, max_workers=6):
     ref_now = dt.now()
     limits = {
         "minute": 60, "3minute": 100, "5minute": 100, "10minute": 100,
@@ -113,9 +113,22 @@ def run_scan_for_registry(kite, registry, engine_name, timeframe, strike_range=0
 
     lock_obj = SimpleLock()
 
+    # Pre-fetch bulk spot quotes
+    spot_quotes = {}
+    if kite:
+        try:
+            spot_query = [f"NSE:{s}" for s in registry.keys()]
+            for chunk_start in range(0, len(spot_query), 200):
+                chunk = spot_query[chunk_start : chunk_start + 200]
+                q_res = kite.ltp(chunk)
+                if q_res and isinstance(q_res, dict):
+                    spot_quotes.update(q_res)
+        except Exception as ltp_err:
+            logging.debug(f"Exporter bulk spot quote error: {ltp_err}")
+
     def _scan_one(symbol, config):
         try:
-            time.sleep(0.15)  # Throttling to keep API request rate safely within Zerodha limit (max 3 req/sec)
+            s_ltp = spot_quotes.get(f"NSE:{symbol}", {}).get("last_price")
             return scan_symbol(
                 kite, symbol, config,
                 from_date, to_date, from_date, to_date,
@@ -123,7 +136,8 @@ def run_scan_for_registry(kite, registry, engine_name, timeframe, strike_range=0
                 resolve_option_strikes, engine_name,
                 timeframe, timeframe, timeframe,
                 dummy_positions, lock_obj, trade_db,
-                strike_range, dummy_log_fn
+                strike_range, dummy_log_fn,
+                spot_ltp=s_ltp
             )
         except Exception as err:
             logging.error(f"Error scanning {symbol} ({engine_name} {timeframe}): {err}")

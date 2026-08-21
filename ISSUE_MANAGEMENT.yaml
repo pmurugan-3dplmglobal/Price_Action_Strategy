@@ -8,6 +8,32 @@ meta:
   purpose: Document operational failures, root causes, regression fixes, and system enhancements.
 
 issues:
+  - id: FEATURE-015
+    title: High-Throughput Scan Cycle Optimization (Bulk Spot Quotes & RAM Candle Caching)
+    severity: ENHANCEMENT
+    category: Performance & Latency
+    family: SCANNER_OPTIMIZATION
+    date_reported: "2026-08-21"
+    symptom: |
+      Staging scan cycles across the full 210 F&O equity universe took 10+ minutes per cycle due to
+      thousands of sequential individual HTTP REST API calls and low thread pool concurrency.
+    root_cause: |
+      1. Individual spot quote calls (kite.ltp) executed serially for all 210 stocks (~45s latency).
+      2. ThreadPoolExecutor was throttled to 5 workers with artificial sleep delays.
+      3. Historical candle cache TTL was too short (5.0s), preventing in-memory cache hits during scan cycles.
+    affected_files:
+      - common/timeframe_utils.py
+      - common/resolve.py
+      - Trade_Option/stock_options_trade_engine.py
+      - Trade_Option/automated_strategy_exporter.py
+    resolution: |
+      1. Implemented bulk spot LTP pre-fetching (chunks of 200) in run_scan_cycle, saving 200+ network calls.
+      2. Increased _CACHE_TTL_SECONDS to 45.0s in timeframe_utils.py for zero-latency in-memory candle reuse.
+      3. Increased ThreadPoolExecutor concurrency to 8 workers in stock_options_trade_engine.py and 6 in exporter.
+      4. Passed pre-fetched spot_ltp directly to scan_symbol.
+      5. Verified across 13-test regression suite with 100% pass rate.
+    status: COMPLETED
+
   - id: FEATURE-014
     title: ATR-Based Swing Prominence & LL/HH Sweep Intermediate Wave Verification
     severity: ENHANCEMENT

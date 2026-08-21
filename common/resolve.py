@@ -863,25 +863,26 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                 entry_scanners, anchor_scanners, resolve_fn, engine_name,
                 timeframe_entry, timeframe_anchor, timeframe_fallback,
                 active_positions, position_lock, trade_db, strike_range,
-                log_fn):
+                log_fn, spot_ltp=None):
     trades = []
     df_spot = None
     macro_bias = None  # 'CE' (Spot >= 13 EMA) or 'PE' (Spot < 13 EMA)
-    current_spot = 0.0
+    current_spot = float(spot_ltp) if spot_ltp and float(spot_ltp) > 0 else 0.0
     token = config.get("token")
-    try:
-        spot_quote = safe_kite_call(kite.ltp, [f"NSE:{symbol}"])
-        if f"NSE:{symbol}" in spot_quote:
-            current_spot = float(spot_quote[f"NSE:{symbol}"]["last_price"])
-            real_tok = spot_quote[f"NSE:{symbol}"].get("instrument_token")
-            if real_tok and token != real_tok:
-                token = int(real_tok)
-                config["token"] = token
-        else:
-            spot_quote = safe_kite_call(kite.ltp, [token])
-            current_spot = float(list(spot_quote.values())[0]["last_price"])
-    except Exception:
-        pass
+    if current_spot <= 0:
+        try:
+            spot_quote = safe_kite_call(kite.ltp, [f"NSE:{symbol}"])
+            if f"NSE:{symbol}" in spot_quote:
+                current_spot = float(spot_quote[f"NSE:{symbol}"]["last_price"])
+                real_tok = spot_quote[f"NSE:{symbol}"].get("instrument_token")
+                if real_tok and token != real_tok:
+                    token = int(real_tok)
+                    config["token"] = token
+            else:
+                spot_quote = safe_kite_call(kite.ltp, [token])
+                current_spot = float(list(spot_quote.values())[0]["last_price"])
+        except Exception:
+            pass
 
     try:
         df_spot = safe_kite_call(fetch_and_resample_candles, kite, config["token"], from_entry, to_entry, timeframe_entry)

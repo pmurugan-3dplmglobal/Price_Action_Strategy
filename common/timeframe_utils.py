@@ -221,7 +221,7 @@ def get_fetch_timeframe(timeframe_str):
         return "day"
 
 _HISTORICAL_CANDLE_CACHE = {}
-_CACHE_TTL_SECONDS = 5.0
+_CACHE_TTL_SECONDS = 45.0
 
 
 def trading_days_between(start, end):

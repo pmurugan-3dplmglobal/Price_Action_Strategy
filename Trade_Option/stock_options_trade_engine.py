@@ -219,13 +219,13 @@ def reconcile_positions(kite):
 #  SCAN CYCLE — RUNS EVERY N SECONDS
 # ──────────────────────────────────────────────
 
-def _process_stock(kite, symbol, config, from_entry, to_entry, from_anchor, to_anchor, entry_scanners, anchor_scanners):
+def _process_stock(kite, symbol, config, from_entry, to_entry, from_anchor, to_anchor, entry_scanners, anchor_scanners, spot_ltp=None):
     return scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anchor,
                        entry_scanners, anchor_scanners,
                        lambda sym, sp, step, opt, r: shared_resolve_strikes(NFO_INSTRUMENTS, sym, sp, step, opt, r),
                        "nifty50", TIMEFRAME_ENTRY, TIMEFRAME_ANCHOR, TIMEFRAME_ENTRY,
                        ACTIVE_POSITIONS, position_lock, trade_db, STRIKE_RANGE,
-                       log_to_journal)
+                       log_to_journal, spot_ltp=spot_ltp)
 
 
 def run_scan_cycle(kite):
@@ -277,9 +277,23 @@ def run_scan_cycle(kite):
     else:
         scan_order = sorted(STOCK_REGISTRY.keys())
 
+    # Bulk pre-fetch all spot LTPs in 1 single API call (eliminates 200+ serial network roundtrips)
+    spot_quotes = {}
+    if kite:
+        try:
+            spot_query = [f"NSE:{s}" for s in scan_order]
+            # Chunk in batches of 200 if necessary
+            for chunk_start in range(0, len(spot_query), 200):
+                chunk = spot_query[chunk_start : chunk_start + 200]
+                q_res = safe_kite_call(kite.ltp, chunk)
+                if q_res and isinstance(q_res, dict):
+                    spot_quotes.update(q_res)
+        except Exception as ltp_err:
+            logging.debug(f"Bulk spot quote fetch error: {ltp_err}")
+
     temp_stored_trades = []
 
-    with ThreadPoolExecutor(max_workers=5) as pool:
+    with ThreadPoolExecutor(max_workers=8) as pool:
         futures = {}
         for symbol in scan_order:
             config = STOCK_REGISTRY.get(symbol)
@@ -288,10 +302,10 @@ def run_scan_cycle(kite):
             with position_lock:
                 if symbol in ACTIVE_POSITIONS:
                     continue
+            s_ltp = spot_quotes.get(f"NSE:{symbol}", {}).get("last_price")
             futures[pool.submit(_process_stock, kite, symbol, config,
                 from_entry, to_entry, from_anchor, to_anchor,
-                entry_scanners, anchor_scanners)] = symbol
-            time.sleep(0.02)
+                entry_scanners, anchor_scanners, spot_ltp=s_ltp)] = symbol
 
         for f in as_completed(futures):
             symbol = futures[f]
