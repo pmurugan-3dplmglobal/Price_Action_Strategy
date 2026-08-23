@@ -88,6 +88,9 @@ except Exception as e:
 print("[TEST 5] Testing Dashboard API Endpoint (/api/get-chart-data)...", end="", flush=True)
 try:
     with app_option_Trade.app.test_client() as client:
+        with client.session_transaction() as sess:
+            sess["user"] = "test_admin"
+            sess["role"] = "admin"
         res1 = client.get('/api/get-chart-data?symbol=BAJAJFINSV26AUG2100PE&type=option&timeframe=30minute')
         res2 = client.get('/api/get-chart-data?symbol=BAJAJFINSV&type=spot&timeframe=30minute')
         assert res1.status_code == 200, f"Option chart status: {res1.status_code}"
@@ -287,6 +290,29 @@ try:
     print(" PASSED [OK]", flush=True)
 except Exception as e:
     errors.append(f"Parabolic Multi-Swing Test Failed: {e}")
+    print(f" FAILED [ERR] ({e})", flush=True)
+
+# Test 14: Dashboard Authentication & Access Control
+print("[TEST 14] Testing Dashboard Authentication & Access Control...", end="", flush=True)
+try:
+    import dashboard_auth
+    assert hasattr(dashboard_auth, "register_user"), "register_user missing"
+    assert hasattr(dashboard_auth, "verify_user"), "verify_user missing"
+    assert hasattr(dashboard_auth, "approve_user"), "approve_user missing"
+    assert hasattr(dashboard_auth, "list_users"), "list_users missing"
+    with app_option_Trade.app.test_client() as client:
+        # Unauthenticated request to / must redirect to /login
+        r = client.get('/', follow_redirects=False)
+        assert r.status_code == 302 and '/login' in r.headers.get('Location', ''), f"Expected redirect to /login, got {r.status_code}"
+        # Unauthenticated API request must return 401
+        r_api = client.get('/api/status')
+        assert r_api.status_code == 401, f"Expected 401 for /api/status, got {r_api.status_code}"
+        # Login page must render
+        r_login = client.get('/login')
+        assert r_login.status_code == 200 and b'Sign In' in r_login.data, "Login template failed to render"
+    print(" PASSED [OK]", flush=True)
+except Exception as e:
+    errors.append(f"Dashboard Auth Test Failed: {e}")
     print(f" FAILED [ERR] ({e})", flush=True)
 
 print("\n" + "=" * 100)

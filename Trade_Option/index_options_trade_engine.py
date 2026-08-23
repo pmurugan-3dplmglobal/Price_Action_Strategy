@@ -218,9 +218,11 @@ def execute_index_entry(kite, pos):
         ltp = float(q.get(q_key, {}).get("last_price", 0))
         ask = 0
         depth = q.get(q_key, {}).get("depth", {}).get("sell", [])
-        if depth and len(depth) > 0:
-            ask = float(depth[0].get("price", 0))
-        price = round((ask if ask > 0 else ltp) * 1.005, 1)
+        bm = float(pos.get("benchmark") or 0)
+        if bm > 0:
+            price = round(bm * 1.005, 1)
+        else:
+            price = round((ask if ask > 0 else ltp) * 1.005, 1)
         lot_sz = pos.get("lot_size") or get_option_lot_size(pos["contract"]) or INDEX_REGISTRY.get(pos.get("symbol", ""), {}).get("lot_size", 1)
         kite.place_order(
             variety=kite.VARIETY_REGULAR, tradingsymbol=pos["contract"],

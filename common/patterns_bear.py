@@ -400,7 +400,7 @@ def scan_anchor_bcd_breakout_bearish(df_entry, df_anchor, anchor_tf="", entry_tf
         pat_name = str(best_match.get("Pattern", ""))
         p_is_strong = any(k in pat_name for k in ["Engulf", "HH_Sweep", "Star", "Baby"])
 
-        if sw_waves >= 3 and term_base and rr_val >= 2.5:
+        if (sw_waves >= 3 or swing_meta.get("tier") == 1) and rr_val >= 2.5:
             tier = 1
             tier_label = "TIER_1_GOLD"
             tier_badge = "🥇 T1"

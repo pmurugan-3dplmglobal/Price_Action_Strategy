@@ -8,6 +8,34 @@ meta:
   purpose: Document operational failures, root causes, regression fixes, and system enhancements.
 
 issues:
+  - id: FEATURE-016
+    title: Dashboard User Authentication, Role Management & Session Access Control
+    severity: ENHANCEMENT
+    category: Dashboard Security & Multi-User Access
+    family: AUTHENTICATION
+    date_reported: "2026-08-23"
+    symptom: |
+      Options and Stock dashboards were accessible without user authentication or role controls,
+      leaving system settings and trade controls open to unauthenticated network access.
+    root_cause: |
+      Dashboards previously lacked an authentication gate, session management, and user registry.
+    affected_files:
+      - common/paths.py
+      - common/dashboard_auth.py
+      - Trade_Option/app_option_Trade.py
+      - Trade_Stock/app_Stock_Trade.py
+      - Trade_Option/templates/index.html
+      - Trade_Stock/templates/index.html
+      - scratch/run_full_regression_test.py
+    resolution: |
+      1. Created common/dashboard_auth.py with secure PBKDF2 password hashing (werkzeug.security),
+         role assignment (first user auto-admin, subsequent users pending approval), and persistence.
+      2. Added DASHBOARD_USERS_FILE and DASHBOARD_SECRET_KEY_FILE to common/paths.py.
+      3. Integrated @app.before_request auth gate protecting all routes & APIs while keeping webhooks whitelisted.
+      4. Built dark-themed /login, /register, and /admin user management views.
+      5. Updated dashboard headers with user badge, admin link, and logout button.
+      6. Verified via comprehensive 14-test regression suite.
+    status: COMPLETED
   - id: FEATURE-015
     title: High-Throughput Scan Cycle Optimization (Bulk Spot Quotes & RAM Candle Caching)
     severity: ENHANCEMENT
@@ -2280,9 +2308,25 @@ issues:
       - MASTER_DOCUMENTATION.yaml
       - ISSUE_MANAGEMENT.yaml
     resolution: |
-      1. Updated Test 4 in scratch/run_full_regression_test.py to write to paths.SCAN_DISPLAY_FILE + ".regression_tmp" and delete it immediately after serialization validation.
-      2. Restored output/monitor/scan_display.json with only genuine live cycle staged trades from output/monitor/cycle_trades.json.
-      3. Verified 13/13 regression tests pass without mutating production display state.
+  - id: FEATURE-017
+    title: Stock Options Live Auto-Execution Tier 1 Restriction & Benchmark Limit Order Pricing
+    severity: ENHANCEMENT
+    category: Live Execution Engine
+    family: FEATURE
+    date_reported: "2026-08-23"
+    symptom: |
+      Auto-execution in stock_options_trade_engine executed the highest RR trade from any tier (including T2 and T3) and placed limit orders with a 0.5% market ask markup instead of targeting the Anchor's structural Benchmark ($A$'s High) price line.
+    root_cause: |
+      User requirement: Live auto-execution should strictly execute only 🥇 Tier 1 (T1 Gold) setups, and the order price should be placed at the Anchor's High / Benchmark price as a strict Limit Order.
+    affected_files:
+      - Trade_Option/stock_options_trade_engine.py
+      - Trade_Option/app_option_Trade.py
+      - ISSUE_MANAGEMENT.yaml
+    resolution: |
+      1. Updated execute_highest_rr_trade in Trade_Option/stock_options_trade_engine.py to filter staged trades strictly for Tier 1 setups (tier == 1, T1 Gold). If no T1 setup exists in the cycle, auto-execution is safely skipped.
+      2. Set entry order pricing to round(benchmark_price, 1) placed as a strict LIMIT order via Kite Connect API.
+      3. Updated /api/buy-scanned-trade in Trade_Option/app_option_Trade.py to honor the benchmark price for 1-click manual buy limit orders when benchmark is provided.
+      4. Verified all 14 regression tests pass with 100% success.
     status: RESOLVED
 
 

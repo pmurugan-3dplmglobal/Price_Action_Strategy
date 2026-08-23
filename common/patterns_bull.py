@@ -481,7 +481,7 @@ def scan_anchor_bcd_breakout(df_entry, df_anchor, anchor_tf="", entry_tf="", ena
     p_rank = _pattern_rank(best_latest)
     rr_val = float(best_latest.get("RR", 0.0))
 
-    if sw_waves >= 3 and term_base and rr_val >= 2.5:
+    if (sw_waves >= 3 or swing_meta.get("tier") == 1) and rr_val >= 2.5:
         tier = 1
         tier_label = "TIER_1_GOLD"
         tier_badge = "🥇 T1"
@@ -505,6 +505,7 @@ def scan_anchor_bcd_breakout(df_entry, df_anchor, anchor_tf="", entry_tf="", ena
 # ──────────────────────────────────────────────
 #  SHARED ENGINE UTILITIES (identical between engines)
 # ──────────────────────────────────────────────
+
 
 
 def scan_trend_continuation_reentry(df_entry, df_anchor):

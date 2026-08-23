@@ -23,6 +23,8 @@ EXECUTED_EXITS_FILE = monitor_file("executed_exit_orders.json")
 JOURNAL_TRADES_DB = monitor_file("journal_trades_db.json")
 TRADE_JOURNAL_CSV = monitor_file("trade_journal.csv")
 PROGRAM_CONFIG_FILE = input_file("program_config.json")
+DASHBOARD_USERS_FILE = monitor_file("dashboard_users.json")
+DASHBOARD_SECRET_KEY_FILE = input_file("dashboard_secret_key.txt")
 
 # Trade databases (what engines + dashboards read/write)
 TRADES_DB = monitor_file("trades_db.json")

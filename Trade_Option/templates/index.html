@@ -118,29 +118,6 @@
             } catch(e) { console.log(e); }
         }
 
-        // ── Live Execution Toggle ──
-        async function toggleLiveExecution(engine) {
-            const isIndex = engine === 'index';
-            const tgl = document.getElementById(isIndex ? 'live-exec-toggle-idx' : 'live-exec-toggle');
-            const lbl = document.getElementById(isIndex ? 'live-exec-label-idx' : 'live-exec-label');
-            const was = tgl.classList.contains('active');
-            const ep = isIndex ? '/api/live-execution/index' : '/api/live-execution/nifty50';
-            try {
-                const r = await fetch(ep, {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({enabled: !was})
-                });
-                const d = await r.json();
-                if (d.ok) {
-                    tgl.classList.toggle('active', d.enabled);
-                    const label = isIndex ? 'IDX' : 'N50';
-                    lbl.textContent = d.enabled ? label+': ON' : label+': OFF';
-                    lbl.style.color = d.enabled ? '#3fb950' : '#8b949e';
-                }
-            } catch(e) { console.log(e); }
-        }
-
         async function toggleCardLive(pid) {
             const ep = '/api/live-execution/' + pid;
             const sw = document.getElementById('live-toggle-' + pid);
@@ -159,27 +136,6 @@
                     lb.style.color = d.enabled ? '#3fb950' : '#8b949e';
                 }
             } catch(e) { console.log(e); }
-        }
-
-        function refreshLiveExec() {
-            const d = window._lastData;
-            if (!d) return;
-            const enabled = d.live_execution || false;
-            const enabledIdx = d.live_execution_index || false;
-            const tgl = document.getElementById('live-exec-toggle');
-            const lbl = document.getElementById('live-exec-label');
-            if (tgl) {
-                tgl.classList.toggle('active', enabled);
-                lbl.textContent = enabled ? 'N50: ON' : 'N50: OFF';
-                lbl.style.color = enabled ? '#3fb950' : '#8b949e';
-            }
-            const tglIdx = document.getElementById('live-exec-toggle-idx');
-            const lblIdx = document.getElementById('live-exec-label-idx');
-            if (tglIdx) {
-                tglIdx.classList.toggle('active', enabledIdx);
-                lblIdx.textContent = enabledIdx ? 'IDX: ON' : 'IDX: OFF';
-                lblIdx.style.color = enabledIdx ? '#3fb950' : '#8b949e';
-            }
         }
 
         // ── Program Start/Stop ──
@@ -1275,11 +1231,11 @@
                 allLogs = allLogs.concat(d.programs?.ema_engine?.log_tail || []);
             }
             allLogs.forEach(l => { logHtml += '<div>'+l.replace(/</g,'&lt;').replace(/>/g,'&gt;')+'</div>'; });
-            document.getElementById('log-body').innerHTML = logHtml;
             const logBox = document.getElementById('log-body');
-            logBox.scrollTop = logBox.scrollHeight;
-
-            refreshLiveExec();
+            if (logBox) {
+                logBox.innerHTML = logHtml || '<p class="empty-state">Waiting for log data...</p>';
+                logBox.scrollTop = logBox.scrollHeight;
+            }
             document.getElementById('last-updated').textContent = 'Last refreshed: ' + new Date().toLocaleString();
             reapplySorts();
         }
@@ -1779,7 +1735,18 @@
 </head>
 <body>
     <div class="toast-container" id="toast-container"></div>
-    <h1>Trading Control Center <small>Steering & Dashboard</small></h1>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
+        <h1 style="margin:0;">Trading Control Center <small>Steering & Dashboard</small></h1>
+        <div style="display:flex;align-items:center;gap:12px;font-size:12px;background:#161b22;padding:6px 14px;border-radius:6px;border:1px solid #30363d;">
+            <span style="color:#8b949e;">👤 <strong style="color:#c9d1d9;">{{ user }}</strong></span>
+            {% if role == 'admin' %}
+            <span style="background:#1f6feb33;color:#58a6ff;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:600;">ADMIN</span>
+            <a href="/admin" style="color:#58a6ff;text-decoration:none;font-weight:600;" title="User Management">Manage Users</a>
+            {% endif %}
+            <span style="color:#30363d;">|</span>
+            <a href="/logout" style="color:#f85149;text-decoration:none;font-weight:600;" title="Sign out of Dashboard">Logout</a>
+        </div>
+    </div>
 
     <div id="token-banner" class="token-banner token-hidden">
         <div class="token-banner-row">
@@ -1918,14 +1885,6 @@
                     <div class="section-header">
                         <span>Trade Details</span>
                         <div style="display:flex;gap:12px;align-items:center">
-                            <div class="toggle-wrap">
-                                <span id="live-exec-label" style="color:#8b949e;font-size:11px">N50: OFF</span>
-                                <div id="live-exec-toggle" class="toggle-switch" onclick="toggleLiveExecution('nifty50')"></div>
-                            </div>
-                            <div class="toggle-wrap">
-                                <span id="live-exec-label-idx" style="color:#8b949e;font-size:11px">IDX: OFF</span>
-                                <div id="live-exec-toggle-idx" class="toggle-switch" onclick="toggleLiveExecution('index')"></div>
-                            </div>
                             <select id="scan-status-filter" onchange="renderScanTab()" class="filter-select" style="width:auto;background:#238636;color:#ffffff;font-weight:600;border:1px solid #2ea043">
                                 <option value="fresh" selected>🟢 Fresh (Pre-T1 Only)</option>
                                 <option value="all">📋 All Scanned Setups</option>

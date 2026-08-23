@@ -37,6 +37,7 @@ architecture:
       ema_engine.py: "13 EMA & 44 EMA crossover scanner and display output builder for options (5050) and stock spot (5051) modes"
       trading_core.py: "Centralized strategy core: scan_anchor_bcd_breakout_generic, 5 Bullish + 5 Bearish anchor detectors, find_profit_targets, find_profit_targets_bearish, resample_timeframe (4h), get_adaptive_lookback, STOCK_REGISTRY (50 stocks), INDEX_REGISTRY (NIFTY, BANKNIFTY, SENSEX), _HISTORICAL_CANDLE_CACHE (TTL RAM caching), is_market_open (09:15-15:30 IST execution guard), session loading, journal writer"
       trade_db.py: "Thread-safe JSON trade database, cycle staging, duplicate active position rejection, expired position purging, and executed pattern deduplication"
+      dashboard_auth.py: "User authentication & access control module (PBKDF2 password hashing, admin/user role hierarchy, approval workflow)"
       dashboard_sl_overrides.py: "Shared read/write of user-edited SL/T1/T2/T3 overrides (sl_target_overrides.json) used by both dashboards"
     Kite_Access_Token_gen.py: "Zerodha Kite OAuth access token generator CLI (single canonical root-level copy)"
     Trade_Option:

@@ -334,10 +334,24 @@ def _avg_target_rank(trade):
     return (avg_target - trade["entry_spot"]) / risk
 
 def execute_highest_rr_trade(kite, staged):
-    """After a scan cycle, pick best by avg RR and execute (if live)."""
+    """After a scan cycle, filter ONLY Tier 1 (🥇 T1 Gold) candidates, pick best by avg RR and execute (if live) at Benchmark limit price."""
     if not staged:
         return
-    best = max(staged, key=_avg_target_rank)
+
+    live_ok = LIVE_MARKET_DEPLOYMENT and live_execution_enabled(LIVE_EXECUTION_FLAG) and is_market_open()
+
+    # Strict Tier 1 Gold Filter for Auto-Execution
+    t1_candidates = [
+        t for t in staged
+        if int(t.get("tier", 2)) == 1 or "T1" in str(t.get("tier_badge", "")) or "GOLD" in str(t.get("tier_label", ""))
+    ]
+    if live_ok and not t1_candidates:
+        logging.info("Auto-execution skipped: No 🥇 Tier 1 (Gold) candidates found in current cycle (auto-execute restricted strictly to T1 setups).")
+        return
+
+    # In backtest or when T1 exists, pick best from T1 candidates (or fallback to staged if non-live backtest)
+    candidate_pool = t1_candidates if t1_candidates else staged
+    best = max(candidate_pool, key=_avg_target_rank)
     sym = best["symbol"]
     side = best.get("side", "CE")
     strike = best.get("strike", "")
@@ -356,7 +370,11 @@ def execute_highest_rr_trade(kite, staged):
         logging.error(f"Could not resolve option for {sym}")
         return
     option_token = _resolve_option_token(contract)
-    live_ok = LIVE_MARKET_DEPLOYMENT and live_execution_enabled(LIVE_EXECUTION_FLAG) and is_market_open()
+
+    # Entry limit order placed strictly at A's high / Benchmark price + 0.5% buffer
+    benchmark_val = float(best.get("benchmark") or cp)
+    limit_price = round(benchmark_val * 1.005, 1) if benchmark_val > 0 else round(cp * 1.005, 1)
+
     if live_ok:
         with position_lock:
             if sym in ACTIVE_POSITIONS:
@@ -365,41 +383,41 @@ def execute_highest_rr_trade(kite, staged):
                 return
             pos = {
                 "contract": contract, "option_token": option_token,
-                "entry_spot": cp, "current_sl": best["current_sl"],
+                "entry_spot": limit_price, "current_sl": best["current_sl"],
                 "t1": best["t1"], "t2": best["t2"], "t3": best["t3"],
                 "trailing_stage": 0, "lot_size": best["lot_size"], "position_size": pos_size,
                 "pattern": best["pattern"], "timeframe": TIMEFRAME_ENTRY,
                 "side": opt_type, "strike": target_strike,
-                "benchmark": best.get("benchmark"), "anchor_floor": best.get("anchor_floor"),
+                "benchmark": benchmark_val, "anchor_floor": best.get("anchor_floor"),
                 "direction": best.get("direction", "BULL"),
                 "entry_time": dt.now().isoformat(),
-                "position_type": "option"
+                "position_type": "option",
+                "tier": best.get("tier", 1),
+                "tier_label": best.get("tier_label", "TIER_1_GOLD"),
+                "tier_badge": best.get("tier_badge", "🥇 T1")
             }
             pos["trade_id"], _created = trade_db.create_trade("nifty50", sym, {k: v for k, v in pos.items() if k != "trade_id"})
             ACTIVE_POSITIONS[sym] = pos
         save_state()
-    trade_db.record_executed_pattern("nifty50", key, {"contract": contract, "entry": cp})
+    trade_db.record_executed_pattern("nifty50", key, {"contract": contract, "entry": limit_price})
     clear_executed_exit(contract)
     clear_executed_exit(sym)
     if live_ok:
         try:
-            q = kite.quote(f"{kite.EXCHANGE_NFO}:{contract}")
-            ltp = q[f"{kite.EXCHANGE_NFO}:{contract}"]["last_price"]
-            ask = q[f"{kite.EXCHANGE_NFO}:{contract}"]["depth"]["sell"][0]["price"]
-            price = round((ask if ask > 0 else ltp) * 1.005, 1)
             qty = best["lot_size"] * pos_size
             oid = kite.place_order(
                 variety=kite.VARIETY_REGULAR, tradingsymbol=contract,
                 exchange=kite.EXCHANGE_NFO, transaction_type=kite.TRANSACTION_TYPE_BUY,
-                quantity=qty, order_type=kite.ORDER_TYPE_LIMIT, price=price,
+                quantity=qty, order_type=kite.ORDER_TYPE_LIMIT, price=limit_price,
                 product=kite.PRODUCT_NRML
             )
+            logging.info(f"🥇 T1 AUTO-EXECUTE BUY LIMIT: {contract} Qty={qty} @ Benchmark Limit Price={limit_price} (Order ID: {oid})")
             log_to_journal(sym, best["pattern"], TIMEFRAME_ENTRY, "BUY", "SUCCESS",
-                           f"Order: {oid}, Qty: {qty}, {opt_type}@{target_strike}", entry=cp, sl=best["current_sl"], target=best["t1"], rr=avg_rr,
+                           f"Order: {oid}, Qty: {qty}, {opt_type}@{target_strike} @ Benchmark Limit={limit_price} (🥇 T1 Gold)", entry=limit_price, sl=best["current_sl"], target=best["t1"], rr=avg_rr,
                            event_time=best.get("entry_time"))
         except Exception as e:
             log_to_journal(sym, best["pattern"], TIMEFRAME_ENTRY, "BUY", "FAILED", str(e),
-                           entry=cp, sl=best["current_sl"], target=best["t1"],
+                           entry=limit_price, sl=best["current_sl"], target=best["t1"],
                            event_time=best.get("entry_time"))
             with position_lock:
                 ACTIVE_POSITIONS.pop(sym, None)
@@ -407,25 +425,25 @@ def execute_highest_rr_trade(kite, staged):
             return
     elif BACKTEST_DATE is not None:
         log_to_journal(sym, best["pattern"], TIMEFRAME_ENTRY, "BACKTEST_BEST", "SUCCESS",
-                       f"Contract: {contract}, Size: {pos_size}, {opt_type}@{target_strike}", entry=cp, sl=best["current_sl"], target=best["t1"],
+                       f"Contract: {contract}, Size: {pos_size}, {opt_type}@{target_strike} @ Benchmark Limit={limit_price}", entry=limit_price, sl=best["current_sl"], target=best["t1"],
                        event_time=best.get("entry_time"))
         sim = simulate_trade_outcome(kite, best, BACKTEST_DATE)
         if sim["result"]:
             log_to_journal(sym, best["pattern"], TIMEFRAME_ENTRY,
                            sim["result"], "COMPLETED", sim["detail"],
-                           entry=cp, sl=best["current_sl"], target=best.get("t1",""), rr=avg_rr,
+                           entry=limit_price, sl=best["current_sl"], target=best.get("t1",""), rr=avg_rr,
                            event_time=sim.get("exit_time") or sim.get("entry_time"))
             logging.info(f"[BACKTEST] Trade outcome: {sim['result']} | {sim['detail']} | P&L: {sim['pnl_pct']}%")
     else:
         log_to_journal(sym, best["pattern"], TIMEFRAME_ENTRY, "SCAN_READY", "SUCCESS",
-                       f"Contract: {contract}, Size: {pos_size}, {opt_type}@{target_strike} | Manual entry pending", entry=cp, sl=best["current_sl"], target=best["t1"],
+                       f"Contract: {contract}, Size: {pos_size}, {opt_type}@{target_strike} | Manual entry pending @ Benchmark={limit_price}", entry=limit_price, sl=best["current_sl"], target=best["t1"],
                        event_time=best.get("entry_time"))
-        logging.info(f"SCAN_READY best trade: {sym} {contract} | Entry: {cp} | SL: {best['current_sl']} | T1: {best.get('t1','')}")
+        logging.info(f"SCAN_READY best trade: {sym} {contract} | Entry Limit (Benchmark): {limit_price} | SL: {best['current_sl']} | T1: {best.get('t1','')}")
         targets = [t for t in [best.get("t1"), best.get("t2"), best.get("t3")] if t]
         avg_target = sum(targets) / len(targets) if targets else 0
         logging.info(f"SCAN_READY best cycle trade: {sym} | {best['pattern']} | avg-target={avg_target:.2f} | avg-RR={avg_rr}")
         return
-    trade_db.record_executed_pattern("nifty50", key, {"contract": contract, "entry": cp})
+    trade_db.record_executed_pattern("nifty50", key, {"contract": contract, "entry": limit_price})
     targets = [t for t in [best.get("t1"), best.get("t2"), best.get("t3")] if t]
     avg_target = sum(targets) / len(targets) if targets else 0
     logging.info(f"EXECUTED best cycle trade: {sym} | {best['pattern']} | avg-target={avg_target:.2f} | avg-RR={avg_rr}")
