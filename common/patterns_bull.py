@@ -480,16 +480,21 @@ def scan_anchor_bcd_breakout(df_entry, df_anchor, anchor_tf="", entry_tf="", ena
     term_base = swing_meta.get("terminal_base", False)
     p_rank = _pattern_rank(best_latest)
     rr_val = float(best_latest.get("RR", 0.0))
+    p_name = str(best_latest.get("Pattern", ""))
 
-    if (sw_waves >= 3 or swing_meta.get("tier") == 1) and rr_val >= 2.5:
+    # True 5-Anchor Reversal Classifiers: Engulfing, LL Sweep, Hammer Baby, Harami, Two Higher Highs
+    is_true_anchor = any(k in p_name for k in ["BE_ABCD", "LL_ABCD", "HAMMER_ABCD", "HARAMI_ABCD", "HH_ABCD"]) and "BASE_ABCD" not in p_name
+
+    if is_true_anchor and (sw_waves >= 3 or swing_meta.get("tier") == 1) and rr_val >= 2.5:
         tier = 1
         tier_label = "TIER_1_GOLD"
         tier_badge = "🥇 T1"
-    elif sw_waves >= 2 or p_rank >= 4 or rr_val >= 1.88:
+    elif is_true_anchor and (sw_waves >= 2 or p_rank >= 3 or rr_val >= 1.88):
         tier = 2
         tier_label = "TIER_2_CORE"
         tier_badge = "🥈 T2"
     else:
+        # Generic BASE_ABCD and trend continuations are strictly mapped to T3 Momentum
         tier = 3
         tier_label = "TIER_3_MOMENTUM"
         tier_badge = "🥉 T3"
@@ -500,6 +505,7 @@ def scan_anchor_bcd_breakout(df_entry, df_anchor, anchor_tf="", entry_tf="", ena
     best_latest["swing_waves"] = sw_waves
     best_latest["terminal_base"] = term_base
     return best_latest
+
 
 
 # ──────────────────────────────────────────────

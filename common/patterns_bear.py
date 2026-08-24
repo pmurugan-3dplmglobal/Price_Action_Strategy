@@ -398,17 +398,18 @@ def scan_anchor_bcd_breakout_bearish(df_entry, df_anchor, anchor_tf="", entry_tf
         term_base = swing_meta.get("terminal_base", False)
         rr_val = float(best_match.get("RR", 0.0))
         pat_name = str(best_match.get("Pattern", ""))
-        p_is_strong = any(k in pat_name for k in ["Engulf", "HH_Sweep", "Star", "Baby"])
+        is_true_anchor = any(k in pat_name for k in ["BE_ABCD", "HH_ABCD", "STAR_ABCD", "HARAMI_ABCD", "LL_ABCD"]) and "BASE_ABCD" not in pat_name
 
-        if (sw_waves >= 3 or swing_meta.get("tier") == 1) and rr_val >= 2.5:
+        if is_true_anchor and (sw_waves >= 3 or swing_meta.get("tier") == 1) and rr_val >= 2.5:
             tier = 1
             tier_label = "TIER_1_GOLD"
             tier_badge = "🥇 T1"
-        elif sw_waves >= 2 or p_is_strong or rr_val >= 1.88:
+        elif is_true_anchor and (sw_waves >= 2 or p_is_strong or rr_val >= 1.88):
             tier = 2
             tier_label = "TIER_2_CORE"
             tier_badge = "🥈 T2"
         else:
+            # Generic BASE_ABCD and trend continuations are strictly mapped to T3 Momentum
             tier = 3
             tier_label = "TIER_3_MOMENTUM"
             tier_badge = "🥉 T3"
@@ -419,6 +420,7 @@ def scan_anchor_bcd_breakout_bearish(df_entry, df_anchor, anchor_tf="", entry_tf
         best_match["swing_waves"] = sw_waves
         best_match["terminal_base"] = term_base
     return best_match
+
 
 
 def scan_trend_continuation_reentry(df_entry, df_anchor):

@@ -163,5 +163,8 @@ def sync_fno_stock_registry(kite, target_universe="FNO_ALL"):
 INDEX_REGISTRY = {
     "NIFTY": {"token": 256265, "lot_size": 65, "strike_step": 50, "tradingsymbol": "NIFTY 50", "exchange": "NFO"},
     "BANKNIFTY": {"token": 260105, "lot_size": 30, "strike_step": 100, "tradingsymbol": "NIFTY BANK", "exchange": "NFO"},
-    "SENSEX": {"token": 265, "lot_size": 20, "strike_step": 100, "tradingsymbol": "BSE SENSEX", "exchange": "BFO"}
+    "SENSEX": {"token": 265, "lot_size": 20, "strike_step": 100, "tradingsymbol": "BSE SENSEX", "exchange": "BFO"},
+    "MIDCPNIFTY": {"token": 288009, "lot_size": 120, "strike_step": 25, "tradingsymbol": "NIFTY MID SELECT", "exchange": "NFO"},
+    "FINNIFTY": {"token": 257801, "lot_size": 65, "strike_step": 50, "tradingsymbol": "NIFTY FIN SERVICE", "exchange": "NFO"}
 }
+

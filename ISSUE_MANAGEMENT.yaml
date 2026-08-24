@@ -2329,6 +2329,29 @@ issues:
       4. Verified all 14 regression tests pass with 100% success.
     status: RESOLVED
 
+  - id: FEATURE-018
+    title: Strict 5-Anchor Pattern Requirement for Tier 1 & Tier 2 Setups (BASE_ABCD Capped to Tier 3)
+    severity: ENHANCEMENT
+    category: Strategy Core / Anchor Tiering
+    family: FEATURE
+    date_reported: "2026-08-24"
+    symptom: |
+      Generic BASE_ABCD setups without a confirmed 5-anchor reversal pattern (Engulfing, LL/HH Sweep, Hammer/Star Baby, Harami, Two Higher Highs / Lower Lows) were qualifying for Tier 1 (🥇 T1 Gold) and Tier 2 (🥈 T2 Core) based purely on high R:R ratios or swing wave counts.
+    root_cause: |
+      User directive: Only the 5 primary price action anchor reversal patterns represent true institutional reversals worthy of T1/T2 classification. Generic trend continuation / BASE_ABCD setups must be strictly demoted to Tier 3 Momentum (🥉 T3).
+    affected_files:
+      - common/patterns_bull.py
+      - common/patterns_bear.py
+      - ISSUE_MANAGEMENT.yaml
+    resolution: |
+      1. Updated scan_anchor_bcd_breakout in common/patterns_bull.py and scan_anchor_bcd_breakout_bearish in common/patterns_bear.py to check `is_true_anchor` (strictly matching BE_ABCD, LL_ABCD, HAMMER_ABCD, HARAMI_ABCD, HH_ABCD, STAR_ABCD, and excluding BASE_ABCD).
+      2. T1 Gold (🥇 T1) and T2 Core (🥈 T2) now strictly require `is_true_anchor == True`.
+      3. All generic BASE_ABCD setups are strictly mapped to Tier 3 Momentum (🥉 T3).
+      4. Verified zero regression across the 14-test regression suite.
+    status: RESOLVED
+
+
+
 
 
 
