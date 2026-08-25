@@ -59,7 +59,7 @@ print(" -> Upload complete.")
 
 # 4. Extract and Restart on VM
 print("\n[4/5] Extracting payload and restarting services on VM...")
-cmd = f"cd {REMOTE_DIR} ; tar -xzf cloud_sync_payload.tar.gz ; rm -f cloud_sync_payload.tar.gz ; sudo bash {REMOTE_DIR}/oracle/setup_systemd_vm.sh"
+cmd = f"cd {REMOTE_DIR} ; git fetch origin && git reset --hard origin/master ; tar -xzf cloud_sync_payload.tar.gz ; rm -f cloud_sync_payload.tar.gz ; sudo bash {REMOTE_DIR}/oracle/setup_systemd_vm.sh"
 subprocess.run(["ssh", "-i", KEY, "-o", "StrictHostKeyChecking=no", HOST, cmd], capture_output=True)
 print(" -> Services restarted.")
 
