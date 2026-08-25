@@ -625,11 +625,12 @@ def scan_anchor_bcd_breakout_generic(df_entry, df_anchor, side="BULL", anchor_tf
             res = scan_trend_continuation_reentry_bearish(df_entry, df_anchor)
         return res
     else:
-        res = scan_anchor_bcd_breakout(df_entry, df_anchor, anchor_tf=anchor_tf, entry_tf=entry_tf)
+        try:
+            from patterns_bull import scan_anchor_bcd_breakout as scan_anchor_bcd_breakout_bullanchor, scan_trend_continuation_reentry
+        except ImportError:
+            from common.patterns_bull import scan_anchor_bcd_breakout as scan_anchor_bcd_breakout_bullanchor, scan_trend_continuation_reentry
+        res = scan_anchor_bcd_breakout_bullanchor(df_entry, df_anchor, anchor_tf=anchor_tf, entry_tf=entry_tf)
         if not res:
             res = scan_trend_continuation_reentry(df_entry, df_anchor)
         return res
-
-
-
 
