@@ -390,13 +390,14 @@ def scan_anchor_bcd_breakout(df_entry, df_anchor, anchor_tf="", entry_tf="", ena
             d_close = float(d_row['close'])
             d_open = float(d_row['open'])
 
-            # Standard 100% Candle Close check: Close > Benchmark
-            if d_close > benchmark:
-                d_idx = curr_idx
-                break
+            # Case A: Completed Historical Candle (100% closed)
+            if curr_idx < len(df_entry) - 1:
+                if d_close > benchmark:
+                    d_idx = curr_idx
+                    break
 
-            # Near-Close Live Candle D check with Dual Guards (applied ONLY to current active forming candle)
-            if curr_idx == len(df_entry) - 1:
+            # Case B: Current Live Active Forming Candle (near-close >= 90% with dual guards)
+            else:
                 tf_to_check = entry_tf or anchor_tf
                 if tf_to_check and is_live_candle_near_close(d_row.get('date'), tf_to_check, completion_pct=0.90):
                     # Guard 1: Benchmark Buffer Guard (+0.3%)
