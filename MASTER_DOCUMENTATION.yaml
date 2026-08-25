@@ -225,6 +225,10 @@ backtest_suite:
         fresh_entry: "HIGH_PRIORITY: Post-D candles have not hit T1 or SL yet. SL at original A.low buffer."
         t2_continuation: "LOW_PRIORITY: Post-D candles ALREADY hit T1, but T2/T3 is still pending and unreached. SL trailed to T1 level."
         expired: "REJECTED: Post-D candles closed below SL OR completed all targets (T3)."
+      exit_order_execution_tiers:
+        tier_1: "Marketable LIMIT Order at 0.995 * Bid/LTP (rounded to 0.05 tick) for instant fills."
+        tier_2: "Aggressive LIMIT Order at 0.980 * Bid/LTP if primary limit order is rejected or unfulfilled."
+        tier_3: "Emergency MARKET Order execution if marketable limit fails to guarantee 100% position closure."
 
   bullish_patterns:
     - id: 1

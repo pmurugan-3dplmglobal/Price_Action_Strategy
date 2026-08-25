@@ -7,12 +7,15 @@ import os
 import json
 import logging
 import time
+import threading
 from datetime import datetime as dt, timedelta, time as datetime_time
 import pandas as pd
 import paths
 
 NFO_CACHE_FILE = paths.NFO_CACHE_FILE
 EXECUTED_EXITS_FILE = paths.EXECUTED_EXITS_FILE
+ACTIVE_POSITIONS = {}
+position_lock = threading.Lock()
 
 def live_execution_enabled(flag_path):
     return os.path.exists(flag_path)
@@ -235,8 +238,18 @@ def close_stock_position(kite, pos, live_market=True, product=None):
                 save_executed_exit(contract, oid, {"type": "LIMIT_ALT", "price": price, "qty": qty})
                 logging.info(f"Fallback stock exit SUCCESS for {contract} with product {alt_product} (Order ID: {oid})")
             except Exception as alt_err:
-                save_executed_exit(contract, "REJECTED_ERROR", {"error": str(alt_err)})
-                logging.error(f"Fallback stock exit failed for {contract}: {alt_err}")
+                try:
+                    oid = kite.place_order(
+                        variety=kite.VARIETY_REGULAR, tradingsymbol=contract,
+                        exchange=kite.EXCHANGE_NSE, transaction_type=kite.TRANSACTION_TYPE_SELL,
+                        quantity=qty, order_type=kite.ORDER_TYPE_MARKET,
+                        product=target_product
+                    )
+                    save_executed_exit(contract, oid, {"type": "MARKET_EMERGENCY", "qty": qty})
+                    logging.info(f"Emergency MARKET stock exit SUCCESS for {contract} with product {target_product} (Order ID: {oid})")
+                except Exception as m_final_err:
+                    save_executed_exit(contract, "REJECTED_ERROR", {"error": str(m_final_err)})
+                    logging.error(f"All stock exit attempts failed for {contract}: primary={primary_err}, alt={alt_err}, market={m_final_err}")
     except Exception as e:
         save_executed_exit(contract, "REJECTED_ERROR", {"error": str(e)})
         logging.error(f"Stock exit failed for {contract}: {e}")
@@ -486,8 +499,18 @@ def close_position(kite, pos, live_market=True, product=None):
             save_executed_exit(contract, oid, {"type": "LIMIT_FALLBACK", "price": fallback_price, "qty": qty})
             logging.info(f"Fallback Marketable LIMIT exit SUCCESS for {contract} on exchange {target_exch} at price {fallback_price} with product {target_product}")
         except Exception as m_err:
-            save_executed_exit(contract, "REJECTED_ERROR", {"error": str(m_err)})
-            logging.error(f"Fallback exit failed for {contract}: {m_err}")
+            try:
+                oid = kite.place_order(
+                    variety=kite.VARIETY_REGULAR, tradingsymbol=contract,
+                    exchange=target_exch, transaction_type=kite.TRANSACTION_TYPE_SELL,
+                    quantity=qty, order_type=kite.ORDER_TYPE_MARKET,
+                    product=target_product
+                )
+                save_executed_exit(contract, oid, {"type": "MARKET_EMERGENCY", "qty": qty})
+                logging.info(f"Emergency MARKET exit SUCCESS for {contract} on exchange {target_exch}")
+            except Exception as final_err:
+                save_executed_exit(contract, "REJECTED_ERROR", {"error": str(final_err)})
+                logging.error(f"All option exit attempts failed for {contract}: primary={primary_err}, limit={m_err}, market={final_err}")
 
 def _load_program_config_file():
     possible_paths = [

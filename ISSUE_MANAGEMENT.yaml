@@ -8,6 +8,27 @@ meta:
   purpose: Document operational failures, root causes, regression fixes, and system enhancements.
 
 issues:
+  - id: FEATURE-021
+    title: Phase 1 Codebase Modernization — trading_core.py Monolith Deletion & Multi-Tier Emergency Exit Execution
+    severity: ENHANCEMENT
+    category: Architecture & Execution Hardening
+    family: ARCHITECTURE_CLEANUP
+    date_reported: "2026-08-25"
+    symptom: |
+      1. trading_core.py retained 3,378 lines of legacy duplicated function bodies alongside decomposed sub-modules.
+      2. Position exit execution relied on limit order fallbacks but lacked a final emergency MARKET order fallback on execution rejection.
+    root_cause: |
+      1. Monolith duplication in trading_core.py created risk of function shadowing.
+      2. Extreme flash-crash volatility or sudden tick rejections could leave positions unclosed if marketable limit orders failed.
+    affected_files:
+      - common/trading_core.py
+      - common/position_monitor.py
+      - MASTER_DOCUMENTATION.yaml
+    resolution: |
+      1. Refactored trading_core.py into a pure, clean canonical re-export hub (reduced from 161 KB / 3,378 lines to 5.2 KB / 182 lines).
+      2. Upgraded close_position and close_stock_position with 3-tier exit execution (Primary Marketable Limit -> Aggressive Limit -> Emergency MARKET order).
+      3. Verified all 108 exported symbols and passed 14/14 regression tests with 100% success.
+    status: COMPLETED
   - id: FEATURE-020
     title: Zero-Trade Diagnostic Fixes — Dynamic Token Sync, 45-Bar Base Recency & 5-Bar Sequence Tolerance
     severity: ENHANCEMENT
