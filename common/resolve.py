@@ -7,7 +7,7 @@ import os
 import json
 import logging
 import time
-from datetime import datetime as dt, timedelta
+from datetime import datetime as dt, timedelta, time as datetime_time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import pandas as pd
 import paths
