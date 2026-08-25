@@ -354,18 +354,18 @@ def scan_anchor_bcd_breakout_bearish(df_entry, df_anchor, anchor_tf="", entry_tf
                     d_idx = i
                     break
 
-            # Case B: Current Live Active Forming Candle (near-close >= 90% with dual guards)
+            # Case B: Current Live Active Forming Candle (near-close >= 80% with dual guards)
             else:
                 tf_to_check = entry_tf or anchor_tf
-                if tf_to_check and is_live_candle_near_close(candle.get('date'), tf_to_check, completion_pct=0.90):
+                if tf_to_check and is_live_candle_near_close(candle.get('date'), tf_to_check, completion_pct=0.80):
                     # Guard 1: Benchmark Buffer Guard (-0.3% below benchmark for bearish)
                     if c_close <= (a_low * 0.997):
-                        # Guard 2: Volume Validation Guard (80% of 20-period avg volume)
+                        # Guard 2: Proportional Volume Validation Guard (60% of 20-period avg volume at 80% time)
                         vol_passed = True
                         if 'volume' in df_entry.columns and i >= 20:
                             avg_vol_20 = float(df_entry['volume'].iloc[i - 20 : i].mean())
                             curr_vol = float(candle.get('volume', 0))
-                            if avg_vol_20 > 0 and curr_vol < (0.80 * avg_vol_20):
+                            if avg_vol_20 > 0 and curr_vol < (0.60 * avg_vol_20):
                                 vol_passed = False
                         if vol_passed:
                             d_idx = i

@@ -59,9 +59,9 @@ def get_tf_minutes(timeframe_str):
     elif "day" in tf_s or tf_s in ["d", "1d"]: return 1440
     return 1440
 
-def is_live_candle_near_close(candle_date, timeframe_str, completion_pct=0.90):
+def is_live_candle_near_close(candle_date, timeframe_str, completion_pct=0.80):
     """
-    Check if the active forming candle is currently within the last 10% (or completion_pct)
+    Check if the active forming candle is currently within the last 20% (or completion_pct)
     of its duration during live market hours.
     Returns True if elapsed time >= completion_pct * tf_minutes.
     """
