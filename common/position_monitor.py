@@ -813,6 +813,14 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                         sl_reason = f"EMERGENCY_HARD_SL (LTP {live_ltp:.2f} <= {emergency_threshold:.2f})"
                         cp = live_ltp
 
+            # 2b) Hard Max-Loss Circuit Shield (Default 15% Cap on Entry Price for Options, 8% for Stocks)
+            max_loss_pct = float(cfg.get("max_option_loss_pct", 15)) / 100.0 if not is_stock else 0.08
+            hard_max_sl_threshold = round(entry_s * (1.0 - max_loss_pct), 2) if entry_s > 0 else 0.0
+            if not sl_hit and hard_max_sl_threshold > 0 and live_ltp > 0 and live_ltp <= hard_max_sl_threshold and not is_before_0945 and not is_outlier_entry:
+                sl_hit = True
+                sl_reason = f"HARD_MAX_{int(max_loss_pct*100)}PCT_SL (LTP {live_ltp:.2f} <= {hard_max_sl_threshold:.2f})"
+                cp = live_ltp
+
             if sl_hit:
                 logging.warning(f"SL [{sl_reason}]: {sym} at {cp} (TF: {pos_tf})")
                 if is_stock:

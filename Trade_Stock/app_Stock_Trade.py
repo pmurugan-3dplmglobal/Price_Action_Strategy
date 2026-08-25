@@ -732,9 +732,12 @@ def refresh_data(single_run=False):
                                     logging.warning(f"[FAILSAFE MONITOR EXIT T1 (no T2/T3)] {sym} LTP={ltp_val} >= T1-buffer={t1_val - _t_early_buf(t1_val):.2f} (Target: {t1_val:.2f})")
                                     pos_obj = {"contract": sym, "position_size": qty, "quantity": qty, "symbol": sym}
                                     shared_close_stock_position(_kite_session, pos_obj, True, p.get("product"))
-                                # TASK 2: Execute SL exit ONLY IF after 09:45 AM AND below 0.5% buffer AND (previous candle closed below SL OR emergency deep break)
-                                elif now_t >= fs_start_t and ltp_val > 0 and sl_val > 0 and is_below_buffer and (prev_closed_below or is_deep_break):
-                                    logging.warning(f"[FAILSAFE MONITOR EXIT SL CONFIRMED] {sym} LTP={ltp_val} <= Buffered SL={sl_buffered} (Prev Close Below: {prev_closed_below}, Deep Break: {is_deep_break})")
+                                effective_entry = entry_pr if entry_pr > 0 else float(scan_sl.get("entry_spot") or 0)
+                                hard_max_8pct_break = (ltp_val <= round(effective_entry * 0.92, 2)) if effective_entry > 0 else False
+
+                                # TASK 2: Execute SL exit ONLY IF after 09:45 AM AND (candle closed below SL OR emergency deep break OR hard max 8% loss cap hit)
+                                if now_t >= fs_start_t and ltp_val > 0 and (sl_val > 0 or hard_max_8pct_break) and (is_below_buffer or hard_max_8pct_break) and (prev_closed_below or is_deep_break or hard_max_8pct_break):
+                                    logging.warning(f"[FAILSAFE MONITOR EXIT SL CONFIRMED] {sym} LTP={ltp_val} (Reason: {'HARD_MAX_8PCT_SL' if hard_max_8pct_break else ('CANDLE_CLOSE_SL' if prev_closed_below else 'EMERGENCY_HARD_SL')}, Entry={effective_entry}, SL={sl_val})")
                                     pos_obj = {"contract": sym, "position_size": qty, "quantity": qty, "symbol": sym}
                                     shared_close_stock_position(_kite_session, pos_obj, True, p.get("product"))
                                 elif now_t < fs_start_t and ltp_val > 0 and sl_val > 0 and is_below_buffer:

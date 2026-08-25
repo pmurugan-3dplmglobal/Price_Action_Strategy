@@ -721,13 +721,17 @@ def refresh_data(single_run=False):
                                         shared_close_position(_kite_session, pos_obj, True, p.get("product"))
                                         _failsafe_exit_mark("EXIT_T1", "TARGET_HIT",
                                                             f"T1 full exit ({ltp_val:.2f} >= {t1_val - _t1_early_buffer(t1_val):.2f}, no T2/T3)", ltp_val)
-                                    # TASK 2: Execute SL exit ONLY IF after 09:45 AM AND below 0.5% buffer AND (previous candle closed below SL OR emergency deep break)
-                                    elif now_t >= fs_start_t and ltp_val > 0 and sl_val > 0 and is_below_buffer and (prev_closed_below or is_deep_break):
-                                        logging.warning(f"[FAILSAFE MONITOR EXIT SL CONFIRMED] {contract_name} LTP={ltp_val} <= Buffered SL={sl_buffered} (Prev Close Below: {prev_closed_below}, Deep Break: {is_deep_break})")
+                                    effective_entry = entry_pr if entry_pr > 0 else float(scan_sl.get("entry_spot") or 0)
+                                    hard_max_15pct_break = (ltp_val <= round(effective_entry * 0.85, 2)) if effective_entry > 0 else False
+
+                                    # TASK 2: Execute SL exit ONLY IF after 09:45 AM AND (candle closed below SL OR emergency deep break OR hard max 15% loss cap hit)
+                                    if now_t >= fs_start_t and ltp_val > 0 and (sl_val > 0 or hard_max_15pct_break) and (is_below_buffer or hard_max_15pct_break) and (prev_closed_below or is_deep_break or hard_max_15pct_break):
+                                        exit_reason_label = "HARD_MAX_15PCT_SL" if hard_max_15pct_break else ("CANDLE_CLOSE_SL" if prev_closed_below else "EMERGENCY_HARD_SL")
+                                        logging.warning(f"[FAILSAFE MONITOR EXIT SL CONFIRMED] {contract_name} LTP={ltp_val} (Reason: {exit_reason_label}, Entry={effective_entry}, SL={sl_val})")
                                         pos_obj = {"contract": contract_name, "position_size": qty, "quantity": qty}
                                         shared_close_position(_kite_session, pos_obj, True, p.get("product"))
                                         _failsafe_exit_mark("EXIT_SL", "SL_HIT",
-                                                            f"SL hit [{('CANDLE_CLOSE_SL' if prev_closed_below else 'EMERGENCY_HARD_SL')}] | LTP {ltp_val:.2f} | SL {sl_val:.2f}", ltp_val)
+                                                            f"SL hit [{exit_reason_label}] | LTP {ltp_val:.2f} | Entry {effective_entry:.2f} | SL {sl_val:.2f}", ltp_val)
                                     elif now_t < fs_start_t and ltp_val > 0 and sl_val > 0 and is_below_buffer:
                                         logging.info(f"[FAILSAFE SL PAUSED BEFORE {fs_start_str} AM] {contract_name} SL check paused until {fs_start_str} AM (Current time: {now_t.strftime('%H:%M:%S')}).")
                                     # Track highest price reached for position
