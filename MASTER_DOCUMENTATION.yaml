@@ -182,8 +182,8 @@ backtest_suite:
         - "Cascade Progression: Extrema of each wave must progressively decay (Lower Highs + Lower Lows for Bullish setups)."
         - "Confirmed Break of Structure (BOS): Each subsequent wave leg down must have a confirmed candle close below the prior structural low (start_val)."
         - "Point 4 Terminal Base: Identifies flat consolidation / base absorption at Point 4 (pct_diff < 2%)."
-        - "Recency Constraint (max_bars_after_terminal): Terminal swing base must be recent (<= 15 bars for Options, <= 20 bars for Stocks)."
-        - "Sequential Trigger: Anchor Candle A timestamp MUST be >= Terminal Swing Date."
+        - "Recency Constraint (max_bars_after_terminal): Terminal swing base must be recent (<= 45 bars across Daily and Options charts)."
+        - "Sequential Trigger: Anchor Candle A formed within terminal base window (Anchor_idx >= Terminal_idx - 5 bars lookback)."
 
     anchor_selection_and_invalidation:
       rule_name: "Universal Anchor Validity & Activity Rule (is_anchor_valid_and_active)"

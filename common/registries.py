@@ -56,6 +56,7 @@ STOCK_REGISTRY = {
     "JSWSTEEL": {"token": 3001089, "lot_size": 675, "strike_step": 10},
     "KOTAKBANK": {"token": 492033, "lot_size": 400, "strike_step": 20},
     "LT": {"token": 2939649, "lot_size": 300, "strike_step": 50},
+    "LTIM": {"token": 4571905, "lot_size": 150, "strike_step": 50},
     "M&M": {"token": 519937, "lot_size": 350, "strike_step": 20},
     "MARUTI": {"token": 2815745, "lot_size": 50, "strike_step": 100},
     "MAXHEALTH": {"token": 5728513, "lot_size": 525, "strike_step": 10},
@@ -69,6 +70,7 @@ STOCK_REGISTRY = {
     "SHRIRAMFIN": {"token": 1102337, "lot_size": 300, "strike_step": 20},
     "SUNPHARMA": {"token": 857857, "lot_size": 700, "strike_step": 20},
     "TATACONSUM": {"token": 878593, "lot_size": 550, "strike_step": 20},
+    "TATAMOTORS": {"token": 884737, "lot_size": 1425, "strike_step": 10},
     "TATASTEEL": {"token": 895745, "lot_size": 5500, "strike_step": 2},
     "TCS": {"token": 2953217, "lot_size": 175, "strike_step": 50},
     "TECHM": {"token": 3465729, "lot_size": 600, "strike_step": 20},
@@ -86,10 +88,12 @@ def sync_stock_tokens(kite):
         if not df.empty:
             df['tradingsymbol'] = df['tradingsymbol'].str.strip()
             df['segment'] = df['segment'].str.strip()
-            nse_map = dict(zip(df[df['segment'] == 'NSE']['tradingsymbol'], df[df['segment'] == 'NSE']['instrument_token']))
+            nse_df = df[df['segment'] == 'NSE']
+            nse_map = dict(zip(nse_df['tradingsymbol'], nse_df['instrument_token']))
             synced = 0
-            for sym in STOCK_REGISTRY:
-                tok = nse_map.get(sym)
+            for sym in list(STOCK_REGISTRY.keys()):
+                # Direct match or hyphen-normalized match (e.g. BAJAJ-AUTO vs BAJAJ_AUTO)
+                tok = nse_map.get(sym) or nse_map.get(sym.replace("_", "-")) or nse_map.get(sym.replace("-", ""))
                 if tok:
                     STOCK_REGISTRY[sym]["token"] = int(tok)
                     synced += 1

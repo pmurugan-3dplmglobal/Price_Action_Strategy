@@ -211,11 +211,12 @@ def scan_anchor_bcd_breakout_bearish(df_entry, df_anchor, anchor_tf="", entry_tf
             enable_swing_filter = False
 
     if enable_swing_filter:
-        sw_res = detect_parabolic_multi_swings(df_anchor, side="BEAR", min_swings=swing_min_waves, min_r2=swing_min_r2, max_bars_after_terminal=20)
+        sw_res = detect_parabolic_multi_swings(df_anchor, side="BEAR", min_swings=swing_min_waves, min_r2=swing_min_r2, max_bars_after_terminal=45)
         swing_meta = {
             "swing_waves": sw_res.get("valid_arch_count", 0),
             "terminal_base": sw_res.get("has_terminal_base", False),
             "terminal_date": sw_res.get("terminal_swing_date", ""),
+            "terminal_idx": sw_res.get("terminal_swing_idx"),
             "tier": sw_res.get("tier", 2),
             "tier_label": sw_res.get("tier_label", "TIER_2_CORE"),
             "tier_badge": sw_res.get("tier_badge", "🥈 T2")
@@ -252,10 +253,20 @@ def scan_anchor_bcd_breakout_bearish(df_entry, df_anchor, anchor_tf="", entry_tf
         a_close = float(anchor_candle['close'])
         a_date = det_result.get("CandleATime") if det_result and det_result.get("CandleATime") else anchor_candle.get('date', '')
 
-        # Sequence gatekeeper: If terminal base is confirmed, Anchor A must be formed at or after terminal base date
+        # Sequence gatekeeper: Allow Anchor A to form within the terminal base window (allowing 5-bar lookback for base confirmation)
         if swing_meta.get("terminal_base") and swing_meta.get("terminal_date") and a_date:
-            if str(a_date) < str(swing_meta["terminal_date"]):
-                continue
+            term_idx = swing_meta.get("terminal_idx")
+            if term_idx is not None:
+                if anchor_idx < max(0, term_idx - 5):
+                    continue
+            else:
+                try:
+                    a_dt = pd.to_datetime(str(a_date).split("+")[0])
+                    t_dt = pd.to_datetime(str(swing_meta["terminal_date"]).split("+")[0])
+                    if (t_dt - a_dt).days > 8:
+                        continue
+                except Exception:
+                    pass
 
         anchor_entry_matches = df_entry[df_entry['date'] == a_date] if 'date' in df_entry.columns else pd.DataFrame()
         if anchor_entry_matches.empty:

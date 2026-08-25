@@ -224,11 +224,12 @@ def scan_anchor_bcd_breakout(df_entry, df_anchor, anchor_tf="", entry_tf="", ena
             enable_swing_filter = False
 
     if enable_swing_filter:
-        sw_res = detect_parabolic_multi_swings(df_anchor, side="BULL", min_swings=swing_min_waves, min_r2=swing_min_r2, max_bars_after_terminal=20)
+        sw_res = detect_parabolic_multi_swings(df_anchor, side="BULL", min_swings=swing_min_waves, min_r2=swing_min_r2, max_bars_after_terminal=45)
         swing_meta = {
             "swing_waves": sw_res.get("valid_arch_count", 0),
             "terminal_base": sw_res.get("has_terminal_base", False),
             "terminal_date": sw_res.get("terminal_swing_date", ""),
+            "terminal_idx": sw_res.get("terminal_swing_idx"),
             "tier": sw_res.get("tier", 2),
             "tier_label": sw_res.get("tier_label", "TIER_2_CORE"),
             "tier_badge": sw_res.get("tier_badge", "🥈 T2")
@@ -282,10 +283,20 @@ def scan_anchor_bcd_breakout(df_entry, df_anchor, anchor_tf="", entry_tf="", ena
 
         a_time_val = anchor_match.get("CandleATime") if anchor_match and anchor_match.get("CandleATime") else str(a.get('date', ''))
         
-        # Sequence gatekeeper: If terminal base is confirmed, Anchor A must be formed at or after terminal base date
+        # Sequence gatekeeper: Allow Anchor A to form within the terminal base window (allowing 5-bar lookback for base confirmation)
         if swing_meta.get("terminal_base") and swing_meta.get("terminal_date") and a_time_val:
-            if str(clean_timestamp(a_time_val)) < str(clean_timestamp(swing_meta["terminal_date"])):
-                continue
+            term_idx = swing_meta.get("terminal_idx")
+            if term_idx is not None:
+                if a_idx < max(0, term_idx - 5):
+                    continue
+            else:
+                try:
+                    a_dt = pd.to_datetime(clean_timestamp(a_time_val))
+                    t_dt = pd.to_datetime(clean_timestamp(swing_meta["terminal_date"]))
+                    if (t_dt - a_dt).days > 8:
+                        continue
+                except Exception:
+                    pass
 
         anchors.append({
             "idx": a_idx, "a": a, "benchmark": benchmark,

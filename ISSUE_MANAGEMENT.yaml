@@ -8,6 +8,32 @@ meta:
   purpose: Document operational failures, root causes, regression fixes, and system enhancements.
 
 issues:
+  - id: FEATURE-020
+    title: Zero-Trade Diagnostic Fixes — Dynamic Token Sync, 45-Bar Base Recency & 5-Bar Sequence Tolerance
+    severity: ENHANCEMENT
+    category: Scanner Quality & Signal Throughput
+    family: SIGNAL_EXPANSION
+    date_reported: "2026-08-25"
+    symptom: |
+      1. 8 liquid Nifty 50 stocks (LTIM, TATAMOTORS, TECHM, BAJAJFINSV, etc.) failed due to stale or missing registry tokens.
+      2. High-quality extended accumulation setups (e.g. EICHERMOT 26 bars) were dropped by an arbitrary 20-bar recency cap.
+      3. Textbook anchors forming at the exact bottom tick were rejected because the parabolic swing detector confirmed base 1-3 bars later.
+    root_cause: |
+      1. Static STOCK_REGISTRY entries lacked auto-sync normalization for hyphenated symbols and missing tickers (LTIM, TATAMOTORS).
+      2. max_bars_after_terminal was rigidly capped at 20 bars.
+      3. Strict timestamp equality Anchor_Time >= Terminal_Base_Time rejected valid contemporaneous bottom anchors.
+    affected_files:
+      - common/registries.py
+      - common/swing_detection.py
+      - common/patterns_bull.py
+      - common/patterns_bear.py
+      - MASTER_DOCUMENTATION.yaml
+    resolution: |
+      1. Added LTIM, TATAMOTORS, BAJAJ-AUTO token mapping and enhanced sync_stock_tokens with flexible symbol normalization.
+      2. Extended max_bars_after_terminal from 20 to 45 bars in detect_parabolic_multi_swings.
+      3. Implemented a 5-bar lookback window in the sequence gatekeeper (Anchor_idx >= Terminal_idx - 5) in both bull and bear pattern modules.
+      4. Verified across regression test suite with 100% pass rate.
+    status: COMPLETED
   - id: FEATURE-019
     title: 3-Swing Downward Break of Structure (BOS) Cascade & Terminal Base Reversal Validation
     severity: ENHANCEMENT

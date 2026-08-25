@@ -260,7 +260,7 @@ def detect_parabolic_multi_swings(
     min_swings: int = 3,
     min_candles_per_leg: int = 3,
     min_r2: float = 0.50,
-    max_bars_after_terminal: int = 20
+    max_bars_after_terminal: int = 45
 ) -> Dict[str, Any]:
     """
     Complete end-to-end multi-swing parabolic cascade detector with Multi-Tier Scoring.
