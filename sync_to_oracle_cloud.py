@@ -1,4 +1,4 @@
-﻿import subprocess, sys, os, time, tarfile, json
+import subprocess, sys, os, time, tarfile, json
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 KEY = r"G:\Poovendan\AI\Trading\Cloud\Oracle_Cloud\ssh-key-2026-08-05.key"

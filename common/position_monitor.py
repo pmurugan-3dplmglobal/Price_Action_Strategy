@@ -11,6 +11,7 @@ import threading
 from datetime import datetime as dt, timedelta, time as datetime_time
 import pandas as pd
 import paths
+from timeframe_utils import fetch_and_resample_candles
 
 NFO_CACHE_FILE = paths.NFO_CACHE_FILE
 EXECUTED_EXITS_FILE = paths.EXECUTED_EXITS_FILE
