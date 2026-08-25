@@ -19,7 +19,9 @@ from trading_core import (
     close_stock_position as shared_close_stock_position,
     clear_executed_exit,
     is_contract_exit_executed,
-    log_to_journal
+    log_to_journal,
+    fetch_and_resample_candles,
+    calc_rr
 )
 from ema_engine import (
     start_ema_engine, stop_ema_engine, get_ema_engine_status, get_ema_scan_data,
