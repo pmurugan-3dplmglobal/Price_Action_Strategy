@@ -39,43 +39,53 @@ def clean_timestamp(ts):
 
 def find_anchor_bullish_engulfing(df):
     """A = bullish engulfing candle. Bearish candle-1, then bullish candle that wraps its body+wick."""
-    if len(df) < 5:
+    if len(df) < 2:
         return None
-    bearish_candle, bull_anchor = df.iloc[-4], df.iloc[-3]
+    bearish_candle, bull_anchor = df.iloc[-2], df.iloc[-1]
     if not (float(bearish_candle['close']) < float(bearish_candle['open'])):
         return None
     if not (float(bull_anchor['close']) > float(bull_anchor['open'])):
         return None
     if not (float(bull_anchor['open']) <= float(bearish_candle['close']) and float(bull_anchor['close']) > float(bearish_candle['high'])):
         return None
+    a_high = float(bull_anchor['high'])
     a_low = float(bull_anchor['low'])
     anchor_close = float(bull_anchor['close'])
     sl_val = calculate_sl_buffer(a_low, side="BULL")
-    return {"Pattern": "BULL_A_ABCD_Engulf", "Close": anchor_close, "SL": sl_val, "Signal": "A_Formation", "CandleATime": str(bull_anchor.get('date', ''))}
+    return {
+        "Pattern": "BULL_A_ABCD_Engulf",
+        "Close": anchor_close,
+        "SL": sl_val,
+        "AnchorHigh": a_high,
+        "AnchorLow": a_low,
+        "Signal": "A_Formation",
+        "CandleATime": str(bull_anchor.get('date', ''))
+    }
 
 def find_anchor_ll_sweep(df):
     """
-    A = Low 2 (second lower low).
+    A = Low 2 (second lower low sweep).
     Rules:
       1. Need > 2 candles (at least 3 candles gap) between Low 1 and Low 2.
       2. In-between candles must NOT close below Low 1 (wicks allowed).
       3. Low 2 sweeps below Low 1.
     """
-    if len(df) < 30:
+    if len(df) < 8:
         return None
 
-    search_range = df.iloc[-29:-7]
-    if search_range.empty:
+    search_range = df.iloc[:-2]
+    if search_range.empty or len(search_range) < 4:
         return None
 
     low_1_idx = search_range['low'].idxmin()
     low_1 = float(df.loc[low_1_idx, 'low'])
 
-    sweep_idx = df.index[-4]
+    sweep_candle, bounce_candle = df.iloc[-2], df.iloc[-1]
+    sweep_idx = sweep_candle.name
 
     pos_low_1 = df.index.get_loc(low_1_idx)
     pos_sweep = df.index.get_loc(sweep_idx)
-    if (pos_sweep - pos_low_1 - 1) < 3:
+    if (pos_sweep - pos_low_1 - 1) < 2:
         return None
 
     inbetween_df = df.iloc[pos_low_1 + 1 : pos_sweep]
@@ -95,7 +105,6 @@ def find_anchor_ll_sweep(df):
     if inbetween_high < min_bounce_req:
         return None
 
-    sweep_candle, bounce_candle, confirm_candle_1, confirm_candle_2 = df.iloc[-4], df.iloc[-3], df.iloc[-2], df.iloc[-1]
     sweep_low = float(sweep_candle['low'])
     is_red = float(sweep_candle['close']) < float(sweep_candle['open'])
     is_green = float(sweep_candle['close']) >= float(sweep_candle['open'])
@@ -111,20 +120,27 @@ def find_anchor_ll_sweep(df):
         return None
     if not (float(bounce_candle['close']) > float(sweep_candle['high'])):
         return None
-    if float(confirm_candle_1['close']) < sweep_low or float(confirm_candle_2['close']) < sweep_low:
-        return None
 
     pattern_name = "BULL_A_LL_Sweep_Var1" if (v1 or v2) else "BULL_A_LL_Sweep_Var2"
 
     anchor_close = float(bounce_candle['close'])
+    anchor_high = max(float(sweep_candle['high']), float(bounce_candle['high']))
     sl_val = calculate_sl_buffer(sweep_low, side="BULL")
-    return {"Pattern": pattern_name, "Close": anchor_close, "SL": sl_val, "Signal": "Low2_Formation", "CandleATime": str(sweep_candle.get('date', ''))}
+    return {
+        "Pattern": pattern_name,
+        "Close": anchor_close,
+        "SL": sl_val,
+        "AnchorHigh": anchor_high,
+        "AnchorLow": sweep_low,
+        "Signal": "Low2_Formation",
+        "CandleATime": str(sweep_candle.get('date', ''))
+    }
 
 def find_anchor_hammer_baby(df):
     """A = baby/hammer/dragonfly candle inside/at bearish mother base with strong lower wick rejection."""
-    if len(df) < 5:
+    if len(df) < 2:
         return None
-    mother_candle, baby_candle, post_baby_1, post_baby_2, post_baby_3 = df.iloc[-5], df.iloc[-4], df.iloc[-3], df.iloc[-2], df.iloc[-1]
+    mother_candle, baby_candle = df.iloc[-2], df.iloc[-1]
     if not (float(mother_candle['close']) < float(mother_candle['open'])):
         return None
     is_green = float(baby_candle['close']) >= float(baby_candle['open'])
@@ -157,42 +173,63 @@ def find_anchor_hammer_baby(df):
     if close_position < 0.60:
         return None
 
-    # 4. Multi-bar stability guard: Subsequent candles must not breach the anchor low
-    if float(post_baby_2['close']) < b_low or float(post_baby_3['close']) < b_low:
-        return None
     anchor_close = b_close
     sl_val = calculate_sl_buffer(b_low, side="BULL")
-    return {"Pattern": "BULL_A_Baby_Candle", "Close": anchor_close, "SL": sl_val, "Signal": "Baby_Formation", "CandleATime": str(baby_candle.get('date', ''))}
+    return {
+        "Pattern": "BULL_A_Baby_Candle",
+        "Close": anchor_close,
+        "SL": sl_val,
+        "AnchorHigh": b_high,
+        "AnchorLow": b_low,
+        "Signal": "Baby_Formation",
+        "CandleATime": str(baby_candle.get('date', ''))
+    }
 
 def find_anchor_bullish_harami(df):
     """A = bullish inside bar (cin) fully inside bearish mother body."""
-    if len(df) < 5:
+    if len(df) < 2:
         return None
-    bearish_mother, bullish_inside, post_harami_1, post_harami_2, post_harami_3 = df.iloc[-5], df.iloc[-4], df.iloc[-3], df.iloc[-2], df.iloc[-1]
+    bearish_mother, bullish_inside = df.iloc[-2], df.iloc[-1]
     if not (float(bearish_mother['close']) < float(bearish_mother['open']) and float(bullish_inside['close']) > float(bullish_inside['open'])):
         return None
     if not (float(bullish_inside['high']) <= float(bearish_mother['open']) and float(bullish_inside['low']) >= float(bearish_mother['close'])):
         return None
+    inside_high = float(bullish_inside['high'])
     inside_low = float(bullish_inside['low'])
-    if float(post_harami_2['close']) < inside_low or float(post_harami_3['close']) < inside_low:
-        return None
     anchor_close = float(bullish_inside['close'])
     sl_val = calculate_sl_buffer(inside_low, side="BULL")
-    return {"Pattern": "BULL_A_Harami", "Close": anchor_close, "SL": sl_val, "Signal": "Harami_Formation", "CandleATime": str(bullish_inside.get('date', ''))}
+    return {
+        "Pattern": "BULL_A_Harami",
+        "Close": anchor_close,
+        "SL": sl_val,
+        "AnchorHigh": inside_high,
+        "AnchorLow": inside_low,
+        "Signal": "Harami_Formation",
+        "CandleATime": str(bullish_inside.get('date', ''))
+    }
 
 def find_anchor_two_higher_highs(df):
     """Setup 3: A1 & A2 are two successive higher high candles with bullish engulfing structure."""
-    if len(df) < 5:
+    if len(df) < 2:
         return None
-    a1, a2 = df.iloc[-4], df.iloc[-3]
+    a1, a2 = df.iloc[-2], df.iloc[-1]
     if not (float(a1['close']) > float(a1['open']) and float(a2['close']) > float(a2['open'])):
         return None
     if not (float(a2['high']) > float(a1['high']) and float(a2['low']) > float(a1['low'])):
         return None
+    a_high = max(float(a1['high']), float(a2['high']))
     a_low = min(float(a1['low']), float(a2['low']))
     anchor_close = float(a2['close'])
     sl_val = calculate_sl_buffer(a_low, side="BULL")
-    return {"Pattern": "BULL_A_Two_Higher_Highs", "Close": anchor_close, "SL": sl_val, "Signal": "HigherHigh_Engulf", "CandleATime": str(a2.get('date', ''))}
+    return {
+        "Pattern": "BULL_A_Two_Higher_Highs",
+        "Close": anchor_close,
+        "SL": sl_val,
+        "AnchorHigh": a_high,
+        "AnchorLow": a_low,
+        "Signal": "HigherHigh_Engulf",
+        "CandleATime": str(a2.get('date', ''))
+    }
 
 # ──────────────────────────────────────────────
 #  ANCHOR BCD BREAKOUT SCANNER (A -> B -> C -> D)
@@ -245,20 +282,20 @@ def scan_anchor_bcd_breakout(df_entry, df_anchor, anchor_tf="", entry_tf="", ena
 
     # ── Phase 1: Find anchor A candles ──
     anchors = []
-    for a_idx in range(4, len(df_entry) - 3):
+    for a_idx in range(1, len(df_entry) - 2):
         a = df_entry.iloc[a_idx]
-        sub_df = df_entry.iloc[: min(len(df_entry), a_idx + 3)]
         sub_df_direct = df_entry.iloc[: a_idx + 1]
 
         anchor_match = None
         for fn in anchor_funcs:
-            res = fn(sub_df) or fn(sub_df_direct)
+            res = fn(sub_df_direct)
             if res:
                 anchor_match = res
                 break
 
-        benchmark = float(a['high'])
-        invalidation = anchor_match["SL"] if anchor_match else calculate_sl_buffer(a['low'], side="BULL")
+        benchmark = float(anchor_match.get("AnchorHigh", a['high'])) if anchor_match else float(a['high'])
+        a_low = float(anchor_match.get("AnchorLow", a['low'])) if anchor_match else float(a['low'])
+        invalidation = anchor_match["SL"] if anchor_match and "SL" in anchor_match else calculate_sl_buffer(a_low, side="BULL")
         anchor_name = anchor_match["Pattern"] if anchor_match else "BULL_A_Base"
 
         # Left-Side Rule: no close below A.low in preceding 100 candles
@@ -467,23 +504,20 @@ def scan_anchor_bcd_breakout(df_entry, df_anchor, anchor_tf="", entry_tf="", ena
         return None
 
     PATTERN_PRIORITY_MAP = {
-        "Engulfing": 5,
-        "LL_Sweep": 5,
-        "Baby_Candle": 4,
-        "Harami": 4,
-        "Two_Higher_Highs": 3,
-        "Base": 1  # Trend continuation / re-entry base has lowest priority
+        "BE_ABCD": 5,
+        "LL_ABCD": 5,
+        "HAMMER_ABCD": 4,
+        "HARAMI_ABCD": 4,
+        "HH_ABCD": 3,
+        "BASE_ABCD": 1
     }
 
     def _pattern_rank(match_obj):
-        p_name = match_obj.get("Pattern", "")
-        for k, rank in PATTERN_PRIORITY_MAP.items():
-            if k in p_name:
-                return rank
-        return 2
+        p_name = match_obj.get("Pattern", "").replace("_EARLY", "")
+        return PATTERN_PRIORITY_MAP.get(p_name, 2)
 
-    # Prefer LATEST formed pattern (d_idx), then Primary Reversal over Continuation Base, then HIGH_PRIORITY, then R:R
-    valid_matches.sort(key=lambda x: (x["d_idx"], _pattern_rank(x), x["Priority"] == "HIGH_PRIORITY", x["RR"]), reverse=True)
+    # Prefer Primary Reversal over Continuation Base, then LATEST formed pattern (d_idx), then HIGH_PRIORITY, then R:R
+    valid_matches.sort(key=lambda x: (_pattern_rank(x), x["d_idx"], x["Priority"] == "HIGH_PRIORITY", x["RR"]), reverse=True)
     best_latest = valid_matches[0]
     best_latest.pop("d_idx", None)
 

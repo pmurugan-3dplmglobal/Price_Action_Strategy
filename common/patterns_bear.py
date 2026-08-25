@@ -22,9 +22,9 @@ from swing_detection import (
 
 def find_anchor_bearish_engulfing(df):
     """Setup 1 (Bearish): A = bearish engulfing candle. Bullish candle-1, then bearish candle wrapping body+wick."""
-    if len(df) < 5:
+    if len(df) < 2:
         return None
-    bullish_candle, bear_anchor = df.iloc[-4], df.iloc[-3]
+    bullish_candle, bear_anchor = df.iloc[-2], df.iloc[-1]
     if not (float(bullish_candle['close']) > float(bullish_candle['open'])):
         return None
     if not (float(bear_anchor['close']) < float(bear_anchor['open'])):
@@ -32,9 +32,18 @@ def find_anchor_bearish_engulfing(df):
     if not (float(bear_anchor['open']) >= float(bullish_candle['close']) and float(bear_anchor['close']) < float(bullish_candle['low'])):
         return None
     a_high = float(bear_anchor['high'])
+    a_low = float(bear_anchor['low'])
     anchor_close = float(bear_anchor['close'])
     sl_val = calculate_sl_buffer(a_high, side="BEAR")
-    return {"Pattern": "BEAR_A_ABCD_Engulf", "Close": anchor_close, "SL": sl_val, "Signal": "Bear_A_Formation", "CandleATime": str(bear_anchor.get('date', ''))}
+    return {
+        "Pattern": "BEAR_A_ABCD_Engulf",
+        "Close": anchor_close,
+        "SL": sl_val,
+        "AnchorHigh": a_high,
+        "AnchorLow": a_low,
+        "Signal": "Bear_A_Formation",
+        "CandleATime": str(bear_anchor.get('date', ''))
+    }
 
 def find_anchor_hh_sweep(df):
     """
@@ -44,21 +53,22 @@ def find_anchor_hh_sweep(df):
       2. In-between candles must NOT close above High 1 (wicks allowed).
       3. High 2 sweeps above High 1.
     """
-    if len(df) < 30:
+    if len(df) < 8:
         return None
 
-    search_range = df.iloc[-29:-7]
-    if search_range.empty:
+    search_range = df.iloc[:-2]
+    if search_range.empty or len(search_range) < 4:
         return None
 
     high_1_idx = search_range['high'].idxmax()
     high_1 = float(df.loc[high_1_idx, 'high'])
 
-    sweep_idx = df.index[-4]
+    sweep_candle, rejection_candle = df.iloc[-2], df.iloc[-1]
+    sweep_idx = sweep_candle.name
 
     pos_high_1 = df.index.get_loc(high_1_idx)
     pos_sweep = df.index.get_loc(sweep_idx)
-    if (pos_sweep - pos_high_1 - 1) < 3:
+    if (pos_sweep - pos_high_1 - 1) < 2:
         return None
 
     inbetween_df = df.iloc[pos_high_1 + 1 : pos_sweep]
@@ -78,7 +88,6 @@ def find_anchor_hh_sweep(df):
     if inbetween_low > min_pullback_req:
         return None
 
-    sweep_candle, rejection_candle, confirm_candle_1, confirm_candle_2 = df.iloc[-4], df.iloc[-3], df.iloc[-2], df.iloc[-1]
     sweep_high = float(sweep_candle['high'])
     is_green = float(sweep_candle['close']) > float(sweep_candle['open'])
     is_red = float(sweep_candle['close']) <= float(sweep_candle['open'])
@@ -94,34 +103,50 @@ def find_anchor_hh_sweep(df):
         return None
     if not (float(rejection_candle['close']) < float(sweep_candle['low'])):
         return None
-    if float(confirm_candle_1['close']) > sweep_high or float(confirm_candle_2['close']) > sweep_high:
-        return None
 
     pattern_name = "BEAR_A_HH_Sweep_Var1" if (v1 or v2) else "BEAR_A_HH_Sweep_Var2"
 
     anchor_close = float(rejection_candle['close'])
+    anchor_low = min(float(sweep_candle['low']), float(rejection_candle['low']))
     sl_val = calculate_sl_buffer(sweep_high, side="BEAR")
-    return {"Pattern": pattern_name, "Close": anchor_close, "SL": sl_val, "Signal": "High2_Formation", "CandleATime": str(sweep_candle.get('date', ''))}
+    return {
+        "Pattern": pattern_name,
+        "Close": anchor_close,
+        "SL": sl_val,
+        "AnchorHigh": sweep_high,
+        "AnchorLow": anchor_low,
+        "Signal": "High2_Formation",
+        "CandleATime": str(sweep_candle.get('date', ''))
+    }
 
 def find_anchor_two_lower_lows(df):
     """Setup 3 (Bearish): A1 & A2 are two successive lower low bearish candles."""
-    if len(df) < 5:
+    if len(df) < 2:
         return None
-    a1, a2 = df.iloc[-4], df.iloc[-3]
+    a1, a2 = df.iloc[-2], df.iloc[-1]
     if not (float(a1['close']) < float(a1['open']) and float(a2['close']) < float(a2['open'])):
         return None
     if not (float(a2['low']) < float(a1['low']) and float(a2['high']) < float(a1['high'])):
         return None
     a_high = max(float(a1['high']), float(a2['high']))
+    a_low = min(float(a1['low']), float(a2['low']))
     anchor_close = float(a2['close'])
     sl_val = calculate_sl_buffer(a_high, side="BEAR")
-    return {"Pattern": "BEAR_A_Two_Lower_Lows", "Close": anchor_close, "SL": sl_val, "Signal": "LowerLow_Engulf", "CandleATime": str(a2.get('date', ''))}
+    return {
+        "Pattern": "BEAR_A_Two_Lower_Lows",
+        "Close": anchor_close,
+        "SL": sl_val,
+        "AnchorHigh": a_high,
+        "AnchorLow": a_low,
+        "Signal": "LowerLow_Engulf",
+        "CandleATime": str(a2.get('date', ''))
+    }
 
 def find_anchor_shooting_star_baby(df):
     """Setup 4 (Bearish): A = shooting star / baby candle inside/at bullish mother peak with strong upper wick rejection."""
-    if len(df) < 5:
+    if len(df) < 2:
         return None
-    mother_candle, baby_candle, post_baby_1, post_baby_2, post_baby_3 = df.iloc[-5], df.iloc[-4], df.iloc[-3], df.iloc[-2], df.iloc[-1]
+    mother_candle, baby_candle = df.iloc[-2], df.iloc[-1]
     if not (float(mother_candle['close']) > float(mother_candle['open'])):
         return None
     is_red = float(baby_candle['close']) <= float(baby_candle['open'])
@@ -154,29 +179,40 @@ def find_anchor_shooting_star_baby(df):
     if close_position > 0.40:
         return None
 
-    # 4. Multi-bar stability guard: Subsequent candles must not breach the anchor high
-    if float(post_baby_2['close']) > b_high or float(post_baby_3['close']) > b_high:
-        return None
-
     anchor_close = b_close
     sl_val = calculate_sl_buffer(b_high, side="BEAR")
-    return {"Pattern": "BEAR_A_ShootingStar_Baby", "Close": anchor_close, "SL": sl_val, "Signal": "ShootingStar_Formation", "CandleATime": str(baby_candle.get('date', ''))}
+    return {
+        "Pattern": "BEAR_A_ShootingStar_Baby",
+        "Close": anchor_close,
+        "SL": sl_val,
+        "AnchorHigh": b_high,
+        "AnchorLow": b_low,
+        "Signal": "ShootingStar_Formation",
+        "CandleATime": str(baby_candle.get('date', ''))
+    }
 
 def find_anchor_bearish_harami(df):
     """Setup 5 (Bearish): A = bearish inside bar fully inside bullish mother body."""
-    if len(df) < 5:
+    if len(df) < 2:
         return None
-    bullish_mother, bearish_inside, post_harami_1, post_harami_2, post_harami_3 = df.iloc[-5], df.iloc[-4], df.iloc[-3], df.iloc[-2], df.iloc[-1]
+    bullish_mother, bearish_inside = df.iloc[-2], df.iloc[-1]
     if not (float(bullish_mother['close']) > float(bullish_mother['open']) and float(bearish_inside['close']) < float(bearish_inside['open'])):
         return None
     if not (float(bearish_inside['high']) <= float(bullish_mother['close']) and float(bearish_inside['low']) >= float(bullish_mother['open'])):
         return None
     inside_high = float(bearish_inside['high'])
-    if float(post_harami_2['close']) > inside_high or float(post_harami_3['close']) > inside_high:
-        return None
+    inside_low = float(bearish_inside['low'])
     anchor_close = float(bearish_inside['close'])
     sl_val = calculate_sl_buffer(inside_high, side="BEAR")
-    return {"Pattern": "BEAR_A_Harami", "Close": anchor_close, "SL": sl_val, "Signal": "Bear_Harami_Formation", "CandleATime": str(bearish_inside.get('date', ''))}
+    return {
+        "Pattern": "BEAR_A_Harami",
+        "Close": anchor_close,
+        "SL": sl_val,
+        "AnchorHigh": inside_high,
+        "AnchorLow": inside_low,
+        "Signal": "Bear_Harami_Formation",
+        "CandleATime": str(bearish_inside.get('date', ''))
+    }
 
 
 # ──────────────────────────────────────────────
@@ -233,7 +269,7 @@ def scan_anchor_bcd_breakout_bearish(df_entry, df_anchor, anchor_tf="", entry_tf
     best_match = None
     min_anchor_search_len = min(60, len(df_anchor))
 
-    for anchor_idx in range(len(df_anchor) - 3, len(df_anchor) - min_anchor_search_len, -1):
+    for anchor_idx in range(len(df_anchor) - 1, len(df_anchor) - min_anchor_search_len, -1):
         sub_anchor_df = df_anchor.iloc[:anchor_idx + 1]
         anchor_candle = sub_anchor_df.iloc[-1]
         
@@ -248,8 +284,8 @@ def scan_anchor_bcd_breakout_bearish(df_entry, df_anchor, anchor_tf="", entry_tf
         if not det_result and not is_bear_candle:
             continue
 
-        a_high = float(anchor_candle['high'])
-        a_low = float(anchor_candle['low'])
+        a_high = float(det_result.get("AnchorHigh", anchor_candle['high'])) if det_result else float(anchor_candle['high'])
+        a_low = float(det_result.get("AnchorLow", anchor_candle['low'])) if det_result else float(anchor_candle['low'])
         a_close = float(anchor_candle['close'])
         a_date = det_result.get("CandleATime") if det_result and det_result.get("CandleATime") else anchor_candle.get('date', '')
 
