@@ -1,9 +1,9 @@
-# Price Action Trading Strategy — Master Documentation Blueprint (Prod Code v02)
+# Price Action Trading Strategy — Master Documentation Blueprint (v2.1.0-stable)
 # Consolidated Master Reference Blueprint (Single Source of Truth)
 
 meta:
   name: Price Action Unified Strategy System
-  version: Prod Code v02
+  version: v2.1.0-stable
   platform: Zerodha Kite Connect API
   architecture: Centralized Shared Core (common/) + Dual Workspaces (Trade_Option & Trade_Stock)
   strategy: Unified ABC Bullish & Bearish Reversal Pattern Engine + Multi-Tiered Market Structure (T1/T2/T3)
@@ -13,6 +13,8 @@ meta:
     - Stock Spot Bullish Reversals (stock_bullish_reversal_scanner.py)
     - Stock Spot Bearish Reversals (stock_bearish_reversal_scanner.py)
     - Multi-Tier Soft Scoring (Tier 1 Gold, Tier 2 Core, Tier 3 Momentum)
+    - EARLY_D_ENTRY (80% Candle Completion with Proportional Volume Validation)
+    - Unified Hybrid Dynamic Legs (ATR Volatility Adaptive Scaling + Symbol Overrides)
 
 architecture:
   diagram: |
@@ -26,16 +28,17 @@ architecture:
                   │
                   ▼
           Centralized Shared Core (common/)
-            ├── trading_core.py (Scanners, Negation Theory, Resampling, Registries)
+            ├── trading_core.py (Canonical Re-export Hub)
+            ├── swing_detection.py (Unified Hybrid Dynamic Legs & Parabolic Multi-Swing Curve Math)
             ├── trade_db.py (Thread-safe JSON persistence & staging)
             └── dashboard_sl_overrides.py (Shared SL/T1/T2/T3 override read/write)
 
   directory:
     common:
       paths.py: "Single source of truth for canonical system file paths across engines and dashboards (TRADES_DB, ACTIVE_POSITIONS_DB, SCAN_DISPLAY_*, TOKEN_FILE, etc.)"
-      swing_detection.py: "Institutional-grade Phase 0 Parabolic Multi-Swing Cascade Filter (is_parabolic_arch_enhanced, extract_swing_pivots, validate_parabolic_cascade_structure, detect_parabolic_multi_swings) enforcing polynomial curvature R^2 >= 0.55, cascading wave progression, and terminal base absorption."
+      swing_detection.py: "Institutional-grade Phase 0 Parabolic Multi-Swing Cascade Filter with Unified Hybrid Dynamic Legs (get_adaptive_leg_length, is_parabolic_arch_enhanced, extract_swing_pivots, validate_parabolic_cascade_structure, detect_parabolic_multi_swings) supporting ATR volatility scaling (2-5 bars), symbol overrides, BOS integrity, and terminal base absorption."
       ema_engine.py: "13 EMA & 44 EMA crossover scanner and display output builder for options (5050) and stock spot (5051) modes"
-      trading_core.py: "Centralized strategy core: scan_anchor_bcd_breakout_generic, 5 Bullish + 5 Bearish anchor detectors, find_profit_targets, find_profit_targets_bearish, resample_timeframe (4h), get_adaptive_lookback, STOCK_REGISTRY (50 stocks), INDEX_REGISTRY (NIFTY, BANKNIFTY, SENSEX), _HISTORICAL_CANDLE_CACHE (TTL RAM caching), is_market_open (09:15-15:30 IST execution guard), session loading, journal writer"
+      trading_core.py: "Canonical re-export hub for backward compatibility across all modules."
       trade_db.py: "Thread-safe JSON trade database, cycle staging, duplicate active position rejection, expired position purging, and executed pattern deduplication"
       dashboard_auth.py: "User authentication & access control module (PBKDF2 password hashing, admin/user role hierarchy, approval workflow)"
       dashboard_sl_overrides.py: "Shared read/write of user-edited SL/T1/T2/T3 overrides (sl_target_overrides.json) used by both dashboards"

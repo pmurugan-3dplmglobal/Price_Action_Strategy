@@ -3,11 +3,46 @@
 
 meta:
   system: Price Action Unified Strategy System
-  version: Prod Code v02
-  last_updated: "2026-08-21"
+  version: v2.1.0-stable
+  last_updated: "2026-08-25"
   purpose: Document operational failures, root causes, regression fixes, and system enhancements.
 
 issues:
+  - id: FEATURE-022
+    title: Price Action Strategy v2.1.0 — Pure 2-Candle Anchors, Color-Independent Point D, 80% Early D Entry & Unified Volatility-Adaptive Dynamic Legs
+    severity: ENHANCEMENT
+    category: Price Action Geometry, Order Timing & Market Microstructure
+    family: STRATEGY_UPGRADE
+    date_reported: "2026-08-25"
+    symptom: |
+      1. Legacy anchor detectors enforced arbitrary 3-bar confirmation lags after the Anchor base, distorting Benchmark assignment and causing late Point D triggers.
+      2. Point D required a green candle for Bullish / red candle for Bearish, missing valid breakout retests where Point D closes beyond Benchmark on a minor opposite-colored body.
+      3. Live unclosed candles on 30m charts could trigger false Point D breakouts midway through the candle (e.g. at Minute 10) before price collapsed back down.
+      4. Static min_candles_per_leg=3 failed to adapt to high-beta vs mega-cap stock volatility profiles.
+      5. Standalone execution of stock_reversal_scanner.py failed due to a relative import in common/patterns_bear.py.
+    root_cause: |
+      1. Legacy anchor functions bundled 3-bar lookahead confirmation inside the base detector instead of isolating Anchor A as the pure 2-candle formation.
+      2. Overly restrictive color filter on Point D contradicted Datta Playbook rulebook (pure Close > Benchmark criterion).
+      3. Point D breakout scanner checked iloc[-1] blindly on live intraday data without checking candle duration completion.
+      4. Fixed pivot window lacked ATR volatility normalization across the 200+ F&O universe.
+      5. Relative import (.patterns_bull) failed when executed without package context.
+    affected_files:
+      - common/patterns_bull.py
+      - common/patterns_bear.py
+      - common/swing_detection.py
+      - common/timeframe_utils.py
+      - common/resolve.py
+      - input/program_config.json
+      - MASTER_DOCUMENTATION.yaml
+    resolution: |
+      1. Refactored all 10 Anchor detectors to pure 2-candle base formations returning exact AnchorHigh and AnchorLow.
+      2. Bound Benchmark strictly to AnchorHigh (Bullish) and AnchorLow (Bearish).
+      3. Made Point D breakout strictly color-independent (Close > Benchmark for Bullish / Close < Benchmark for Bearish).
+      4. Activated EARLY_D_ENTRY at 80% candle completion (Minute 24 on 30m chart) with +0.3% benchmark buffer and >= 60% proportional volume validation.
+      5. Implemented Unified Hybrid dynamic leg architecture with 3-tier resolution: Explicit symbol override -> ATR Volatility Adaptation -> Global Default.
+      6. Replaced relative import in common/patterns_bear.py with robust absolute import.
+      7. Verified 100% passing across 14/14 regression tests on Localhost and Oracle Cloud VM.
+    status: COMPLETED
   - id: FEATURE-021
     title: Phase 1 Codebase Modernization — trading_core.py Monolith Deletion & Multi-Tier Emergency Exit Execution
     severity: ENHANCEMENT

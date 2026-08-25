@@ -1,6 +1,6 @@
 # AGENTS.md — Technical Code Map
 
-Price Action Trading system (Zerodha Kite) — v2.0.0-stable.
+Price Action Trading system (Zerodha Kite) — v2.1.0-stable.
 Canonical root: `G:\Poovendan\AI\Trading\Share\ReadyToDeploy\Prod_code_01\Price_Action_Strategy`
 
 ## Defined Agent Roles & Behavioral Persona
