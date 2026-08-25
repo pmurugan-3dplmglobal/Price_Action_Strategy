@@ -8,6 +8,27 @@ meta:
   purpose: Document operational failures, root causes, regression fixes, and system enhancements.
 
 issues:
+  - id: BUG-044
+    title: Timezone-Aware Market Hour & Exit Guard (UTC Cloud VM IST Normalization)
+    severity: MEDIUM
+    category: Market Timing & Order Execution
+    family: EXECUTION_GUARDS
+    date_reported: "2026-08-25"
+    symptom: |
+      On Oracle Cloud Linux VM (UTC timezone), position monitor attempted live order exits after market hours (e.g. 18:30 IST / 13:00 UTC), triggering broker rejection: "Your order could not be converted to a After Market Order (AMO)".
+    root_cause: |
+      is_market_open() and is_new_entry_allowed() evaluated dt.now().time() using local system clock. On UTC cloud servers, 13:00 UTC fell within the 09:15-15:30 window, causing false positive market open states.
+    affected_files:
+      - common/timeframe_utils.py
+      - common/position_monitor.py
+      - common/resolve.py
+      - common/trading_core.py
+    resolution: |
+      1. Implemented get_ist_now() in timeframe_utils.py with automatic Asia/Kolkata timezone conversion and UTC+05:30 fallback.
+      2. Updated is_market_open(), is_new_entry_allowed(), and resolve.py cutoff checks to use get_ist_now().
+      3. Outside 09:15-15:30 IST, close_position gracefully suppresses live broker calls and logs informational market-closed status.
+      4. Verified across 14/14 regression tests and deployed to Oracle Cloud VM.
+    status: COMPLETED
   - id: FEATURE-023
     title: Timeframe-Aware Institutional Tier Scoring — Top-Tier Accumulation & Distribution Alignment
     severity: ENHANCEMENT
