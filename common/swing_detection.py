@@ -171,18 +171,23 @@ def validate_parabolic_cascade_structure(
         if is_bull:
             start_val = float(df['low'].iloc[start_idx])
             end_val = float(df['low'].iloc[end_idx])
-            is_monotonic = end_val < start_val  # Lower Low
+            is_monotonic = end_val < start_val  # 2nd leg low is breaking 1st leg low
+            # Structural BOS: Wave price must have a confirmed candle close below the prior structural low
+            has_bos = bool((df_wave['close'] < start_val).any()) if not df_wave.empty else False
             wave_extrema = float(df_wave['high'].max())  # Peak
         else:
             start_val = float(df['high'].iloc[start_idx])
             end_val = float(df['high'].iloc[end_idx])
-            is_monotonic = end_val > start_val  # Higher High
+            is_monotonic = end_val > start_val  # 2nd leg high is breaking 1st leg high
+            # Structural BOS: Wave price must have a confirmed candle close above the prior structural high
+            has_bos = bool((df_wave['close'] > start_val).any()) if not df_wave.empty else False
             wave_extrema = float(df_wave['low'].min())  # Trough
         
         wave_details.append({
             "wave_index": i + 1,
             "is_arch": is_arch,
             "is_monotonic": is_monotonic,
+            "has_bos": has_bos,
             "extrema": wave_extrema,
             "base_val": end_val
         })
@@ -193,14 +198,17 @@ def validate_parabolic_cascade_structure(
     if not wave_details:
         return {"valid": False, "reason": "No waves constructed", "details": []}
 
-    # Macro trend check: Progressive cascade
+    # Macro trend check: Progressive cascade (Lower Highs for Bull; Higher Lows for Bear)
     extremas = [w["extrema"] for w in wave_details]
     if is_bull:
         cascade_progression = all(extremas[i] > extremas[i+1] for i in range(len(extremas)-1)) if len(extremas) > 1 else True
     else:
         cascade_progression = all(extremas[i] < extremas[i+1] for i in range(len(extremas)-1)) if len(extremas) > 1 else True
 
-    # Detect terminal consolidation / base (Point 4 handling)
+    # Check structural BOS integrity across all cascading waves
+    all_bos_confirmed = all(w.get("has_bos", False) for w in wave_details[:-1]) if len(wave_details) > 1 else True
+
+    # Detect terminal consolidation / base (Point 4 handling / 3rd swing bottom)
     last_wave = wave_details[-1]
     has_terminal_base = False
     if len(wave_details) >= 2:
@@ -217,10 +225,10 @@ def validate_parabolic_cascade_structure(
     )
 
     # Multi-Tier Soft Classification
-    # Tier 1 (Gold): >=3 waves + cascade progression + terminal base
+    # Tier 1 (Gold): >=3 waves with confirmed BOS + cascade progression + terminal 3rd swing bottom/base
     # Tier 2 (Core): >=2 waves (or 2-wave arch) + cascade progression
     # Tier 3 (Momentum): 1-wave or structural re-entry
-    if valid_arches >= 3 and cascade_progression and (last_wave["is_arch"] or has_terminal_base):
+    if valid_arches >= 3 and cascade_progression and all_bos_confirmed and (last_wave["is_arch"] or has_terminal_base):
         tier = 1
         tier_label = "TIER_1_GOLD"
         tier_badge = "🥇 T1"
@@ -238,6 +246,7 @@ def validate_parabolic_cascade_structure(
         "valid_arch_count": valid_arches,
         "cascade_progression": cascade_progression,
         "has_terminal_base": has_terminal_base,
+        "all_bos_confirmed": all_bos_confirmed,
         "tier": tier,
         "tier_label": tier_label,
         "tier_badge": tier_badge,

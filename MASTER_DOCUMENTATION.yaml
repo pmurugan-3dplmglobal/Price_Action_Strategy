@@ -180,6 +180,7 @@ backtest_suite:
       requirements:
         - "Polynomial Regression: Fits y = ax^2 + bx + c requiring concave down dome (a < 0) for Bullish and concave up cup (a > 0) for Bearish with R^2 >= 0.55."
         - "Cascade Progression: Extrema of each wave must progressively decay (Lower Highs + Lower Lows for Bullish setups)."
+        - "Confirmed Break of Structure (BOS): Each subsequent wave leg down must have a confirmed candle close below the prior structural low (start_val)."
         - "Point 4 Terminal Base: Identifies flat consolidation / base absorption at Point 4 (pct_diff < 2%)."
         - "Recency Constraint (max_bars_after_terminal): Terminal swing base must be recent (<= 15 bars for Options, <= 20 bars for Stocks)."
         - "Sequential Trigger: Anchor Candle A timestamp MUST be >= Terminal Swing Date."

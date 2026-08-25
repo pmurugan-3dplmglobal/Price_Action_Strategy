@@ -8,6 +8,27 @@ meta:
   purpose: Document operational failures, root causes, regression fixes, and system enhancements.
 
 issues:
+  - id: FEATURE-019
+    title: 3-Swing Downward Break of Structure (BOS) Cascade & Terminal Base Reversal Validation
+    severity: ENHANCEMENT
+    category: Market Structure & Pattern Recognition
+    family: SWING_DETECTION
+    date_reported: "2026-08-25"
+    symptom: |
+      Wick-only dips could occasionally register as lower pivots without genuine body close acceptance,
+      diluting Tier 1 Gold classification purity during choppy consolidation periods.
+    root_cause: |
+      validate_parabolic_cascade_structure verified monotonic pivot values but lacked strict candle-close
+      Break of Structure (BOS) validation across intermediate cascading waves.
+    affected_files:
+      - common/swing_detection.py
+      - MASTER_DOCUMENTATION.yaml
+    resolution: |
+      1. Implemented strict candle-close Break of Structure (has_bos) for each wave in validate_parabolic_cascade_structure.
+      2. Enforced that each subsequent downward wave leg must have a confirmed candle close below the prior structural low (start_val).
+      3. Tier 1 Gold now strictly requires >= 3 cascading arches + progressive lower highs + confirmed BOS on all waves + terminal 3rd swing base bottom.
+      4. Verified via full regression test suite (Test 13 AST and math tests passed).
+    status: COMPLETED
   - id: FEATURE-018
     title: Friday 15:15 EOD Index Squareoff, Expiry Rollover Protection & Outlier Entry Price Guard
     severity: ENHANCEMENT
