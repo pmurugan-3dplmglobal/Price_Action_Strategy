@@ -158,6 +158,7 @@ def export_trades_to_csv(trades, csv_path, scan_slot):
 
     headers = [
         "Scan_Time", "Scan_Slot", "Symbol", "Contract", "Pattern", "Pattern_Code",
+        "Tier", "Tier_Label",
         "Side", "Timeframe", "Entry_Spot", "SL", "T1", "T2", "T3",
         "RR", "Candle_Time", "Priority", "Stage_Status"
     ]
@@ -171,6 +172,8 @@ def export_trades_to_csv(trades, csv_path, scan_slot):
             "Contract": t.get("contract", ""),
             "Pattern": t.get("pattern", ""),
             "Pattern_Code": t.get("pattern_code", ""),
+            "Tier": t.get("tier_badge") or t.get("tier_label", "TIER_2_CORE"),
+            "Tier_Label": t.get("tier_label", "TIER_2_CORE"),
             "Side": t.get("side", ""),
             "Timeframe": t.get("timeframe", ""),
             "Entry_Spot": t.get("entry_spot", ""),

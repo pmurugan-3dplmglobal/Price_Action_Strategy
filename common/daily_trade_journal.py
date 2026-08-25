@@ -23,6 +23,8 @@ CSV_HEADER = [
     "Side",
     "Timeframe",
     "Pattern",
+    "Tier",
+    "Swing_Waves",
     "Entry_Time",
     "Entry_Price",
     "Exit_Time",
@@ -77,6 +79,8 @@ def save_journal_entries(entries):
                 e.get("Side", ""),
                 e.get("Timeframe", ""),
                 e.get("Pattern", ""),
+                e.get("Tier", ""),
+                e.get("Swing_Waves", ""),
                 e.get("Entry_Time", ""),
                 e.get("Entry_Price", ""),
                 e.get("Exit_Time", ""),
@@ -93,6 +97,80 @@ def save_journal_entries(entries):
                 e.get("Analysis_Remarks", ""),
                 e.get("Self_Learning_Lesson", "")
             ])
+
+def resolve_trade_tier_and_swings(symbol, contract="", pattern=""):
+    """Resolve Stage 0 Tier Classification (🥇 T1 Gold, 🥈 T2 Core, 🥉 T3 Momentum) and Swing Wave Count."""
+    clean_sym = str(symbol or contract).replace(" ", "").upper()
+    tier_badge = "🥈 T2 Core"
+    swing_waves = "2 Waves"
+
+    # 1. Search scan_display files
+    for path in [paths.SCAN_DISPLAY_FILE, paths.SCAN_DISPLAY_INDEX_FILE, paths.SCAN_DISPLAY_STOCK_FILE]:
+        if os.path.exists(path):
+            try:
+                with open(path, encoding="utf-8") as f:
+                    data = json.load(f)
+                for sec in ("staged_trades", "active_live", "carry_forward"):
+                    for item in data.get(sec, []):
+                        if isinstance(item, dict):
+                            i_sym = str(item.get("symbol") or "").replace(" ", "").upper()
+                            i_cnt = str(item.get("contract") or "").replace(" ", "").upper()
+                            if clean_sym in (i_sym, i_cnt) or i_sym in clean_sym or i_cnt in clean_sym:
+                                tb = item.get("tier_badge") or item.get("tier_label")
+                                sw = item.get("swing_waves")
+                                if tb:
+                                    if "T1" in str(tb) or "GOLD" in str(tb):
+                                        tier_badge = "🥇 T1 Gold"
+                                    elif "T3" in str(tb) or "MOMENTUM" in str(tb):
+                                        tier_badge = "🥉 T3 Momentum"
+                                    else:
+                                        tier_badge = "🥈 T2 Core"
+                                if sw is not None:
+                                    try:
+                                        sw_int = int(sw)
+                                        swing_waves = f"{sw_int} Waves" if sw_int < 3 else "3+ Waves (Multi-Swing)"
+                                    except Exception:
+                                        swing_waves = str(sw)
+                                return tier_badge, swing_waves
+            except Exception:
+                pass
+
+    # 2. Search trade_db
+    try:
+        from common.trade_db import get_all_trades
+        for t in get_all_trades():
+            t_sym = str(t.get("symbol") or t.get("contract") or "").replace(" ", "").upper()
+            if clean_sym in t_sym or t_sym in clean_sym:
+                tb = t.get("tier_badge") or t.get("tier_label") or t.get("tier")
+                sw = t.get("swing_waves")
+                if tb:
+                    if str(tb) in ("1", "🥇 T1", "TIER_1_GOLD") or "T1" in str(tb):
+                        tier_badge = "🥇 T1 Gold"
+                    elif str(tb) in ("3", "🥉 T3", "TIER_3_MOMENTUM") or "T3" in str(tb):
+                        tier_badge = "🥉 T3 Momentum"
+                    else:
+                        tier_badge = "🥈 T2 Core"
+                if sw is not None:
+                    try:
+                        sw_int = int(sw)
+                        swing_waves = f"{sw_int} Waves" if sw_int < 3 else "3+ Waves (Multi-Swing)"
+                    except Exception:
+                        swing_waves = str(sw)
+                return tier_badge, swing_waves
+    except Exception:
+        pass
+
+    # 3. Default fallback based on pattern name
+    pat_str = str(pattern).upper()
+    if "BASE_ABCD" in pat_str or "MANUAL" in pat_str or "DISCRETIONARY" in pat_str or "1CLICK" in pat_str:
+        tier_badge = "🥉 T3 Momentum"
+        swing_waves = "1 Wave / Direct"
+    elif any(p in pat_str for p in ["LL_ABCD", "BE_ABCD", "HH_ABCD", "STAR_ABCD", "HAMMER_ABCD"]):
+        tier_badge = "🥈 T2 Core"
+        swing_waves = "2 Waves"
+
+    return tier_badge, swing_waves
+
 
 def resolve_trade_pattern(symbol, contract="", default_pat=None, is_manual=False):
     """Resolve the exact strategy pattern name for pattern analysis, even for manual entries based on scans."""
@@ -280,6 +358,7 @@ def generate_daily_journal(target_date=None, kite=None):
                     except Exception:
                         pass
 
+                tier_badge, swing_waves = resolve_trade_tier_and_swings(sym, sym, pattern_name)
                 rec = {
                     "Date": target_date,
                     "Engine": engine_type,
@@ -287,6 +366,8 @@ def generate_daily_journal(target_date=None, kite=None):
                     "Side": "BUY" if buy_qty > 0 else "SELL",
                     "Timeframe": "75min" if engine_type == "nifty50" else "3min",
                     "Pattern": pattern_name,
+                    "Tier": tier_badge,
+                    "Swing_Waves": swing_waves,
                     "Entry_Time": entry_time,
                     "Entry_Price": round(buy_avg, 2),
                     "Exit_Time": exit_time,
@@ -356,6 +437,7 @@ def generate_daily_journal(target_date=None, kite=None):
                 
                 outcome = "ACTIVE (Carry Forward)" if status == "ACTIVE" else status
                 pattern_name = resolve_trade_pattern(sym, t.get("contract", ""), t.get("pattern"))
+                tier_badge, swing_waves = resolve_trade_tier_and_swings(sym, t.get("contract", ""), pattern_name)
                 
                 rem, les = derive_trade_remarks_and_lesson(sym, outcome, pnl_rs, pattern_name)
                 if sym in existing_user_notes:
@@ -371,6 +453,8 @@ def generate_daily_journal(target_date=None, kite=None):
                     "Side": t.get("side", "BUY"),
                     "Timeframe": t.get("timeframe", "30minute"),
                     "Pattern": pattern_name,
+                    "Tier": tier_badge,
+                    "Swing_Waves": swing_waves,
                     "Entry_Time": t.get("entry_time", t.get("created_at", "")),
                     "Entry_Price": t.get("entry_spot", 0),
                     "Exit_Time": t.get("exit_time", "") if status != "ACTIVE" else "OPEN",
@@ -398,5 +482,181 @@ def generate_daily_journal(target_date=None, kite=None):
     logging.info(f"Daily Trade Journal updated for {target_date}: {len(today_records)} trades recorded.")
     return today_records
 
+def get_trade_journal_analytics(entries=None):
+    """Compute detailed analytics and statistical metrics on trade journal entries, including Tier & Swing Wave breakdowns."""
+    if entries is None:
+        entries = load_journal_entries()
+
+    total_trades = len(entries)
+    if total_trades == 0:
+        return {
+            "summary": {
+                "total_trades": 0,
+                "closed_trades": 0,
+                "active_trades": 0,
+                "winning_trades": 0,
+                "losing_trades": 0,
+                "breakeven_trades": 0,
+                "win_rate_pct": 0.0,
+                "total_pnl_rs": 0.0,
+                "gross_profit_rs": 0.0,
+                "gross_loss_rs": 0.0,
+                "profit_factor": 0.0,
+                "avg_pnl_per_trade_rs": 0.0,
+                "avg_win_rs": 0.0,
+                "avg_loss_rs": 0.0,
+                "max_win_rs": 0.0,
+                "max_loss_rs": 0.0
+            },
+            "by_pattern": {},
+            "by_tier": {},
+            "by_swing_waves": {},
+            "by_timeframe": {},
+            "by_engine": {},
+            "by_outcome": {}
+        }
+
+    closed_trades = 0
+    active_trades = 0
+    winning_trades = 0
+    losing_trades = 0
+    breakeven_trades = 0
+
+    total_pnl_rs = 0.0
+    gross_profit_rs = 0.0
+    gross_loss_rs = 0.0
+    max_win_rs = 0.0
+    max_loss_rs = 0.0
+
+    by_pattern = {}
+    by_tier = {}
+    by_swing_waves = {}
+    by_timeframe = {}
+    by_engine = {}
+    by_outcome = {}
+
+    for e in entries:
+        outcome = str(e.get("Outcome", "")).strip()
+        is_active = "ACTIVE" in outcome.upper() or outcome == "Carry Forward" or e.get("Exit_Time") in ("OPEN", "")
+
+        try:
+            pnl_rs = float(e.get("PnL_Rs") or 0.0)
+        except (ValueError, TypeError):
+            pnl_rs = 0.0
+
+        pattern = str(e.get("Pattern") or "UNKNOWN").strip()
+        
+        # Dynamically resolve Tier & Swing Waves if missing from legacy records
+        tier = e.get("Tier")
+        swings = e.get("Swing_Waves")
+        if not tier or not swings:
+            resolved_t, resolved_sw = resolve_trade_tier_and_swings(e.get("Symbol"), e.get("Symbol"), pattern)
+            tier = tier or resolved_t
+            swings = swings or resolved_sw
+            e["Tier"] = tier
+            e["Swing_Waves"] = swings
+
+        tf = str(e.get("Timeframe") or "UNKNOWN").strip()
+        eng = str(e.get("Engine") or "UNKNOWN").strip()
+
+        total_pnl_rs += pnl_rs
+
+        if is_active:
+            active_trades += 1
+        else:
+            closed_trades += 1
+            if pnl_rs > 0:
+                winning_trades += 1
+                gross_profit_rs += pnl_rs
+                if pnl_rs > max_win_rs:
+                    max_win_rs = pnl_rs
+            elif pnl_rs < 0:
+                losing_trades += 1
+                gross_loss_rs += abs(pnl_rs)
+                if pnl_rs < max_loss_rs:
+                    max_loss_rs = pnl_rs
+            else:
+                breakeven_trades += 1
+
+        # Outcome breakdown
+        by_outcome[outcome] = by_outcome.get(outcome, 0) + 1
+
+        # Helper to update breakdown dicts
+        def update_breakdown(group_dict, key_val):
+            if key_val not in group_dict:
+                group_dict[key_val] = {
+                    "total_trades": 0,
+                    "closed_trades": 0,
+                    "winning_trades": 0,
+                    "losing_trades": 0,
+                    "total_pnl_rs": 0.0,
+                    "win_rate_pct": 0.0,
+                    "avg_pnl_rs": 0.0
+                }
+            g = group_dict[key_val]
+            g["total_trades"] += 1
+            g["total_pnl_rs"] += pnl_rs
+            if not is_active:
+                g["closed_trades"] += 1
+                if pnl_rs > 0:
+                    g["winning_trades"] += 1
+                elif pnl_rs < 0:
+                    g["losing_trades"] += 1
+
+        update_breakdown(by_pattern, pattern)
+        update_breakdown(by_tier, str(tier))
+        update_breakdown(by_swing_waves, str(swings))
+        update_breakdown(by_timeframe, tf)
+        update_breakdown(by_engine, eng)
+
+    # Finalize percentages and averages for groups
+    def finalize_breakdown(group_dict):
+        for k, v in group_dict.items():
+            ct = v["closed_trades"]
+            v["win_rate_pct"] = round((v["winning_trades"] / ct) * 100, 2) if ct > 0 else 0.0
+            v["avg_pnl_rs"] = round(v["total_pnl_rs"] / v["total_trades"], 2) if v["total_trades"] > 0 else 0.0
+            v["total_pnl_rs"] = round(v["total_pnl_rs"], 2)
+
+    finalize_breakdown(by_pattern)
+    finalize_breakdown(by_tier)
+    finalize_breakdown(by_swing_waves)
+    finalize_breakdown(by_timeframe)
+    finalize_breakdown(by_engine)
+
+    win_rate_pct = round((winning_trades / closed_trades) * 100, 2) if closed_trades > 0 else 0.0
+    profit_factor = round(gross_profit_rs / gross_loss_rs, 2) if gross_loss_rs > 0 else (999.99 if gross_profit_rs > 0 else 0.0)
+    avg_pnl_per_trade = round(total_pnl_rs / total_trades, 2) if total_trades > 0 else 0.0
+    avg_win = round(gross_profit_rs / winning_trades, 2) if winning_trades > 0 else 0.0
+    avg_loss = round(gross_loss_rs / losing_trades, 2) if losing_trades > 0 else 0.0
+
+    return {
+        "summary": {
+            "total_trades": total_trades,
+            "closed_trades": closed_trades,
+            "active_trades": active_trades,
+            "winning_trades": winning_trades,
+            "losing_trades": losing_trades,
+            "breakeven_trades": breakeven_trades,
+            "win_rate_pct": win_rate_pct,
+            "total_pnl_rs": round(total_pnl_rs, 2),
+            "gross_profit_rs": round(gross_profit_rs, 2),
+            "gross_loss_rs": round(gross_loss_rs, 2),
+            "profit_factor": profit_factor,
+            "avg_pnl_per_trade_rs": avg_pnl_per_trade,
+            "avg_win_rs": avg_win,
+            "avg_loss_rs": avg_loss,
+            "max_win_rs": round(max_win_rs, 2),
+            "max_loss_rs": round(max_loss_rs, 2)
+        },
+        "by_pattern": by_pattern,
+        "by_tier": by_tier,
+        "by_swing_waves": by_swing_waves,
+        "by_timeframe": by_timeframe,
+        "by_engine": by_engine,
+        "by_outcome": by_outcome
+    }
+
 if __name__ == "__main__":
     generate_daily_journal()
+
+

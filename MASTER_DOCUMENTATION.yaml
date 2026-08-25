@@ -42,6 +42,7 @@ architecture:
       trading_core.py: "Canonical re-export hub for backward compatibility across all modules."
       trade_db.py: "Thread-safe JSON trade database, cycle staging, duplicate active position rejection, expired position purging, and executed pattern deduplication"
       dashboard_auth.py: "User authentication & access control module (PBKDF2 password hashing, admin/user role hierarchy, approval workflow)"
+      daily_trade_journal.py: "Daily trade journal sync & statistical analytics engine (get_trade_journal_analytics: Win Rate %, Profit Factor, PnL by Pattern, Timeframe, Engine, and Outcome)"
       dashboard_sl_overrides.py: "Shared read/write of user-edited SL/T1/T2/T3 overrides (sl_target_overrides.json) used by both dashboards"
     Kite_Access_Token_gen.py: "Zerodha Kite OAuth access token generator CLI (single canonical root-level copy)"
     Trade_Option:

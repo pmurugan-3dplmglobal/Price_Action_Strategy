@@ -297,6 +297,8 @@ def export_results(results):
         rows.append({
             "Symbol": r.get("Symbol", ""),
             "Pattern": r.get("Pattern", ""),
+            "Tier": r.get("tier_badge") or r.get("tier_label", "TIER_2_CORE"),
+            "Tier_Label": r.get("tier_label", "TIER_2_CORE"),
             "Entry": r.get("Close", ""),
             "Stop_Loss": r.get("SL", ""),
             "T1": r.get("T1", ""),

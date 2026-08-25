@@ -711,6 +711,8 @@
 
             const statusFilterEl = document.getElementById('scan-status-filter');
             const statusFilter = statusFilterEl ? statusFilterEl.value : 'fresh';
+            const tierFilterEl = document.getElementById('scan-tier-filter');
+            const tierFilter = tierFilterEl ? tierFilterEl.value : 'all';
 
             const engines = filter === 'all' ? ['daily', 'bear_trade'] : [filter];
             const todayStr = new Date().toISOString().slice(0, 10);
@@ -728,6 +730,23 @@
                     const slVal = parseFloat(t.current_sl || t.sl || 0);
                     const t1Val = parseFloat(t.t1 || 0);
                     if (slVal <= 0 || t1Val <= 0) return; // Only include trades with intact SL & Targets
+
+                    // Tier Filter Application
+                    let tNum = parseInt(t.tier || 2, 10);
+                    const tbStr = String(t.tier_badge || '');
+                    const tlStr = String(t.tier_label || '');
+                    if (tbStr.includes('T1') || tlStr.includes('GOLD')) {
+                        tNum = 1;
+                    } else if (tbStr.includes('T3') || tlStr.includes('MOMENTUM')) {
+                        tNum = 3;
+                    } else if (tbStr.includes('T2') || tlStr.includes('CORE')) {
+                        tNum = 2;
+                    }
+
+                    if (tierFilter === '1' && tNum !== 1) return;
+                    if (tierFilter === '2' && tNum !== 2) return;
+                    if (tierFilter === '3' && tNum !== 3) return;
+                    if (tierFilter === '1_2' && tNum !== 1 && tNum !== 2) return;
 
                     const key = (t.contract || t.symbol || '').replace(/\s+/g, '').toUpperCase();
                     const symKey = (t.symbol || '').replace(/\s+/g, '').toUpperCase();
@@ -1961,6 +1980,13 @@
                                 <option value="all">📋 All Scanned Setups</option>
                                 <option value="t1_reached">🎯 T1+ Reached</option>
                                 <option value="exited">🏷️ Exited / SL Hit</option>
+                            </select>
+                            <select id="scan-tier-filter" onchange="renderScanTab()" class="filter-select" style="width:auto;background:#1f6feb;color:#ffffff;font-weight:600;border:1px solid #388bfd">
+                                <option value="all" selected>🌟 All Tiers</option>
+                                <option value="1">🥇 Tier 1 Gold</option>
+                                <option value="2">🥈 Tier 2 Core</option>
+                                <option value="3">🥉 Tier 3 Momentum</option>
+                                <option value="1_2">⭐ Tier 1 & 2</option>
                             </select>
                             <select id="scan-engine-filter" onchange="renderScanTab()" class="filter-select" style="width:auto">
                                 <option value="all" selected>All</option>

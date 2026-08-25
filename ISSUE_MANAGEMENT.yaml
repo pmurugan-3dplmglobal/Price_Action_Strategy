@@ -8,6 +8,29 @@ meta:
   purpose: Document operational failures, root causes, regression fixes, and system enhancements.
 
 issues:
+  - id: FEATURE-025
+    title: Scan Tab Tier Filtering & CSV Export Tier Column Integration
+    severity: ENHANCEMENT
+    category: Dashboard UI & Data Export
+    family: UI_ENHANCEMENT
+    date_reported: "2026-08-25"
+    symptom: |
+      Users required the ability to filter scanned setups by Tier (Tier 1 Gold, Tier 2 Core, Tier 3 Momentum, or Tier 1 & 2 combined) directly on the Scans tab of both dashboards, and requested explicit Tier classification columns in all exported CSVs.
+    root_cause: |
+      The scan tab only provided status (Fresh, T1+, Exited) and engine filters. CSV export endpoints lacked the Tier badge/label column.
+    affected_files:
+      - Trade_Option/templates/index.html
+      - Trade_Stock/templates/index.html
+      - Trade_Option/app_option_Trade.py
+      - Trade_Stock/app_Stock_Trade.py
+      - Trade_Option/automated_strategy_exporter.py
+      - Trade_Stock/stock_reversal_scanner.py
+    resolution: |
+      1. Added scan-tier-filter dropdown in Trade_Option/templates/index.html and Trade_Stock/templates/index.html with All Tiers, 🥇 Tier 1 Gold, 🥈 Tier 2 Core, 🥉 Tier 3 Momentum, and ⭐ Tier 1 & 2 filters.
+      2. Integrated live client-side filtering in renderScanTab() across both dashboards.
+      3. Added Tier (and Tier_Label) column to /api/scan/export in app_option_Trade.py and app_Stock_Trade.py, automated_strategy_exporter.py, and stock_reversal_scanner.py.
+      4. Verified 100% success on 14/14 regression tests.
+    status: COMPLETED
   - id: BUG-044
     title: Timezone-Aware Market Hour & Exit Guard (UTC Cloud VM IST Normalization)
     severity: MEDIUM
@@ -2562,6 +2585,54 @@ issues:
       4. Updated execute_highest_rr_trade in Trade_Option/stock_options_trade_engine.py to prioritize Tier 1 Gold candidates first, falling back to Tier 2 Core candidates if no Tier 1 is present.
       5. Verified 100% pass across the 14-test regression suite.
     status: RESOLVED
+
+  - id: FEATURE-020
+    title: Trade Journal Analytics Module & Price Action Domain Invariants
+    severity: ENHANCEMENT
+    category: Strategy Analytics & Documentation
+    family: FEATURE
+    date_reported: "2026-08-25"
+    symptom: |
+      Need automated analytical metrics (Win Rate, Profit Factor, Gross Profit/Loss, PnL by Pattern, Timeframe, Engine, and Outcome) on the Daily Trade Journal, and explicit Price Action domain invariants documented in AGENTS.md.
+    root_cause: |
+      Enhancing statistical trade journal evaluation and institutional knowledge persistence across AI assistant sessions.
+    affected_files:
+      - AGENTS.md
+      - common/daily_trade_journal.py
+      - Trade_Option/app_option_Trade.py
+      - Trade_Stock/app_Stock_Trade.py
+      - ISSUE_MANAGEMENT.yaml
+    resolution: |
+      1. Updated AGENTS.md with Domain Invariants (OHLCV Geometry Over Visual Labels, BASE_ABCD Pattern Validity, D1 vs D2 Lifecycle, Dynamic F&O Universe Resolution, and Unlisted Equities).
+      2. Added get_trade_journal_analytics() in common/daily_trade_journal.py calculating overall PnL, Win Rate %, Profit Factor, Avg/Max Win & Loss, and breakdowns by Pattern, Timeframe, Engine, and Outcome.
+      3. Added /api/journal/analytics endpoint to both Options Dashboard (app_option_Trade.py) and Stock Dashboard (app_Stock_Trade.py).
+      4. Verified 100% pass across all 14 regression suite tests.
+    status: RESOLVED
+
+  - id: FEATURE-021
+    title: Trade Journal Stage 0 Tier & Swing Wave Breakdown Analytics
+    severity: ENHANCEMENT
+    category: Strategy Analytics & Journaling
+    family: FEATURE
+    date_reported: "2026-08-25"
+    symptom: |
+      Trade Journal lacked breakdown metrics by Stage 0 Setup Tiers (🥇 T1 Gold, 🥈 T2 Core, 🥉 T3 Momentum) and Swing Wave counts (3+ Multi-Swing, 2-Wave, 1-Wave/Direct), preventing statistical evaluation of win rates across setup tiers.
+    root_cause: |
+      Integrating Stage 0 Parabolic Decay Soft Classification into journal record fields and analytics reporting.
+    affected_files:
+      - common/daily_trade_journal.py
+      - Trade_Option/app_option_Trade.py
+      - Trade_Stock/app_Stock_Trade.py
+      - ISSUE_MANAGEMENT.yaml
+    resolution: |
+      1. Added `Tier` and `Swing_Waves` columns to `CSV_HEADER` and trade record dictionaries in `common/daily_trade_journal.py`.
+      2. Added `resolve_trade_tier_and_swings()` dynamically resolving Stage 0 tier badges (🥇 T1 Gold, 🥈 T2 Core, 🥉 T3 Momentum) and swing wave counts.
+      3. Updated `get_trade_journal_analytics()` to include `by_tier` and `by_swing_waves` statistical breakdowns.
+      4. Updated CSV and Excel export endpoints in `Trade_Option/app_option_Trade.py` and `Trade_Stock/app_Stock_Trade.py`.
+      5. Verified 100% pass across all 14 regression suite tests.
+    status: RESOLVED
+
+
 
 
 

@@ -1218,7 +1218,7 @@ def api_scan_export():
         from spot_enricher import extract_underlying_symbol, evaluate_spot_trend_and_t1
         output = io.StringIO()
         writer = csv.writer(output)
-        writer.writerow(["Symbol", "Contract", "Side", "Entry", "SL", "T1", "T2", "T3",
+        writer.writerow(["Symbol", "Contract", "Side", "Tier", "Entry", "SL", "T1", "T2", "T3",
                          "AncherT", "EntryTime", "Result", "CF", "RR", "Engine", "Status",
                          "Spot_Trend", "Spot_T1_Target"])
         files = [("Nifty 50", SCAN_DISPLAY_FILE), ("Index", SCAN_DISPLAY_INDEX_FILE), ("Stock EMA", EMA_DISPLAY_FILE_OPTION)]
@@ -1240,10 +1240,17 @@ def api_scan_export():
                             side_val = "CE"
                         elif "PE" in cnt_str:
                             side_val = "PE"
+                    
+                    tb_raw = t.get("tier_badge") or t.get("tier_label")
+                    if not tb_raw:
+                        t_num = int(t.get("tier", 2))
+                        tb_raw = "🥇 T1" if t_num == 1 else ("🥈 T2" if t_num == 2 else "🥉 T3")
+
                     writer.writerow([
                         t.get("symbol", ""),
                         t.get("contract", ""),
                         side_val,
+                        tb_raw,
                         _format_float(t.get("entry") or t.get("entry_spot")),
                         _format_float(t.get("sl") or t.get("current_sl")),
                         _format_float(t.get("t1")),
@@ -1938,6 +1945,15 @@ def api_journal_get():
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
+@app.route("/api/journal/analytics", methods=["GET"])
+def api_journal_analytics():
+    try:
+        from daily_trade_journal import get_trade_journal_analytics
+        return jsonify({"ok": True, "data": get_trade_journal_analytics()})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 @app.route("/api/journal/sync", methods=["POST"])
 def api_journal_sync():
     try:
@@ -1984,7 +2000,7 @@ def api_journal_export():
         from daily_trade_journal import load_journal_entries
         entries = load_journal_entries()
         headers = [
-            "Date", "Engine", "Symbol", "Side", "Timeframe", "Pattern",
+            "Date", "Engine", "Symbol", "Side", "Timeframe", "Pattern", "Tier", "Swing_Waves",
             "Entry_Time", "Entry_Price", "Exit_Time", "Exit_Price",
             "SL", "T1", "T2", "T3", "Quantity", "Lot_Size",
             "PnL_Rs", "PnL_Pct", "Outcome", "Analysis_Remarks", "Self_Learning_Lesson"
@@ -2017,7 +2033,7 @@ def api_journal_export_excel():
         ws.title = "Trade Journal"
 
         headers = [
-            "Date", "Engine", "Symbol", "Side", "Timeframe", "Pattern",
+            "Date", "Engine", "Symbol", "Side", "Timeframe", "Pattern", "Tier", "Swing Waves",
             "Entry Time", "Entry Price", "Exit Time", "Exit Price",
             "SL", "T1", "T2", "T3", "Quantity", "Lot Size",
             "PnL (₹)", "PnL (%)", "Outcome", "Analysis Remarks", "Self-Learning Lesson"

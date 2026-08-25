@@ -29,6 +29,16 @@ AGY operates with three integrated identities across all tasks:
 - Record every bug fix / feature in `ISSUE_MANAGEMENT.yaml`; keep `MASTER_DOCUMENTATION.yaml` accurate.
 - Commit to git with proper notes when asked.
 
+## Domain Invariants (Price Action & Strategy Rules)
+
+- **OHLCV Geometry Over Visual Labels**: The trading engine detects pattern structures strictly from raw OHLCV candle data geometry, NOT from visual text annotations on chart images. Horizontal lines on charts correspond to AnchorLow/AnchorHigh boundaries computed from candlestick data.
+- **BASE_ABCD Pattern Validity**: BASE_ABCD is a core valid anchor pattern. Charts showing horizontal accumulation/distribution support/resistance levels map directly to BASE_ABCD detected from underlying price action.
+- **D1 vs D2 Lifecycle**: Multiple "D" markers on a chart represent the trade lifecycle:
+  - **Marker D1**: Initial Base Breakout (`scan_anchor_bcd_breakout`).
+  - **Marker D2**: Trend Continuation Re-Entry / Pyramid (`scan_trend_continuation_reentry` — Datta Playbook Page 16/17).
+- **Dynamic F&O Universe Resolution**: F&O stock & option contracts are dynamically resolved from the NSE/NFO exchange master via `resolve.py` — NOT restricted to a hardcoded static list.
+- **Unlisted Equities**: Symbols like HDBFS (unlisted/pre-IPO) are used for chart demonstrations only; live automated Kite execution only routes listed NSE/BSE cash and F&O symbols.
+
 ## Architecture Overview
 
 ```
