@@ -348,13 +348,13 @@ def scan_anchor_bcd_breakout_bearish(df_entry, df_anchor, anchor_tf="", entry_tf
             if c_close > a_high:
                 break
 
-            # Standard 100% Candle Close check
-            if c_close < a_low and is_red:
+            # Standard 100% Candle Close check: Close < Benchmark (color independent)
+            if c_close < a_low:
                 d_idx = i
                 break
 
             # Near-Close Live Candle D check with Dual Guards (applied ONLY to current active forming candle)
-            if i == len(df_entry) - 1 and is_red:
+            if i == len(df_entry) - 1:
                 tf_to_check = entry_tf or anchor_tf
                 if tf_to_check and is_live_candle_near_close(candle.get('date'), tf_to_check, completion_pct=0.90):
                     # Guard 1: Benchmark Buffer Guard (-0.3% below benchmark for bearish)

@@ -380,7 +380,7 @@ def scan_anchor_bcd_breakout(df_entry, df_anchor, anchor_tf="", entry_tf="", ena
         if c_idx is None:
             continue
 
-        # Point D: FIRST GREEN candle AFTER C closing above benchmark
+        # Point D: FIRST candle AFTER C closing above benchmark (color independent)
         d_slice = df_entry.iloc[c_idx + 1:]
         d_idx = None
         is_near_close_d = False
@@ -389,15 +389,14 @@ def scan_anchor_bcd_breakout(df_entry, df_anchor, anchor_tf="", entry_tf="", ena
             d_row = d_slice.iloc[j]
             d_close = float(d_row['close'])
             d_open = float(d_row['open'])
-            is_green = d_close > d_open
 
-            # Standard 100% Candle Close check
-            if d_close > benchmark and is_green:
+            # Standard 100% Candle Close check: Close > Benchmark
+            if d_close > benchmark:
                 d_idx = curr_idx
                 break
 
             # Near-Close Live Candle D check with Dual Guards (applied ONLY to current active forming candle)
-            if curr_idx == len(df_entry) - 1 and is_green:
+            if curr_idx == len(df_entry) - 1:
                 tf_to_check = entry_tf or anchor_tf
                 if tf_to_check and is_live_candle_near_close(d_row.get('date'), tf_to_check, completion_pct=0.90):
                     # Guard 1: Benchmark Buffer Guard (+0.3%)
