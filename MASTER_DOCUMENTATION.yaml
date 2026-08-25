@@ -389,7 +389,5 @@ system_integrity_safeguards:
 
 
 
-validation:
-  description: "Automated validation of engine scans against 27 Datta ground‑truth charts using Gemini Vision."
-  entry_point: "validation/run_datta_validation.py"
-  report: "scratch/datta_validation_report.md"
+
+

@@ -4,6 +4,11 @@ shooting star baby, harami, two lower lows), A-B-C-D breakout scanner, bearish
 trend continuation re-entry (Page 17), and the unified generic scanner.
 Extracted from trading_core.py (2026-08-11).
 """
+import os, sys
+COMMON_DIR = os.path.dirname(os.path.abspath(__file__))
+if COMMON_DIR not in sys.path:
+    sys.path.insert(0, COMMON_DIR)
+
 import logging
 import pandas as pd
 from datetime import datetime as dt

@@ -4,6 +4,11 @@ hammer baby, harami, two higher highs), A-B-C-D breakout scanner, and trend
 continuation re-entry (Page 16).
 Extracted from trading_core.py (2026-08-11).
 """
+import os, sys
+COMMON_DIR = os.path.dirname(os.path.abspath(__file__))
+if COMMON_DIR not in sys.path:
+    sys.path.insert(0, COMMON_DIR)
+
 import logging
 import pandas as pd
 from datetime import datetime as dt

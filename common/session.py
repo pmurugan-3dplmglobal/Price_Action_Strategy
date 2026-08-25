@@ -4,16 +4,18 @@ session refresh, safe API call wrapper, and journal logging.
 Extracted from trading_core.py (2026-08-11).
 """
 import os
+import sys
+COMMON_DIR = os.path.dirname(os.path.abspath(__file__))
+if COMMON_DIR not in sys.path:
+    sys.path.insert(0, COMMON_DIR)
+
 import json
 import logging
 import csv
 import time
 import threading
 from datetime import datetime as dt, timedelta
-try:
-    from . import paths
-except Exception:
-    import paths
+import paths
 
 TOKEN_FILE = paths.TOKEN_FILE
 JOURNAL_FILE = paths.TRADE_JOURNAL_CSV

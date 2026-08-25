@@ -2546,20 +2546,4 @@ issues:
 
 
 
-  - id: VALIDATION-001
-    title: Datta Chart Ground‑Truth Validation
-    severity: ENHANCEMENT
-    category: Verification
-    family: VALIDATION
-    date_reported: "2026-08-25"
-    symptom: |
-      Need automated validation of engine scans against 27 annotated Datta charts.
-    root_cause: |
-      Manual comparison is error‑prone and time‑consuming.
-    affected_files:
-      - validation/ground_truth_extractor.py
-      - validation/run_datta_validation.py
-      - validation/report_generator.py
-    resolution: |
-      Added a new validation package that extracts chart anchors via Gemini Vision, runs a placeholder engine scan, compares results, and generates a markdown report.
-    status: IMPLEMENTED
+

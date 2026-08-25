@@ -4,6 +4,11 @@ and position close execution (both options and stock spot).
 Extracted from trading_core.py (2026-08-11).
 """
 import os
+import sys
+COMMON_DIR = os.path.dirname(os.path.abspath(__file__))
+if COMMON_DIR not in sys.path:
+    sys.path.insert(0, COMMON_DIR)
+
 import json
 import logging
 import time

@@ -4,6 +4,11 @@ scan_symbol dispatcher, position reconciliation, and trade simulation.
 Extracted from trading_core.py (2026-08-11).
 """
 import os
+import sys
+COMMON_DIR = os.path.dirname(os.path.abspath(__file__))
+if COMMON_DIR not in sys.path:
+    sys.path.insert(0, COMMON_DIR)
+
 import json
 import logging
 import time
@@ -11,6 +16,7 @@ from datetime import datetime as dt, timedelta, time as datetime_time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import pandas as pd
 import paths
+
 from swing_detection import detect_parabolic_multi_swings
 from session import safe_kite_call, ensure_kite_session, load_kite_session
 from timeframe_utils import (
@@ -34,7 +40,8 @@ from patterns_bull import (
     find_anchor_hammer_baby,
     find_anchor_bullish_harami,
     find_anchor_two_higher_highs,
-    scan_anchor_bcd_breakout
+    scan_anchor_bcd_breakout,
+    scan_trend_continuation_reentry
 )
 from patterns_bear import (
     find_anchor_bearish_engulfing,
@@ -42,7 +49,9 @@ from patterns_bear import (
     find_anchor_shooting_star_baby,
     find_anchor_bearish_harami,
     find_anchor_two_lower_lows,
-    scan_anchor_bcd_breakout_bearish
+    scan_anchor_bcd_breakout_bearish,
+    scan_trend_continuation_reentry_bearish,
+    scan_anchor_bcd_breakout_generic
 )
 
 def _match_registry_symbol(registry, tradingsymbol):
