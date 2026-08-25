@@ -10,7 +10,10 @@ import csv
 import time
 import threading
 from datetime import datetime as dt, timedelta
-import paths
+try:
+    from . import paths
+except Exception:
+    import paths
 
 TOKEN_FILE = paths.TOKEN_FILE
 JOURNAL_FILE = paths.TRADE_JOURNAL_CSV

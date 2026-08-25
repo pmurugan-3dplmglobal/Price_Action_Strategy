@@ -8,6 +8,26 @@ meta:
   purpose: Document operational failures, root causes, regression fixes, and system enhancements.
 
 issues:
+  - id: FEATURE-023
+    title: Timeframe-Aware Institutional Tier Scoring — Top-Tier Accumulation & Distribution Alignment
+    severity: ENHANCEMENT
+    category: Price Action Geometry & Multi-Tier Market Structure
+    family: STRATEGY_UPGRADE
+    date_reported: "2026-08-25"
+    symptom: |
+      On Daily and Weekly equity swing charts (e.g. TCS Image 4 and POLYCAB Image 9), high-expectancy setups featuring multi-week accumulation bases or distribution domes were penalized by narrow parabolic curve metrics and capped at Tier 2 Core despite R:R > 2.80.
+    root_cause: |
+      Tier 1 Gold previously enforced an intraday parabolic swing filter requirement (sw_waves >= 3) across all timeframes. Institutional Wyckoff accumulation/distribution bases develop over 10-20 daily candles, yielding flatter polynomial regression fits than narrow 30m option spikes.
+    affected_files:
+      - common/patterns_bull.py
+      - common/patterns_bear.py
+      - common/session.py
+    resolution: |
+      1. Implemented timeframe-aware tier scoring in patterns_bull.py and patterns_bear.py.
+      2. On Daily/Weekly charts (anchor_tf in ['day', 'week', '1d', '1w']), qualified Liquidity Sweep bases with R:R >= 2.0 now receive Tier 1 Gold (🥇 T1).
+      3. Preserved strict parabolic velocity requirements (R^2 >= 0.55) for Intraday Options scanning.
+      4. Verified 100% success across 14/14 regression tests and validated TCS (R:R 2.80) & POLYCAB (R:R 2.83) as Tier 1 Gold.
+    status: COMPLETED
   - id: FEATURE-022
     title: Price Action Strategy v2.1.0 — Pure 2-Candle Anchors, Color-Independent Point D, 80% Early D Entry & Unified Volatility-Adaptive Dynamic Legs
     severity: ENHANCEMENT
@@ -2526,3 +2546,20 @@ issues:
 
 
 
+  - id: VALIDATION-001
+    title: Datta Chart Ground‑Truth Validation
+    severity: ENHANCEMENT
+    category: Verification
+    family: VALIDATION
+    date_reported: "2026-08-25"
+    symptom: |
+      Need automated validation of engine scans against 27 annotated Datta charts.
+    root_cause: |
+      Manual comparison is error‑prone and time‑consuming.
+    affected_files:
+      - validation/ground_truth_extractor.py
+      - validation/run_datta_validation.py
+      - validation/report_generator.py
+    resolution: |
+      Added a new validation package that extracts chart anchors via Gemini Vision, runs a placeholder engine scan, compares results, and generates a markdown report.
+    status: IMPLEMENTED

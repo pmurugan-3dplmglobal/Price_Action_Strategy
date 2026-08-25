@@ -39,7 +39,7 @@ def is_parabolic_arch_enhanced(
         # Use Lows + Closes for arch floor (cup ∪)
         y = (lows + closes) / 2.0
         
-    x = np.arange(len(y))
+    x = np.arange(int(len(y)), dtype=float)
     
     # Fit 2nd-degree polynomial
     try:

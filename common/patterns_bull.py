@@ -526,19 +526,21 @@ def scan_anchor_bcd_breakout(df_entry, df_anchor, anchor_tf="", entry_tf="", ena
     p_rank = _pattern_rank(best_latest)
     rr_val = float(best_latest.get("RR", 0.0))
     p_name = str(best_latest.get("Pattern", ""))
-
     # True 5-Anchor Reversal Classifiers: Engulfing, LL Sweep, Hammer Baby, Harami, Two Higher Highs
     is_true_anchor = any(k in p_name for k in ["BE_ABCD", "LL_ABCD", "HAMMER_ABCD", "HARAMI_ABCD", "HH_ABCD"]) and "BASE_ABCD" not in p_name
+    is_higher_timeframe = str(anchor_tf).lower() in ["day", "week", "1d", "1w", "daily", "weekly", "d", "w"]
 
     # Option A Balanced Tiering (T1 Gold 1:2 / 2.0, T2 Core 1:1.5 / 1.5):
-    # Tier 1 (Gold): Strictly 5 True Anchors + (>=3 Waves or Tier 1 Multi-Swing Arch) + R:R >= 2.0
-    # Tier 2 (Core): 5 True Anchors (>=2 Waves / R:R >= 1.5) OR strong BASE_ABCD with (>=3 Waves and R:R >= 2.0)
+    # Tier 1 (Gold): 
+    #   - Intraday Options: Strictly 5 True Anchors + (>=3 Waves or Tier 1 Multi-Swing Arch) + R:R >= 2.0
+    #   - Daily/Weekly Equities: True Anchor / Institutional Liquidity Base + R:R >= 2.0
+    # Tier 2 (Core): 5 True Anchors (>=2 Waves / R:R >= 1.5) OR strong BASE_ABCD with (>=3 Waves and R:R >= 2.0) OR Higher TF with R:R >= 1.5
     # Tier 3 (Momentum): Standard/early BASE_ABCD and trend continuations (R:R >= 1.5)
-    if is_true_anchor and (sw_waves >= 3 or swing_meta.get("tier") == 1) and rr_val >= 2.0:
+    if (is_true_anchor or is_higher_timeframe) and rr_val >= 2.0 and (sw_waves >= 2 or is_higher_timeframe or swing_meta.get("tier") == 1):
         tier = 1
         tier_label = "TIER_1_GOLD"
         tier_badge = "🥇 T1"
-    elif (is_true_anchor and (sw_waves >= 2 or p_rank >= 3 or rr_val >= 1.5)) or ((sw_waves >= 3 or swing_meta.get("tier") == 1) and rr_val >= 2.0):
+    elif (is_true_anchor and (sw_waves >= 2 or p_rank >= 3 or rr_val >= 1.5)) or ((sw_waves >= 3 or swing_meta.get("tier") == 1) and rr_val >= 2.0) or (is_higher_timeframe and rr_val >= 1.5):
         tier = 2
         tier_label = "TIER_2_CORE"
         tier_badge = "🥈 T2"

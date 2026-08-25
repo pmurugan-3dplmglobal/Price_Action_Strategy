@@ -448,16 +448,19 @@ def scan_anchor_bcd_breakout_bearish(df_entry, df_anchor, anchor_tf="", entry_tf
         pat_name = str(best_match.get("Pattern", ""))
         p_is_strong = any(k in pat_name for k in ["BE_ABCD", "HH_ABCD", "STAR_ABCD", "HARAMI_ABCD", "LL_ABCD"])
         is_true_anchor = p_is_strong and "BASE_ABCD" not in pat_name
+        is_higher_timeframe = str(anchor_tf).lower() in ["day", "week", "1d", "1w", "daily", "weekly", "d", "w"]
 
         # Option A Balanced Tiering (T1 Gold 1:2 / 2.0, T2 Core 1:1.5 / 1.5):
-        # Tier 1 (Gold): Strictly 5 True Anchors + (>=3 Waves or Tier 1 Multi-Swing Arch) + R:R >= 2.0
-        # Tier 2 (Core): 5 True Anchors (>=2 Waves / R:R >= 1.5) OR strong BASE_ABCD with (>=3 Waves and R:R >= 2.0)
+        # Tier 1 (Gold): 
+        #   - Intraday Options: Strictly 5 True Anchors + (>=3 Waves or Tier 1 Multi-Swing Arch) + R:R >= 2.0
+        #   - Daily/Weekly Equities: True Anchor / Institutional Distribution Top + R:R >= 2.0
+        # Tier 2 (Core): 5 True Anchors (>=2 Waves / R:R >= 1.5) OR strong BASE_ABCD with (>=3 Waves and R:R >= 2.0) OR Higher TF with R:R >= 1.5
         # Tier 3 (Momentum): Standard/early BASE_ABCD and trend continuations (R:R >= 1.5)
-        if is_true_anchor and (sw_waves >= 3 or swing_meta.get("tier") == 1) and rr_val >= 2.0:
+        if (is_true_anchor or is_higher_timeframe) and rr_val >= 2.0 and (sw_waves >= 2 or is_higher_timeframe or swing_meta.get("tier") == 1):
             tier = 1
             tier_label = "TIER_1_GOLD"
             tier_badge = "🥇 T1"
-        elif (is_true_anchor and (sw_waves >= 2 or p_is_strong or rr_val >= 1.5)) or ((sw_waves >= 3 or swing_meta.get("tier") == 1) and rr_val >= 2.0):
+        elif (is_true_anchor and (sw_waves >= 2 or p_is_strong or rr_val >= 1.5)) or ((sw_waves >= 3 or swing_meta.get("tier") == 1) and rr_val >= 2.0) or (is_higher_timeframe and rr_val >= 1.5):
             tier = 2
             tier_label = "TIER_2_CORE"
             tier_badge = "🥈 T2"

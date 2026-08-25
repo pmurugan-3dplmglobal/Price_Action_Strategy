@@ -13,6 +13,7 @@ meta:
     - Stock Spot Bullish Reversals (stock_bullish_reversal_scanner.py)
     - Stock Spot Bearish Reversals (stock_bearish_reversal_scanner.py)
     - Multi-Tier Soft Scoring (Tier 1 Gold, Tier 2 Core, Tier 3 Momentum)
+    - Timeframe-Aware Institutional Accumulation & Distribution Scoring (Daily/Weekly Base Recognition)
     - EARLY_D_ENTRY (80% Candle Completion with Proportional Volume Validation)
     - Unified Hybrid Dynamic Legs (ATR Volatility Adaptive Scaling + Symbol Overrides)
 
@@ -388,3 +389,7 @@ system_integrity_safeguards:
 
 
 
+validation:
+  description: "Automated validation of engine scans against 27 Datta ground‑truth charts using Gemini Vision."
+  entry_point: "validation/run_datta_validation.py"
+  report: "scratch/datta_validation_report.md"

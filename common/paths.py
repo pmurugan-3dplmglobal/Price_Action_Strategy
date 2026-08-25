@@ -2,6 +2,9 @@ import os
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
+# Directory for temporary scratch files (validation artifacts, etc.)
+SCRATCH_DIR = os.path.join(PROJECT_ROOT, "scratch")
+
 
 def input_file(name):
     return os.path.join(PROJECT_ROOT, "input", name)
