@@ -247,7 +247,7 @@ def scan_anchor_bcd_breakout_bearish(df_entry, df_anchor, anchor_tf="", entry_tf
             enable_swing_filter = False
 
     if enable_swing_filter:
-        sw_res = detect_parabolic_multi_swings(df_anchor, side="BEAR", min_swings=swing_min_waves, min_r2=swing_min_r2, max_bars_after_terminal=45)
+        sw_res = detect_parabolic_multi_swings(df_anchor, side="BEAR", min_swings=swing_min_waves, min_r2=swing_min_r2, max_bars_after_terminal=45, timeframe_str=anchor_tf)
         swing_meta = {
             "swing_waves": sw_res.get("valid_arch_count", 0),
             "terminal_base": sw_res.get("has_terminal_base", False),

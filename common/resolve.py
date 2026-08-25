@@ -1002,7 +1002,7 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
         swing_meta_pe = {"swing_waves": 0, "terminal_base": False, "terminal_date": ""}
         if enable_swing:
             if not df_ce_a.empty:
-                sw_ce = detect_parabolic_multi_swings(df_ce_a, side="BULL", min_swings=swing_min_w, min_r2=swing_r2, max_bars_after_terminal=20)
+                sw_ce = detect_parabolic_multi_swings(df_ce_a, side="BULL", min_swings=swing_min_w, min_r2=swing_r2, max_bars_after_terminal=45, symbol=symbol, timeframe_str=timeframe_anchor)
                 if not sw_ce.get("matched", False):
                     df_ce_e = pd.DataFrame()
                 else:
@@ -1013,7 +1013,7 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                     }
 
             if not df_pe_a.empty:
-                sw_pe = detect_parabolic_multi_swings(df_pe_a, side="BULL", min_swings=swing_min_w, min_r2=swing_r2, max_bars_after_terminal=20)
+                sw_pe = detect_parabolic_multi_swings(df_pe_a, side="BULL", min_swings=swing_min_w, min_r2=swing_r2, max_bars_after_terminal=45, symbol=symbol, timeframe_str=timeframe_anchor)
                 if not sw_pe.get("matched", False):
                     df_pe_e = pd.DataFrame()
                 else:

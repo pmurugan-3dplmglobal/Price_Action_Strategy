@@ -254,13 +254,89 @@ def validate_parabolic_cascade_structure(
     }
 
 
+def get_adaptive_leg_length(
+    df: Optional[pd.DataFrame] = None, 
+    symbol: str = "", 
+    timeframe_str: str = "30minute", 
+    default_leg: int = 3
+) -> int:
+    """
+    Calculates the optimal min_candles_per_leg for swing pivot extraction via a 3-tier hierarchy:
+    1. Explicit symbol override in input/program_config.json.
+    2. Dynamic ATR Volatility-Adaptive calculation (scaled between min_leg and max_leg).
+    3. Global default (fallback).
+    """
+    import json, os
+    try:
+        import paths
+        cfg_path = paths.PROGRAM_CONFIG_FILE
+    except Exception:
+        cfg_path = "input/program_config.json"
+
+    overrides = {}
+    use_vol = True
+    min_bound = 2
+    max_bound = 5
+
+    if os.path.exists(cfg_path):
+        try:
+            with open(cfg_path, "r", encoding="utf-8") as f:
+                c = json.load(f)
+            s_cfg = c.get("swing_leg_config", {})
+            overrides = s_cfg.get("overrides", {})
+            default_leg = int(s_cfg.get("default", default_leg))
+            use_vol = bool(s_cfg.get("volatility_adaptive", True))
+            min_bound = int(s_cfg.get("min_leg", 2))
+            max_bound = int(s_cfg.get("max_leg", 5))
+        except Exception:
+            pass
+
+    # Tier 1: Explicit symbol override
+    sym_clean = str(symbol).upper().strip()
+    for k, v in overrides.items():
+        if k.upper() in sym_clean:
+            return int(v)
+
+    # Tier 2: Dynamic ATR Volatility Adaptation
+    if use_vol and df is not None and len(df) >= 14:
+        try:
+            highs = df['high'].values.astype(float)
+            lows = df['low'].values.astype(float)
+            closes = df['close'].values.astype(float)
+            tr = np.maximum(highs - lows, np.maximum(np.abs(highs - np.roll(closes, 1)), np.abs(lows - np.roll(closes, 1))))
+            atr = float(np.nanmean(tr[-14:]))
+            curr_price = float(closes[-1])
+            if curr_price > 0 and atr > 0:
+                vol_pct = (atr / curr_price) * 100.0
+                is_daily = 'day' in str(timeframe_str).lower() or '1d' in str(timeframe_str).lower()
+                if is_daily:
+                    if vol_pct < 1.5: leg = min_bound
+                    elif vol_pct > 3.2: leg = max_bound
+                    elif vol_pct > 2.2: leg = min(4, max_bound)
+                    elif vol_pct > 1.6: leg = 3
+                    else: leg = min_bound
+                else:
+                    if vol_pct < 0.40: leg = min_bound
+                    elif vol_pct > 1.20: leg = max_bound
+                    elif vol_pct > 0.80: leg = min(4, max_bound)
+                    elif vol_pct > 0.50: leg = 3
+                    else: leg = min_bound
+                return leg
+        except Exception:
+            pass
+
+    return default_leg
+
+
 def detect_parabolic_multi_swings(
     df: pd.DataFrame,
     side: str = "BULL",
     min_swings: int = 3,
-    min_candles_per_leg: int = 3,
+    min_candles_per_leg: Optional[int] = None,
     min_r2: float = 0.50,
-    max_bars_after_terminal: int = 45
+    max_bars_after_terminal: int = 45,
+    symbol: str = "",
+    timeframe_str: str = "30minute"
 ) -> Dict[str, Any]:
     """
     Complete end-to-end multi-swing parabolic cascade detector with Multi-Tier Scoring.
@@ -269,6 +345,9 @@ def detect_parabolic_multi_swings(
     - Tier 2 (Core): >= 2 Parabolic Waves (R^2 >= 0.50) (e.g. Double Bottom / Liquidity Sweep).
     - Tier 3 (Momentum): Trend Continuation / Structural Re-entry.
     """
+    if min_candles_per_leg is None or min_candles_per_leg <= 0:
+        min_candles_per_leg = get_adaptive_leg_length(df, symbol=symbol, timeframe_str=timeframe_str)
+
     if df is None or len(df) < (2 * min_candles_per_leg * 2):
         return {"matched": False, "reason": "Insufficient candles", "valid": False, "tier": 3, "tier_label": "TIER_3_MOMENTUM", "tier_badge": "🥉 T3"}
 
