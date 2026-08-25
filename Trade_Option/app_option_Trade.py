@@ -562,6 +562,10 @@ def refresh_data(single_run=False):
                         except Exception:
                             pass
                     if _kite_session:
+                        try:
+                            trade_db.reconcile_broker_live_positions(_kite_session)
+                        except Exception:
+                            pass
                         kite_positions = _kite_session.positions()
                         merged = []
                         net_pos = [p for p in kite_positions.get("net", []) if p.get("tradingsymbol") and int(p.get("quantity", 0)) != 0]

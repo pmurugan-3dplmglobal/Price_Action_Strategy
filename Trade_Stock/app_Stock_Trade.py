@@ -575,6 +575,10 @@ def refresh_data(single_run=False):
                                 ks.set_access_token(td["access_token"])
                                 _kite_session = ks
                         if _kite_session:
+                            try:
+                                trade_db.reconcile_broker_live_positions(_kite_session)
+                            except Exception:
+                                pass
                             syms = []
                             for t in active:
                                 tok = t.get("option_token") or t.get("index_token")
