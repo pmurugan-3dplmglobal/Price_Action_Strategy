@@ -132,6 +132,21 @@ def close_stock_position(kite, pos, live_market=True, product=None):
         except Exception as p_err:
             logging.warning(f"Could not verify live net quantity for stock {contract}: {p_err}")
 
+    # Automatic Open-Order Purge Guard: Cancel any existing OPEN / TRIGGER PENDING orders for this stock
+    if kite and live_market:
+        try:
+            open_orders = [o for o in kite.orders() if o.get("tradingsymbol") == contract and o.get("status") in ["OPEN", "TRIGGER PENDING"]]
+            for oo in open_orders:
+                prev_oid = str(oo.get("order_id"))
+                var = oo.get("variety", kite.VARIETY_REGULAR)
+                logging.info(f"[PURGE OPEN ORDER] Cancelling existing {oo.get('status')} order #{prev_oid} on stock {contract} to release broker quantity lock.")
+                try:
+                    kite.cancel_order(variety=var, order_id=prev_oid)
+                except Exception as cancel_err:
+                    logging.warning(f"Could not cancel open order #{prev_oid} for stock {contract}: {cancel_err}")
+        except Exception as o_err:
+            logging.warning(f"Order book query for open order purge failed for stock {contract}: {o_err}")
+
     if is_contract_exit_executed(contract):
         prev = EXECUTED_EXITS.get(contract, {})
         oid = str(prev.get("order_id", ""))
@@ -370,6 +385,21 @@ def close_position(kite, pos, live_market=True, product=None):
                     break
         except Exception as p_err:
             logging.warning(f"Could not verify live net quantity for {contract}: {p_err}")
+
+    # Automatic Open-Order Purge Guard: Cancel any existing OPEN / TRIGGER PENDING orders for this contract
+    if kite and live_market:
+        try:
+            open_orders = [o for o in kite.orders() if o.get("tradingsymbol") == contract and o.get("status") in ["OPEN", "TRIGGER PENDING"]]
+            for oo in open_orders:
+                prev_oid = str(oo.get("order_id"))
+                var = oo.get("variety", kite.VARIETY_REGULAR)
+                logging.info(f"[PURGE OPEN ORDER] Cancelling existing {oo.get('status')} order #{prev_oid} on option {contract} to release broker quantity lock.")
+                try:
+                    kite.cancel_order(variety=var, order_id=prev_oid)
+                except Exception as cancel_err:
+                    logging.warning(f"Could not cancel open order #{prev_oid} for option {contract}: {cancel_err}")
+        except Exception as o_err:
+            logging.warning(f"Order book query for open order purge failed for option {contract}: {o_err}")
 
     if kite and live_market and not is_market_open():
         logging.info(f"[MARKET CLOSED] Skipping live Zerodha exit order for {contract} outside market hours (09:15-15:30 IST). Position status logged.")
