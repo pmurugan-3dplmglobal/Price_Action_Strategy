@@ -965,7 +965,7 @@
                 });
             });
             if (mergedPositions.length) {
-                posHtml = '<table><thead><tr><th onclick="sortTable(this,0)">Symbol</th><th onclick="sortTable(this,1)">Source</th><th onclick="sortTable(this,2)">Pattern</th><th onclick="sortTable(this,3)">Entry</th><th onclick="sortTable(this,4)">SL</th><th onclick="sortTable(this,5)">T1</th><th onclick="sortTable(this,6)">T2</th><th onclick="sortTable(this,7)">T3</th><th onclick="sortTable(this,8)">LTP</th><th onclick="sortTable(this,9)">Qty</th><th onclick="sortTable(this,10)">Status</th><th onclick="sortTable(this,11)">P&L</th><th style="text-align:center">Chart</th><th>Act</th></tr></thead><tbody>';
+                posHtml = '<div class="table-responsive"><table><thead><tr><th onclick="sortTable(this,0)">Symbol</th><th onclick="sortTable(this,1)">Source</th><th onclick="sortTable(this,2)">Pattern</th><th onclick="sortTable(this,3)">Entry</th><th onclick="sortTable(this,4)">SL</th><th onclick="sortTable(this,5)">T1</th><th onclick="sortTable(this,6)">T2</th><th onclick="sortTable(this,7)">T3</th><th onclick="sortTable(this,8)">LTP</th><th onclick="sortTable(this,9)">Qty</th><th onclick="sortTable(this,10)">Status</th><th onclick="sortTable(this,11)">P&L</th><th style="text-align:center">Chart</th><th>Act</th></tr></thead><tbody>';
                 mergedPositions.forEach(t => {
                     const st = (t.status || '').toLowerCase();
                     let badge = 'badge-open';
@@ -1037,7 +1037,7 @@
                     }
                     posHtml += `<tr><td><strong>${t.symbol}</strong></td><td>${t.source}</td><td><span class="badge badge-open">${t.pattern||''}</span></td>${entryCell}${slCell}${t1Cell}${t2Cell}${t3Cell}<td>${displayLtp || '-'}</td><td>${qty}</td><td><span class="badge ${badge}">${stLabel}</span></td><td>${pnlStr !== '' ? `<span class="badge ${pnlBadge}">${pnlStr}</span>` : '-'}</td>${chartCellPos}${actCell}</tr>`;
                 });
-                posHtml += '</tbody></table>';
+                posHtml += '</tbody></table></div>';
             } else {
                 posHtml = '<div class="empty-state">No positions found</div>';
             }
@@ -1254,7 +1254,7 @@
             }
 
             let html = `<div style="padding:4px 10px 8px;font-weight:bold;color:#a371f7;font-size:12px">Stock EMA Crossover Trades (${trades.length})</div>`;
-            html += '<table class="trade-table"><thead><tr><th>Symbol</th><th>Contract</th><th>Side</th><th>Entry Spot</th><th>Option Entry</th><th>SL</th><th>T1</th><th>T2</th><th>T3</th><th>Time</th><th>Pattern</th><th>Chart</th><th>Action</th></tr></thead><tbody>';
+            html += '<div class="table-responsive"><table class="trade-table"><thead><tr><th>Symbol</th><th>Contract</th><th>Side</th><th>Entry Spot</th><th>Option Entry</th><th>SL</th><th>T1</th><th>T2</th><th>T3</th><th>Time</th><th>Pattern</th><th>Chart</th><th>Action</th></tr></thead><tbody>';
 
             trades.forEach(t => {
                 const sym = t.symbol || '';
@@ -1274,7 +1274,7 @@
                 html += `<tr><td>${sym}</td><td style="font-size:11px">${cnt}</td><td>${side}</td><td>${spot}</td><td>${entry}</td><td>${sl}</td><td>${t1}</td><td>${t2}</td><td>${t3}</td><td style="font-size:11px">${timeStr}</td><td><span class="badge badge-bull">${pat}</span></td>${chartCell}${actCell}</tr>`;
             });
 
-            html += '</tbody></table>';
+            html += '</tbody></table></div>';
             body.innerHTML = html;
         }
 
@@ -1724,6 +1724,14 @@
         .alert-close:hover { color: #fff; }
         .last-updated { color: #8b949e; font-size: 11px; text-align: right; margin-top: 8px; }
 
+        .table-responsive {
+            width: 100%;
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+            margin-bottom: 12px;
+            border-radius: 6px;
+        }
+
         @media (max-width: 1100px) {
             .reports-grid { grid-template-columns: 1fr; }
         }
@@ -1731,13 +1739,98 @@
             .stats-grid { grid-template-columns: repeat(2, 1fr); }
             .program-grid { grid-template-columns: 1fr; }
         }
+        @media (max-width: 768px) {
+            body { padding: 10px 8px; }
+            h1 { font-size: 18px; flex-wrap: wrap; }
+            .header-bar { flex-direction: column; align-items: flex-start !important; gap: 8px !important; }
+            .user-badge { width: 100%; justify-content: space-between; }
+            .stats-grid { grid-template-columns: repeat(2, 1fr); gap: 6px; margin-bottom: 12px; }
+            .stat-card { padding: 10px 6px; }
+            .stat-card .value { font-size: 20px; }
+            .stat-card .label { font-size: 10px; }
+            
+            /* Horizontal swipe scroll tabs */
+            .left-tab-bar, .tab-bar {
+                display: flex;
+                overflow-x: auto;
+                -webkit-overflow-scrolling: touch;
+                white-space: nowrap;
+                scrollbar-width: thin;
+            }
+            .left-tab-btn, .tab-btn {
+                flex: 0 0 auto;
+                padding: 8px 12px;
+                font-size: 11px;
+            }
+
+            /* Touch targets & buttons */
+            .prog-actions button, .pos-filter-btn, .clear-logs-btn, .export-btn, .btn-edit, .btn-chart, .btn-buy, .btn-exit {
+                min-height: 30px;
+                padding: 4px 8px;
+                font-size: 11px;
+            }
+            .token-banner-row, .token-input-row {
+                flex-direction: column;
+                align-items: stretch;
+                gap: 8px;
+            }
+            .token-gen-btn, .token-submit-btn {
+                width: 100%;
+                text-align: center;
+                padding: 8px;
+            }
+            .token-url-box {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 4px;
+            }
+
+            /* Mobile Chart Modal */
+            .chart-modal-box {
+                width: 98% !important;
+                height: 92vh !important;
+                padding: 10px !important;
+            }
+            .chart-modal-header {
+                flex-direction: column;
+                align-items: flex-start !important;
+                gap: 8px !important;
+            }
+            .chart-modal-controls {
+                flex-wrap: wrap;
+                width: 100%;
+                gap: 6px !important;
+            }
+            .chart-modal-controls button, .chart-modal-controls select, .chart-modal-controls a {
+                font-size: 11px !important;
+                padding: 6px 8px !important;
+                flex: 1 1 auto;
+                text-align: center;
+            }
+        }
+        @media (max-width: 480px) {
+            .stats-grid { grid-template-columns: repeat(2, 1fr); gap: 6px; }
+            .stat-card .value { font-size: 18px; }
+            .section-panel .section-header {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 8px;
+            }
+            .section-panel .section-header > div {
+                width: 100%;
+                display: flex;
+                flex-wrap: wrap;
+                gap: 6px;
+                justify-content: flex-start;
+            }
+        }
     </style>
 </head>
 <body>
     <div class="toast-container" id="toast-container"></div>
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
+    <div class="header-bar" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
         <h1 style="margin:0;">Trading Control Center <small>Steering & Dashboard</small></h1>
-        <div style="display:flex;align-items:center;gap:12px;font-size:12px;background:#161b22;padding:6px 14px;border-radius:6px;border:1px solid #30363d;">
+        <div class="user-badge" style="display:flex;align-items:center;gap:12px;font-size:12px;background:#161b22;padding:6px 14px;border-radius:6px;border:1px solid #30363d;">
             <span style="color:#8b949e;">👤 <strong style="color:#c9d1d9;">{{ user }}</strong></span>
             {% if role == 'admin' %}
             <span style="background:#1f6feb33;color:#58a6ff;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:600;">ADMIN</span>
@@ -2002,15 +2095,15 @@
 
     <!-- Interactive TradingView Chart Modal -->
     <div id="chartModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.85); z-index:99999; justify-content:center; align-items:center;">
-        <div style="background:#161b22; border:1px solid #30363d; border-radius:8px; width:92%; max-width:1100px; height:85vh; display:flex; flex-direction:column; padding:15px; box-shadow:0 10px 30px rgba(0,0,0,0.7);">
+        <div class="chart-modal-box" style="background:#161b22; border:1px solid #30363d; border-radius:8px; width:92%; max-width:1100px; height:85vh; display:flex; flex-direction:column; padding:15px; box-shadow:0 10px 30px rgba(0,0,0,0.7);">
             <!-- Modal Header -->
-            <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #30363d; padding-bottom:10px; margin-bottom:10px;">
+            <div class="chart-modal-header" style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #30363d; padding-bottom:10px; margin-bottom:10px; flex-wrap:wrap; gap:8px;">
                 <div style="display:flex; align-items:center; gap:12px;">
                     <h3 id="modalChartTitle" style="margin:0; color:#58a6ff; font-size:16px; font-weight:bold;">📈 Chart View</h3>
                     <span id="modalChartBadge" style="background:#238636; color:#fff; padding:3px 8px; border-radius:4px; font-size:11px; font-weight:bold;">30m TF</span>
                 </div>
                 <!-- Scope & Timeframe Controls -->
-                <div style="display:flex; align-items:center; gap:8px;">
+                <div class="chart-modal-controls" style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
                     <button id="btnScopeOption" onclick="switchChartScope('option')" style="background:#1f6feb; color:#fff; border:none; padding:5px 12px; border-radius:4px; font-weight:bold; cursor:pointer; font-size:12px;">📊 Option Contract Chart</button>
                     <button id="btnScopeSpot" onclick="switchChartScope('spot')" style="background:#21262d; color:#8b949e; border:1px solid #30363d; padding:5px 12px; border-radius:4px; font-weight:bold; cursor:pointer; font-size:12px;">📈 Underlying Spot Chart</button>
                     
@@ -2297,6 +2390,18 @@
                 document.getElementById('tvChartContainer').innerHTML = `<div style="display:flex;justify-content:center;align-items:center;height:100%;color:#f85149;font-weight:bold;">Chart Error: ${e.message}</div>`;
             }
         }
+
+        window.addEventListener('resize', () => {
+            if (tvChartInstance) {
+                const container = document.getElementById('tvChartContainer');
+                if (container && container.clientWidth > 0 && container.clientHeight > 0) {
+                    tvChartInstance.applyOptions({
+                        width: container.clientWidth,
+                        height: container.clientHeight
+                    });
+                }
+            }
+        });
     </script>
 
     <div class="last-updated" id="last-updated">Loading...</div>

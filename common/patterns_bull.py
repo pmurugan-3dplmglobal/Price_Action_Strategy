@@ -413,7 +413,7 @@ def scan_anchor_bcd_breakout(df_entry, df_anchor, anchor_tf="", entry_tf="", ena
                 sl_val = t1  # Trailed SL to T1 level to protect banked gains
 
         risk = close_price - sl_val
-        if risk <= 0 or risk < close_price * 0.002 or ((t1 - close_price) / risk) < 1.88:
+        if risk <= 0 or risk < close_price * 0.002 or ((t1 - close_price) / risk) < 1.5:
             continue
 
         rr = (t1 - close_price) / risk if risk > 0 else 0
@@ -485,16 +485,19 @@ def scan_anchor_bcd_breakout(df_entry, df_anchor, anchor_tf="", entry_tf="", ena
     # True 5-Anchor Reversal Classifiers: Engulfing, LL Sweep, Hammer Baby, Harami, Two Higher Highs
     is_true_anchor = any(k in p_name for k in ["BE_ABCD", "LL_ABCD", "HAMMER_ABCD", "HARAMI_ABCD", "HH_ABCD"]) and "BASE_ABCD" not in p_name
 
-    if is_true_anchor and (sw_waves >= 3 or swing_meta.get("tier") == 1) and rr_val >= 2.5:
+    # Option A Balanced Tiering (T1 Gold 1:2 / 2.0, T2 Core 1:1.5 / 1.5):
+    # Tier 1 (Gold): Strictly 5 True Anchors + (>=3 Waves or Tier 1 Multi-Swing Arch) + R:R >= 2.0
+    # Tier 2 (Core): 5 True Anchors (>=2 Waves / R:R >= 1.5) OR strong BASE_ABCD with (>=3 Waves and R:R >= 2.0)
+    # Tier 3 (Momentum): Standard/early BASE_ABCD and trend continuations (R:R >= 1.5)
+    if is_true_anchor and (sw_waves >= 3 or swing_meta.get("tier") == 1) and rr_val >= 2.0:
         tier = 1
         tier_label = "TIER_1_GOLD"
         tier_badge = "🥇 T1"
-    elif is_true_anchor and (sw_waves >= 2 or p_rank >= 3 or rr_val >= 1.88):
+    elif (is_true_anchor and (sw_waves >= 2 or p_rank >= 3 or rr_val >= 1.5)) or ((sw_waves >= 3 or swing_meta.get("tier") == 1) and rr_val >= 2.0):
         tier = 2
         tier_label = "TIER_2_CORE"
         tier_badge = "🥈 T2"
     else:
-        # Generic BASE_ABCD and trend continuations are strictly mapped to T3 Momentum
         tier = 3
         tier_label = "TIER_3_MOMENTUM"
         tier_badge = "🥉 T3"
@@ -561,7 +564,7 @@ def scan_trend_continuation_reentry(df_entry, df_anchor):
         return None
 
     risk = entry_price - sl_val
-    if risk <= 0 or risk < entry_price * 0.002 or ((t1 - entry_price) / risk) < 1.88:
+    if risk <= 0 or risk < entry_price * 0.002 or ((t1 - entry_price) / risk) < 1.5:
         return None
 
     rr = (t1 - entry_price) / risk

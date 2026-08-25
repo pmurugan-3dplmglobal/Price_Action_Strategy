@@ -8,6 +8,54 @@ meta:
   purpose: Document operational failures, root causes, regression fixes, and system enhancements.
 
 issues:
+  - id: FEATURE-018
+    title: Friday 15:15 EOD Index Squareoff, Expiry Rollover Protection & Outlier Entry Price Guard
+    severity: ENHANCEMENT
+    category: Risk Management & Order Execution
+    family: RISK_MANAGEMENT
+    date_reported: "2026-08-25"
+    symptom: |
+      1. Short-timeframe (3m) index options carried over weekend suffered 30%+ theta crush and opening gap decay on Monday.
+      2. Trading stock options in the final 5 days before monthly expiry resulted in extreme theta decay.
+      3. Stale manual/user override prices (e.g. entry 12.0 on 0.60 market LTP) triggered instant false Emergency Hard SL hits.
+    root_cause: |
+      1. Missing Friday EOD auto-squareoff rule for short-timeframe and index contracts.
+      2. Option strike resolution used a tight 4-day threshold, missing early weekly rollover into next-month stock contracts.
+      3. Position monitor lacked outlier divergence checking between entry_spot and live LTP on user-edited entries.
+    affected_files:
+      - common/position_monitor.py
+      - common/resolve.py
+      - common/trading_core.py
+      - Trade_Option/app_option_Trade.py
+      - Trade_Stock/app_Stock_Trade.py
+    resolution: |
+      1. Added Friday 15:15 IST auto-squareoff guard in common/position_monitor.py for 3m/5m index options to eliminate weekend holding risk.
+      2. Enhanced resolve_option_strikes in common/resolve.py and trading_core.py with next-month series rollover for stock options during monthly expiry week (days_rem <= 6), while keeping near-week active expiry for index options.
+      3. Implemented Stale/Outlier Entry Price Guard in position_monitor.py and 1-click buy endpoints to align divergent entry prices with live LTP.
+      4. Verified via full regression suite and AST checks.
+    status: COMPLETED
+  - id: FEATURE-017
+    title: Mobile-Friendly Responsive UI & Touch Navigation for Options and Stock Dashboards
+    severity: ENHANCEMENT
+    category: Dashboard UI / Mobile Responsiveness
+    family: RESPONSIVE_DESIGN
+    date_reported: "2026-08-25"
+    symptom: |
+      On mobile and tablet viewports, tables overflowed horizontally, tabs wrapped awkwardly,
+      stat cards crushed, touch targets were too small for thumbs, and chart modal was rigid.
+    root_cause: |
+      Fixed-width grid structures and missing overflow containers prevented fluid mobile rendering.
+    affected_files:
+      - Trade_Option/templates/index.html
+      - Trade_Stock/templates/index.html
+    resolution: |
+      1. Added .table-responsive wrapper around Active Positions, Scans, and EMA Trades tables with smooth touch scrolling.
+      2. Added horizontal swipe scroll tabs (.left-tab-bar, .tab-bar) with white-space nowrap and thin scrollbars.
+      3. Implemented fluid responsive breakpoints (1100px, 900px, 768px, 480px) for stats, program cards, and headers.
+      4. Optimized touch targets (min 30-36px height) and vertical stacking for token generation & creds inputs.
+      5. Enhanced TradingView chart modal with flexible 98vw/92vh mobile container and dynamic window resize handler.
+      6. Verified via full regression test suite (Test 12 HTML JS V8 AST passed).
+    status: COMPLETED
   - id: FEATURE-016
     title: Dashboard User Authentication, Role Management & Session Access Control
     severity: ENHANCEMENT
@@ -2348,11 +2396,28 @@ issues:
       2. T1 Gold (🥇 T1) and T2 Core (🥈 T2) now strictly require `is_true_anchor == True`.
       3. All generic BASE_ABCD setups are strictly mapped to Tier 3 Momentum (🥉 T3).
       4. Verified zero regression across the 14-test regression suite.
+  - id: FEATURE-019
+    title: Balanced Hybrid Multi-Tier Soft Classification (T1 True Anchors + T2 Core Multi-Wave BASE_ABCD)
+    severity: ENHANCEMENT
+    category: Strategy Core / Anchor Tiering
+    family: FEATURE
+    date_reported: "2026-08-24"
+    symptom: |
+      Strict 5-anchor gating in FEATURE-018 demoted all BASE_ABCD setups to Tier 3 Momentum, causing 0 trades to be staged/executed on days with strong multi-wave parabolic breakouts that lacked an explicit candlestick reversal anchor at Point A.
+    root_cause: |
+      Balancing institutional anchor purity (T1 Gold) with multi-swing parabolic trend momentum (T2 Core) allows high-conviction swing setups with >=3 waves and R:R >= 2.5 to be staged as Tier 2 Core while strictly protecting Tier 1 Gold for confirmed 5-anchor reversals.
+    affected_files:
+      - common/patterns_bull.py
+      - common/patterns_bear.py
+      - Trade_Option/stock_options_trade_engine.py
+      - ISSUE_MANAGEMENT.yaml
+    resolution: |
+      1. Updated common/patterns_bull.py and common/patterns_bear.py so Tier 1 Gold strictly requires 5 True Anchors + (>=3 waves or T1 multi-swing) + R:R >= 2.0 (1:2).
+      2. Enabled Tier 2 Core for 5 True Anchors (>=2 waves / R:R >= 1.5) OR strong BASE_ABCD with >=3 swing waves and R:R >= 2.0 (1:1.5).
+      3. Updated scan minimum R:R filter from 1.88 to 1.5 across BCD breakouts and trend continuation re-entries.
+      4. Updated execute_highest_rr_trade in Trade_Option/stock_options_trade_engine.py to prioritize Tier 1 Gold candidates first, falling back to Tier 2 Core candidates if no Tier 1 is present.
+      5. Verified 100% pass across the 14-test regression suite.
     status: RESOLVED
-
-
-
-
 
 
 

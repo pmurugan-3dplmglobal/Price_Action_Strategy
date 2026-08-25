@@ -340,17 +340,25 @@ def execute_highest_rr_trade(kite, staged):
 
     live_ok = LIVE_MARKET_DEPLOYMENT and live_execution_enabled(LIVE_EXECUTION_FLAG) and is_market_open()
 
-    # Strict Tier 1 Gold Filter for Auto-Execution
+    # Tier 1 Gold Candidates (Priority 1)
     t1_candidates = [
         t for t in staged
         if int(t.get("tier", 2)) == 1 or "T1" in str(t.get("tier_badge", "")) or "GOLD" in str(t.get("tier_label", ""))
     ]
-    if live_ok and not t1_candidates:
-        logging.info("Auto-execution skipped: No 🥇 Tier 1 (Gold) candidates found in current cycle (auto-execute restricted strictly to T1 setups).")
-        return
+    # Tier 2 Core Candidates (Priority 2)
+    t2_candidates = [
+        t for t in staged
+        if int(t.get("tier", 2)) == 2 or "T2" in str(t.get("tier_badge", "")) or "CORE" in str(t.get("tier_label", ""))
+    ]
 
-    # In backtest or when T1 exists, pick best from T1 candidates (or fallback to staged if non-live backtest)
-    candidate_pool = t1_candidates if t1_candidates else staged
+    if t1_candidates:
+        candidate_pool = t1_candidates
+    elif t2_candidates:
+        candidate_pool = t2_candidates
+    else:
+        if live_ok:
+            logging.info("Auto-execution skipped: No 🥇 Tier 1 (Gold) or 🥈 Tier 2 (Core) candidates found in current cycle.")
+        return
     best = max(candidate_pool, key=_avg_target_rank)
     sym = best["symbol"]
     side = best.get("side", "CE")

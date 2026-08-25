@@ -691,6 +691,39 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                     positions_dict[sym]["candle_tf_time"] = str(event_time) if event_time else ""
                     positions_dict[sym]["timeframe"] = pos_tf
 
+            # ── FRIDAY EOD 15:15 INTRADAY INDEX AUTO-SQUAREOFF GUARD ──
+            # On Fridays (weekday == 4), short-timeframe (<= 5min) or Index option positions must not be carried
+            # over the weekend to eliminate severe 2-day theta crush and Monday opening gap risk.
+            now_dt = dt.now()
+            is_friday = now_dt.weekday() == 4
+            is_eod_time = now_dt.strftime("%H:%M") >= "15:15"
+            pos_tf_str = str(pos.get("timeframe") or timeframe_entry or "").lower()
+            is_short_tf = any(tf in pos_tf_str for tf in ["3m", "3min", "3minute", "5m", "5min", "5minute"])
+            is_index_contract = (engine_name == "index") or (pos.get("engine") == "index") or any(idx_sym in c_str for idx_sym in ["NIFTY", "BANKNIFTY", "SENSEX", "MIDCPNIFTY", "FINNIFTY", "BANKEX"])
+
+            if is_friday and is_eod_time and (is_short_tf or is_index_contract):
+                logging.info(f"[FRIDAY 15:15 EOD SQUAREOFF] Closing {sym} ({contract}) to prevent weekend theta decay & gap risk.")
+                if is_stock:
+                    close_stock_position(kite, pos, live, product_type)
+                else:
+                    close_position(kite, pos, live, product_type)
+                entry_s = float(pos.get("entry_spot") or pos.get("entry_price") or 0.0)
+                exit_price = live_ltp if live_ltp > 0 else (cp if cp > 0 else entry_s)
+                pnl = ((exit_price - entry_s) / entry_s * 100) if entry_s else 0
+                log_fn(sym, pos.get("pattern", ""), pos_tf, "EXIT_EOD_FRIDAY", "CLOSED",
+                       f"Friday 15:15 EOD Auto-Squareoff (Exit @ {exit_price:.2f})", pnl,
+                       entry=entry_s, sl=pos.get("current_sl", ""), target=pos.get("t1", ""),
+                       event_time=last.get('date'))
+                if tid:
+                    trade_db.update_trade(tid, {
+                        "status": "COMPLETED",
+                        "exit_time": dt.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "pnl_percent": round(pnl, 2),
+                        "details": f"Friday 15:15 EOD auto-squareoff [WEEKEND_DECAY_GUARD] | Exit @ {exit_price:.2f}"
+                    })
+                to_clear.append(sym)
+                continue
+
             # 1) SL Evaluation (Separated SL Monitor: Skipped 09:15-09:45 AM, Active at 09:45 AM+)
             now_time_str = dt.now().strftime("%H:%M")
             is_before_0945 = now_time_str < "09:45"
@@ -733,8 +766,18 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                             event_time = c_row.get('date')
                             break
 
+            # ── STALE / OUTLIER ENTRY PRICE GUARD ──
+            # Prevent false emergency SL triggers when entry_spot or current_sl has an extreme data mismatch vs live LTP
+            # (e.g. BSE entry 12.0 with SL 1.0 when live option market is trading at 0.60).
+            is_outlier_entry = False
+            entry_s = float(pos.get("entry_spot") or pos.get("entry_price") or 0.0)
+            if entry_s > 0 and live_ltp > 0:
+                if (entry_s / live_ltp > 3.0 or live_ltp / entry_s > 3.0) and pos.get("user_edited"):
+                    is_outlier_entry = True
+                    logging.warning(f"[STALE OUTLIER GUARD] {sym} entry {entry_s:.2f} diverges >300% from live LTP {live_ltp:.2f}. Skipping false emergency SL trigger.")
+
             # 2) Emergency Hard Stop / Direct LTP evaluation (Active after 09:45 AM)
-            if not sl_hit and current_sl > 0 and live_ltp > 0 and not is_before_0945:
+            if not sl_hit and current_sl > 0 and live_ltp > 0 and not is_before_0945 and not is_outlier_entry:
                 if sl_mode == "tick_ltp" and live_ltp <= current_sl:
                     sl_hit = True
                     sl_reason = f"TICK_LTP_SL ({live_ltp})"

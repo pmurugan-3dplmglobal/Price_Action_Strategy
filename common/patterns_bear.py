@@ -367,7 +367,7 @@ def scan_anchor_bcd_breakout_bearish(df_entry, df_anchor, anchor_tf="", entry_tf
             continue
 
         rr = (entry_close - t1) / risk
-        if rr < 1.88:
+        if rr < 1.5:
             continue
 
         setup_data = {
@@ -398,18 +398,22 @@ def scan_anchor_bcd_breakout_bearish(df_entry, df_anchor, anchor_tf="", entry_tf
         term_base = swing_meta.get("terminal_base", False)
         rr_val = float(best_match.get("RR", 0.0))
         pat_name = str(best_match.get("Pattern", ""))
-        is_true_anchor = any(k in pat_name for k in ["BE_ABCD", "HH_ABCD", "STAR_ABCD", "HARAMI_ABCD", "LL_ABCD"]) and "BASE_ABCD" not in pat_name
+        p_is_strong = any(k in pat_name for k in ["BE_ABCD", "HH_ABCD", "STAR_ABCD", "HARAMI_ABCD", "LL_ABCD"])
+        is_true_anchor = p_is_strong and "BASE_ABCD" not in pat_name
 
-        if is_true_anchor and (sw_waves >= 3 or swing_meta.get("tier") == 1) and rr_val >= 2.5:
+        # Option A Balanced Tiering (T1 Gold 1:2 / 2.0, T2 Core 1:1.5 / 1.5):
+        # Tier 1 (Gold): Strictly 5 True Anchors + (>=3 Waves or Tier 1 Multi-Swing Arch) + R:R >= 2.0
+        # Tier 2 (Core): 5 True Anchors (>=2 Waves / R:R >= 1.5) OR strong BASE_ABCD with (>=3 Waves and R:R >= 2.0)
+        # Tier 3 (Momentum): Standard/early BASE_ABCD and trend continuations (R:R >= 1.5)
+        if is_true_anchor and (sw_waves >= 3 or swing_meta.get("tier") == 1) and rr_val >= 2.0:
             tier = 1
             tier_label = "TIER_1_GOLD"
             tier_badge = "🥇 T1"
-        elif is_true_anchor and (sw_waves >= 2 or p_is_strong or rr_val >= 1.88):
+        elif (is_true_anchor and (sw_waves >= 2 or p_is_strong or rr_val >= 1.5)) or ((sw_waves >= 3 or swing_meta.get("tier") == 1) and rr_val >= 2.0):
             tier = 2
             tier_label = "TIER_2_CORE"
             tier_badge = "🥈 T2"
         else:
-            # Generic BASE_ABCD and trend continuations are strictly mapped to T3 Momentum
             tier = 3
             tier_label = "TIER_3_MOMENTUM"
             tier_badge = "🥉 T3"
@@ -470,7 +474,7 @@ def scan_trend_continuation_reentry(df_entry, df_anchor):
         return None
 
     risk = entry_price - sl_val
-    if risk <= 0 or risk < entry_price * 0.002 or ((t1 - entry_price) / risk) < 1.88:
+    if risk <= 0 or risk < entry_price * 0.002 or ((t1 - entry_price) / risk) < 1.5:
         return None
 
     rr = (t1 - entry_price) / risk
@@ -540,7 +544,7 @@ def scan_trend_continuation_reentry_bearish(df_entry, df_anchor):
         return None
 
     risk = sl_val - entry_price
-    if risk <= 0 or risk < entry_price * 0.002 or ((entry_price - t1) / risk) < 1.88:
+    if risk <= 0 or risk < entry_price * 0.002 or ((entry_price - t1) / risk) < 1.5:
         return None
 
     rr = (entry_price - t1) / risk

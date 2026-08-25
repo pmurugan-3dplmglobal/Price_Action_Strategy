@@ -1686,6 +1686,12 @@ def api_buy_scanned_trade():
             except Exception as bf_err:
                 logging.warning(f"1-Click Buy display backfill skipped: {bf_err}")
 
+        # Align option entry price with real execution/LTP price if spot price was passed or stale
+        if exch != "NSE" and ltp > 0:
+            if entry_spot <= 0 or (abs(entry_spot - ltp) / max(entry_spot, ltp) > 0.50):
+                logging.info(f"[PRICE ALIGN] Overriding divergent entry_spot {entry_spot} with live option LTP {ltp} for {contract}")
+                entry_spot = ltp
+
         trade_data = {
             "contract": contract,
             "entry_spot": entry_spot,

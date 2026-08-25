@@ -2723,13 +2723,25 @@ def resolve_option_strikes(nfo_instruments, base_symbol, spot_price, step_size, 
                 expiries = future['expiry_dt'].unique()
                 curr_exp = expiries[0]
                 days_rem = (curr_exp - today).days
-                is_stock_contract = base_symbol.strip().upper() not in ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "SENSEX", "BANKEX"]
-                if is_stock_contract and days_rem <= 4 and len(expiries) > 1:
-                    target_exp = expiries[1]
-                    sub = future[future['expiry_dt'] == target_exp]
-                    c = sub.iloc[0] if not sub.empty else future.iloc[0]
+                is_index_contract = base_symbol.strip().upper() in ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "SENSEX", "BANKEX"]
+                
+                # Expiry Rollover Protection:
+                # 1) Stock Options: In monthly expiry week (days_rem <= 6), roll over to next month's series to prevent severe theta crush.
+                # 2) Index Options: Weekly expiries supported — provide current weekly expiry (or next week if expiring today late in session).
+                if not is_index_contract:
+                    if days_rem <= 6 and len(expiries) > 1:
+                        target_exp = expiries[1]
+                        sub = future[future['expiry_dt'] == target_exp]
+                        c = sub.iloc[0] if not sub.empty else future.iloc[0]
+                    else:
+                        c = future.iloc[0]
                 else:
-                    c = future.iloc[0]
+                    if days_rem == 0 and dt.now().time() >= datetime_time(14, 0) and len(expiries) > 1:
+                        target_exp = expiries[1]
+                        sub = future[future['expiry_dt'] == target_exp]
+                        c = sub.iloc[0] if not sub.empty else future.iloc[0]
+                    else:
+                        c = future.iloc[0]
             elif not df.empty:
                 c = df.iloc[0]
             else:

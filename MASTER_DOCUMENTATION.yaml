@@ -212,6 +212,9 @@ backtest_suite:
 
     risk_management:
       check_interval: "Every 5 seconds / WebSocket heartbeat daemon"
+      friday_eod_index_squareoff: "On Fridays (weekday == 4) at 15:15 IST, all short-timeframe (<= 5m) or Index option positions are automatically squared off (EXIT_EOD_FRIDAY) to eliminate 2-day weekend theta decay and Monday opening gap risk."
+      expiry_rollover_protection: "Stock options in monthly expiry week (days_rem <= 6) automatically roll over to the next monthly series (expiries[1]) to eliminate terminal gamma/theta risk. Index options preserve active weekly near-expiry."
+      stale_outlier_entry_guard: "Positions with >300% divergence between entry_spot and live LTP (or manual overrides) are protected from false immediate Emergency Hard SL triggers."
       stages:
         sl_hit: "Exit full position (EXIT_SL)"
         t1_hit: "Move SL to Entry / Breakeven (TRAIL_BE), or FULL EXIT if T2/T3 are N/A"
@@ -334,17 +337,17 @@ multi_tiered_scoring:
     tier_1_gold:
       badge: "🥇 T1"
       label: "TIER_1_GOLD"
-      criteria: ">= 3 Parabolic Waves (R^2 >= 0.55) + Monotonic Decay + Terminal Base Absorption + A-B-C-D Confirmation + R:R >= 2.50"
+      criteria: "5 True Anchors + (>= 3 Parabolic Waves or Tier 1 Arch) + Terminal Base Absorption + A-B-C-D Confirmation + R:R >= 2.00 (1:2)"
       sizing: "100% Standard Capital"
     tier_2_core:
       badge: "🥈 T2"
       label: "TIER_2_CORE"
-      criteria: ">= 2 Parabolic Waves (R^2 >= 0.50, Double Bottoms / W-patterns) OR High-Conviction Candlestick Footprint (Engulfing, Hammer Baby, LL/HH Sweep) + A-B-C-D + R:R >= 1.88"
+      criteria: "5 True Anchors (>= 2 Waves / R:R >= 1.50) OR High-Conviction BASE_ABCD (>= 3 Waves + R:R >= 2.00) (1:1.5)"
       sizing: "70% Standard Capital"
     tier_3_momentum:
       badge: "🥉 T3"
       label: "TIER_3_MOMENTUM"
-      criteria: "Page 16/17 Trend Continuation / Immediate Re-Entry / 1-Wave Pullback + R:R >= 1.88"
+      criteria: "Standard BASE_ABCD / Page 16/17 Trend Continuation / Immediate Re-Entry / 1-Wave Pullback + R:R >= 1.50"
       sizing: "50% Standard Capital"
   reference_document: "docs/STAGE_0_PARABOLIC_CASCADE_REFERENCE.md"
 
