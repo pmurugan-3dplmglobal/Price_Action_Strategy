@@ -47,6 +47,7 @@ from timeframe_utils import (
     cap_lookback_days,
     fetch_and_resample_candles,
     fetch_option_data,
+    get_ist_now,
     _HISTORICAL_CANDLE_CACHE,
     _CACHE_TTL_SECONDS
 )

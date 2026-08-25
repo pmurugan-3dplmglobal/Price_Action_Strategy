@@ -16,7 +16,7 @@ import threading
 from datetime import datetime as dt, timedelta, time as datetime_time
 import pandas as pd
 import paths
-from timeframe_utils import fetch_and_resample_candles
+from timeframe_utils import fetch_and_resample_candles, get_ist_now
 
 NFO_CACHE_FILE = paths.NFO_CACHE_FILE
 EXECUTED_EXITS_FILE = paths.EXECUTED_EXITS_FILE
@@ -327,7 +327,7 @@ def clear_executed_exit(contract):
 
 def is_market_open():
     """Check if Indian markets (NSE/NFO/BSE/BFO) are currently open (Mon-Fri 09:15 to 15:30 IST)."""
-    now = dt.now()
+    now = get_ist_now()
     if now.weekday() >= 5:
         return False
     t_now = now.time()
@@ -340,7 +340,7 @@ def is_new_entry_allowed(live_execution_active=True):
     """
     if not live_execution_active:
         return True
-    now = dt.now()
+    now = get_ist_now()
     if now.weekday() >= 5:
         return False
     t_now = now.time()

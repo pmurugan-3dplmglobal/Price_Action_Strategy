@@ -24,6 +24,7 @@ from timeframe_utils import (
     fetch_option_data,
     resample_timeframe,
     get_fetch_timeframe,
+    get_ist_now,
     LOOKBACK_LIMITS
 )
 from display_writer import clean_timestamp
@@ -1185,8 +1186,9 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
             except Exception:
                 is_live = False
 
-            now_t = dt.now().time()
-            is_weekday = dt.now().weekday() < 5
+            now_dt = get_ist_now()
+            now_t = now_dt.time()
+            is_weekday = now_dt.weekday() < 5
             if is_live and is_weekday and datetime_time(15, 20) < now_t <= datetime_time(15, 30):
                 logging.info(f"[MARKET_CLOSE_LOCK] New trade staging suppressed for {symbol} ({best_trade['contract']}): Live execution is ON and current time {now_t.strftime('%H:%M:%S')} is past 15:20 IST entry cutoff.")
             else:
@@ -1328,7 +1330,7 @@ def resolve_option_strikes(nfo_instruments, base_symbol, spot_price, step_size, 
                     else:
                         c = future.iloc[0]
                 else:
-                    if days_rem == 0 and dt.now().time() >= datetime_time(14, 0) and len(expiries) > 1:
+                    if days_rem == 0 and get_ist_now().time() >= datetime_time(14, 0) and len(expiries) > 1:
                         target_exp = expiries[1]
                         sub = future[future['expiry_dt'] == target_exp]
                         c = sub.iloc[0] if not sub.empty else future.iloc[0]
