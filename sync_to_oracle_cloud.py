@@ -1,5 +1,8 @@
 import subprocess, sys, os, time, tarfile, json
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 ROOT = os.path.dirname(os.path.abspath(__file__))
 KEY = r"G:\Poovendan\AI\Trading\Cloud\Oracle_Cloud\ssh-key-2026-08-05.key"
 HOST = "opc@129.225.69.131"
@@ -61,7 +64,10 @@ print(" -> Upload complete.")
 print("\n[4/5] Extracting payload and restarting services on VM...")
 cmd = f"cd {REMOTE_DIR} && tar -xzf cloud_sync_payload.tar.gz && rm -f cloud_sync_payload.tar.gz && sudo bash {REMOTE_DIR}/oracle/setup_systemd_vm.sh"
 res = subprocess.run(["ssh", "-i", KEY, "-o", "StrictHostKeyChecking=no", HOST, cmd], capture_output=True, text=True, encoding="utf-8", errors="replace")
-print(res.stdout or res.stderr)
+try:
+    print(res.stdout or res.stderr)
+except Exception:
+    print((res.stdout or res.stderr).encode("ascii", errors="replace").decode("ascii"))
 print(" -> Services restarted.")
 
 # 5. Start trading engines via API
