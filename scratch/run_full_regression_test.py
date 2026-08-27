@@ -46,9 +46,10 @@ except Exception as e:
 # Test 3: Bullish & Bearish Pattern Scanners (Option A Strict Invalidation)
 print("[TEST 3] Testing Bullish & Bearish Scanners (Option A Strict Invalidation)...", end="", flush=True)
 try:
-    from trading_core import scan_anchor_bcd_breakout, scan_anchor_bcd_breakout_bearish, fetch_and_resample_candles
-    token = 22471938 # BAJAJFINSV26AUG2100PE
-    df_30 = fetch_and_resample_candles(kite, token, '2026-08-01', '2026-08-04', '30minute')
+    from trading_core import scan_anchor_bcd_breakout, scan_anchor_bcd_breakout_bearish, fetch_and_resample_candles, STOCK_REGISTRY
+    from datetime import datetime as dt, timedelta
+    token = STOCK_REGISTRY.get("RELIANCE", {}).get("token", 738561)
+    df_30 = fetch_and_resample_candles(kite, token, (dt.now() - timedelta(days=15)).strftime('%Y-%m-%d'), dt.now().strftime('%Y-%m-%d'), '30minute')
     res_bull = scan_anchor_bcd_breakout(df_30, df_30)
     res_bear = scan_anchor_bcd_breakout_bearish(df_30, df_30)
     print(f" PASSED [OK] (Bullish: {res_bull is not None}, Bearish: {res_bear is not None})", flush=True)
@@ -62,18 +63,18 @@ try:
     from trading_core import write_scan_display_data
     import paths
     test_trades = [{
-        "symbol": "BAJAJFINSV",
-        "contract": "BAJAJFINSV26AUG2100PE",
+        "symbol": "KAYNES",
+        "contract": "KAYNES26SEP3900PE",
         "side": "PE",
-        "entry_spot": 55.15,
-        "current_sl": 47.48,
-        "t1": 121.65,
-        "t2": 172.00,
-        "t3": 180.00,
-        "rr": 8.67,
+        "entry_spot": 176.95,
+        "current_sl": 158.76,
+        "t1": 235.00,
+        "t2": 262.00,
+        "t3": 275.00,
+        "rr": 3.19,
         "pattern": "BASE_ABCD",
-        "entry_time": "2026-08-03 14:45:00",
-        "candle_a_time": "2026-08-03 14:45:00"
+        "entry_time": "2026-08-25 14:15:00",
+        "candle_a_time": "2026-08-25 10:15:00"
     }]
     disp_path = paths.SCAN_DISPLAY_FILE + ".regression_tmp"
     write_scan_display_data(test_trades, [], disp_path, engine_name="nifty50")
@@ -91,8 +92,8 @@ try:
         with client.session_transaction() as sess:
             sess["user"] = "test_admin"
             sess["role"] = "admin"
-        res1 = client.get('/api/get-chart-data?symbol=BAJAJFINSV26AUG2100PE&type=option&timeframe=30minute')
-        res2 = client.get('/api/get-chart-data?symbol=BAJAJFINSV&type=spot&timeframe=30minute')
+        res1 = client.get('/api/get-chart-data?symbol=KAYNES26SEP3900PE&type=option&timeframe=30minute')
+        res2 = client.get('/api/get-chart-data?symbol=RELIANCE&type=spot&timeframe=30minute')
         assert res1.status_code == 200, f"Option chart status: {res1.status_code}"
         assert res2.status_code == 200, f"Spot chart status: {res2.status_code}"
         d1 = res1.get_json()

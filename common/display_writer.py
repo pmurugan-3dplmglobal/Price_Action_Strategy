@@ -82,9 +82,23 @@ def write_scan_display_data(staged, active, display_file, engine_name=None):
                 except Exception:
                     pass
 
+            opt_tok = t.get("option_token") or t.get("token") or t.get("instrument_token")
+            if not opt_tok and contract:
+                try:
+                    from position_monitor import _get_nfo_cache
+                    _df_cache = _get_nfo_cache()
+                    if not _df_cache.empty and 'tradingsymbol' in _df_cache.columns:
+                        _m = _df_cache[_df_cache['tradingsymbol'] == contract]
+                        if not _m.empty:
+                            opt_tok = int(_m.iloc[0]['instrument_token'])
+                except Exception:
+                    pass
+
             return {
                 "symbol": t.get("symbol", ""),
                 "contract": contract,
+                "option_token": opt_tok,
+                "token": opt_tok,
                 "side": side_val,
                 "entry_spot": entry,
                 "current_sl": sl,

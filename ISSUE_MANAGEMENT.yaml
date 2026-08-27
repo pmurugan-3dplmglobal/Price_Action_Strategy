@@ -2627,15 +2627,53 @@ issues:
     resolution: |
       1. Added `Tier` and `Swing_Waves` columns to `CSV_HEADER` and trade record dictionaries in `common/daily_trade_journal.py`.
       2. Added `resolve_trade_tier_and_swings()` dynamically resolving Stage 0 tier badges (🥇 T1 Gold, 🥈 T2 Core, 🥉 T3 Momentum) and swing wave counts.
-      3. Updated `get_trade_journal_analytics()` to include `by_tier` and `by_swing_waves` statistical breakdowns.
-      4. Updated CSV and Excel export endpoints in `Trade_Option/app_option_Trade.py` and `Trade_Stock/app_Stock_Trade.py`.
-      5. Verified 100% pass across all 14 regression suite tests.
+  - id: ISSUE-084
+    title: Dynamic F&O Universe Position Recovery, Registry Whitelist Elimination & Missing Token SL Fallback
+    severity: CRITICAL
+    category: Live Position Monitoring & Risk Engine
+    family: BUG
+    date_reported: "2026-08-27"
+    symptom: |
+      Live options trade in KAYNES26SEP3900PE (and other non-Nifty 50 F&O equities) held on Zerodha Kite was not monitored by stock_options_trade_engine or app_option_Trade failsafe monitor, causing automated Stop Loss (158.76) to miss exit and resulting in a 16K+ loss.
+    root_cause: |
+      1. `stock_options_trade_engine.py` filtered broker positions strictly against `STOCK_REGISTRY` which was statically locked to 52 Nifty 50 stocks, silently dropping unlisted F&O symbols like KAYNES.
+      2. `write_scan_display_data` and `lookup_scan_sl_target` omitted `option_token` in scan display dictionaries, causing failsafe candle confirmation (`prev_closed_below`) to fail with `token_id = None`.
+      3. Failsafe monitor skipped SL execution if candle close check could not run, leaving positions without direct LTP SL protection.
+    affected_files:
+      - common/registries.py
+      - common/trading_core.py
+      - common/display_writer.py
+      - common/resolve.py
+      - Trade_Option/stock_options_trade_engine.py
+      - Trade_Option/app_option_Trade.py
+      - common/position_monitor.py
+      - ISSUE_MANAGEMENT.yaml
+    resolution: |
+      1. Updated common/registries.py with `_populate_stock_registry_from_cache()` at module load, auto-populating all 209+ F&O equities with exact lot sizes and tokens from `nfo_instruments_cache.csv`.
+      2. Added `extract_underlying_symbol(tradingsymbol)` and updated `match_registry_symbol` to resolve underlying equity names dynamically.
+      3. Updated `stock_options_trade_engine.py` position recovery loop to utilize dynamic symbol extraction and `get_option_lot_size(contract)` so ALL F&O positions in Zerodha are monitored.
+      4. Ensured `option_token` and `token` are always persisted in `display_writer.py` and returned by `lookup_scan_sl_target`.
+      5. Added `DIRECT_LTP_SL_FALLBACK` in `Trade_Option/app_option_Trade.py` ensuring capital protection even if historical candle data is unavailable.
+      6. Added +10% Peak Gain Breakeven Trailing SL rule across `common/position_monitor.py` and `Trade_Option/app_option_Trade.py`.
+      7. Verified 100% pass across all 14 tests in the regression suite.
     status: RESOLVED
 
-
-
-
-
-
-
-
+  - id: FEATURE-022
+    title: +10% Peak Gain Breakeven Trailing Stop-Loss Shield
+    severity: ENHANCEMENT
+    category: Risk Engine / Trailing Stop-Loss
+    family: FEATURE
+    date_reported: "2026-08-27"
+    symptom: |
+      Trades experiencing strong early momentum (+10% to +12% peak gains, e.g. LT, PERSISTENT, WIPRO) were collapsing back into full stop-out losses during afternoon intraday pullbacks.
+    root_cause: |
+      Trailing SL Stage 1 was only triggered when the market price reached Target 1 (`T1 - buffer`), which was occasionally higher than a +10% to +15% move for large R:R setups.
+    affected_files:
+      - common/position_monitor.py
+      - Trade_Option/app_option_Trade.py
+      - ISSUE_MANAGEMENT.yaml
+    resolution: |
+      1. Updated `monitor_active_positions` in `common/position_monitor.py` to trigger Stage 1 Breakeven Trailing (SL -> Entry) whenever peak gain (`hp - entry`) reaches >= +10.0%.
+      2. Integrated the same +10.0% gain threshold in the dashboard failsafe monitor in `Trade_Option/app_option_Trade.py`.
+      3. Verified all 14 regression tests pass with 100% success.
+    status: RESOLVED

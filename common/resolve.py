@@ -367,7 +367,25 @@ def lookup_scan_sl_target(contract, symbol, engine, kite=None, entry_price=0, ti
             sl = best_db.get("current_sl")
             t1 = best_db.get("t1")
             if sl and t1:
-                return {"current_sl": sl, "t1": t1, "t2": best_db.get("t2"), "t3": best_db.get("t3"), "pattern": best_db.get("pattern", "DB_SYNC")}
+                opt_tok = best_db.get("option_token") or best_db.get("token")
+                if not opt_tok and (contract or symbol):
+                    try:
+                        from position_monitor import _get_nfo_cache
+                        _df_cache = _get_nfo_cache()
+                        if not _df_cache.empty and 'tradingsymbol' in _df_cache.columns:
+                            _m = _df_cache[_df_cache['tradingsymbol'] == str(contract or symbol).strip().upper()]
+                            if not _m.empty:
+                                opt_tok = int(_m.iloc[0]['instrument_token'])
+                    except Exception:
+                        pass
+                return {
+                    "current_sl": sl, "t1": t1, "t2": best_db.get("t2"), "t3": best_db.get("t3"),
+                    "pattern": best_db.get("pattern", "DB_SYNC"),
+                    "option_token": opt_tok, "token": opt_tok,
+                    "entry_spot": best_db.get("entry_spot") or best_db.get("entry_price"),
+                    "timeframe": best_db.get("timeframe", "30minute"),
+                    "lot_size": best_db.get("lot_size")
+                }
     except Exception:
         pass
 
@@ -387,7 +405,25 @@ def lookup_scan_sl_target(contract, symbol, engine, kite=None, entry_price=0, ti
                         sl = trade.get("current_sl")
                         t1 = trade.get("t1")
                         if sl and t1:
-                            return {"current_sl": sl, "t1": t1, "t2": trade.get("t2"), "t3": trade.get("t3"), "pattern": trade.get("pattern", "SCAN_SYNC")}
+                            opt_tok = trade.get("option_token") or trade.get("token")
+                            if not opt_tok and (contract or symbol):
+                                try:
+                                    from position_monitor import _get_nfo_cache
+                                    _df_cache = _get_nfo_cache()
+                                    if not _df_cache.empty and 'tradingsymbol' in _df_cache.columns:
+                                        _m = _df_cache[_df_cache['tradingsymbol'] == str(contract or symbol).strip().upper()]
+                                        if not _m.empty:
+                                            opt_tok = int(_m.iloc[0]['instrument_token'])
+                                except Exception:
+                                    pass
+                            return {
+                                "current_sl": sl, "t1": t1, "t2": trade.get("t2"), "t3": trade.get("t3"),
+                                "pattern": trade.get("pattern", "SCAN_SYNC"),
+                                "option_token": opt_tok, "token": opt_tok,
+                                "entry_spot": trade.get("entry_spot") or trade.get("entry_price"),
+                                "timeframe": trade.get("timeframe", "30minute"),
+                                "lot_size": trade.get("lot_size")
+                            }
                 if clean_c:
                     best_t = None
                     best_len = -1
@@ -401,7 +437,25 @@ def lookup_scan_sl_target(contract, symbol, engine, kite=None, entry_price=0, ti
                         sl = best_t.get("current_sl")
                         t1 = best_t.get("t1")
                         if sl and t1:
-                            return {"current_sl": sl, "t1": t1, "t2": best_t.get("t2"), "t3": best_t.get("t3"), "pattern": best_t.get("pattern", "SCAN_SYNC")}
+                            opt_tok = best_t.get("option_token") or best_t.get("token")
+                            if not opt_tok and (contract or symbol):
+                                try:
+                                    from position_monitor import _get_nfo_cache
+                                    _df_cache = _get_nfo_cache()
+                                    if not _df_cache.empty and 'tradingsymbol' in _df_cache.columns:
+                                        _m = _df_cache[_df_cache['tradingsymbol'] == str(contract or symbol).strip().upper()]
+                                        if not _m.empty:
+                                            opt_tok = int(_m.iloc[0]['instrument_token'])
+                                except Exception:
+                                    pass
+                            return {
+                                "current_sl": sl, "t1": t1, "t2": best_t.get("t2"), "t3": best_t.get("t3"),
+                                "pattern": best_t.get("pattern", "SCAN_SYNC"),
+                                "option_token": opt_tok, "token": opt_tok,
+                                "entry_spot": best_t.get("entry_spot") or best_t.get("entry_price"),
+                                "timeframe": best_t.get("timeframe", "30minute"),
+                                "lot_size": best_t.get("lot_size")
+                            }
         except Exception:
             pass
 
@@ -464,9 +518,23 @@ def write_scan_display_data(staged, active, display_file, engine_name=None):
                 except Exception:
                     pass
 
+            opt_tok = t.get("option_token") or t.get("token") or t.get("instrument_token")
+            if not opt_tok and contract:
+                try:
+                    from position_monitor import _get_nfo_cache
+                    _df_cache = _get_nfo_cache()
+                    if not _df_cache.empty and 'tradingsymbol' in _df_cache.columns:
+                        _m = _df_cache[_df_cache['tradingsymbol'] == contract]
+                        if not _m.empty:
+                            opt_tok = int(_m.iloc[0]['instrument_token'])
+                except Exception:
+                    pass
+
             return {
                 "symbol": t.get("symbol", ""),
                 "contract": contract,
+                "option_token": opt_tok,
+                "token": opt_tok,
                 "side": side_val,
                 "entry_spot": entry,
                 "current_sl": sl,

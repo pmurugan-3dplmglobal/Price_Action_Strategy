@@ -2,9 +2,9 @@ import subprocess, sys, os, time, tarfile, json
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 KEY = r"G:\Poovendan\AI\Trading\Cloud\Oracle_Cloud\ssh-key-2026-08-05.key"
-HOST = "opc@140.245.197.71"
-REMOTE_DIR = "/home/opc/Price_Action_Strategy"
-PUBLIC_IP = "140.245.197.71"
+HOST = "opc@129.225.69.131"
+REMOTE_DIR = "/home/trade/Trade_Kite/Price_Action_Strategy"
+PUBLIC_IP = "129.225.69.131"
 
 print("=" * 75)
 print("     PRICE ACTION STRATEGY - ORACLE CLOUD VM SYNC AND DEPLOY")
@@ -41,11 +41,11 @@ if best_tok:
 print("\n[2/5] Packaging codebase...")
 tar_p = os.path.join(ROOT, "cloud_sync_payload.tar.gz")
 with tarfile.open(tar_p, "w:gz") as tar:
-    for folder in ["common", "Trade_Option", "Trade_Stock", "input", "oracle"]:
+    for folder in ["common", "Trade_Option", "Trade_Stock", "input", "oracle", "scratch", "docs"]:
         fp = os.path.join(ROOT, folder)
         if os.path.exists(fp):
             tar.add(fp, arcname=folder)
-    for fn in ["ISSUE_MANAGEMENT.yaml", "MASTER_DOCUMENTATION.yaml", "Kite_Access_Token_gen.py"]:
+    for fn in ["ISSUE_MANAGEMENT.yaml", "MASTER_DOCUMENTATION.yaml", "Kite_Access_Token_gen.py", "requirements.txt", "deploy_to_cloud.sh", "VERSION.txt"]:
         fp = os.path.join(ROOT, fn)
         if os.path.exists(fp):
             tar.add(fp, arcname=fn)
@@ -59,8 +59,9 @@ print(" -> Upload complete.")
 
 # 4. Extract and Restart on VM
 print("\n[4/5] Extracting payload and restarting services on VM...")
-cmd = f"cd {REMOTE_DIR} ; tar -xzf cloud_sync_payload.tar.gz ; rm -f cloud_sync_payload.tar.gz ; git fetch origin && git reset --hard origin/master ; sudo bash {REMOTE_DIR}/oracle/setup_systemd_vm.sh"
-subprocess.run(["ssh", "-i", KEY, "-o", "StrictHostKeyChecking=no", HOST, cmd], capture_output=True)
+cmd = f"cd {REMOTE_DIR} && tar -xzf cloud_sync_payload.tar.gz && rm -f cloud_sync_payload.tar.gz && sudo bash {REMOTE_DIR}/oracle/setup_systemd_vm.sh"
+res = subprocess.run(["ssh", "-i", KEY, "-o", "StrictHostKeyChecking=no", HOST, cmd], capture_output=True, text=True, encoding="utf-8", errors="replace")
+print(res.stdout or res.stderr)
 print(" -> Services restarted.")
 
 # 5. Start trading engines via API
@@ -75,3 +76,4 @@ print("=" * 75)
 print(f" Options Dashboard: http://{PUBLIC_IP}:5050")
 print(f" Stock Dashboard:   http://{PUBLIC_IP}:5051")
 print("=" * 75)
+

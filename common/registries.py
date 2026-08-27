@@ -6,16 +6,40 @@ import logging
 import pandas as pd
 import paths
 
+INDEX_REGISTRY = {
+    "NIFTY": {"token": 256265, "lot_size": 65, "strike_step": 50, "tradingsymbol": "NIFTY 50", "exchange": "NFO"},
+    "BANKNIFTY": {"token": 260105, "lot_size": 30, "strike_step": 100, "tradingsymbol": "NIFTY BANK", "exchange": "NFO"},
+    "SENSEX": {"token": 265, "lot_size": 20, "strike_step": 100, "tradingsymbol": "BSE SENSEX", "exchange": "BFO"},
+    "MIDCPNIFTY": {"token": 288009, "lot_size": 120, "strike_step": 25, "tradingsymbol": "NIFTY MID SELECT", "exchange": "NFO"},
+    "FINNIFTY": {"token": 257801, "lot_size": 65, "strike_step": 50, "tradingsymbol": "NIFTY FIN SERVICE", "exchange": "NFO"}
+}
+
 SUPER_STOCKS = [
     "RELIANCE", "TCS", "HDFCBANK", "ICICIBANK", "INFY",
     "ITC", "SBIN", "BHARTIARTL", "LT", "WIPRO"
 ]
+
+def extract_underlying_symbol(tradingsymbol):
+    """Extract underlying symbol from a tradingsymbol (e.g. KAYNES26SEP3900PE -> KAYNES, NIFTY26AUG24000CE -> NIFTY)."""
+    if not tradingsymbol:
+        return None
+    raw = str(tradingsymbol).strip().upper()
+    for reg in (INDEX_REGISTRY, STOCK_REGISTRY):
+        for sym in sorted(reg.keys(), key=len, reverse=True):
+            if sym.replace(" ", "").upper() in raw:
+                return sym
+    import re
+    m = re.match(r"^([A-Z&-]+?)\d{2}[A-Z]{3}", raw)
+    if m:
+        return m.group(1)
+    return raw
 
 def match_registry_symbol(registry, tradingsymbol):
     """Return the registry key that best matches a tradingsymbol, longest-match first.
 
     Fixes the mislabel bug where 'NIFTY' matched inside 'BANKNIFTY26AUG57700PE'
     before 'BANKNIFTY' was checked (dict iteration order is insertion order).
+    Falls back to extract_underlying_symbol if direct substring match is missing.
     Returns None when nothing matches.
     """
     if not registry or not tradingsymbol:
@@ -24,6 +48,9 @@ def match_registry_symbol(registry, tradingsymbol):
     for sym in sorted(registry.keys(), key=len, reverse=True):
         if sym.replace(" ", "").upper() in raw:
             return sym
+    extracted = extract_underlying_symbol(tradingsymbol)
+    if extracted and extracted in registry:
+        return extracted
     return None
 
 STOCK_REGISTRY = {
@@ -80,6 +107,40 @@ STOCK_REGISTRY = {
     "ULTRACEMCO": {"token": 2952193, "lot_size": 100, "strike_step": 100},
     "WIPRO": {"token": 969473, "lot_size": 1500, "strike_step": 5}
 }
+
+def _populate_stock_registry_from_cache():
+    """Populate full F&O stock registry dynamically from NFO cache CSV on disk."""
+    try:
+        import os
+        if os.path.exists(paths.NFO_CACHE_FILE):
+            df = pd.read_csv(paths.NFO_CACHE_FILE)
+            if not df.empty and 'name' in df.columns:
+                options = df[df['segment'] == 'NFO-OPT'] if 'segment' in df.columns else df
+                index_names = {'NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'SENSEX', 'BANKEX', 'NIFTYNXT50'}
+                for name, group in options.groupby('name'):
+                    sym = str(name).strip().upper()
+                    if sym in index_names:
+                        continue
+                    lot = int(group.iloc[0]['lot_size']) if 'lot_size' in group.columns else 1
+                    tok = int(group.iloc[0]['instrument_token']) if 'instrument_token' in group.columns else 0
+                    strikes = sorted(group['strike'].dropna().unique()) if 'strike' in group.columns else []
+                    if len(strikes) >= 2:
+                        diffs = [round(float(strikes[i+1] - strikes[i]), 2) for i in range(min(10, len(strikes)-1)) if strikes[i+1] > strikes[i]]
+                        step = float(min(diffs)) if diffs else 10.0
+                    else:
+                        step = 10.0
+                    if sym not in STOCK_REGISTRY:
+                        STOCK_REGISTRY[sym] = {"token": tok, "lot_size": lot, "strike_step": step}
+                    else:
+                        if tok > 0 and STOCK_REGISTRY[sym].get("token", 0) == 0:
+                            STOCK_REGISTRY[sym]["token"] = tok
+                        STOCK_REGISTRY[sym]["lot_size"] = lot
+                        if "strike_step" not in STOCK_REGISTRY[sym] or not STOCK_REGISTRY[sym]["strike_step"]:
+                            STOCK_REGISTRY[sym]["strike_step"] = step
+    except Exception as e:
+        logging.debug(f"Failed to populate STOCK_REGISTRY from NFO cache: {e}")
+
+_populate_stock_registry_from_cache()
 
 def sync_stock_tokens(kite):
     try:
@@ -159,16 +220,4 @@ def sync_fno_stock_registry(kite, target_universe="FNO_ALL"):
     except Exception as e:
         logging.error(f"F&O stock registry sync failed: {e}")
         return STOCK_REGISTRY
-
-# ──────────────────────────────────────────────
-#  SESSION & UTILITIES
-# ──────────────────────────────────────────────
-
-INDEX_REGISTRY = {
-    "NIFTY": {"token": 256265, "lot_size": 65, "strike_step": 50, "tradingsymbol": "NIFTY 50", "exchange": "NFO"},
-    "BANKNIFTY": {"token": 260105, "lot_size": 30, "strike_step": 100, "tradingsymbol": "NIFTY BANK", "exchange": "NFO"},
-    "SENSEX": {"token": 265, "lot_size": 20, "strike_step": 100, "tradingsymbol": "BSE SENSEX", "exchange": "BFO"},
-    "MIDCPNIFTY": {"token": 288009, "lot_size": 120, "strike_step": 25, "tradingsymbol": "NIFTY MID SELECT", "exchange": "NFO"},
-    "FINNIFTY": {"token": 257801, "lot_size": 65, "strike_step": 50, "tradingsymbol": "NIFTY FIN SERVICE", "exchange": "NFO"}
-}
 

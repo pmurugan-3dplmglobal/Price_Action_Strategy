@@ -59,7 +59,8 @@ from registries import (
     SUPER_STOCKS,
     sync_stock_tokens,
     sync_fno_stock_registry,
-    match_registry_symbol
+    match_registry_symbol,
+    extract_underlying_symbol
 )
 
 # ── session ──

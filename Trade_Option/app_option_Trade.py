@@ -684,6 +684,19 @@ def refresh_data(single_run=False):
 
                                     prev_closed_below = False
                                     token_id = scan_sl.get("option_token") or scan_sl.get("index_token") or scan_sl.get("token")
+                                    if not token_id and tok_id and str(tok_id).isdigit() and int(tok_id) > 0:
+                                        token_id = int(tok_id)
+                                    if not token_id:
+                                        try:
+                                            from position_monitor import _get_nfo_cache
+                                            df_nfo_tok = _get_nfo_cache()
+                                            if not df_nfo_tok.empty and 'tradingsymbol' in df_nfo_tok.columns:
+                                                match_row = df_nfo_tok[df_nfo_tok['tradingsymbol'] == contract_name]
+                                                if not match_row.empty:
+                                                    token_id = int(match_row.iloc[0]['instrument_token'])
+                                        except Exception:
+                                            pass
+
                                     if is_below_buffer and not is_deep_break and token_id and _kite_session:
                                         try:
                                             df_hist = fetch_and_resample_candles(_kite_session, token_id, (dt.now() - timedelta(days=2)).strftime("%Y-%m-%d"), dt.now().strftime("%Y-%m-%d"), "15minute")
@@ -697,9 +710,6 @@ def refresh_data(single_run=False):
                                     # TASK 1: Pause automated exit execution if user is actively editing this symbol on the UI
                                     if clean_sym in ACTIVE_EDIT_LOCKS:
                                         logging.info(f"[FAILSAFE PAUSED] {contract_name} is currently being edited on UI. Automated exit execution paused.")
-                                    # TASK 1b: Skip if exit order has already been executed/submitted
-                                    elif is_contract_exit_executed(contract_name):
-                                        pass
                                     # 2. Check T3 Target Hit Exit (Active from 09:15 AM)
                                     elif ltp_val > 0 and t3_val > 0 and ltp_val >= t3_val:
                                         logging.info(f"[FAILSAFE MONITOR EXIT T3] {contract_name} LTP={ltp_val} >= T3={t3_val}")
@@ -721,12 +731,26 @@ def refresh_data(single_run=False):
                                         shared_close_position(_kite_session, pos_obj, True, p.get("product"))
                                         _failsafe_exit_mark("EXIT_T1", "TARGET_HIT",
                                                             f"T1 full exit ({ltp_val:.2f} >= {t1_val - _t1_early_buffer(t1_val):.2f}, no T2/T3)", ltp_val)
+                                    
                                     effective_entry = entry_pr if entry_pr > 0 else float(scan_sl.get("entry_spot") or 0)
                                     hard_max_15pct_break = (ltp_val <= round(effective_entry * 0.85, 2)) if effective_entry > 0 else False
 
-                                    # TASK 2: Execute SL exit ONLY IF after 09:45 AM AND (candle closed below SL OR emergency deep break OR hard max 15% loss cap hit)
-                                    if now_t >= fs_start_t and ltp_val > 0 and (sl_val > 0 or hard_max_15pct_break) and (is_below_buffer or hard_max_15pct_break) and (prev_closed_below or is_deep_break or hard_max_15pct_break):
-                                        exit_reason_label = "HARD_MAX_15PCT_SL" if hard_max_15pct_break else ("CANDLE_CLOSE_SL" if prev_closed_below else "EMERGENCY_HARD_SL")
+                                    # TASK 2: Execute SL exit ONLY IF after 09:45 AM AND (candle closed below SL OR emergency deep break OR hard max 15% loss cap hit OR direct breach fallback)
+                                    sl_hit_confirmed = False
+                                    if hard_max_15pct_break:
+                                        sl_hit_confirmed = True
+                                        exit_reason_label = "HARD_MAX_15PCT_SL"
+                                    elif is_deep_break:
+                                        sl_hit_confirmed = True
+                                        exit_reason_label = "EMERGENCY_HARD_SL"
+                                    elif prev_closed_below:
+                                        sl_hit_confirmed = True
+                                        exit_reason_label = "CANDLE_CLOSE_SL"
+                                    elif is_below_buffer and not token_id:
+                                        sl_hit_confirmed = True
+                                        exit_reason_label = "DIRECT_LTP_SL_FALLBACK"
+
+                                    if now_t >= fs_start_t and ltp_val > 0 and (sl_val > 0 or hard_max_15pct_break) and sl_hit_confirmed:
                                         logging.warning(f"[FAILSAFE MONITOR EXIT SL CONFIRMED] {contract_name} LTP={ltp_val} (Reason: {exit_reason_label}, Entry={effective_entry}, SL={sl_val})")
                                         pos_obj = {"contract": contract_name, "position_size": qty, "quantity": qty}
                                         shared_close_position(_kite_session, pos_obj, True, p.get("product"))
@@ -740,11 +764,11 @@ def refresh_data(single_run=False):
                                     if tid and live_ltp > prev_high:
                                         trade_db.update_trade(tid, {"high_price": live_ltp})
 
-                                    effective_entry = entry_pr if entry_pr > 0 else float(scan_sl.get("entry_spot") or 0)
-
-                                    # 3. Trailing SL Stage 1 (T1 Hit -> Trail SL to Breakeven / Entry)
-                                    if t_stage == 0 and t1_val > effective_entry and pos_high >= t1_val and effective_entry > 0:
-                                        logging.info(f"[FAILSAFE TRAIL 1] {contract_name} High={pos_high} >= T1={t1_val} -> Trailing SL to Breakeven ({effective_entry})")
+                                    # 3. Trailing SL Stage 1 (T1 Hit OR Gain >= +10% -> Trail SL to Breakeven / Entry)
+                                    gain_pct = ((pos_high - effective_entry) / effective_entry * 100) if effective_entry > 0 else 0
+                                    t1_hit_cond = (pos_high >= t1_val if (t1_val > 0 and effective_entry > 0 and t1_val > effective_entry) else False)
+                                    if t_stage == 0 and effective_entry > 0 and (t1_hit_cond or gain_pct >= 10.0):
+                                        logging.info(f"[FAILSAFE TRAIL 1] {contract_name} High={pos_high} (Gain: +{gain_pct:.1f}%) -> Trailing SL to Breakeven ({effective_entry})")
                                         if tid: trade_db.update_trade(tid, {"current_sl": effective_entry, "trailing_stage": 1, "sl_set_time": dt.now().isoformat()})
                                     # 4. Trailing SL Stage 2 (T2 Hit -> Trail SL to T1)
                                     elif t_stage == 1 and t2_val > t1_val and pos_high >= t2_val and t1_val > 0:

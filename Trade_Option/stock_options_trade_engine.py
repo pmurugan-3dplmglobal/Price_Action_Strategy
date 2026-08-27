@@ -45,7 +45,9 @@ from trading_core import (
     simulate_trade_outcome as shared_simulate,
     clear_executed_exit,
     STOCK_REGISTRY,
-    match_registry_symbol
+    match_registry_symbol,
+    extract_underlying_symbol,
+    get_option_lot_size
 )
 
 LIVE_MARKET_DEPLOYMENT = True
@@ -150,7 +152,9 @@ def _load_cached_nfo():
             if not df.empty:
                 with instruments_lock:
                     NFO_INSTRUMENTS = df
-                logging.info(f"Loaded {len(NFO_INSTRUMENTS)} NFO contracts from cache")
+                from registries import _populate_stock_registry_from_cache
+                _populate_stock_registry_from_cache()
+                logging.info(f"Loaded {len(NFO_INSTRUMENTS)} NFO contracts from cache ({len(STOCK_REGISTRY)} F&O equities in registry)")
         except Exception as e:
             logging.warning(f"Failed to load cached NFO: {e}")
 
@@ -710,7 +714,7 @@ def main():
             seen_symbols = set()
             for t in active:
                 sym = t.get("symbol")
-                if not sym or sym not in STOCK_REGISTRY or sym in seen_symbols:
+                if not sym or sym in seen_symbols:
                     continue
                 seen_symbols.add(sym)
                 pos = {k: v for k, v in t.items() if k not in ("id", "engine", "symbol", "status", "updated_at")}
@@ -745,19 +749,21 @@ def main():
                 for p in all_positions:
                     if p["exchange"] not in ("NFO", "NSE") or int(p.get("quantity", 0)) <= 0:
                         continue
-                    symbol = match_registry_symbol(STOCK_REGISTRY, p["tradingsymbol"])
+                    tsym = p["tradingsymbol"]
+                    symbol = match_registry_symbol(STOCK_REGISTRY, tsym) or extract_underlying_symbol(tsym)
                     if not symbol or symbol in ACTIVE_POSITIONS:
                         continue
                     nq = abs(int(p.get("quantity", 0)))
                     if nq == 0: continue
                     if p["exchange"] == "NFO":
-                        lots = nq // STOCK_REGISTRY[symbol]["lot_size"]
-                        if lots == 0: continue
+                        lot_sz = get_option_lot_size(tsym) or (STOCK_REGISTRY.get(symbol, {}).get("lot_size", 1))
+                        lots = nq // lot_sz if lot_sz > 0 else 1
+                        if lots == 0: lots = 1
                         pos = {
-                            "contract": p["tradingsymbol"], "option_token": int(p.get("instrument_token", 0)),
+                            "contract": tsym, "option_token": int(p.get("instrument_token", 0)),
                             "entry_spot": float(p.get("net_price") or p.get("buy_price") or p.get("average_price") or 0),
                             "current_sl": 0, "t1": 0, "t2": 0, "t3": 0,
-                            "trailing_stage": 0, "lot_size": STOCK_REGISTRY[symbol]["lot_size"],
+                            "trailing_stage": 0, "lot_size": lot_sz,
                             "position_size": lots, "pattern": "KITE_RECOVERED",
                             "timeframe": TIMEFRAME_ENTRY,
                             "entry_time": dt.now().isoformat(),
@@ -765,7 +771,7 @@ def main():
                         }
                     else:
                         pos = {
-                            "contract": p["tradingsymbol"], "option_token": int(p.get("instrument_token", 0)),
+                            "contract": tsym, "option_token": int(p.get("instrument_token", 0)),
                             "entry_spot": float(p.get("net_price") or p.get("buy_price") or p.get("average_price") or 0),
                             "current_sl": 0, "t1": 0, "t2": 0, "t3": 0,
                             "trailing_stage": 0, "lot_size": 1,
@@ -774,16 +780,16 @@ def main():
                             "entry_time": dt.now().isoformat(),
                             "position_type": "stock"
                         }
-                    clear_executed_exit(p["tradingsymbol"])
+                    clear_executed_exit(tsym)
                     clear_executed_exit(symbol)
                     pos["trade_id"], _created = trade_db.create_trade("nifty50", symbol, {k: v for k, v in pos.items() if k != "trade_id"})
-                    scan_sl = lookup_scan_sl_target(p["tradingsymbol"], symbol, "nifty50", kite, pos["entry_spot"], TIMEFRAME_ENTRY, TIMEFRAME_ANCHOR)
+                    scan_sl = lookup_scan_sl_target(tsym, symbol, "nifty50", kite, pos["entry_spot"], TIMEFRAME_ENTRY, TIMEFRAME_ANCHOR)
                     if scan_sl:
                         pos.update(scan_sl)
                         trade_db.update_trade(pos["trade_id"], scan_sl)
-                        logging.info(f"[KITE_RECOVER] Applied scan SL/Target for {symbol}: SL={scan_sl['current_sl']} T1={scan_sl['t1']} T2={scan_sl['t2']} T3={scan_sl['t3']}")
+                        logging.info(f"[KITE_RECOVER] Applied scan SL/Target for {symbol}: SL={scan_sl.get('current_sl')} T1={scan_sl.get('t1')} T2={scan_sl.get('t2')} T3={scan_sl.get('t3')}")
                     ACTIVE_POSITIONS[symbol] = pos
-                    logging.info(f"Recovered from Kite: {symbol} {p['tradingsymbol']} qty={nq}")
+                    logging.info(f"Recovered from Kite: {symbol} {tsym} qty={nq}")
             except Exception as e:
                 logging.warning(f"Kite position recovery failed: {e}")
             reconcile_positions(kite)

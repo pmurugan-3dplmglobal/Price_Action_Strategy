@@ -899,6 +899,27 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
             buf_t3 = _get_target_buffer(t3_val)
 
             # 3) Target Exits & Trailing Evaluation
+            entry_s = float(pos.get("entry_spot") or pos.get("entry_price") or 0.0)
+            gain_pct = ((hp - entry_s) / entry_s * 100) if entry_s > 0 else 0.0
+
+            # Breakeven Trail Stage 1: Triggered when peak gain >= +10% (protects green trades from turning red)
+            if pos.get("trailing_stage", 0) == 0 and gain_pct >= 10.0 and has_higher_targets:
+                curr_sl = float(pos.get("current_sl") or 0.0)
+                new_sl = max(curr_sl, entry_s) if str(pos.get("side","CE")).upper() in ["CE", "BUY", "BULL"] else min(curr_sl, entry_s) if curr_sl > 0 else entry_s
+                sl_stamp = dt.now().isoformat()
+                with lock:
+                    if sym in positions_dict:
+                        positions_dict[sym]["current_sl"] = new_sl
+                        positions_dict[sym]["trailing_stage"] = 1
+                        positions_dict[sym]["sl_set_time"] = sl_stamp
+                logging.info(f"TRAIL-1 (+10% Gain Lock) {sym}: High={hp:.2f} (+{gain_pct:.1f}%) -> SL=BE ({new_sl:.2f})")
+                log_fn(sym, pos.get("pattern", ""), timeframe_entry, "TRAIL_BE", "MUTATED",
+                       f"SL={new_sl:.2f} (+{gain_pct:.1f}% gain locked)",
+                       entry=entry_s, sl=new_sl, target=t1_val,
+                       event_time=last.get('date'))
+                if tid:
+                    trade_db.update_trade(tid, {"trailing_stage": 1, "current_sl": new_sl, "sl_set_time": sl_stamp})
+
             if t1_val and hp >= (t1_val - buf_t1):
                 # RULE: If T2 or T3 is NOT available, exit 100% at T1 (early exit threshold)!
                 if not has_higher_targets:
@@ -907,7 +928,6 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                         close_stock_position(kite, pos, live, product_type)
                     else:
                         close_position(kite, pos, live, product_type)
-                    entry_s = pos.get("entry_spot", 0)
                     exit_price = live_ltp if live_ltp > 0 else (cp if cp > 0 else t1_val)
                     pnl = ((exit_price - entry_s) / entry_s * 100) if entry_s else 0
                     log_fn(sym, pos.get("pattern", ""), pos_tf, "EXIT_T1", "CLOSED",
@@ -925,7 +945,6 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                     continue
                 elif pos.get("trailing_stage", 0) == 0:
                     curr_sl = float(pos.get("current_sl") or 0.0)
-                    entry_s = float(pos.get("entry_spot") or 0.0)
                     new_sl = max(curr_sl, entry_s) if str(pos.get("side","CE")).upper() in ["CE", "BUY", "BULL"] else min(curr_sl, entry_s) if curr_sl > 0 else entry_s
                     sl_stamp = dt.now().isoformat()
                     with lock:
@@ -936,7 +955,7 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                     logging.info(f"TRAIL-1 {sym}: SL=BE ({new_sl:.2f})")
                     log_fn(sym, pos.get("pattern", ""), timeframe_entry, "TRAIL_BE", "MUTATED",
                            f"SL={new_sl:.2f}",
-                           entry=pos.get("entry_spot", 0), sl=new_sl, target=t1_val,
+                           entry=entry_s, sl=new_sl, target=t1_val,
                            event_time=last.get('date'))
                     if tid:
                         trade_db.update_trade(tid, {"trailing_stage": 1, "current_sl": new_sl, "sl_set_time": sl_stamp})

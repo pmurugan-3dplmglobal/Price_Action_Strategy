@@ -384,11 +384,7 @@ system_integrity_safeguards:
   trailing_sl_ratchet: "Monotonic side-aware SL ratchet: new_sl = max(curr_sl, target_base) for BULL and min(curr_sl, target_base) for BEAR, preventing backward SL regression."
   websocket_live_ticks: "ActivePositionWebSocketMonitor provides real-time streaming tick LTP feeds with sub-millisecond latency for active position trailing and stop-loss triggers, with transparent fallback to REST quotes."
   spot_token_auto_healing: "Automatic dynamic token auto-repair: queries NSE:<SYMBOL> live quote by symbol name if a token error occurs, self-healing STOCK_REGISTRY in memory on the fly."
-
-
-
-
-
-
-
-
+  fno_universe_auto_population: "_populate_stock_registry_from_cache() auto-populates all 209+ F&O equities into STOCK_REGISTRY on startup directly from nfo_instruments_cache.csv with exact lot sizes, strikes, and tokens, eliminating static 52-stock whitelist drops."
+  dynamic_position_recovery: "stock_options_trade_engine.py and app_option_Trade.py resolve underlying symbols and lot sizes via extract_underlying_symbol() and get_option_lot_size(), ensuring 100% of live Zerodha F&O positions are recovered and monitored."
+  direct_ltp_sl_fallback: "Emergency capital protection shield: If historical candle token resolution fails, app_option_Trade falls back immediately to DIRECT_LTP_SL_FALLBACK on buffer breach without waiting for candle confirmation."
+  breakeven_trailing_shield: "Stage 1 Breakeven Trailing Stop-Loss automatically moves SL to Entry price as soon as a trade achieves >= +10.0% peak gain or touches T1, preventing profitable momentum from turning into stop-loss hits."
