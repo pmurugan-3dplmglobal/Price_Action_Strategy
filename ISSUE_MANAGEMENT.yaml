@@ -2677,3 +2677,32 @@ issues:
       2. Integrated the same +10.0% gain threshold in the dashboard failsafe monitor in `Trade_Option/app_option_Trade.py`.
       3. Verified all 14 regression tests pass with 100% success.
     status: RESOLVED
+
+  - id: ISSUE-085
+    title: Inverted SL Prevention, Broker Average Authority & Stale Override Auto-Purge
+    severity: HIGH
+    category: Risk Engine / State Reconciliation
+    family: STATE_DESYNC
+    date_reported: "2026-08-27"
+    symptom: |
+      On engine restart, re-entered or existing positions (NESTLEIND 1500 CE, WIPRO 182.5 CE) retained stale Stop-Losses higher than actual purchase prices (e.g. SL 24.70 on entry 16.00, or SL 2.82 on entry 2.60), causing premature failsafe exits at 09:45:00.
+    root_cause: |
+      1. Position recovery loop skipped state update if `symbol in ACTIVE_POSITIONS`, retaining stale historical DB `entry_spot` and `current_sl` from previous sessions.
+      2. `sl_target_overrides.json` retained expired August contracts and inverted manual overrides without validating `current_sl < entry_spot`.
+      3. Failsafe monitor evaluated raw unvalidated SL against LTP at 09:45:00 without sanitizing against the true Kite average price.
+    affected_files:
+      - common/dashboard_sl_overrides.py
+      - common/position_monitor.py
+      - common/resolve.py
+      - common/trading_core.py
+      - Trade_Option/stock_options_trade_engine.py
+      - Trade_Option/app_option_Trade.py
+      - ISSUE_MANAGEMENT.yaml
+    resolution: |
+      1. Added `sanitize_sl_and_entry(entry_spot, current_sl, trailing_stage, side)` in `common/dashboard_sl_overrides.py` ensuring Stop-Loss is strictly below Entry for Long positions.
+      2. Enhanced `clean_stale_overrides()` to automatically purge expired monthly/weekly contracts and discard inverted overrides.
+      3. Updated `stock_options_trade_engine.py` recovery loop to check `entry_mismatch` and `is_inverted_sl`, automatically overwriting stale DB records with the authoritative Kite `average_price`.
+      4. Updated `Trade_Option/app_option_Trade.py` failsafe monitor to sanitize SL against `effective_entry` and set `is_deep_break` to 5% below SL.
+      5. Full 14-test regression suite verified passing with 100% success.
+    status: RESOLVED
+

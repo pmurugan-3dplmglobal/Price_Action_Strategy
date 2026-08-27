@@ -810,10 +810,23 @@ def reconcile_positions(kite, registry, positions_dict, lock, engine, timeframe_
     SL_TARGET_OVERRIDES_FILE = get_override_paths()[0]
     if os.path.exists(SL_TARGET_OVERRIDES_FILE):
         try:
+            from dashboard_sl_overrides import clean_stale_overrides, sanitize_sl_and_entry
+            clean_stale_overrides()
             with open(SL_TARGET_OVERRIDES_FILE) as f:
                 eng_overrides = json.load(f).get(engine, {})
             for sym, vals in eng_overrides.items():
                 if sym in positions_dict:
+                    e_s = float(positions_dict[sym].get("entry_spot") or positions_dict[sym].get("entry_price") or 0.0)
+                    sl_override = float(vals.get("current_sl") or 0.0)
+                    st_val = int(positions_dict[sym].get("trailing_stage") or 0)
+                    side_val = positions_dict[sym].get("side", "CE")
+                    
+                    if e_s > 0 and sl_override > 0:
+                        _, safe_sl = sanitize_sl_and_entry(e_s, sl_override, st_val, side_val)
+                        if safe_sl != sl_override and st_val == 0:
+                            logging.warning(f"[RECONCILE] Inverted SL override sanitized for {sym}: SL {sl_override} -> {safe_sl} (Entry: {e_s})")
+                            vals["current_sl"] = safe_sl
+
                     for k in ("current_sl", "t1", "t2", "t3"):
                         if k in vals:
                             positions_dict[sym][k] = vals[k]

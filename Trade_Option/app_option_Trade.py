@@ -660,12 +660,17 @@ def refresh_data(single_run=False):
                                             pass
 
                                     ltp_val = live_ltp
-                                    sl_val = _safe_float(scan_sl.get("current_sl"))
+                                    effective_entry = entry_pr if entry_pr > 0 else float(scan_sl.get("entry_spot") or 0)
+                                    raw_sl = _safe_float(scan_sl.get("current_sl"))
                                     t1_val = _safe_float(scan_sl.get("t1"))
                                     t2_val = _safe_float(scan_sl.get("t2"))
                                     t3_val = _safe_float(scan_sl.get("t3"))
                                     t_stage = int(scan_sl.get("trailing_stage") or 0)
                                     tid = scan_sl.get("id")
+                                    side_val = scan_sl.get("side", "CE")
+
+                                    from dashboard_sl_overrides import sanitize_sl_and_entry
+                                    _, sl_val = sanitize_sl_and_entry(effective_entry, raw_sl, t_stage, side_val)
 
                                     clean_sym = str(contract_name).replace(" ", "").upper()
                                     now_t = dt.now().time()
@@ -679,8 +684,8 @@ def refresh_data(single_run=False):
 
                                     # Buffer & Previous Candle Confirmation for SL Exit
                                     sl_buffered = round(sl_val * 0.995, 2)
-                                    is_below_buffer = ltp_val <= sl_buffered
-                                    is_deep_break = ltp_val <= round(sl_val * 0.985, 2)
+                                    is_below_buffer = (ltp_val <= sl_buffered) if sl_val > 0 else False
+                                    is_deep_break = (ltp_val <= round(sl_val * 0.95, 2)) if sl_val > 0 else False
 
                                     prev_closed_below = False
                                     token_id = scan_sl.get("option_token") or scan_sl.get("index_token") or scan_sl.get("token")

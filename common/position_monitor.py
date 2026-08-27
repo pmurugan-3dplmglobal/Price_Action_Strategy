@@ -85,6 +85,23 @@ def contract_is_expired(contract):
                 return exp_date < dt.now().date()
     except Exception as e:
         logging.warning(f"Expiry cache lookup failed for {c}: {e}")
+    # Check standard monthly contract pattern (e.g. RELIANCE26AUG1340PE)
+    _MONTH_MAP = {'JAN': 1, 'FEB': 2, 'MAR': 3, 'APR': 4, 'MAY': 5, 'JUN': 6, 'JUL': 7, 'AUG': 8, 'SEP': 9, 'OCT': 10, 'NOV': 11, 'DEC': 12}
+    m_mon = re.search(r"(\d{2})(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)(\d+)(CE|PE)$", c)
+    if m_mon:
+        yy = int("20" + m_mon.group(1))
+        mon_str = m_mon.group(2)
+        month_num = _MONTH_MAP[mon_str]
+        today = dt.now().date()
+        if yy < today.year:
+            return True
+        if yy == today.year and month_num < today.month:
+            return True
+        if yy == today.year and month_num == today.month:
+            # If current month and day is >= 27th (past typical monthly expiry Thursday)
+            if today.day >= 27:
+                return True
+
     if _CONTRACT_EXPIRY_RE is None:
         _CONTRACT_EXPIRY_RE = re.compile(r"(\d+)(CE|PE)$")
     m = _CONTRACT_EXPIRY_RE.search(c)

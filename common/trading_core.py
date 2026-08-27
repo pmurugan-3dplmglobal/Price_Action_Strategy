@@ -179,5 +179,9 @@ import trade_db
 # ── dashboard_sl_overrides ──
 from dashboard_sl_overrides import (
     read_sl_overrides,
-    write_sl_overrides
+    write_sl_overrides,
+    sanitize_sl_and_entry,
+    clean_stale_overrides,
+    purge_sl_override
 )
+

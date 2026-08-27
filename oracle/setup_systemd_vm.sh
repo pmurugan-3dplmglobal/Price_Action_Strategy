@@ -10,6 +10,10 @@ fi
 
 echo "Configuring systemd services for $APP_DIR (User: $RUN_USER)..."
 
+if command -v getenforce &> /dev/null && [ "$(getenforce)" != "Disabled" ]; then
+    chcon -R -t bin_t "$APP_DIR/venv/bin/" || true
+fi
+
 cat << EOF > /etc/systemd/system/trading-options.service
 [Unit]
 Description=Price Action Options Trading Dashboard (Port 5050)

@@ -751,10 +751,42 @@ def main():
                         continue
                     tsym = p["tradingsymbol"]
                     symbol = match_registry_symbol(STOCK_REGISTRY, tsym) or extract_underlying_symbol(tsym)
-                    if not symbol or symbol in ACTIVE_POSITIONS:
+                    if not symbol:
                         continue
+                    
+                    avg_pr = float(p.get("average_price") or p.get("buy_price") or p.get("net_price") or 0.0)
                     nq = abs(int(p.get("quantity", 0)))
                     if nq == 0: continue
+
+                    if symbol in ACTIVE_POSITIONS:
+                        existing = ACTIVE_POSITIONS[symbol]
+                        cnt_changed = existing.get("contract") and existing.get("contract") != tsym
+                        old_entry = float(existing.get("entry_spot") or existing.get("entry_price") or 0.0)
+                        entry_mismatch = (avg_pr > 0 and old_entry > 0 and abs(old_entry - avg_pr) / max(old_entry, 1.0) > 0.05)
+                        curr_sl = float(existing.get("current_sl") or 0.0)
+                        is_inverted_sl = (avg_pr > 0 and curr_sl >= avg_pr and int(existing.get("trailing_stage") or 0) == 0)
+
+                        if cnt_changed or entry_mismatch or is_inverted_sl:
+                            logging.info(f"[KITE SYNC] Correcting stale/mismatched state for {symbol} ({tsym}): old_entry={old_entry} -> avg_pr={avg_pr}, old_sl={curr_sl}")
+                            existing["contract"] = tsym
+                            existing["entry_spot"] = avg_pr if avg_pr > 0 else old_entry
+                            existing["entry_price"] = existing["entry_spot"]
+                            existing["option_token"] = int(p.get("instrument_token", 0))
+                            if is_inverted_sl or cnt_changed:
+                                scan_sl = lookup_scan_sl_target(tsym, symbol, "nifty50", kite, existing["entry_spot"], TIMEFRAME_ENTRY, TIMEFRAME_ANCHOR)
+                                if scan_sl:
+                                    existing.update(scan_sl)
+                                else:
+                                    existing["current_sl"] = calculate_sl_buffer(existing["entry_spot"], side="BULL")
+                                    existing["trailing_stage"] = 0
+                            if existing.get("trade_id"):
+                                trade_db.update_trade(existing["trade_id"], {
+                                    "contract": tsym, "entry_spot": existing["entry_spot"],
+                                    "entry_price": existing["entry_spot"], "current_sl": existing["current_sl"],
+                                    "option_token": existing["option_token"], "trailing_stage": existing.get("trailing_stage", 0)
+                                })
+                        continue
+
                     if p["exchange"] == "NFO":
                         lot_sz = get_option_lot_size(tsym) or (STOCK_REGISTRY.get(symbol, {}).get("lot_size", 1))
                         lots = nq // lot_sz if lot_sz > 0 else 1
@@ -786,8 +818,15 @@ def main():
                     scan_sl = lookup_scan_sl_target(tsym, symbol, "nifty50", kite, pos["entry_spot"], TIMEFRAME_ENTRY, TIMEFRAME_ANCHOR)
                     if scan_sl:
                         pos.update(scan_sl)
-                        trade_db.update_trade(pos["trade_id"], scan_sl)
-                        logging.info(f"[KITE_RECOVER] Applied scan SL/Target for {symbol}: SL={scan_sl.get('current_sl')} T1={scan_sl.get('t1')} T2={scan_sl.get('t2')} T3={scan_sl.get('t3')}")
+                    else:
+                        pos["current_sl"] = calculate_sl_buffer(pos["entry_spot"], side="BULL")
+                    
+                    # Sanitize recovered SL
+                    from dashboard_sl_overrides import sanitize_sl_and_entry
+                    _, safe_sl = sanitize_sl_and_entry(pos["entry_spot"], pos["current_sl"], pos.get("trailing_stage", 0), "BULL")
+                    pos["current_sl"] = safe_sl
+                    trade_db.update_trade(pos["trade_id"], {"current_sl": pos["current_sl"], "t1": pos.get("t1", 0), "t2": pos.get("t2", 0), "t3": pos.get("t3", 0)})
+                    logging.info(f"[KITE_RECOVER] Applied scan SL/Target for {symbol}: SL={pos.get('current_sl')} T1={pos.get('t1')} T2={pos.get('t2')} T3={pos.get('t3')}")
                     ACTIVE_POSITIONS[symbol] = pos
                     logging.info(f"Recovered from Kite: {symbol} {tsym} qty={nq}")
             except Exception as e:
