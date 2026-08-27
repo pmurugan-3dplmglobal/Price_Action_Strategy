@@ -667,10 +667,9 @@ def refresh_data(single_run=False):
                                     t3_val = _safe_float(scan_sl.get("t3"))
                                     t_stage = int(scan_sl.get("trailing_stage") or 0)
                                     tid = scan_sl.get("id")
-                                    side_val = scan_sl.get("side", "CE")
-
+                                    hp_val = _safe_float(scan_sl.get("high_price") or scan_sl.get("highest_price") or ltp_val)
                                     from dashboard_sl_overrides import sanitize_sl_and_entry
-                                    _, sl_val = sanitize_sl_and_entry(effective_entry, raw_sl, t_stage, side_val)
+                                    _, sl_val = sanitize_sl_and_entry(effective_entry, raw_sl, t_stage, side_val, high_price=hp_val)
 
                                     clean_sym = str(contract_name).replace(" ", "").upper()
                                     now_t = dt.now().time()
@@ -682,10 +681,13 @@ def refresh_data(single_run=False):
                                     except Exception:
                                         fs_start_t = datetime_time(9, 45)
 
-                                    # Buffer & Previous Candle Confirmation for SL Exit
-                                    sl_buffered = round(sl_val * 0.995, 2)
+                                    # Buffer & Previous Candle Confirmation for SL Exit (Micro-Tick Cushion)
+                                    sl_cushion = max(0.20, sl_val * 0.02) if sl_val < 10 else max(0.80, sl_val * 0.01)
+                                    sl_buffered = round(sl_val - sl_cushion, 2)
                                     is_below_buffer = (ltp_val <= sl_buffered) if sl_val > 0 else False
-                                    is_deep_break = (ltp_val <= round(sl_val * 0.95, 2)) if sl_val > 0 else False
+
+                                    deep_break_cushion = max(0.30, sl_val * 0.05) if sl_val < 10 else max(1.00, sl_val * 0.03)
+                                    is_deep_break = (ltp_val <= round(sl_val - deep_break_cushion, 2)) if sl_val > 0 else False
 
                                     prev_closed_below = False
                                     token_id = scan_sl.get("option_token") or scan_sl.get("index_token") or scan_sl.get("token")

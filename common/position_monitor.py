@@ -859,7 +859,8 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                     sl_reason = f"TICK_LTP_SL ({live_ltp})"
                     cp = live_ltp
                 elif sl_mode == "hybrid":
-                    emergency_threshold = current_sl * (1.0 - emergency_buffer_pct)
+                    emergency_cushion = max(0.30, current_sl * 0.05) if current_sl < 10 else max(1.00, current_sl * emergency_buffer_pct)
+                    emergency_threshold = round(current_sl - emergency_cushion, 2)
                     if live_ltp <= emergency_threshold:
                         sl_hit = True
                         sl_reason = f"EMERGENCY_HARD_SL (LTP {live_ltp:.2f} <= {emergency_threshold:.2f})"

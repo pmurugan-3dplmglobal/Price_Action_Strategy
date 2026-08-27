@@ -2706,3 +2706,26 @@ issues:
       5. Full 14-test regression suite verified passing with 100% success.
     status: RESOLVED
 
+  - id: FEATURE-023
+    title: Micro-Tick & Bid-Ask Spread Shield for Low-Priced Options (< ₹10.00)
+    severity: ENHANCEMENT
+    category: Risk Engine / Microstructure Cushion
+    family: FEATURE
+    date_reported: "2026-08-27"
+    symptom: |
+      Low-priced option contracts (e.g. WIPRO 182.5 CE @ ₹2.60) were tripping Stop-Loss triggers on 3-tick (15-paise) fluctuations caused by ordinary bid-ask spread churn without underlying stock breakdown.
+    root_cause: |
+      Fixed percentage SL buffer (e.g. 0.5% or 1.5%) on sub-₹5 contracts amounted to < 1 tick (3.9 paise), far below the NSE 5-paise tick size and 10-paise market maker spread.
+    affected_files:
+      - common/targets.py
+      - common/position_monitor.py
+      - Trade_Option/app_option_Trade.py
+      - ISSUE_MANAGEMENT.yaml
+    resolution: |
+      1. Updated `calculate_sl_buffer` in `common/targets.py` to enforce a minimum buffer of `max(0.40, price * 0.15)` (8 ticks / 40 paise) for options < ₹5.00, and `max(0.60, price * 0.08)` (12 ticks / 60 paise) for options < ₹15.00.
+      2. Updated `emergency_threshold` in `common/position_monitor.py` to require `max(0.30, current_sl * 0.05)` (at least 6 ticks below SL) for sub-₹10 options.
+      3. Updated `sl_buffered` and `is_deep_break` in `Trade_Option/app_option_Trade.py` with the micro-tick cushion.
+      4. Verified all 14 regression tests pass with 100% success.
+    status: RESOLVED
+
+

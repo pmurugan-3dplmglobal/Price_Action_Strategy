@@ -156,29 +156,33 @@ def calculate_position_size(spot_price, stop_loss, capital=100000.0, risk_percen
 
 def calculate_sl_buffer(price_level, side="BULL"):
     """
-    Asset-adaptive & price-tiered Stop Loss buffer:
-    - For Ultra-Cheap Options (price < 10): max(0.40, price * 0.10) (prevents premature bid-ask spread whipsaws)
-    - For Cheap Options (10 <= price < 50): max(0.60, price * 0.04) (0.60 - 2.00 pt buffer)
-    - For Mid Options (50 <= price < 200): max(1.00, price * 0.02)
-    - For High Options / Stock Spot (200 <= price < 500): max(1.50, price * 0.01)
-    - For Index Spot / High Stocks (price >= 500): max(2.50, price * 0.005)
+    Asset-adaptive & price-tiered Stop Loss buffer (Micro-Tick & Spread Shield):
+    - For Micro / Penny Options (price < 5): max(0.40, price * 0.15) (at least 8 ticks / 0.40 pts buffer to avoid bid-ask spread whipsaws)
+    - For Cheap Options (5 <= price < 15): max(0.60, price * 0.08) (at least 12 ticks / 0.60 pts buffer)
+    - For Low-Mid Options (15 <= price < 50): max(0.80, price * 0.04) (0.80 - 2.00 pt buffer)
+    - For Mid Options (50 <= price < 200): max(1.50, price * 0.02)
+    - For High Options / Stock Spot (200 <= price < 500): max(2.50, price * 0.01)
+    - For Index Spot / High Stocks (price >= 500): max(3.50, price * 0.005)
     """
     price = float(price_level)
-    if price < 10:
-        buffer = max(0.40, price * 0.10)
+    if price < 5:
+        buffer = max(0.40, price * 0.15)
+    elif price < 15:
+        buffer = max(0.60, price * 0.08)
     elif price < 50:
-        buffer = max(0.60, price * 0.04)
+        buffer = max(0.80, price * 0.04)
     elif price < 200:
-        buffer = max(1.00, price * 0.02)
+        buffer = max(1.50, price * 0.02)
     elif price < 500:
-        buffer = max(1.50, price * 0.01)
+        buffer = max(2.50, price * 0.01)
     else:
-        buffer = max(2.50, price * 0.005)
+        buffer = max(3.50, price * 0.005)
 
     if str(side).upper() == "BEAR":
         return round(price + buffer, 2)
     else:
         return round(max(0.05, price - buffer), 2)
+
 
 def check_circuit_and_spread_shield(kite, symbol, exchange="NSE", side="BUY"):
     """

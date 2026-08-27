@@ -5,15 +5,22 @@ import paths
 from datetime import datetime as dt
 
 
-def sanitize_sl_and_entry(entry_spot, current_sl, trailing_stage=0, side="BULL"):
+def sanitize_sl_and_entry(entry_spot, current_sl, trailing_stage=0, side="BULL", high_price=0.0):
     """
-    Ensure Stop-Loss is mathematically valid and never inverted on untrailed positions.
-    - Bullish/CE: current_sl must be strictly below entry_spot (unless trailing_stage >= 1).
-    - Bearish/PE: current_sl must be strictly above entry_spot (unless trailing_stage >= 1).
+    Ensure Stop-Loss is mathematically valid and never inverted on untrailed or corrupted positions.
+    - Bullish/CE: current_sl must be strictly below entry_spot (unless trailing_stage >= 1 AND high_price >= current_sl).
+    - Bearish/PE: current_sl must be strictly above entry_spot (unless trailing_stage >= 1 AND high_price <= current_sl).
     """
+    try:
+        from targets import calculate_sl_buffer
+    except Exception:
+        def calculate_sl_buffer(p, s="BULL"):
+            return round(p * 0.85, 2) if s == "BULL" else round(p * 1.15, 2)
+
     try:
         entry = float(entry_spot or 0.0)
         sl = float(current_sl or 0.0)
+        hp = float(high_price or 0.0)
         if entry <= 0:
             return entry, sl
 
@@ -21,12 +28,16 @@ def sanitize_sl_and_entry(entry_spot, current_sl, trailing_stage=0, side="BULL")
         stage = int(trailing_stage or 0)
 
         if is_bull:
-            if stage == 0 and sl >= entry:
-                sl = round(entry * 0.95, 2)
+            # If SL >= Entry, it is ONLY valid if the trade has reached stage >= 1 AND highest price touched was >= SL!
+            # If price never reached SL (e.g. stale SL 24.70 on entry 16.00 with high 18.90), it is a corrupted ghost SL.
+            if sl >= entry:
+                if stage == 0 or (hp > 0 and hp < sl) or sl > (entry * 1.30):
+                    sl = calculate_sl_buffer(entry, side="BULL")
         else:
-            if stage == 0 and sl <= entry and sl > 0:
-                sl = round(entry * 1.05, 2)
-        return entry, sl
+            if sl <= entry and sl > 0:
+                if stage == 0 or (hp > 0 and hp > sl) or sl < (entry * 0.70):
+                    sl = calculate_sl_buffer(entry, side="BEAR")
+        return entry, round(sl, 2)
     except Exception:
         return entry_spot, current_sl
 
