@@ -455,6 +455,33 @@ issues:
       2. Guarded renderScanSection in templates/index.html with window._scanCleared check at function entry, preventing active position injection until a fresh scan cycle is triggered.
     status: COMPLETED
 
+  - id: FEATURE-003
+    title: Spot-Anchored SL Guard, 2-Tranche Profit Booking & Datta D2 Re-Entry Engine
+    severity: ENHANCEMENT
+    category: Execution & Strategy Architecture
+    date_reported: "2026-08-28"
+    symptom: |
+      1. Option positions in post-breakdown/recovery setups (e.g. HAL, MANAPPURAM) experienced premature stop-outs due to option spread/theta wicks despite the underlying Cash Spot strictly holding above its anchor support.
+      2. Profitable multi-lot setups lacked a structured 2-Tranche partial profit banking mechanism (booking 50% at T1 while letting the runner ride risk-free).
+      3. Trend continuation re-entries (Datta Playbook Page 16/17 D2 setups) were not actively queued alongside primary anchor BCD breakouts.
+    root_cause: |
+      1. position_monitor.py evaluated stop-loss solely on option premium ticks, causing false exits during spot liquidity sweeps.
+      2. No partial quantity override support existed in close_position.
+      3. scan_trend_continuation_reentry was not wired into the engine scanner pipelines.
+    affected_files:
+      - common/position_monitor.py
+      - common/resolve.py
+      - Trade_Option/stock_options_trade_engine.py
+      - Trade_Option/index_options_trade_engine.py
+      - input/program_config.json
+    resolution: |
+      1. Implemented Spot-Anchored Structural SL Guard in common/position_monitor.py: verifies live underlying cash spot support before tripping option stop-outs (with a 35% catastrophic option circuit cap).
+      2. Implemented 2-Tranche "Core + Runner" Model: exits 50% position quantity at T1 to bank cash profits, raises remaining runner Stop-Loss to Breakeven, and rides to T2/T3.
+      3. Added qty_override support to close_position and close_stock_position.
+      4. Integrated Setup_2_Trend_Continuation (scan_trend_continuation_reentry) across stock and index option trade engines.
+      5. Configured enable_spot_sl_guard and tranche_mode flags in input/program_config.json.
+    status: COMPLETED
+
   - id: FEATURE-002
     title: Parabolic Multi-Swing Cascade Filter (enable_swing_filter)
     severity: ENHANCEMENT

@@ -24,6 +24,7 @@ from trading_core import (
     is_market_open,
     calculate_position_size,
     scan_anchor_bcd_breakout,
+    scan_trend_continuation_reentry,
     find_anchor_bullish_engulfing,
     find_anchor_ll_sweep,
     find_anchor_hammer_baby,
@@ -265,6 +266,7 @@ def run_scan_cycle(kite):
 
     entry_scanners = [
         ("Setup_1_Anchor_BCD", scan_anchor_bcd_breakout),
+        ("Setup_2_Trend_Continuation", scan_trend_continuation_reentry),
     ]
     anchor_scanners = [
         ("A1", find_anchor_bullish_engulfing),

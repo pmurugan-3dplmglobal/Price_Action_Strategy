@@ -33,7 +33,8 @@ from targets import (
     find_profit_targets_bearish,
     check_left_side_rule,
     check_left_side_rule_bearish,
-    calculate_position_size
+    calculate_position_size,
+    calculate_sl_buffer
 )
 from patterns_bull import (
     find_anchor_bullish_engulfing,
@@ -557,7 +558,10 @@ def write_scan_display_data(staged, active, display_file, engine_name=None):
                 "terminal_base": bool(t.get("terminal_base", t.get("has_terminal_base", False))),
                 "tier": t.get("tier", 2),
                 "tier_label": t.get("tier_label", "TIER_2_CORE"),
-                "tier_badge": t.get("tier_badge", "🥈 T2")
+                "tier_badge": t.get("tier_badge", "🥈 T2"),
+                "spot_token": t.get("spot_token") or t.get("index_token"),
+                "spot_sl": t.get("spot_sl"),
+                "spot_entry": t.get("spot_entry")
             }
         new_staged = [build_trade(t, t.get("pattern", "BE_ABCD"), t.get("entry_time", now_str), None, is_staged=True) for t in (staged or [])]
         carry_fwd = []
@@ -1034,6 +1038,11 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
 
     symbol_candidates = []
 
+    spot_low_10 = float(df_spot['low'].iloc[-10:].min()) if df_spot is not None and not df_spot.empty else (current_spot * 0.98 if current_spot > 0 else 0.0)
+    spot_high_10 = float(df_spot['high'].iloc[-10:].max()) if df_spot is not None and not df_spot.empty else (current_spot * 1.02 if current_spot > 0 else 0.0)
+    spot_sl_ce = calculate_sl_buffer(spot_low_10, side="BULL") if spot_low_10 > 0 else 0.0
+    spot_sl_pe = calculate_sl_buffer(spot_high_10, side="BEAR") if spot_high_10 > 0 else 0.0
+
     for strike in sorted(set(ce_map) & set(pe_map)):
         ce = ce_map[strike]
         pe = pe_map[strike]
@@ -1094,25 +1103,17 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
         if enable_swing:
             if not df_ce_a.empty:
                 sw_ce = detect_parabolic_multi_swings(df_ce_a, side="BULL", min_swings=swing_min_w, min_r2=swing_r2, max_bars_after_terminal=45, symbol=symbol, timeframe_str=timeframe_anchor)
-                if not sw_ce.get("matched", False):
-                    df_ce_e = pd.DataFrame()
-                else:
-                    swing_meta_ce = {
-                        "swing_waves": sw_ce.get("valid_arch_count", 0),
-                        "terminal_base": sw_ce.get("has_terminal_base", False),
-                        "terminal_date": sw_res_date if (sw_res_date := sw_ce.get("terminal_swing_date")) else ""
-                    }
+                if sw_ce:
+                    swing_meta_ce["swing_waves"] = sw_ce.get("valid_arch_count", 0)
+                    swing_meta_ce["terminal_base"] = sw_ce.get("has_terminal_base", False)
+                    swing_meta_ce["terminal_date"] = sw_ce.get("terminal_date", "")
 
             if not df_pe_a.empty:
                 sw_pe = detect_parabolic_multi_swings(df_pe_a, side="BULL", min_swings=swing_min_w, min_r2=swing_r2, max_bars_after_terminal=45, symbol=symbol, timeframe_str=timeframe_anchor)
-                if not sw_pe.get("matched", False):
-                    df_pe_e = pd.DataFrame()
-                else:
-                    swing_meta_pe = {
-                        "swing_waves": sw_pe.get("valid_arch_count", 0),
-                        "terminal_base": sw_pe.get("has_terminal_base", False),
-                        "terminal_date": sw_res_date_pe if (sw_res_date_pe := sw_pe.get("terminal_swing_date")) else ""
-                    }
+                if sw_pe:
+                    swing_meta_pe["swing_waves"] = sw_pe.get("valid_arch_count", 0)
+                    swing_meta_pe["terminal_base"] = sw_pe.get("has_terminal_base", False)
+                    swing_meta_pe["terminal_date"] = sw_pe.get("terminal_date", "")
 
         if df_ce_e.empty and df_pe_e.empty:
             continue
@@ -1148,7 +1149,8 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                         pos_size = calculate_position_size(current_spot, result_ce["SL"])
                         trade_data = {
                             "symbol": symbol, "contract": ce['tradingsymbol'], "option_token": ce['token'],
-                            "index_token": config["token"], "strike": strike, "entry_spot": result_ce["Close"],
+                            "index_token": config["token"], "spot_token": config["token"], "spot_entry": current_spot,
+                            "spot_sl": spot_sl_ce, "strike": strike, "entry_spot": result_ce["Close"],
                             "current_sl": result_ce["SL"], "t1": result_ce["T1"], "t2": result_ce["T2"],
                             "t3": result_ce["T3"], "rr": result_ce.get("RR"), "trailing_stage": 0,
                             "lot_size": ce.get("lot_size") or config.get("lot_size", 1), "position_size": pos_size,
@@ -1195,7 +1197,8 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                         pos_size = calculate_position_size(current_spot, result_pe["SL"])
                         trade_data = {
                             "symbol": symbol, "contract": pe['tradingsymbol'], "option_token": pe['token'],
-                            "index_token": config["token"], "strike": strike, "entry_spot": result_pe["Close"],
+                            "index_token": config["token"], "spot_token": config["token"], "spot_entry": current_spot,
+                            "spot_sl": spot_sl_pe, "strike": strike, "entry_spot": result_pe["Close"],
                             "current_sl": result_pe["SL"], "t1": result_pe["T1"], "t2": result_pe["T2"],
                             "t3": result_pe["T3"], "rr": result_pe.get("RR"), "trailing_stage": 0,
                             "lot_size": pe.get("lot_size") or config.get("lot_size", 1), "position_size": pos_size,

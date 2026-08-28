@@ -1497,14 +1497,22 @@ def api_update_position():
     ACTIVE_EDIT_LOCKS.discard(clean_target)
 
     matched = False
+    def _is_match(item_sym, item_cnt):
+        c_sym = str(item_sym or "").replace(" ", "").upper()
+        c_cnt = str(item_cnt or "").replace(" ", "").upper()
+        if not clean_target: return False
+        if c_cnt and clean_target == c_cnt: return True
+        if c_sym and clean_target == c_sym and (not c_cnt or c_cnt == c_sym): return True
+        is_opt_tgt = ("CE" in clean_target or "PE" in clean_target) and any(c.isdigit() for c in clean_target)
+        if not is_opt_tgt and c_sym == clean_target: return True
+        return False
+
     with data_lock:
         update_keys = list(vals.keys())
 
         # 1. Update in-memory all_trades
         for t in cached_data.get("all_trades", []):
-            t_sym = str(t.get("symbol") or "").replace(" ", "").upper()
-            t_cnt = str(t.get("contract") or "").replace(" ", "").upper()
-            if clean_target in (t_sym, t_cnt) or t_sym in clean_target or t_cnt in clean_target:
+            if _is_match(t.get("symbol"), t.get("contract")):
                 matched = True
                 for k in update_keys: t[k] = vals[k]
                 tid = t.get("id")
@@ -1514,9 +1522,7 @@ def api_update_position():
         # 2. Update in-memory positions
         for pos_key, pos in (cached_data.get("positions", {}).items() if isinstance(cached_data.get("positions"), dict) else enumerate(cached_data.get("positions", []))):
             if isinstance(pos, dict):
-                p_sym = str(pos.get("symbol") or "").replace(" ", "").upper()
-                p_cnt = str(pos.get("contract") or "").replace(" ", "").upper()
-                if clean_target in (p_sym, p_cnt) or p_sym in clean_target or p_cnt in clean_target:
+                if _is_match(pos.get("symbol"), pos.get("contract")):
                     matched = True
                     for k in update_keys: pos[k] = vals[k]
                     tid = pos.get("id")
@@ -1525,18 +1531,14 @@ def api_update_position():
 
         # 3. Update in-memory kite_positions so UI refreshes immediately
         for kp in cached_data.get("kite_positions", []):
-            k_sym = str(kp.get("symbol") or "").replace(" ", "").upper()
-            k_cnt = str(kp.get("contract") or "").replace(" ", "").upper()
-            if clean_target in (k_sym, k_cnt) or k_sym in clean_target or k_cnt in clean_target:
+            if _is_match(kp.get("symbol"), kp.get("contract")):
                 for k in update_keys: kp[k] = vals[k]
 
         if not matched:
             contract = symbol
             exchange = "NSE"
             for kp in cached_data.get("kite_positions", []):
-                k_sym = str(kp.get("symbol") or "").replace(" ", "").upper()
-                k_cnt = str(kp.get("contract") or "").replace(" ", "").upper()
-                if clean_target in (k_sym, k_cnt) or k_sym in clean_target or k_cnt in clean_target:
+                if _is_match(kp.get("symbol"), kp.get("contract")):
                     contract = kp.get("contract", symbol)
                     exchange = kp.get("exchange", "NSE")
                     break
