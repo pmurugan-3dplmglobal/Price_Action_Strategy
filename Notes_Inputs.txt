@@ -1,3 +1,8 @@
+Rule 0: STRICT CLOUD VM DEPLOYMENT PIPELINE (Immutable Ground Rule)
+- NEVER edit or modify code directly on remote cloud VMs (Oracle Cloud / AWS).
+- Standard Workflow: 1. Local Development -> 2. Local Regression Testing (100% Pass) -> 3. Git Push (origin master) -> 4. Git Pull on VM & Restart Services.
+- Machine-specific credentials (tokens, config) remain isolated per machine and are never cross-pollinated.
+
 Don't make any change directly lets discuss (add any point/idea ) finally we can implement
 Read :DOCUMENTATION.yaml/DOCUMENTATION_STOCK.yaml for understanding 
 Update :ISSUE_MANAGEMENT.yaml whenever you fix any bug or add feature 

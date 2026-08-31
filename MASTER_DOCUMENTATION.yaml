@@ -393,4 +393,5 @@ system_integrity_safeguards:
   datta_d2_reentry_engine: "Datta D2 Trend Continuation Re-Entry Engine (scan_trend_continuation_reentry): Wired into Stock and Index Option trade engines to scan post-Point-B flag pullbacks and automatically trigger secondary continuation breakouts."
   broker_product_authority: "Live Broker Product Authority: close_position() queries live kite.positions() dynamically to match the exact open product type (NRML or MIS), completely eliminating Zerodha RMS naked writing margin rejections."
   cross_strike_contract_isolation: "Strict Contract Isolation (_is_match): Dashboard /api/update-position endpoints strictly match by full contract identifier, preventing cross-strike SL override collisions across multi-strike option holdings."
+  cloud_vm_deployment_pipeline: "Strict Cloud Deployment Rule: NEVER modify code directly on remote VMs. Mandatory pipeline: 1. Local Development -> 2. 14-Test Regression Suite (100% Pass) -> 3. Git Push -> 4. VM Git Pull & Service Restart. Machine credentials remain isolated per environment."
 

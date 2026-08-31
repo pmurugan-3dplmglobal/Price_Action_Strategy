@@ -24,6 +24,14 @@ AGY operates with three integrated identities across all tasks:
   For routine code changes read ONLY the Tier 1 folders touched by the task; do not read
   `archive/`, `Reference/`, `__pycache__/`, `backtest/`, or `scratch/` unless the task demands it.
 - **Autonomous Execution**: AGY is authorized to make file changes & run verification commands directly in this project without prompting for permission. Keep the user informed of all actions taken.
+- **Strict Cloud VM Deployment Pipeline (`Local -> Test -> Git Push -> Git Pull on VM`)**:
+  - **NEVER edit code directly on remote cloud VMs** (Oracle Cloud / AWS).
+  - All bug fixes, enhancements, UI changes, and refactors must strictly follow:
+    1. **Local Development**: Edit code exclusively in the local Windows environment.
+    2. **Local Test & Verification**: Run AST checks and the 14-test regression suite (`python scratch/run_full_regression_test.py`) to confirm 100% pass.
+    3. **Git Push**: Commit and push clean changes to `origin/master`.
+    4. **VM Pull & Reload**: Execute `git pull origin master` on the VM followed by restarting systemd services (`sudo systemctl restart trading-options trading-stock trading-export`).
+    5. **Account Credentials Isolation**: Machine-specific tokens (`input/kite_access_token.txt`) and configs remain isolated per environment and are never cross-pollinated.
 - Core strategy logic in `common/trading_core.py` must not change during cleanup/refactors — only remove dead code / alias duplicates.
 - Always use canonical paths from `common/paths.py`. Never use CWD-relative paths (ISSUE-038 family).
 - Record every bug fix / feature in `ISSUE_MANAGEMENT.yaml`; keep `MASTER_DOCUMENTATION.yaml` accurate.
