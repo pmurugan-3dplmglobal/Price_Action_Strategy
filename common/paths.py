@@ -6,16 +6,27 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRATCH_DIR = os.path.join(PROJECT_ROOT, "scratch")
 
 
+# Canonical directory paths
+INPUT_DIR = os.path.join(PROJECT_ROOT, "input")
+MONITOR_DIR = os.path.join(PROJECT_ROOT, "output", "monitor")
+LOGS_DIR = os.path.join(PROJECT_ROOT, "output", "logs")
+EXPORTS_DIR = os.path.join(PROJECT_ROOT, "output", "exports")
+
+
 def input_file(name):
-    return os.path.join(PROJECT_ROOT, "input", name)
+    return os.path.join(INPUT_DIR, name)
 
 
 def monitor_file(name):
-    return os.path.join(PROJECT_ROOT, "output", "monitor", name)
+    return os.path.join(MONITOR_DIR, name)
 
 
 def log_file(name):
-    return os.path.join(PROJECT_ROOT, "output", "logs", name)
+    return os.path.join(LOGS_DIR, name)
+
+
+def export_file(name):
+    return os.path.join(EXPORTS_DIR, name)
 
 
 # Shared canonical paths (single source of truth for cross-module files)
@@ -28,6 +39,8 @@ TRADE_JOURNAL_CSV = monitor_file("trade_journal.csv")
 PROGRAM_CONFIG_FILE = input_file("program_config.json")
 DASHBOARD_USERS_FILE = monitor_file("dashboard_users.json")
 DASHBOARD_SECRET_KEY_FILE = input_file("dashboard_secret_key.txt")
+EXPORT_STATE_FILE = monitor_file("export_state.json")
+TRADE_ARCHIVE_XLSX = export_file("trade_archive.xlsx")
 
 # Trade databases (what engines + dashboards read/write)
 TRADES_DB = monitor_file("trades_db.json")
@@ -41,6 +54,8 @@ SCAN_DISPLAY_FILE = monitor_file("scan_display.json")
 SCAN_DISPLAY_INDEX_FILE = monitor_file("scan_display_index.json")
 SCAN_DISPLAY_STOCK_FILE = monitor_file("scan_display_stock.json")
 SCAN_DISPLAY_BEAR_FILE = monitor_file("scan_display_stock_bear.json")
+SCAN_DISPLAY_WEEKLY_FILE = monitor_file("scan_display_stock_weekly.json")
+SCAN_DISPLAY_WEEKLY_BEAR_FILE = monitor_file("scan_display_stock_weekly_bear.json")
 SCAN_DISPLAY_EMA_FILE = monitor_file("scan_display_ema.json")
 SCAN_DISPLAY_EMA_STOCK_FILE = monitor_file("scan_display_ema_stock.json")
 
@@ -50,6 +65,8 @@ INDEX_LOG_FILE = log_file("bull_index_trade_engine.log")
 EMA_LOG_FILE = log_file("ema_engine.log")
 BULL_DAILY_SCAN_LOG = log_file("bull_daily_scanner.log")
 BEAR_DAILY_SCAN_LOG = log_file("bull_bear_daily_scanner.log")
+WEEKLY_BULL_SCAN_LOG = log_file("bull_weekly_scanner.log")
+WEEKLY_BEAR_SCAN_LOG = log_file("bull_weekly_bear_scanner.log")
 
 # Live execution flags
 NIFTY50_LIVE_FLAG = input_file("nifty50_live.flag")

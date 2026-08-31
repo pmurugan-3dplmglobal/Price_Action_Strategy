@@ -51,3 +51,35 @@ also mark the SL & T's on the chart is it possible with Kite ?
 
 Bug : In progress
 can you check if the candle marking on Chart is correct ? while changing TF its should adapt the chart 
+
+--------------------------------------------------------------------------------
+Feature:4 : Pending / Future Idea
+Move API credentials to .env file (Local & Cloud VM)
+
+• Concept: Decouple Kite API credentials (`api_key`, `api_secret`) from `program_config.json` into a `.env` file for enhanced security across local development and cloud deployments.
+• Precedence Order:
+    1. System / Shell Environment (`os.environ`)
+    2. Root `.env` file (`paths.PROJECT_ROOT / .env`)
+    3. Fallback to `program_config.json` (legacy compatibility)
+• Architecture & Files to Touch:
+    1. `common/session.py`: Lightweight zero-dependency `.env` loader (`load_env_file()`) + canonical `get_kite_credentials()`.
+    2. `input/program_config.json`: Strip `api_key` and `api_secret` fields so it strictly manages strategy configs.
+    3. `.env.example`: Template with placeholder keys committed to git.
+    4. `.env`: Real credentials stored locally (protected by `.gitignore`).
+    5. `Trade_Option/app_option_Trade.py` & `Trade_Stock/app_Stock_Trade.py`: Import `get_kite_credentials()` and update `/api/save-credentials` to write to `.env`.
+    6. `Kite_Access_Token_gen.py`: Read credentials via `get_kite_credentials()`.
+• Oracle Cloud VM Setup:
+    1. One-time `.env` creation on VM at `$APP_DIR/.env`.
+    2. Systemd services (`trading-options.service`, `trading-stock.service`, `trading-export.service`): add `EnvironmentFile=$APP_DIR/.env`.
+    3. `sync_to_oracle_cloud.py`: Ensure `.env` is skipped from tar package to preserve VM credentials.
+--------------------------------------------------------------------------------
+Feature:5 : Pending / Future Idea
+Positive Breakeven (+BE: Entry + 2% / +2 Ticks) Gain Lock on +10% Spikes
+
+• Concept: When an option contract moves into substantial profit (High >= Entry + 10%), trail Stop-Loss to `Entry + 2%` or `Entry + 2 Ticks` (e.g. ₹5.85 on ₹5.75 entry) instead of flat Breakeven (₹5.75).
+• Problem it Solves:
+    In fast-reversing contracts (like KOTAKBANK 420 PE which spiked +13.9% to ₹6.55 before crashing), trailing to exact entry (₹5.75) resulted in a -₹900 loss after spread slippage when exiting at ₹5.35.
+• Architecture & Files to Touch:
+    1. `common/position_monitor.py`: Update `TRAIL-1 (+10% Gain Lock)` logic to set `new_sl = round(entry_s * 1.02, 2)` or `entry_s + max(0.10, tick_size * 2)` to guarantee green trade closure on reversal.
+    2. `input/program_config.json`: Add `"trail_be_buffer_pct": 2.0` setting.
+--------------------------------------------------------------------------------

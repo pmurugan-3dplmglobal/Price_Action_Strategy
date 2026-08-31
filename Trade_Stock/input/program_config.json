@@ -1,35 +1,60 @@
 {
   "api_key": "o8nnw6kxykvrsrhg",
   "api_secret": "9g7d5kktr38d7yvq11njsm4upz8kc6s1",
-  "daily": {
-    "timeframe": "day",
-    "lookback_days": 2000,
-    "product_type": "CNC",
-    "target_index": "NIFTY50"
+  "nifty50": {
+    "target_universe": "FNO_ALL",
+    "timeframe_entry": "30minute",
+    "timeframe_anchor": "30minute",
+    "capital": 100000,
+    "strike_range": 1,
+    "enable_swing_filter": true,
+    "swing_min_waves": 3,
+    "strict_macro_gate": true,
+    "enable_spot_sl_guard": true,
+    "tranche_mode": true
+  },
+  "ema_engine": {
+    "timeframe": "1d",
+    "target_universe": "ALL",
+    "scan_interval": 300
+  },
+  "index": {
+    "timeframe_entry": "3minute",
+    "timeframe_anchor": "15minute",
+    "capital": 100000,
+    "strike_range": 3,
+    "enable_swing_filter": true,
+    "swing_min_waves": 3,
+    "strict_macro_gate": false,
+    "enable_spot_sl_guard": true,
+    "tranche_mode": true
   },
   "bear_trade": {
-    "timeframe": "day",
-    "lookback_days": 2000,
     "product_type": "CNC",
-    "target_index": "NIFTY50"
+    "target_index": "NIFTY_MIDCAP_100",
+    "timeframe": "day",
+    "enable_swing_filter": true,
+    "swing_min_waves": 2
   },
-  "_backtest": false,
-  "index": {
-    "timeframe_entry": "30minute",
-    "timeframe_anchor": "30minute",
-    "lookback_days": 100,
-    "scan_interval": 15,
-    "risk_percent": 1,
-    "capital": 100000,
-    "strike_range": 0
+  "daily": {
+    "product_type": "CNC",
+    "target_index": "NIFTY_MIDCAP_100",
+    "timeframe": "day",
+    "enable_swing_filter": true,
+    "swing_min_waves": 2
   },
-  "nifty50": {
-    "timeframe_entry": "30minute",
-    "timeframe_anchor": "30minute",
-    "lookback_days": 200,
-    "scan_interval": 30,
-    "risk_percent": 10,
-    "capital": 100000,
-    "strike_range": 0
+  "swing_leg_config": {
+    "default": 3,
+    "min_leg": 2,
+    "max_leg": 5,
+    "volatility_adaptive": true,
+    "overrides": {
+      "NIFTY": 2,
+      "BANKNIFTY": 2,
+      "RELIANCE": 2,
+      "HDFCBANK": 2,
+      "TATAMOTORS": 4,
+      "ADANIENT": 4
+    }
   }
 }

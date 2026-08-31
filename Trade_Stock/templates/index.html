@@ -20,6 +20,7 @@
             event.target.classList.add('active');
             if (tabId === 'backtest-tab') renderBacktest();
             if (tabId === 'scan-tab-left') renderScanTab();
+            if (tabId === 'weekly-scan-tab') renderWeeklyScanTab();
         }
 
         function switchTab(tabId) {
@@ -814,6 +815,85 @@
             }
             document.getElementById('scan-body').innerHTML = scanHtml;
             reapplySorts();
+        }
+
+        function renderWeeklyScanTab() {
+            const d = window._lastData;
+            if (!d) return;
+            const sd = d.scan_display || {};
+            const sideFilter = (document.getElementById('weekly-side-filter') || {}).value || 'all';
+            const tierFilter = (document.getElementById('weekly-tier-filter') || {}).value || 'all';
+            const colHeaders = '<th>Symbol</th><th>Side</th><th>Tier</th><th>Entry</th><th>SL</th><th>T1</th><th>T2</th><th>T3</th><th>RR</th><th>Pattern</th><th>Anchor Date</th><th>Swings</th>';
+            let html = '';
+
+            const engines = [];
+            if (sideFilter === 'all' || sideFilter === 'bull') engines.push(['weekly', '📈 Bull Weekly']);
+            if (sideFilter === 'all' || sideFilter === 'bear') engines.push(['weekly_bear', '📉 Bear Weekly']);
+
+            engines.forEach(([eng, label]) => {
+                const engData = sd[eng] || {};
+                const allTrades = [
+                    ...(engData.staged_trades || []),
+                    ...(engData.all_staged_today || []),
+                    ...(engData.carry_forward || [])
+                ];
+                // Deduplicate by symbol
+                const seen = new Set();
+                const trades = allTrades.filter(t => {
+                    const k = (t.symbol || t.contract || '').toUpperCase();
+                    if (seen.has(k)) return false;
+                    seen.add(k);
+                    return true;
+                });
+                // Tier filter
+                const filtered = trades.filter(t => {
+                    if (tierFilter === 'all') return true;
+                    return String(parseInt(t.tier || 2, 10)) === tierFilter;
+                });
+                if (!filtered.length) return;
+                html += `<div class="scan-section-title">${label} Weekly Setups (${filtered.length})</div>`;
+                html += '<div style="overflow-x:auto"><table><thead><tr>' + colHeaders + '</tr></thead><tbody>';
+                filtered.forEach(t => {
+                    const entry = parseFloat(t.entry_spot || t.entry_price || t.entry || 0);
+                    const sl = parseFloat(t.current_sl || t.sl || 0);
+                    const t1v = parseFloat(t.t1 || 0);
+                    const t2v = parseFloat(t.t2 || 0);
+                    const t3v = parseFloat(t.t3 || 0);
+                    const rr = parseFloat(t.rr || 0);
+                    let tierBadge = '';
+                    const tn = parseInt(t.tier || 2, 10);
+                    if (tn === 1) tierBadge = '<span style="background:#238636;color:#fff;font-size:10px;padding:1px 6px;border-radius:8px;font-weight:700">🥇 T1</span>';
+                    else if (tn === 2) tierBadge = '<span style="background:#1f6feb;color:#fff;font-size:10px;padding:1px 6px;border-radius:8px;font-weight:700">🥈 T2</span>';
+                    else tierBadge = '<span style="background:#8957e5;color:#fff;font-size:10px;padding:1px 6px;border-radius:8px;font-weight:700">🥉 T3</span>';
+                    const wLabel = `<span style="background:#3fb950;color:#000;font-size:10px;padding:1px 5px;border-radius:6px;font-weight:700">W</span>`;
+                    let pat = (t.pattern || '-');
+                    if (pat.includes('Engulf')) pat = pat.includes('Bear') ? 'BEAR_ENG' : 'BULL_ENG';
+                    else if (pat.includes('Two_Higher')) pat = 'BULL_2HH';
+                    else if (pat.includes('Two_Lower')) pat = 'BEAR_2LL';
+                    else if (pat.includes('Sweep') && pat.includes('HH')) pat = 'BEAR_HH';
+                    else if (pat.includes('Sweep') || pat.includes('LL')) pat = 'BULL_LL';
+                    else if (pat.includes('Baby') || pat.includes('Hammer')) pat = 'BULL_HAM';
+                    else if (pat.includes('Harami')) pat = pat.includes('Bear') ? 'BEAR_HAR' : 'BULL_HAR';
+                    const swings = t.swing_waves ? `🌊 ${t.swing_waves}S${t.terminal_base ? ' +Base' : ''}` : '-';
+                    html += `<tr>
+                        <td>${wLabel} ${t.symbol || t.contract || '-'}</td>
+                        <td><span style="color:${eng==='weekly'?'#3fb950':'#f85149'};font-weight:700">${eng==='weekly'?'BUY':'SELL'}</span></td>
+                        <td>${tierBadge}</td>
+                        <td>${entry>0?entry.toFixed(2):'-'}</td>
+                        <td>${sl>0?sl.toFixed(2):'-'}</td>
+                        <td>${t1v>0?t1v.toFixed(2):'-'}</td>
+                        <td>${t2v>0?t2v.toFixed(2):'-'}</td>
+                        <td>${t3v>0?t3v.toFixed(2):'-'}</td>
+                        <td>${rr>0?rr.toFixed(2):'-'}</td>
+                        <td style="font-size:11px">${pat}</td>
+                        <td style="font-size:11px">${t.candle_a_time||t.entry_time||'-'}</td>
+                        <td style="font-size:11px">${swings}</td>
+                    </tr>`;
+                });
+                html += '</tbody></table></div>';
+            });
+            if (!html) html = '<p class="empty-state">No weekly setups yet &mdash; start the 📅 Weekly Bull or Weekly Bear scanner from the control panel.</p>';
+            document.getElementById('weekly-scan-body').innerHTML = html;
         }
 
         function showToast(msg, type) {
@@ -1953,6 +2033,7 @@
             <div class="left-tab-bar">
                 <button class="left-tab-btn active" onclick="switchLeftTab('active-pos-tab')">Live Positions</button>
                 <button class="left-tab-btn" onclick="switchLeftTab('scan-tab-left')">Today's scan</button>
+                <button class="left-tab-btn" onclick="switchLeftTab('weekly-scan-tab')">📅 Weekly Scan</button>
                 <button class="left-tab-btn" onclick="switchLeftTab('ema-scan-tab')">EMA Scan</button>
             </div>
             <div id="active-pos-tab" class="left-tab-content active">
@@ -2000,6 +2081,29 @@
                     <div id="scan-body"><p class="empty-state">No scan trades yet</p></div>
                 </div>
             </div>
+            <div id="weekly-scan-tab" class="left-tab-content">
+                <div class="section-panel">
+                    <div class="section-header">
+                        <span>📅 Weekly A-B-C-D Setups <span style="background:#3fb950;color:#000;font-size:10px;padding:2px 7px;border-radius:10px;font-weight:700;vertical-align:middle;">INVESTMENT GRADE</span></span>
+                        <div style="display:flex;gap:6px;align-items:center">
+                            <select id="weekly-side-filter" onchange="renderWeeklyScanTab()" class="filter-select" style="width:auto;background:#1f6feb;color:#fff;font-weight:600;border:1px solid #388bfd">
+                                <option value="all" selected>Both Bull & Bear</option>
+                                <option value="bull">📈 Bullish Only</option>
+                                <option value="bear">📉 Bearish Only</option>
+                            </select>
+                            <select id="weekly-tier-filter" onchange="renderWeeklyScanTab()" class="filter-select" style="width:auto">
+                                <option value="all" selected>🌟 All Tiers</option>
+                                <option value="1">🥇 Tier 1 Gold</option>
+                                <option value="2">🥈 Tier 2 Core</option>
+                                <option value="3">🥉 Tier 3 Momentum</option>
+                            </select>
+                            <button onclick="clearScanData()" style="padding:2px 10px;background:inherit;border:1px solid #f85149;color:#f85149;border-radius:4px;font-size:10px;cursor:pointer">Clear</button>
+                            <button onclick="scanExport()" style="padding:2px 10px;background:inherit;border:1px solid #58a6ff;color:#58a6ff;border-radius:4px;font-size:10px;cursor:pointer">Export</button>
+                        </div>
+                    </div>
+                    <div id="weekly-scan-body"><p class="empty-state">No weekly scan trades yet — start the Weekly Bull or Bear scanner from the control panel.</p></div>
+                </div>
+            </div>
             <div id="ema-scan-tab" class="left-tab-content">
                 <div class="section-panel">
                     <div class="section-header">
@@ -2025,8 +2129,10 @@
                         <div style="display:flex;align-items:center;gap:6px;">
                             <select onchange="setFilter('log',this.value)" class="filter-select">
                                 <option value="all">All</option>
-                                <option value="daily">Stock Bullish</option>
-                                <option value="bear_trade">Stock Bearish</option>
+                                <option value="daily">Stock Bullish (Daily)</option>
+                                <option value="bear_trade">Stock Bearish (Daily)</option>
+                                <option value="weekly">Stock Bull (Weekly)</option>
+                                <option value="weekly_bear">Stock Bear (Weekly)</option>
                                 <option value="ema_engine">Stock EMA Engine</option>
                             </select>
                             <button class="clear-logs-btn" onclick="clearLogs()">Clear Logs</button>

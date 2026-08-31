@@ -31,19 +31,22 @@ from trading_core import (
     STOCK_REGISTRY
 )
 
+import paths
+
 DEFAULT_WIN_EXPORT_DIR = r"G:\Poovendan\AI\Trading\Share\Export_output\Automated"
 if os.path.exists(r"G:\Poovendan\AI\Trading\Share"):
     BASE_EXPORT_DIR = DEFAULT_WIN_EXPORT_DIR
 else:
-    BASE_EXPORT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output", "exports")
+    BASE_EXPORT_DIR = paths.EXPORTS_DIR
 os.makedirs(BASE_EXPORT_DIR, exist_ok=True)
 
-os.makedirs("output/logs", exist_ok=True)
+log_p = paths.log_file("automated_strategy_exporter.log")
+os.makedirs(os.path.dirname(log_p), exist_ok=True)
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[
-        logging.FileHandler("output/logs/automated_strategy_exporter.log", mode="a", encoding="utf-8"),
+        logging.FileHandler(log_p, mode="a", encoding="utf-8"),
         logging.StreamHandler()
     ]
 )

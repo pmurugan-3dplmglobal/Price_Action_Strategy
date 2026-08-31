@@ -504,6 +504,19 @@ def refresh_data(single_run=False):
                         scan_display["nifty50"] = data_obj
             except Exception:
                 pass
+            try:
+                if os.path.exists(SCAN_DISPLAY_INDEX_FILE):
+                    mtime = os.path.getmtime(SCAN_DISPLAY_INDEX_FILE)
+                    if _file_mtime_cache.get(SCAN_DISPLAY_INDEX_FILE) == mtime and SCAN_DISPLAY_INDEX_FILE in _parsed_json_cache:
+                        scan_display["index"] = _parsed_json_cache[SCAN_DISPLAY_INDEX_FILE]
+                    else:
+                        with open(SCAN_DISPLAY_INDEX_FILE, "r") as f:
+                            data_obj = json.load(f)
+                        _file_mtime_cache[SCAN_DISPLAY_INDEX_FILE] = mtime
+                        _parsed_json_cache[SCAN_DISPLAY_INDEX_FILE] = data_obj
+                        scan_display["index"] = data_obj
+            except Exception:
+                pass
             for k in ["nifty50", "index"]:
                 if k in scan_display and isinstance(scan_display[k], dict):
                     obj = scan_display[k]
@@ -2251,7 +2264,7 @@ def api_get_chart_data():
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
-EXPORT_STATE_FILE = "output/monitor/export_state.json"
+EXPORT_STATE_FILE = paths.EXPORT_STATE_FILE
 
 # ──────────────────────────────────────────────
 #  MONTHLY EXPORT (trades to Excel archive)
@@ -2269,9 +2282,9 @@ def run_monthly_export():
         parts = ts.split(" ")[0].split("-") if " " in ts else ts.split("-")
         key = (parts[0], parts[1]) if len(parts) >= 2 else ("unknown", "00")
         groups[key].append(t)
-    out_dir = "output/exports"
+    out_dir = paths.EXPORTS_DIR
     os.makedirs(out_dir, exist_ok=True)
-    xl_path = os.path.join(out_dir, "trade_archive.xlsx")
+    xl_path = paths.TRADE_ARCHIVE_XLSX
     sheet_names = []
     if os.path.exists(xl_path):
         wb = openpyxl.load_workbook(xl_path)
@@ -2344,10 +2357,10 @@ def auto_eod_journal_scheduler():
         time.sleep(60)
 
 def main():
-    os.makedirs("input", exist_ok=True)
-    os.makedirs("output/logs", exist_ok=True)
-    os.makedirs("output/monitor", exist_ok=True)
-    os.makedirs("logs", exist_ok=True)
+    os.makedirs(paths.INPUT_DIR, exist_ok=True)
+    os.makedirs(paths.LOGS_DIR, exist_ok=True)
+    os.makedirs(paths.MONITOR_DIR, exist_ok=True)
+    os.makedirs(paths.EXPORTS_DIR, exist_ok=True)
     threading.Thread(target=auto_export_if_new_month, daemon=True).start()
     worker = threading.Thread(target=refresh_data, daemon=True)
     worker.start()

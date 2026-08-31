@@ -770,9 +770,17 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                     positions_dict[sym]["candle_tf_time"] = str(event_time) if event_time else ""
                     positions_dict[sym]["timeframe"] = pos_tf
 
-            # ── FRIDAY EOD 15:15 INTRADAY INDEX AUTO-SQUAREOFF GUARD ──
-            # On Fridays (weekday == 4), short-timeframe (<= 5min) or Index option positions must not be carried
-            # over the weekend to eliminate severe 2-day theta crush and Monday opening gap risk.
+            # ── FRIDAY EOD 15:15 SMART OPTION AUTO-SQUAREOFF GUARD ──
+            # On Fridays (weekday == 4 >= 15:15 IST), manage weekend carryover risk:
+            # 1. Short-TF (<= 5min) and Index Options ALWAYS square off (high weekend gamma & decay).
+            # 2. Stock Options evaluate an Intelligent Carry Gate:
+            #    - HOLD over weekend if:
+            #      a) Runner on house money: trailing_stage >= 1 (T1 hit, partial booked or SL at BE)
+            #      b) Strong profit cushion: P&L >= +2.0% into close
+            #      c) Fresh afternoon breakout: Entered on Friday after 13:30 IST & P&L >= 0.0%
+            #      d) Tier 1 Gold setup: tier == 1 / TIER_1_GOLD & P&L >= 0.0%
+            #    - SQUARE OFF if Stagnant / Underwater:
+            #      Entered earlier in session, P&L < +2.0%, T1 untouched. Eliminates 66-hr weekend theta tax.
             now_dt = dt.now()
             is_friday = now_dt.weekday() == 4
             is_eod_time = now_dt.strftime("%H:%M") >= "15:15"
@@ -780,28 +788,64 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
             is_short_tf = any(tf in pos_tf_str for tf in ["3m", "3min", "3minute", "5m", "5min", "5minute"])
             is_index_contract = (engine_name == "index") or (pos.get("engine") == "index") or any(idx_sym in c_str for idx_sym in ["NIFTY", "BANKNIFTY", "SENSEX", "MIDCPNIFTY", "FINNIFTY", "BANKEX"])
 
-            if is_friday and is_eod_time and (is_short_tf or is_index_contract):
-                logging.info(f"[FRIDAY 15:15 EOD SQUAREOFF] Closing {sym} ({contract}) to prevent weekend theta decay & gap risk.")
-                if is_stock:
-                    close_stock_position(kite, pos, live, product_type)
-                else:
-                    close_position(kite, pos, live, product_type)
+            if is_friday and is_eod_time and not is_stock:
                 entry_s = float(pos.get("entry_spot") or pos.get("entry_price") or 0.0)
-                exit_price = live_ltp if live_ltp > 0 else (cp if cp > 0 else entry_s)
-                pnl = ((exit_price - entry_s) / entry_s * 100) if entry_s else 0
-                log_fn(sym, pos.get("pattern", ""), pos_tf, "EXIT_EOD_FRIDAY", "CLOSED",
-                       f"Friday 15:15 EOD Auto-Squareoff (Exit @ {exit_price:.2f})", pnl,
-                       entry=entry_s, sl=pos.get("current_sl", ""), target=pos.get("t1", ""),
-                       event_time=last.get('date'))
-                if tid:
-                    trade_db.update_trade(tid, {
-                        "status": "COMPLETED",
-                        "exit_time": dt.now().strftime("%Y-%m-%d %H:%M:%S"),
-                        "pnl_percent": round(pnl, 2),
-                        "details": f"Friday 15:15 EOD auto-squareoff [WEEKEND_DECAY_GUARD] | Exit @ {exit_price:.2f}"
-                    })
-                to_clear.append(sym)
-                continue
+                curr_p = live_ltp if live_ltp > 0 else (cp if cp > 0 else entry_s)
+                curr_pnl_pct = ((curr_p - entry_s) / entry_s * 100) if entry_s > 0 else 0.0
+
+                should_squareoff = False
+                squareoff_reason = ""
+
+                if is_short_tf or is_index_contract:
+                    should_squareoff = True
+                    squareoff_reason = "Friday 15:15 EOD Index/Intraday Auto-Squareoff [WEEKEND_DECAY_GUARD]"
+                else:
+                    # Stock Option: Apply Intelligent Carry Gate
+                    is_runner_be = int(pos.get("trailing_stage") or 0) >= 1
+                    is_solid_profit = curr_pnl_pct >= float(cfg.get("friday_min_profit_pct", 2.0))
+                    
+                    # Check if fresh afternoon entry (e.g. entered after 13:30 on Friday)
+                    is_fresh_pm = False
+                    pos_et = str(pos.get("entry_time") or "")
+                    if pos_et:
+                        try:
+                            et_clean = pos_et.split("+")[0].replace("T", " ")
+                            et_obj = dt.fromisoformat(et_clean)
+                            if et_obj.date() == now_dt.date() and et_obj.strftime("%H:%M") >= "13:30":
+                                is_fresh_pm = True
+                        except Exception:
+                            pass
+                    
+                    is_tier1_gold = (int(pos.get("tier") or 0) == 1) or ("GOLD" in str(pos.get("tier_label", "")).upper())
+
+                    # Qualified to hold?
+                    qualified_to_hold = is_runner_be or is_solid_profit or (is_fresh_pm and curr_pnl_pct >= 0.0) or (is_tier1_gold and curr_pnl_pct >= 0.0)
+
+                    if not qualified_to_hold:
+                        should_squareoff = True
+                        squareoff_reason = f"Friday 15:15 EOD Stagnant Square-off [THETA_PROTECTION] (PnL {curr_pnl_pct:.2f}% < +2.0%, T1 untouched)"
+                    else:
+                        hold_tag = "RUNNER_BE" if is_runner_be else ("PROFIT_CUSHION" if is_solid_profit else ("FRESH_PM_ENTRY" if is_fresh_pm else "TIER_1_GOLD_ACCUMULATION"))
+                        logging.info(f"[FRIDAY 15:15 CARRY APPROVED] Holding {sym} ({contract}) over weekend for Monday open: Tag={hold_tag} | PnL {curr_pnl_pct:.2f}% | Entry {entry_s:.2f} -> LTP {curr_p:.2f}")
+
+                if should_squareoff:
+                    logging.info(f"[FRIDAY 15:15 EOD SQUAREOFF] Closing {sym} ({contract}) | {squareoff_reason}")
+                    close_position(kite, pos, live, product_type)
+                    exit_price = curr_p
+                    pnl = curr_pnl_pct
+                    log_fn(sym, pos.get("pattern", ""), pos_tf, "EXIT_EOD_FRIDAY", "CLOSED",
+                           f"{squareoff_reason} (Exit @ {exit_price:.2f})", pnl,
+                           entry=entry_s, sl=pos.get("current_sl", ""), target=pos.get("t1", ""),
+                           event_time=last.get('date'))
+                    if tid:
+                        trade_db.update_trade(tid, {
+                            "status": "COMPLETED",
+                            "exit_time": dt.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            "pnl_percent": round(pnl, 2),
+                            "details": f"{squareoff_reason} | Exit @ {exit_price:.2f}"
+                        })
+                    to_clear.append(sym)
+                    continue
 
             # 1) SL Evaluation (Separated SL Monitor: Skipped 09:15-09:45 AM, Active at 09:45 AM+)
             now_time_str = dt.now().strftime("%H:%M")
@@ -891,6 +935,21 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                         spot_tok = reg_entry
 
                 spot_sl = float(pos.get("spot_sl") or 0.0)
+                if spot_tok and spot_sl <= 0:
+                    try:
+                        df_spot_chk = fetch_and_resample_candles(kite, spot_tok, from_date, to_date, pos_tf or timeframe_entry)
+                        if df_spot_chk is not None and len(df_spot_chk) >= 5:
+                            side_s = str(pos.get("side", "CE")).upper()
+                            if side_s in ["CE", "BUY", "BULL"]:
+                                low_val = float(df_spot_chk['low'].iloc[-10:].min())
+                                spot_sl = round(low_val - max(0.50, low_val * 0.005), 2)
+                            else:
+                                high_val = float(df_spot_chk['high'].iloc[-10:].max())
+                                spot_sl = round(high_val + max(0.50, high_val * 0.005), 2)
+                            pos["spot_sl"] = spot_sl
+                    except Exception as derive_spot_err:
+                        logging.debug(f"Dynamic spot_sl derivation failed for {sym}: {derive_spot_err}")
+
                 if spot_tok and spot_sl > 0:
                     try:
                         sq = kite.ltp([spot_tok])

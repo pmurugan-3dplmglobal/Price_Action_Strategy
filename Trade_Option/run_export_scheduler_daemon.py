@@ -8,13 +8,16 @@ COMMON_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "comm
 if COMMON_DIR not in sys.path:
     sys.path.insert(0, COMMON_DIR)
 
+import paths
 from automated_strategy_exporter import execute_scheduled_export
 
+log_p = paths.log_file("export_scheduler_daemon.log")
+os.makedirs(os.path.dirname(log_p), exist_ok=True)
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[
-        logging.FileHandler("output/logs/export_scheduler_daemon.log", mode="a", encoding="utf-8"),
+        logging.FileHandler(log_p, mode="a", encoding="utf-8"),
         logging.StreamHandler()
     ]
 )

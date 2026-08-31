@@ -12,10 +12,12 @@ input/*.txt
 input/*.flag
 **/input/*.txt
 **/input/*.flag
-Trade_Option/input/
-Trade_Stock/input/
+Trade_Option/input/*.txt
+Trade_Stock/input/*.txt
 .DS_Store
 *.log
+*.tar.gz
+cloud_sync_payload.tar.gz
 
 # Environment
 .env

@@ -1,29 +1,60 @@
 {
   "api_key": "o8nnw6kxykvrsrhg",
   "api_secret": "9g7d5kktr38d7yvq11njsm4upz8kc6s1",
-  "daily": {
-    "lookback_days": 2000
-  },
-  "_backtest": false,
-  "sl_mode": "hybrid",
-  "failsafe_start_time": "09:45",
-  "emergency_buffer_pct": 0.15,
-  "index": {
-    "timeframe_entry": "15minute",
-    "timeframe_anchor": "15minute",
-    "lookback_days": 30,
-    "scan_interval": 15,
-    "risk_percent": 1,
-    "capital": 100000,
-    "strike_range": 0
-  },
   "nifty50": {
-    "timeframe_entry": "60minute",
-    "timeframe_anchor": "60minute",
-    "lookback_days": 30,
-    "scan_interval": 30,
-    "risk_percent": 10,
+    "target_universe": "FNO_ALL",
+    "timeframe_entry": "30minute",
+    "timeframe_anchor": "30minute",
     "capital": 100000,
-    "strike_range": 0
+    "strike_range": 1,
+    "enable_swing_filter": true,
+    "swing_min_waves": 3,
+    "strict_macro_gate": true,
+    "enable_spot_sl_guard": true,
+    "tranche_mode": true
+  },
+  "ema_engine": {
+    "timeframe": "1d",
+    "target_universe": "ALL",
+    "scan_interval": 300
+  },
+  "index": {
+    "timeframe_entry": "3minute",
+    "timeframe_anchor": "15minute",
+    "capital": 100000,
+    "strike_range": 3,
+    "enable_swing_filter": true,
+    "swing_min_waves": 3,
+    "strict_macro_gate": false,
+    "enable_spot_sl_guard": true,
+    "tranche_mode": true
+  },
+  "bear_trade": {
+    "product_type": "CNC",
+    "target_index": "NIFTY_MIDCAP_100",
+    "timeframe": "day",
+    "enable_swing_filter": true,
+    "swing_min_waves": 2
+  },
+  "daily": {
+    "product_type": "CNC",
+    "target_index": "NIFTY_MIDCAP_100",
+    "timeframe": "day",
+    "enable_swing_filter": true,
+    "swing_min_waves": 2
+  },
+  "swing_leg_config": {
+    "default": 3,
+    "min_leg": 2,
+    "max_leg": 5,
+    "volatility_adaptive": true,
+    "overrides": {
+      "NIFTY": 2,
+      "BANKNIFTY": 2,
+      "RELIANCE": 2,
+      "HDFCBANK": 2,
+      "TATAMOTORS": 4,
+      "ADANIENT": 4
+    }
   }
 }

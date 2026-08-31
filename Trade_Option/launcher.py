@@ -24,8 +24,8 @@ def main():
     print("  Starting web server...")
     print()
 
-    webbrowser.open(DASHBOARD_URL)
-    subprocess.run([sys.executable, "app.py"])
+    app_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app_option_Trade.py")
+    subprocess.run([sys.executable, app_file])
 
 if __name__ == "__main__":
     main()

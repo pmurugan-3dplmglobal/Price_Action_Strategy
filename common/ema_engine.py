@@ -39,15 +39,38 @@ def _setup_ema_logger():
 
 logger = _setup_ema_logger()
 
-def _save_ema_status():
+def _atomic_write_json(file_path, data):
+    tmp = f"{file_path}.tmp.{os.getpid()}"
     try:
-        os.makedirs(os.path.dirname(EMA_STATUS_FILE), exist_ok=True)
-        tmp_file = EMA_STATUS_FILE + ".tmp"
-        with open(tmp_file, "w", encoding="utf-8") as f:
-            json.dump(_ema_engine_running, f, indent=2)
-        os.replace(tmp_file, EMA_STATUS_FILE)
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        for attempt in range(5):
+            try:
+                os.replace(tmp, file_path)
+                return True
+            except (PermissionError, OSError):
+                time.sleep(0.05 * (attempt + 1))
+        with open(file_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        return True
     except Exception as e:
-        logger.error(f"Failed to save EMA status file: {e}")
+        logger.warning(f"Atomic write failed for {file_path}: {e}")
+        try:
+            with open(file_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+            return True
+        except Exception:
+            return False
+    finally:
+        if os.path.exists(tmp):
+            try:
+                os.remove(tmp)
+            except Exception:
+                pass
+
+def _save_ema_status():
+    _atomic_write_json(EMA_STATUS_FILE, _ema_engine_running)
 
 def _load_ema_status():
     if os.path.exists(EMA_STATUS_FILE):
@@ -270,10 +293,7 @@ def execute_ema_scan_cycle(timeframe="1d", is_options_mode=True, target_universe
             },
             "last_updated": time.strftime("%Y-%m-%d %H:%M:%S")
         }
-        tmp_file = out_file + ".tmp"
-        with open(tmp_file, "w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=2)
-        os.replace(tmp_file, out_file)
+        _atomic_write_json(out_file, payload)
 
         logger.info(f"EMA Scan cycle completed for universe='{target_universe}': {len(results)} setups found.")
         return results

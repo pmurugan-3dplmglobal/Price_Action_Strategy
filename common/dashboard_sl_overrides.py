@@ -42,6 +42,37 @@ def sanitize_sl_and_entry(entry_spot, current_sl, trailing_stage=0, side="BULL",
         return entry_spot, current_sl
 
 
+def _atomic_write_json(file_path, data):
+    tmp = f"{file_path}.tmp.{os.getpid()}"
+    try:
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        for attempt in range(5):
+            try:
+                os.replace(tmp, file_path)
+                return True
+            except (PermissionError, OSError):
+                time.sleep(0.05 * (attempt + 1))
+        with open(file_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        return True
+    except Exception as e:
+        logging.warning(f"Atomic write failed for {file_path}: {e}")
+        try:
+            with open(file_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+            return True
+        except Exception:
+            return False
+    finally:
+        if os.path.exists(tmp):
+            try:
+                os.remove(tmp)
+            except Exception:
+                pass
+
+
 def clean_stale_overrides(active_contracts=None):
     """
     Purge expired contracts and invalid/inverted entries from sl_target_overrides.json.
@@ -79,15 +110,8 @@ def clean_stale_overrides(active_contracts=None):
             cleaned[eng][sym] = vals
 
     if modified:
-        try:
-            os.makedirs(os.path.dirname(paths.SL_TARGET_OVERRIDES_FILE), exist_ok=True)
-            tmp = paths.SL_TARGET_OVERRIDES_FILE + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(cleaned, f, indent=2)
-            os.replace(tmp, paths.SL_TARGET_OVERRIDES_FILE)
-            logging.info("[OVERRIDES] Cleaned stale/expired and inverted overrides.")
-        except Exception as e:
-            logging.warning(f"[OVERRIDES] Failed to write cleaned overrides: {e}")
+        _atomic_write_json(paths.SL_TARGET_OVERRIDES_FILE, cleaned)
+        logging.info("[OVERRIDES] Cleaned stale/expired and inverted overrides.")
     return cleaned
 
 
@@ -106,13 +130,7 @@ def purge_sl_override(symbol):
             overrides[eng].pop(clean_symbol, None)
             modified = True
     if modified:
-        try:
-            tmp = paths.SL_TARGET_OVERRIDES_FILE + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(overrides, f, indent=2)
-            os.replace(tmp, paths.SL_TARGET_OVERRIDES_FILE)
-        except Exception as e:
-            logging.warning(f"Failed to purge override for {symbol}: {e}")
+        _atomic_write_json(paths.SL_TARGET_OVERRIDES_FILE, overrides)
 
 
 def read_sl_overrides():
@@ -146,10 +164,6 @@ def write_sl_overrides(engine, symbol, vals, engine_aliases):
     for eng_k in engine_aliases:
         overrides.setdefault(eng_k, {})[str(symbol)] = vals
         overrides.setdefault(eng_k, {})[clean_symbol] = vals
-    os.makedirs(os.path.dirname(paths.SL_TARGET_OVERRIDES_FILE), exist_ok=True)
-    tmp = paths.SL_TARGET_OVERRIDES_FILE + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(overrides, f, indent=2)
-    os.replace(tmp, paths.SL_TARGET_OVERRIDES_FILE)
+    _atomic_write_json(paths.SL_TARGET_OVERRIDES_FILE, overrides)
     return overrides
 

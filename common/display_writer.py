@@ -255,13 +255,32 @@ def write_scan_display_data(staged, active, display_file, engine_name=None):
             "carry_forward": carry_fwd,
             "active_live": active_live
         }
-        if engine_name:
-            data["engine"] = engine_name
         os.makedirs(os.path.dirname(display_file), exist_ok=True)
-        tmp_file = display_file + ".tmp"
-        with open(tmp_file, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
-        os.replace(tmp_file, display_file)
+        tmp_file = f"{display_file}.tmp.{os.getpid()}"
+        written = False
+        try:
+            with open(tmp_file, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+            for attempt in range(5):
+                try:
+                    os.replace(tmp_file, display_file)
+                    written = True
+                    break
+                except (PermissionError, OSError):
+                    time.sleep(0.05 * (attempt + 1))
+            if not written:
+                with open(display_file, "w", encoding="utf-8") as f:
+                    json.dump(data, f, indent=2)
+        except Exception as write_err:
+            logging.warning(f"Display file atomic replace warning: {write_err}, falling back to direct write")
+            with open(display_file, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+        finally:
+            if os.path.exists(tmp_file):
+                try:
+                    os.remove(tmp_file)
+                except Exception:
+                    pass
     except Exception as e:
         logging.error(f"Display data write failed: {e}")
 

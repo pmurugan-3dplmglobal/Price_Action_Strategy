@@ -50,6 +50,9 @@ def resolve_underlying(contract_or_symbol, engine="nifty50"):
 app = Flask(__name__)
 app.secret_key = dashboard_auth.get_secret_key()
 
+from blueprints.routes_token import token_bp
+app.register_blueprint(token_bp)
+
 # ──────────────────────────────────────────────
 #  FILE PATHS & DASHBOARD CONFIG
 # ──────────────────────────────────────────────
@@ -131,7 +134,8 @@ PROGRAMS = {
                 "default": "day"
             },
             "enable_swing_filter": {"label": "Swing Filter", "type": "select", "options": ["true", "false"], "default": "true"},
-            "swing_min_waves": {"label": "Min Swings", "type": "number", "default": 3}
+            "swing_min_waves": {"label": "Min Swings", "type": "number", "default": 2},
+            "swing_min_r2": {"label": "Swing R² (0.0-1.0)", "type": "number", "default": 0.55}
         }
     },
     "bear_trade": {
@@ -160,7 +164,44 @@ PROGRAMS = {
                 "default": "day"
             },
             "enable_swing_filter": {"label": "Swing Filter", "type": "select", "options": ["true", "false"], "default": "true"},
-            "swing_min_waves": {"label": "Min Swings", "type": "number", "default": 3}
+            "swing_min_waves": {"label": "Min Swings", "type": "number", "default": 2},
+            "swing_min_r2": {"label": "Swing R² (0.0-1.0)", "type": "number", "default": 0.55}
+        }
+    },
+    "weekly": {
+        "name": "Stock_Weekly_Bull_Scanner",
+        "file": "Trade_Stock/stock_weekly_bull_scanner.py",
+        "desc": "Scans NSE stocks on Weekly timeframe for Bullish A-B-C-D setups (Investment Grade)",
+        "color": "#3fb950",
+        "log_file": paths.WEEKLY_BULL_SCAN_LOG,
+        "config_fields": {
+            "target_index": {
+                "label": "Target Index Universe",
+                "type": "select",
+                "options": ["NIFTY50", "NIFTY_NEXT_100", "NIFTY_MIDCAP_100", "NIFTY_SMALLCAP_250"],
+                "default": "NIFTY_MIDCAP_100"
+            },
+            "enable_swing_filter": {"label": "Swing Filter", "type": "select", "options": ["true", "false"], "default": "true"},
+            "swing_min_waves": {"label": "Min Swings", "type": "number", "default": 2},
+            "swing_min_r2": {"label": "Swing R² (0.0-1.0)", "type": "number", "default": 0.45}
+        }
+    },
+    "weekly_bear": {
+        "name": "Stock_Weekly_Bear_Scanner",
+        "file": "Trade_Stock/stock_weekly_bear_scanner.py",
+        "desc": "Scans NSE stocks on Weekly timeframe for Bearish A-B-C-D setups (Investment Grade Short)",
+        "color": "#ff7b72",
+        "log_file": paths.WEEKLY_BEAR_SCAN_LOG,
+        "config_fields": {
+            "target_index": {
+                "label": "Target Index Universe",
+                "type": "select",
+                "options": ["NIFTY50", "NIFTY_NEXT_100", "NIFTY_MIDCAP_100", "NIFTY_SMALLCAP_250"],
+                "default": "NIFTY_MIDCAP_100"
+            },
+            "enable_swing_filter": {"label": "Swing Filter", "type": "select", "options": ["true", "false"], "default": "true"},
+            "swing_min_waves": {"label": "Min Swings", "type": "number", "default": 2},
+            "swing_min_r2": {"label": "Swing R² (0.0-1.0)", "type": "number", "default": 0.45}
         }
     },
     "ema_engine": {
@@ -185,8 +226,8 @@ cached_data = {
     "journal": [],
     "log_tail": {pid: [] for pid in PROGRAMS},
     "stats": {"total_trades": 0, "win_rate": 0, "active_positions": 0, "pnl": 0},
-    "scans": {"daily": [], "bear_trade": []},
-    "scan_summary": {"daily": {"anchors": {}, "abc_matches": {}}, "bear_trade": {"anchors": {}, "abc_matches": {}}},
+    "scans": {"daily": [], "bear_trade": [], "weekly": [], "weekly_bear": []},
+    "scan_summary": {"daily": {"anchors": {}, "abc_matches": {}}, "bear_trade": {"anchors": {}, "abc_matches": {}}, "weekly": {"anchors": {}, "abc_matches": {}}, "weekly_bear": {"anchors": {}, "abc_matches": {}}},
     "all_trades": [],
     "kite_positions": [],
     "ltp": {},
@@ -884,6 +925,16 @@ def auth_gate():
         return redirect("/login")
     return None
 
+@app.route("/favicon.ico")
+def favicon():
+    return "", 204
+
+@app.route("/")
+def dashboard():
+    with open(TEMPLATE_PATH, encoding="utf-8") as _template_f:
+        tpl = _template_f.read()
+    return render_template_string(tpl, refresh=REFRESH_SECONDS, programs=PROGRAMS, user=session.get("user", ""), role=session.get("role", ""))
+
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
@@ -948,16 +999,6 @@ def admin_users():
     if session.get("role") != "admin":
         return jsonify({"ok": False, "error": "Admin only"}), 403
     return jsonify({"ok": True, "users": dashboard_auth.list_users()})
-
-@app.route("/favicon.ico")
-def favicon():
-    return "", 204
-
-@app.route("/")
-def dashboard():
-    with open(TEMPLATE_PATH, encoding="utf-8") as _template_f:
-        tpl = _template_f.read()
-    return render_template_string(tpl, refresh=REFRESH_SECONDS, programs=PROGRAMS, user=session.get("user", ""), role=session.get("role", ""))
 
 @app.route("/api/status")
 def api_status():
@@ -1029,7 +1070,6 @@ def api_token_callback():
         req_token = data.get("request_token")
     if not req_token:
         return "<h3>Error: No request_token received from Zerodha</h3><p><a href='/'>Return to Dashboard</a></p>", 400
-    
     res = exchange_request_token(req_token.strip())
     if res.get("ok"):
         return """
@@ -1038,7 +1078,7 @@ def api_token_callback():
         <head><title>Kite Token Generated</title></head>
         <body style="font-family:sans-serif;background:#0d1117;color:#c9d1d9;text-align:center;padding:50px;">
             <div style="background:#161b22;border:1px solid #238636;border-radius:8px;padding:30px;max-width:500px;margin:auto;box-shadow:0 4px 12px rgba(0,0,0,0.5);">
-                <h2 style="color:#3fb950;margin-top:0;">✅ Token Generated Successfully!</h2>
+                <h2 style="color:#3fb950;margin-top:0;">&#x2705; Token Generated Successfully!</h2>
                 <p style="color:#8b949e;">Zerodha access token has been generated and saved for today.</p>
                 <a href="/" style="display:inline-block;background:#238636;color:#ffffff;padding:10px 20px;border-radius:6px;text-decoration:none;font-weight:bold;margin-top:15px;">Return to Dashboard</a>
             </div>
@@ -1089,7 +1129,7 @@ def api_save_config(prog_id):
 def api_scan_clear():
     now_str = dt.now().strftime("%Y-%m-%d %H:%M:%S")
     today_str = dt.now().strftime("%Y-%m-%d")
-    for f in [paths.SCAN_DISPLAY_FILE, paths.SCAN_DISPLAY_INDEX_FILE, paths.SCAN_DISPLAY_STOCK_FILE, paths.SCAN_DISPLAY_BEAR_FILE]:
+    for f in [paths.SCAN_DISPLAY_FILE, paths.SCAN_DISPLAY_INDEX_FILE, paths.SCAN_DISPLAY_STOCK_FILE, paths.SCAN_DISPLAY_BEAR_FILE, paths.SCAN_DISPLAY_WEEKLY_FILE, paths.SCAN_DISPLAY_WEEKLY_BEAR_FILE]:
         try:
             empty_scan = {
                 "date": today_str,
@@ -1113,14 +1153,14 @@ def api_scan_clear():
         pass
     try:
         import trade_db
-        for eng in ["daily", "bear_trade", "nifty50", "index"]:
+        for eng in ["daily", "bear_trade", "weekly", "weekly_bear", "nifty50", "index"]:
             trade_db.clear_cycle_trades(eng)
     except Exception:
         pass
     _file_mtime_cache.clear()
     _parsed_json_cache.clear()
     with data_lock:
-        for k in ["daily", "bear_trade", "nifty50", "index"]:
+        for k in ["daily", "bear_trade", "weekly", "weekly_bear", "nifty50", "index"]:
             cached_data["scan_display"][k] = {"staged_trades": [], "all_staged_today": [], "carry_forward": [], "active_live": [], "cleared_at": now_str}
     return jsonify({"ok": True})
 
@@ -1204,7 +1244,7 @@ def api_scan_export():
         writer.writerow(["Symbol", "Contract", "Side", "Tier", "Entry", "SL", "T1", "T2", "T3",
                          "AncherT", "EntryTime", "Result", "CF", "RR", "Engine", "Status",
                          "Spot_Trend", "Spot_T1_Target"])
-        files = [("Daily", SCAN_DISPLAY_FILE), ("Bear", SCAN_DISPLAY_BEAR_FILE), ("Stock EMA", EMA_DISPLAY_FILE_STOCK)]
+        files = [("Daily", SCAN_DISPLAY_FILE), ("Bear", SCAN_DISPLAY_BEAR_FILE), ("Weekly Bull", paths.SCAN_DISPLAY_WEEKLY_FILE), ("Weekly Bear", paths.SCAN_DISPLAY_WEEKLY_BEAR_FILE), ("Stock EMA", EMA_DISPLAY_FILE_STOCK)]
         spot_eval_cache = {}
         for label, path in files:
             full = os.path.join(BASE_DIR, path)
@@ -1571,7 +1611,7 @@ def api_buy_scanned_trade():
         t2 = float(data.get("t2") or 0)
         t3 = float(data.get("t3") or 0)
         engine = data.get("engine", "daily")
-        
+
         if not symbol:
             return jsonify({"ok": False, "error": "symbol is required"}), 400
 
@@ -1585,6 +1625,7 @@ def api_buy_scanned_trade():
 
         global _kite_session
         order_id = None
+        ltp = 0
         if not _kite_session:
             try:
                 from common.trading_core import load_kite_session
@@ -1601,7 +1642,6 @@ def api_buy_scanned_trade():
                 q_key = f"{exch}:{contract}"
                 q = _kite_session.quote([q_key])
                 ltp = float(q.get(q_key, {}).get("last_price", 0))
-                ask = 0
                 depth = q.get(q_key, {}).get("depth", {}).get("sell", [])
                 bm = float(data.get("benchmark") or 0)
                 if bm > 0:
@@ -1611,11 +1651,11 @@ def api_buy_scanned_trade():
                     price = round((ask if ask > 0 else ltp) * 1.005, 1)
                     if price <= 0:
                         price = round(entry_spot * 1.005, 1)
-                
+
                 from common.trading_core import STOCK_REGISTRY
                 lot_size = STOCK_REGISTRY.get(symbol, {}).get("lot_size", 1) if exch != "NSE" else 1
                 prod = _kite_session.PRODUCT_CNC if exch == "NSE" else _kite_session.PRODUCT_NRML
-                
+
                 order_id = _kite_session.place_order(
                     variety=_kite_session.VARIETY_REGULAR,
                     tradingsymbol=contract,
@@ -1717,7 +1757,7 @@ def api_exit_position():
         symbol = data.get("symbol", "")
         contract = data.get("contract") or symbol
         engine = data.get("engine", "nifty50")
-        
+
         if not symbol and not contract:
             return jsonify({"ok": False, "error": "Symbol or contract name required"}), 400
 
@@ -1748,7 +1788,7 @@ def api_exit_position():
                     exch = "NFO"
                 else:
                     exch = "NSE"
-                
+
                 pos_obj = {
                     "contract": contract,
                     "symbol": symbol,
@@ -1811,7 +1851,7 @@ def api_exit_all_positions():
         logging.error(f"Exit All API failed: {e}")
         return jsonify({"ok": False, "error": str(e)}), 500
 
-EXPORT_STATE_FILE = "output/monitor/export_state.json"
+EXPORT_STATE_FILE = paths.EXPORT_STATE_FILE
 
 # ──────────────────────────────────────────────
 #  DAILY SELF-LEARNING TRADE JOURNAL API
@@ -1917,11 +1957,11 @@ def api_journal_export_excel():
             "SL", "T1", "T2", "T3", "Quantity", "Lot Size",
             "PnL (₹)", "PnL (%)", "Outcome", "Analysis Remarks", "Self-Learning Lesson"
         ]
-        
+
         header_font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
         header_fill = PatternFill(start_color="1F2937", end_color="1F2937", fill_type="solid")
         center_align = Alignment(horizontal="center", vertical="center")
-        
+
         ws.append(headers)
         for col_num in range(1, len(headers) + 1):
             cell = ws.cell(row=1, column=col_num)
@@ -1992,7 +2032,6 @@ def api_journal_export_excel():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
-
 # ──────────────────────────────────────────────
 #  INTERACTIVE NEGATION ANALYZER API
 # ──────────────────────────────────────────────
@@ -2004,7 +2043,7 @@ def api_analyze_trade():
         entry_price = float(data.get("entry_price", 0)) if data.get("entry_price") else 0.0
         timeframe = str(data.get("timeframe", "75min")).strip()
         engine = str(data.get("engine", "nifty50")).strip()
-        
+
         if not symbol:
             return jsonify({"ok": False, "error": "Valid Symbol or Contract Name required"}), 400
 
@@ -2037,7 +2076,7 @@ def api_analyze_trade():
         t1_val = analysis.get("t1")
         t2_val = analysis.get("t2")
         t3_val = analysis.get("t3")
-        
+
         risk = (resolved_entry - sl_val) if (resolved_entry > 0 and sl_val < resolved_entry) else 0
         rr = round((t1_val - resolved_entry) / risk, 2) if (t1_val and risk > 0) else 0.0
 
@@ -2150,6 +2189,7 @@ def api_get_chart_data():
 
 
 
+
 def run_monthly_export():
     import openpyxl
     from collections import defaultdict
@@ -2162,9 +2202,9 @@ def run_monthly_export():
         parts = ts.split(" ")[0].split("-") if " " in ts else ts.split("-")
         key = (parts[0], parts[1]) if len(parts) >= 2 else ("unknown", "00")
         groups[key].append(t)
-    out_dir = "output/exports"
+    out_dir = paths.EXPORTS_DIR
     os.makedirs(out_dir, exist_ok=True)
-    xl_path = os.path.join(out_dir, "trade_archive.xlsx")
+    xl_path = paths.TRADE_ARCHIVE_XLSX
     sheet_names = []
     if os.path.exists(xl_path):
         wb = openpyxl.load_workbook(xl_path)
@@ -2217,10 +2257,10 @@ def auto_export_if_new_month():
         print(f"Auto-export error: {e}")
 
 def main():
-    os.makedirs("input", exist_ok=True)
-    os.makedirs("output/logs", exist_ok=True)
-    os.makedirs("output/monitor", exist_ok=True)
-    os.makedirs("logs", exist_ok=True)
+    os.makedirs(paths.INPUT_DIR, exist_ok=True)
+    os.makedirs(paths.LOGS_DIR, exist_ok=True)
+    os.makedirs(paths.MONITOR_DIR, exist_ok=True)
+    os.makedirs(paths.EXPORTS_DIR, exist_ok=True)
     threading.Thread(target=auto_export_if_new_month, daemon=True).start()
     worker = threading.Thread(target=refresh_data, daemon=True)
     worker.start()

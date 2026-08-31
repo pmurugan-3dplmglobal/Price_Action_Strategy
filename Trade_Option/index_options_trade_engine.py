@@ -193,8 +193,8 @@ def run_scan_cycle(kite):
                              ACTIVE_POSITIONS, position_lock, trade_db, STRIKE_RANGE,
                              log_to_journal)
         temp_stored_trades.extend(trades)
-    with position_lock:
-        shared_write_display(temp_stored_trades, dict(ACTIVE_POSITIONS), SCAN_DISPLAY_FILE, "index")
+        with position_lock:
+            shared_write_display(temp_stored_trades, dict(ACTIVE_POSITIONS), SCAN_DISPLAY_FILE, "index")
     return temp_stored_trades
 
 # ──────────────────────────────────────────────
@@ -388,6 +388,8 @@ def main_scan_loop(kite):
     except Exception as e:
         logging.warning(f"Kite position recovery failed: {e}")
     shared_reconcile(kite, INDEX_REGISTRY, ACTIVE_POSITIONS, position_lock, "index", TIMEFRAME_ENTRY, TIMEFRAME_ANCHOR, LOOKBACK_DAYS, lambda sym, sp, step, opt, r: shared_resolve_strikes(instrument_dump, sym, sp, step, opt, r))
+    with position_lock:
+        shared_write_display([], dict(ACTIVE_POSITIONS), SCAN_DISPLAY_FILE, "index")
     cycle = 0
     while True:
         try:

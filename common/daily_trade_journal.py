@@ -179,8 +179,8 @@ def resolve_trade_pattern(symbol, contract="", default_pat=None, is_manual=False
 
     clean_sym = str(symbol or contract).replace(" ", "").upper()
 
-    # 1. Search scan_display_data.json and scan_display_index.json
-    for path in [paths.SCAN_DISPLAY_FILE, paths.SCAN_DISPLAY_INDEX_FILE]:
+    # 1. Search scan_display JSON files (Option, Index, Bull Stock, Bear Stock)
+    for path in [paths.SCAN_DISPLAY_FILE, paths.SCAN_DISPLAY_INDEX_FILE, paths.SCAN_DISPLAY_STOCK_FILE, paths.SCAN_DISPLAY_BEAR_FILE]:
         if os.path.exists(path):
             try:
                 with open(path, encoding="utf-8") as f:

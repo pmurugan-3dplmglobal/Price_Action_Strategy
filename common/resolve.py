@@ -261,6 +261,36 @@ def derive_sl_targets_for_contract(kite, contract, entry_price, timeframe_entry=
             if t1 is None or t1 <= ep:
                 t1 = round(ep + (1.88 * risk), 2)
 
+        # Derive spot token & spot SL for Spot-Anchored SL Guard
+        spot_tok = None
+        spot_sl = None
+        spot_entry = None
+        if kite and contract_str:
+            try:
+                import re
+                from registries import STOCK_REGISTRY, INDEX_REGISTRY
+                m_sym = re.match(r"^([A-Za-z0-9_]+?)(?:\d{2}[A-Za-z]{3})", contract_str)
+                base_s = m_sym.group(1).upper() if m_sym else contract_str.split("26")[0].upper()
+                reg_entry = STOCK_REGISTRY.get(base_s) or INDEX_REGISTRY.get(base_s)
+                if isinstance(reg_entry, dict):
+                    spot_tok = reg_entry.get("token")
+                elif isinstance(reg_entry, int):
+                    spot_tok = reg_entry
+                if spot_tok:
+                    sq = kite.ltp([spot_tok])
+                    if sq:
+                        spot_entry = float(list(sq.values())[0]["last_price"])
+                    df_spot = fetch_and_resample_candles(kite, spot_tok, from_d, to_d, timeframe_anchor)
+                    if df_spot is not None and len(df_spot) >= 5:
+                        if "PE" in contract_str:
+                            spot_high_10 = float(df_spot['high'].iloc[-10:].max())
+                            spot_sl = calculate_sl_buffer(spot_high_10, side="BEAR")
+                        else:
+                            spot_low_10 = float(df_spot['low'].iloc[-10:].min())
+                            spot_sl = calculate_sl_buffer(spot_low_10, side="BULL")
+            except Exception as s_derive_err:
+                logging.debug(f"Spot derivation error for {contract}: {s_derive_err}")
+
         now_iso = dt.now().isoformat()
         return {
             "entry_price": round(ep, 2) if ep else 0.0,
@@ -269,7 +299,10 @@ def derive_sl_targets_for_contract(kite, contract, entry_price, timeframe_entry=
             "t2": t2,
             "t3": t3,
             "pattern": pattern_name,
-            "entry_time": now_iso
+            "entry_time": now_iso,
+            "spot_token": spot_tok,
+            "spot_sl": spot_sl,
+            "spot_entry": spot_entry
         }
     except Exception as e:
         logging.warning(f"Derive contract SL/Target failed for {contract}: {e}")
@@ -385,7 +418,13 @@ def lookup_scan_sl_target(contract, symbol, engine, kite=None, entry_price=0, ti
                     "option_token": opt_tok, "token": opt_tok,
                     "entry_spot": best_db.get("entry_spot") or best_db.get("entry_price"),
                     "timeframe": best_db.get("timeframe", "30minute"),
-                    "lot_size": best_db.get("lot_size")
+                    "lot_size": best_db.get("lot_size"),
+                    "spot_token": best_db.get("spot_token") or best_db.get("index_token"),
+                    "spot_sl": best_db.get("spot_sl"),
+                    "spot_entry": best_db.get("spot_entry"),
+                    "tier": best_db.get("tier", 2),
+                    "tier_label": best_db.get("tier_label", "TIER_2_CORE"),
+                    "tier_badge": best_db.get("tier_badge", "🥈 T2")
                 }
     except Exception:
         pass
@@ -423,7 +462,13 @@ def lookup_scan_sl_target(contract, symbol, engine, kite=None, entry_price=0, ti
                                 "option_token": opt_tok, "token": opt_tok,
                                 "entry_spot": trade.get("entry_spot") or trade.get("entry_price"),
                                 "timeframe": trade.get("timeframe", "30minute"),
-                                "lot_size": trade.get("lot_size")
+                                "lot_size": trade.get("lot_size"),
+                                "spot_token": trade.get("spot_token") or trade.get("index_token"),
+                                "spot_sl": trade.get("spot_sl"),
+                                "spot_entry": trade.get("spot_entry"),
+                                "tier": trade.get("tier", 2),
+                                "tier_label": trade.get("tier_label", "TIER_2_CORE"),
+                                "tier_badge": trade.get("tier_badge", "🥈 T2")
                             }
                 if clean_c:
                     best_t = None
@@ -455,7 +500,13 @@ def lookup_scan_sl_target(contract, symbol, engine, kite=None, entry_price=0, ti
                                 "option_token": opt_tok, "token": opt_tok,
                                 "entry_spot": best_t.get("entry_spot") or best_t.get("entry_price"),
                                 "timeframe": best_t.get("timeframe", "30minute"),
-                                "lot_size": best_t.get("lot_size")
+                                "lot_size": best_t.get("lot_size"),
+                                "spot_token": best_t.get("spot_token") or best_t.get("index_token"),
+                                "spot_sl": best_t.get("spot_sl"),
+                                "spot_entry": best_t.get("spot_entry"),
+                                "tier": best_t.get("tier", 2),
+                                "tier_label": best_t.get("tier_label", "TIER_2_CORE"),
+                                "tier_badge": best_t.get("tier_badge", "🥈 T2")
                             }
         except Exception:
             pass
@@ -1244,17 +1295,38 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
         if pool:
             # Step 2: Sort pool by:
             #   1. Tier Ranking (🥇 T1 Gold < 🥈 T2 Core < 🥉 T3 Momentum)
-            #   2. Risk-to-Reward Ratio (highest first)
-            #   3. Strike Distance to Spot (closest ATM first)
+            #   2. Moneyness Preference (0: 1-Step ITM / ATM -> 1: Deep ITM -> 2: OTM)
+            #   3. Net Profit potential to T1 (highest first)
+            #   4. Risk-to-Reward Ratio (highest first)
+            #   5. Strike Distance to Spot
             def _candidate_rank(c):
                 tier_val = int(c.get("tier", 2))
                 rr_val = float(c.get("rr") or 0.0)
                 ep = float(c.get("entry_spot") or 0.0)
                 t1 = float(c.get("t1") or 0.0)
                 net_profit = max(0.0, t1 - ep)
-                strike_dist = abs(float(c.get("strike", 0)) - current_spot)
-                # Market Expert Priority: Tier (1 Gold < 2 Core) -> Max Net Profit -> Max RR -> Closest ATM
-                return (tier_val, -net_profit, -rr_val, strike_dist)
+                strike_val = float(c.get("strike", 0))
+                side_val = str(c.get("side", "CE")).upper()
+                step_val = float(c.get("strike_step") or 50.0)
+                
+                # Moneyness classification: Prioritize 1-Step ITM & ATM to defeat Theta decay and Call/Put writing resistance
+                if side_val == "CE":
+                    if strike_val <= current_spot and (current_spot - strike_val) <= (step_val * 1.5):
+                        moneyness_rank = 0  # 1-Step ITM or ATM
+                    elif strike_val < current_spot:
+                        moneyness_rank = 1  # Deep ITM
+                    else:
+                        moneyness_rank = 2  # OTM
+                else: # PE
+                    if strike_val >= current_spot and (strike_val - current_spot) <= (step_val * 1.5):
+                        moneyness_rank = 0  # 1-Step ITM or ATM
+                    elif strike_val > current_spot:
+                        moneyness_rank = 1  # Deep ITM
+                    else:
+                        moneyness_rank = 2  # OTM
+
+                strike_dist = abs(strike_val - current_spot)
+                return (tier_val, moneyness_rank, -net_profit, -rr_val, strike_dist)
 
             pool.sort(key=_candidate_rank)
             best_trade = pool[0]

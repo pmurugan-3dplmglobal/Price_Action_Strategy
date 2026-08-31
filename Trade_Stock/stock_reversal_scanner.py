@@ -56,11 +56,11 @@ ENABLE_SWING_FILTER = True
 SWING_MIN_WAVES = 3
 SWING_MIN_R2 = 0.55
 
-OUTPUT_FILE = f"output/exports/{PROFILE['export_prefix']}{dt.now().strftime('%Y%m%d_%H%M')}.csv"
+OUTPUT_FILE = os.path.join(paths.EXPORTS_DIR, f"{PROFILE['export_prefix']}{dt.now().strftime('%Y%m%d_%H%M')}.csv")
 
 ACTIVE_POSITIONS = {}
 position_lock = threading.Lock()
-ANCHOR_SCAN_REQUEST_FILE = os.path.join("output", "monitor", "anchor_scan_request.txt")
+ANCHOR_SCAN_REQUEST_FILE = paths.monitor_file("anchor_scan_request.txt")
 
 SCAN_DISPLAY_FILE = PROFILE["display_file"]
 
@@ -105,7 +105,7 @@ def configure_bull():
         "banner": "  NIFTY 50 DAILY TIMEFRAME SCANNER",
         "handle_anchor_flag": True,
     })
-    OUTPUT_FILE = f"output/exports/{PROFILE['export_prefix']}{dt.now().strftime('%Y%m%d_%H%M')}.csv"
+    OUTPUT_FILE = os.path.join(paths.EXPORTS_DIR, f"{PROFILE['export_prefix']}{dt.now().strftime('%Y%m%d_%H%M')}.csv")
     SCAN_DISPLAY_FILE = PROFILE["display_file"]
     _configure_logging()
 
@@ -128,9 +128,66 @@ def configure_bear():
         "banner": "  NIFTY 50 BEARISH DAILY REVERSAL SCANNER",
         "handle_anchor_flag": False,
     })
-    OUTPUT_FILE = f"output/exports/{PROFILE['export_prefix']}{dt.now().strftime('%Y%m%d_%H%M')}.csv"
+    OUTPUT_FILE = os.path.join(paths.EXPORTS_DIR, f"{PROFILE['export_prefix']}{dt.now().strftime('%Y%m%d_%H%M')}.csv")
     SCAN_DISPLAY_FILE = PROFILE["display_file"]
     _configure_logging()
+
+
+def configure_weekly_bull():
+    """Configure scanner for Weekly Bullish TF — wraps the same engine with week timeframe."""
+    global PROFILE, OUTPUT_FILE, SCAN_DISPLAY_FILE, TIMEFRAME_ENTRY, TIMEFRAME_ANCHOR, SWING_MIN_WAVES, SWING_MIN_R2
+    PROFILE.update({
+        "side": "BULL",
+        "display_side": "BUY",
+        "scanner_label": "S1_Weekly_Bull_BCD",
+        "display_file": paths.SCAN_DISPLAY_WEEKLY_FILE,
+        "export_prefix": "Weekly_Bull_Scan_",
+        "log_file": paths.WEEKLY_BULL_SCAN_LOG,
+        "journal_tag": "SCAN_MATCH_WEEKLY",
+        "config_section": "weekly",
+        "summary_title": "WEEKLY BULLISH SCAN SUMMARY",
+        "pattern_width": 20,
+        "match_prefix": "WEEKLY MATCH",
+        "anchor_msg": "bullish",
+        "banner": "  WEEKLY BULLISH REVERSAL SCANNER",
+        "handle_anchor_flag": False,
+    })
+    TIMEFRAME_ENTRY = "week"
+    TIMEFRAME_ANCHOR = "week"
+    SWING_MIN_WAVES = 2
+    SWING_MIN_R2 = 0.45
+    OUTPUT_FILE = os.path.join(paths.EXPORTS_DIR, f"{PROFILE['export_prefix']}{dt.now().strftime('%Y%m%d_%H%M')}.csv")
+    SCAN_DISPLAY_FILE = PROFILE["display_file"]
+    _configure_logging()
+
+
+def configure_weekly_bear():
+    """Configure scanner for Weekly Bearish TF — wraps the same engine with week timeframe."""
+    global PROFILE, OUTPUT_FILE, SCAN_DISPLAY_FILE, TIMEFRAME_ENTRY, TIMEFRAME_ANCHOR, SWING_MIN_WAVES, SWING_MIN_R2
+    PROFILE.update({
+        "side": "BEAR",
+        "display_side": "SELL",
+        "scanner_label": "S1_Weekly_Bear_BCD",
+        "display_file": paths.SCAN_DISPLAY_WEEKLY_BEAR_FILE,
+        "export_prefix": "Weekly_Bear_Scan_",
+        "log_file": paths.WEEKLY_BEAR_SCAN_LOG,
+        "journal_tag": "SCAN_MATCH_WEEKLY_BEAR",
+        "config_section": "weekly_bear",
+        "summary_title": "WEEKLY BEARISH SCAN SUMMARY",
+        "pattern_width": 25,
+        "match_prefix": "WEEKLY BEAR MATCH",
+        "anchor_msg": "bearish",
+        "banner": "  WEEKLY BEARISH REVERSAL SCANNER",
+        "handle_anchor_flag": False,
+    })
+    TIMEFRAME_ENTRY = "week"
+    TIMEFRAME_ANCHOR = "week"
+    SWING_MIN_WAVES = 2
+    SWING_MIN_R2 = 0.45
+    OUTPUT_FILE = os.path.join(paths.EXPORTS_DIR, f"{PROFILE['export_prefix']}{dt.now().strftime('%Y%m%d_%H%M')}.csv")
+    SCAN_DISPLAY_FILE = PROFILE["display_file"]
+    _configure_logging()
+
 
 
 def run_scan(kite):
