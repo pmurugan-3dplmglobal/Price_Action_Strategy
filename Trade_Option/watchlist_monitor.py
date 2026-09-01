@@ -36,35 +36,76 @@ def save_watchlist_config(data):
     with open(paths.WATCHLIST_CONFIG_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
 
+def _safe_float(v):
+    if v is None:
+        return None
+    try:
+        s = str(v).strip()
+        return float(s) if s not in ("", "null", "None", "NaN", "undefined") else None
+    except (TypeError, ValueError):
+        return None
+
+def _safe_int(v):
+    if v is None:
+        return None
+    try:
+        s = str(v).strip()
+        return int(float(s)) if s not in ("", "null", "None", "NaN", "undefined") else None
+    except (TypeError, ValueError):
+        return None
+
+def _extract_base_symbol(contract_str):
+    import re
+    c = str(contract_str).strip().upper()
+    m = re.match(r"^([A-Z]+)", c)
+    if m:
+        base = m.group(1)
+        for s in ["26SEP", "26AUG", "26OCT", "26NOV", "26DEC", "269", "268", "267"]:
+            if s in c:
+                base = c.split(s)[0]
+                break
+        return base
+    return c
+
 def add_watchlist_item(contract, base_symbol=None, entry_price=None, exit_price=None, lot_size=None, tag="MANUAL_WATCH", note=""):
     items = load_watchlist_config()
     contract_clean = contract.strip().upper()
+    if not contract_clean:
+        return
+    
+    ep = _safe_float(entry_price)
+    xp = _safe_float(exit_price)
+    lot = _safe_int(lot_size)
+    tag_clean = str(tag or "MANUAL_WATCH").strip().upper()
+    note_clean = str(note or "").strip()
+    
     existing = next((item for item in items if item.get("contract", "").upper() == contract_clean), None)
     if existing:
-        if base_symbol: existing["base_symbol"] = base_symbol.strip().upper()
-        if entry_price is not None: existing["entry_price"] = float(entry_price)
-        if exit_price is not None: existing["exit_price"] = float(exit_price)
-        if lot_size is not None: existing["lot_size"] = int(lot_size)
-        if tag: existing["tag"] = tag
-        if note: existing["note"] = note
+        if base_symbol:
+            existing["base_symbol"] = str(base_symbol).strip().upper()
+        if ep is not None:
+            existing["entry_price"] = ep
+        if xp is not None:
+            existing["exit_price"] = xp
+        if lot is not None:
+            existing["lot_size"] = lot
+        if tag_clean:
+            existing["tag"] = tag_clean
+        if note_clean:
+            existing["note"] = note_clean
         print(f"[OK] Updated watchlist item: {contract_clean}")
     else:
-        if not base_symbol:
-            base_symbol = contract_clean
-            for s in ["26SEP", "26AUG", "26OCT", "26901", "26908", "26915", "26922", "26929"]:
-                if s in contract_clean:
-                    base_symbol = contract_clean.split(s)[0]
-                    break
+        base_clean = str(base_symbol).strip().upper() if base_symbol else _extract_base_symbol(contract_clean)
         items.append({
             "contract": contract_clean,
-            "base_symbol": base_symbol.strip().upper(),
-            "entry_price": float(entry_price) if entry_price is not None else None,
-            "exit_price": float(exit_price) if exit_price is not None else None,
-            "lot_size": int(lot_size) if lot_size is not None else None,
-            "tag": tag,
-            "note": note
+            "base_symbol": base_clean,
+            "entry_price": ep,
+            "exit_price": xp,
+            "lot_size": lot,
+            "tag": tag_clean,
+            "note": note_clean
         })
-        print(f"[OK] Added new watchlist item: {contract_clean} (Base: {base_symbol})")
+        print(f"[OK] Added new watchlist item: {contract_clean} (Base: {base_clean})")
     save_watchlist_config(items)
 
 def remove_watchlist_item(contract):
