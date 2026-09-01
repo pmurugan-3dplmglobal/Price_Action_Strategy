@@ -16,10 +16,13 @@
         function switchLeftTab(tabId) {
             document.querySelectorAll('.left-tab-content').forEach(t => t.classList.remove('active'));
             document.querySelectorAll('.left-tab-btn').forEach(b => b.classList.remove('active'));
-            document.getElementById(tabId).classList.add('active');
-            event.target.classList.add('active');
+            const target = document.getElementById(tabId);
+            if (target) target.classList.add('active');
+            if (event && event.target) event.target.classList.add('active');
             if (tabId === 'backtest-tab') renderBacktest();
             if (tabId === 'scan-tab-left') renderScanTab();
+            if (tabId === 'ema-scan-tab') renderEmaScanTab();
+            if (tabId === 'watchlist-tab') renderWatchlistTab();
         }
 
         function switchTab(tabId) {
@@ -1237,6 +1240,7 @@
             document.getElementById('journal-body').innerHTML = jHtml;
             renderScanTab();
             renderEmaScanTab();
+            renderWatchlistTab();
 
             let logHtml = '';
             let allLogs = [];
@@ -1295,6 +1299,151 @@
 
             html += '</tbody></table></div>';
             body.innerHTML = html;
+        }
+
+        function renderWatchlistTab() {
+            const body = document.getElementById('watchlist-body');
+            if (!body) return;
+
+            const wl = window._lastData?.watchlist || { items: [] };
+            const items = wl.items || [];
+            const lastUp = wl.last_updated || '-';
+            const upEl = document.getElementById('watchlist-last-updated');
+            if (upEl) upEl.textContent = 'Updated: ' + lastUp;
+
+            if (!items || items.length === 0) {
+                body.innerHTML = '<p class="empty-state">No watchlist items yet. Use ➕ Add Item to track contracts.</p>';
+                return;
+            }
+
+            let html = `<div style="padding:4px 10px 8px;font-weight:bold;color:#58a6ff;font-size:12px">👁️ Watched Option Contracts & Underlying Equities (${items.length})</div>`;
+            html += '<div class="table-responsive"><table class="trade-table"><thead><tr><th>Contract</th><th>Opt LTP</th><th>Opt %</th><th>Spot LTP</th><th>Spot %</th><th>Entry Ref</th><th>Exit Ref</th><th>Learning / P&L Verdict</th><th>Note</th><th>Action</th></tr></thead><tbody>';
+
+            items.forEach(it => {
+                const cnt = it.contract || '';
+                const base = it.base_symbol || cnt;
+                const oLtp = it.opt_ltp ? '₹' + parseFloat(it.opt_ltp).toFixed(2) : '-';
+                const oChg = it.opt_chg_pct !== undefined ? (it.opt_chg_pct >= 0 ? '+' : '') + parseFloat(it.opt_chg_pct).toFixed(2) + '%' : '-';
+                const oChgColor = it.opt_chg_pct > 0 ? '#3fb950' : (it.opt_chg_pct < 0 ? '#f85149' : '#8b949e');
+                
+                const sLtp = it.spot_ltp ? '₹' + parseFloat(it.spot_ltp).toFixed(2) : '-';
+                const sChg = it.spot_chg_pct !== undefined ? (it.spot_chg_pct >= 0 ? '+' : '') + parseFloat(it.spot_chg_pct).toFixed(2) + '%' : '-';
+                const sChgColor = it.spot_chg_pct > 0 ? '#3fb950' : (it.spot_chg_pct < 0 ? '#f85149' : '#8b949e');
+                
+                const ep = it.entry_price ? '₹' + parseFloat(it.entry_price).toFixed(2) : '-';
+                const xp = it.exit_price ? '₹' + parseFloat(it.exit_price).toFixed(2) : '-';
+                
+                let verdictBadge = '-';
+                if (it.verdict) {
+                    let badgeBg = '#21262d';
+                    let badgeColor = '#c9d1d9';
+                    if (it.verdict.includes('Great Exit') || it.verdict.includes('Top Profit')) {
+                        badgeBg = '#23863633';
+                        badgeColor = '#3fb950';
+                    } else if (it.verdict.includes('Rebound') || it.verdict.includes('Extended Runner')) {
+                        badgeBg = '#d2992233';
+                        badgeColor = '#d29922';
+                    } else if (it.verdict.includes('Active')) {
+                        badgeBg = '#1f6feb33';
+                        badgeColor = '#58a6ff';
+                    }
+                    verdictBadge = `<span style="background:${badgeBg};color:${badgeColor};padding:3px 8px;border-radius:4px;font-size:11px;font-weight:600">${it.verdict}</span>`;
+                }
+
+                const note = it.note || '-';
+                const actCell = `<td style="text-align:center"><button onclick="removeWatchlistItem('${cnt}')" style="background:inherit;border:1px solid #f85149;color:#f85149;padding:2px 8px;border-radius:4px;cursor:pointer;font-size:11px" title="Remove from Watchlist">🗑️</button></td>`;
+
+                html += `<tr>
+                    <td style="font-weight:bold;color:#58a6ff">${cnt} <span style="font-size:10px;color:#8b949e">(${base})</span></td>
+                    <td style="font-weight:600">${oLtp}</td>
+                    <td style="color:${oChgColor};font-weight:600">${oChg}</td>
+                    <td style="font-weight:600">${sLtp}</td>
+                    <td style="color:${sChgColor};font-weight:600">${sChg}</td>
+                    <td>${ep}</td>
+                    <td>${xp}</td>
+                    <td>${verdictBadge}</td>
+                    <td style="font-size:11px;color:#8b949e;max-width:200px">${note}</td>
+                    ${actCell}
+                </tr>`;
+            });
+
+            html += '</tbody></table></div>';
+            body.innerHTML = html;
+        }
+
+        async function refreshWatchlistLive(btn) {
+            if (btn) {
+                btn.disabled = true;
+                btn.textContent = '🔄 Fetching...';
+            }
+            try {
+                const r = await fetch('/api/watchlist/refresh', { method: 'POST' });
+                const d = await r.json();
+                if (d.ok) {
+                    if (window._lastData) window._lastData.watchlist = { last_updated: d.last_updated, items: d.data };
+                    renderWatchlistTab();
+                    showToast('Watchlist quotes refreshed live from Kite!', 'success');
+                } else {
+                    showToast('Failed to refresh watchlist: ' + (d.error || 'Unknown error'), 'error');
+                }
+            } catch(e) {
+                showToast('Watchlist fetch error: ' + e, 'error');
+            } finally {
+                if (btn) {
+                    btn.disabled = false;
+                    btn.textContent = '🔄 Refresh Quotes';
+                }
+            }
+        }
+
+        async function removeWatchlistItem(contract) {
+            if (!confirm(`Remove ${contract} from watchlist?`)) return;
+            try {
+                const r = await fetch('/api/watchlist/remove', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({contract: contract})
+                });
+                const d = await r.json();
+                if (d.ok) {
+                    if (window._lastData) window._lastData.watchlist = { last_updated: new Date().toLocaleTimeString(), items: d.data };
+                    renderWatchlistTab();
+                    showToast(`Removed ${contract} from watchlist`, 'success');
+                } else {
+                    showToast('Error removing: ' + (d.error || 'Unknown error'), 'error');
+                }
+            } catch(e) { showToast('Error: ' + e, 'error'); }
+        }
+
+        async function addWatchlistItemPrompt() {
+            const cnt = prompt("Enter Option / Stock Symbol to Watch (e.g. ABCAPITAL26SEP410CE):");
+            if (!cnt) return;
+            const epStr = prompt("Reference Entry Price (optional, e.g. 7.10):", "");
+            const xpStr = prompt("Reference Exit Price (optional, e.g. 5.75):", "");
+            const note = prompt("Learning Note (optional, e.g. Booked loss - watching decay):", "");
+            const tag = xpStr ? (parseFloat(xpStr) < (parseFloat(epStr)||0) ? "POST_EXIT_LEARNING" : "POST_PROFIT_RUN") : "ACTIVE_MONITOR";
+            
+            try {
+                const r = await fetch('/api/watchlist/add', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        contract: cnt.trim().toUpperCase(),
+                        entry_price: epStr ? parseFloat(epStr) : null,
+                        exit_price: xpStr ? parseFloat(xpStr) : null,
+                        tag: tag,
+                        note: note
+                    })
+                });
+                const d = await r.json();
+                if (d.ok) {
+                    if (window._lastData) window._lastData.watchlist = { last_updated: new Date().toLocaleTimeString(), items: d.data };
+                    renderWatchlistTab();
+                    showToast(`Added ${cnt} to Watchlist!`, 'success');
+                } else {
+                    showToast('Error adding: ' + (d.error || 'Unknown error'), 'error');
+                }
+            } catch(e) { showToast('Error: ' + e, 'error'); }
         }
 
         async function refreshData() {
@@ -1976,6 +2125,7 @@
                 <button class="left-tab-btn active" onclick="switchLeftTab('active-pos-tab')">Live Positions</button>
                 <button class="left-tab-btn" onclick="switchLeftTab('scan-tab-left')">Today's scan</button>
                 <button class="left-tab-btn" onclick="switchLeftTab('ema-scan-tab')">EMA Scan</button>
+                <button class="left-tab-btn" onclick="switchLeftTab('watchlist-tab')">👁️ Watchlist & Learning</button>
             </div>
             <div id="active-pos-tab" class="left-tab-content active">
                 <div class="section-panel">
@@ -2032,6 +2182,19 @@
                         </div>
                     </div>
                     <div id="ema-scan-body"><p class="empty-state">No EMA scan trades yet</p></div>
+                </div>
+            </div>
+            <div id="watchlist-tab" class="left-tab-content">
+                <div class="section-panel">
+                    <div class="section-header">
+                        <span>👁️ Price Action Watchlist & Post-Trade Learning</span>
+                        <div style="display:flex;align-items:center;gap:8px">
+                            <span id="watchlist-last-updated" style="font-size:11px;color:#8b949e">-</span>
+                            <button class="btn-scan-export" onclick="refreshWatchlistLive(this)" style="padding:2px 10px;background:#238636;border:1px solid #2ea043;color:#fff;border-radius:4px;font-size:10px;cursor:pointer;font-weight:600">🔄 Refresh Quotes</button>
+                            <button class="btn-scan-export" onclick="addWatchlistItemPrompt()" style="padding:2px 10px;background:#1f6feb;border:1px solid #388bfd;color:#fff;border-radius:4px;font-size:10px;cursor:pointer;font-weight:600">➕ Add Item</button>
+                        </div>
+                    </div>
+                    <div id="watchlist-body"><p class="empty-state">No watchlist items yet</p></div>
                 </div>
             </div>
         </div>

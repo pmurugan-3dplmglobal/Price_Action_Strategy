@@ -889,6 +889,18 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                             event_time = c_row.get('date')
                             break
 
+                    # ── LIVE RECLAIM GUARD ──
+                    # If a historical candle closed below SL, but the current live market price has reclaimed
+                    # above Entry Price (live_ltp >= entry_s) and the latest completed bar closed above current_sl,
+                    # do NOT execute a retroactive SL exit on a profitable running trade (ISSUE-041).
+                    if sl_hit and "CANDLE_CLOSE_SL" in sl_reason:
+                        entry_s = float(pos.get("entry_spot") or pos.get("entry_price") or 0.0)
+                        latest_completed_close = float(df.iloc[-2]['close']) if len(df) >= 2 else 0.0
+                        if entry_s > 0 and live_ltp >= entry_s and latest_completed_close > current_sl:
+                            logging.info(f"[RECLAIM_GUARD] Suppressed retroactive {sl_reason} for {sym} ({pos.get('contract')}): Trade has reclaimed above Entry ({live_ltp:.2f} >= {entry_s:.2f}) and latest completed bar closed at {latest_completed_close:.2f} > SL ({current_sl:.2f}). Trade remains active.")
+                            sl_hit = False
+                            sl_reason = ""
+
             # ── STALE / OUTLIER ENTRY PRICE GUARD ──
             # Prevent false emergency SL triggers when entry_spot or current_sl has an extreme data mismatch vs live LTP
             # (e.g. BSE entry 12.0 with SL 1.0 when live option market is trading at 0.60).
@@ -922,9 +934,14 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                 cp = live_ltp
 
             # 2c) Spot-Anchored Structural SL Guard for Options
-            # If option SL was tripped (by candle close, hybrid, or hard 15% threshold), verify against Cash Spot support
+            # ONLY applies to INITIAL Stop Loss (trailing_stage == 0 and current_sl < entry_s).
+            # Once a position has been TRAILED to Breakeven or Profit (trailing_stage >= 1 or current_sl >= entry_s),
+            # the Trailed SL must NEVER be suppressed by initial morning spot support (ISSUE-042).
             enable_spot_guard = cfg.get("enable_spot_sl_guard", True) if isinstance(cfg, dict) else True
-            if sl_hit and not is_stock and enable_spot_guard and kite:
+            trailing_stg = int(pos.get("trailing_stage") or 0)
+            is_trailed_stop = (trailing_stg >= 1) or (entry_s > 0 and current_sl >= (entry_s * 0.99))
+
+            if sl_hit and not is_stock and enable_spot_guard and not is_trailed_stop and kite:
                 spot_tok = pos.get("spot_token") or pos.get("index_token") or pos.get("underlying_token")
                 if not spot_tok:
                     from registries import STOCK_REGISTRY, INDEX_REGISTRY

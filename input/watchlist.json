@@ -1,0 +1,47 @@
+[
+  {
+    "contract": "ABCAPITAL26SEP410CE",
+    "base_symbol": "ABCAPITAL",
+    "entry_price": 7.1,
+    "exit_price": 5.75,
+    "lot_size": 3100,
+    "tag": "POST_EXIT_LEARNING",
+    "note": "Booked Loss @ 5.75 | Watching post-exit theta decay & spot 393 support"
+  },
+  {
+    "contract": "SOLARINDS26SEP19750PE",
+    "base_symbol": "SOLARINDS",
+    "entry_price": 365.35,
+    "exit_price": 468.15,
+    "lot_size": 50,
+    "tag": "POST_PROFIT_RUN",
+    "note": "Booked +28% Profit | Watching pullback & continuation behavior"
+  },
+  {
+    "contract": "AXISBANK26SEP1300PE",
+    "base_symbol": "AXISBANK",
+    "entry_price": 39.0,
+    "exit_price": 40.75,
+    "lot_size": 625,
+    "tag": "POST_PROFIT_RUN",
+    "note": "Closed @ 40.75 (+4.5%) | Watching continuation towards T1 49.60"
+  },
+  {
+    "contract": "ANGELONE26SEP285CE",
+    "base_symbol": "ANGELONE",
+    "entry_price": 10.9,
+    "exit_price": 9.85,
+    "lot_size": 2500,
+    "tag": "POST_EXIT_LEARNING",
+    "note": "Booked Loss @ 9.85 | Watching daily downtrend supply pressure"
+  },
+  {
+    "contract": "BAJAJHLDNG26SEP11500CE",
+    "base_symbol": "BAJAJHLDNG",
+    "entry_price": 211.25,
+    "exit_price": null,
+    "lot_size": 50,
+    "tag": "ACTIVE_MONITOR",
+    "note": "Active Runner | Watching T2 298.85 / T3 338.20 targets"
+  }
+]

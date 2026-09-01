@@ -54,7 +54,11 @@ architecture:
     Trade_Stock:
       app_Stock_Trade.py: "Stock Trade Dashboard (port 5051) with 1-Click BUY button on Scan Tab (/api/buy-scanned-trade)"
       stock_bullish_reversal_scanner.py: "Stock Bullish Reversal Scanner & Exporter"
-      stock_bearish_reversal_scanner.py: "Stock Bearish Reversal Scanner & Exporter"
+    docs:
+      description: "Tactical Knowledge Base, Continuous Learning Playbook, and Architecture Specifications"
+      LIVE_TRADING_EXPERIENCE_PLAYBOOK.md: "Continuous Live Trading Experience Playbook and Market Lessons Journal capturing day-by-day execution takeaways, failure root causes (e.g. Option Chart Illusion, Spot 44 EMA Breakdown), and tactical engine enhancements"
+      STAGE_0_PARABOLIC_CASCADE_REFERENCE.md: "Mathematical and Price Action specification for Stage 0 Parabolic Decay & Soft Scoring"
+      DATTA_27_GROUND_TRUTH_VALIDATION_REPORT.md: "27 Ground Truth Chart Pattern Validation against Datta Rulebook"
     backtest:
       description: "Official Historical Validation Suite for multi-day option strike backtests, Yahoo/Kite historical candle runners, and simulation engines"
       run_official_option_strike_backtest.py: "Official Multi-day Option Strike & Spot Backtest Runner"
@@ -195,9 +199,11 @@ backtest_suite:
       anchor_selection: "Scanners must select the NEWEST (most recent) valid Anchor candle in the chart."
       timeframe_scope: "STRICTLY SPECIFIC TO ANCHOR TIMEFRAME (df_anchor). Evaluated exclusively on candles of timeframe_anchor."
       invalidation_conditions:
-        - "SL Violation: Discard setup if any subsequent candle on df_anchor closed below SL (closing basis)."
-        - "Target 1 Pre-Hit: Discard setup if any subsequent candle on df_anchor touched T1 (high price >= T1)."
-      generic_enforcement: "Applied universally across stock_options_trade_engine.py, index_options_trade_engine.py, scan_anchor_bcd_breakout(), scan_symbol(), and UI APIs."
+        - "SL Violation: Discard setup if any subsequent candle on df_anchor closed below SL (closing basis for Bull, above SL for Bear)."
+        - "Target 1 (80%+ Exhaustion): Discard setup if any subsequent candle achieved >= 80% of move to T1 or touched 100% of T1."
+        - "T1 to T2 Gap Constraint: If 80%/100% T1 reached, setup is strictly discarded unless T2 is available with >= 10.0% expansion gap over T1."
+        - "Target 2 Pre-Hit: Discard setup if subsequent candles touched or exceeded T2."
+      generic_enforcement: "Applied universally across stock_options_trade_engine.py, index_options_trade_engine.py, scan_anchor_bcd_breakout(), scan_symbol(), patterns_bull.py, patterns_bear.py, and UI APIs."
 
     target_derivation_and_timeframes:
       default_anchor_tf: "Nifty 50 Stock Options & Spot default strictly to 30minute (Same Entry & Anchor TF: timeframe_entry='30minute', timeframe_anchor='30minute'). Index Options default to 15minute."
@@ -301,7 +307,21 @@ registries:
     constituents: "All 50 Nifty 50 stocks with auto-sync from Zerodha NSE instrument master"
 
 deployment:
-  cloud_provider: "Oracle Cloud Always Free (4 ARM cores, 24GB RAM, Ubuntu 24.04)"
+  cloud_provider: "Oracle Cloud Always Free (4 ARM cores, 24GB RAM, Ubuntu 24.04 / Oracle Linux)"
+  ssh_key: "G:\\Poovendan\\AI\\Trading\\Cloud\\Oracle_Cloud\\ssh-key-2026-08-05.key"
+  nodes:
+    bhavni:
+      host: "opc@129.225.69.131"
+      public_ip: "129.225.69.131"
+      remote_dir: "/home/trade/Trade_Kite/Price_Action_Strategy"
+      options_dashboard: "http://129.225.69.131:5050"
+      stock_dashboard: "http://129.225.69.131:5051"
+    poovendan:
+      host: "opc@140.245.197.71"
+      public_ip: "140.245.197.71"
+      remote_dir: "/home/opc/Price_Action_Strategy"
+      options_dashboard: "http://140.245.197.71:5050"
+      stock_dashboard: "http://140.245.197.71:5051"
   ports:
     options_dashboard: 5050
     stock_dashboard: 5051

@@ -1013,6 +1013,19 @@ def dashboard():
         tpl = _template_f.read()
     return render_template_string(tpl, refresh=REFRESH_SECONDS, programs=PROGRAMS, user=session.get("user", ""), role=session.get("role", ""))
 
+def get_watchlist_data():
+    try:
+        if os.path.exists(paths.WATCHLIST_LIVE_FILE):
+            with open(paths.WATCHLIST_LIVE_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        elif os.path.exists(paths.WATCHLIST_CONFIG_FILE):
+            with open(paths.WATCHLIST_CONFIG_FILE, "r", encoding="utf-8") as f:
+                items = json.load(f)
+                return {"last_updated": "Config loaded", "items": items}
+    except Exception as e:
+        logging.warning(f"Watchlist load: {e}")
+    return {"last_updated": "-", "items": []}
+
 @app.route("/api/status")
 def api_status():
     try:
@@ -1043,6 +1056,7 @@ def api_status():
             "config": cfg,
             "scan_display": cached_data["scan_display"],
             "ema_scan": get_ema_scan_data(is_options_mode=True),
+            "watchlist": get_watchlist_data(),
             "live_execution": cached_data["live_execution"],
             "live_execution_index": cached_data["live_execution_index"],
             "executed_exits": cached_data.get("executed_exits", {}),
@@ -1050,6 +1064,55 @@ def api_status():
         })
     except Exception as e:
         return jsonify({"error": str(e), "programs": {}}), 500
+
+@app.route("/api/watchlist")
+def api_watchlist():
+    return jsonify(get_watchlist_data())
+
+@app.route("/api/watchlist/refresh", methods=["POST"])
+def api_watchlist_refresh():
+    try:
+        from watchlist_monitor import fetch_watchlist_live_data
+        data = fetch_watchlist_live_data(_kite_session)
+        return jsonify({"ok": True, "data": data, "last_updated": dt.now().strftime("%Y-%m-%d %H:%M:%S")})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+@app.route("/api/watchlist/add", methods=["POST"])
+def api_watchlist_add():
+    try:
+        data = request.get_json(force=True, silent=True) or {}
+        contract = data.get("contract", "").strip()
+        if not contract:
+            return jsonify({"ok": False, "error": "Contract name is required"}), 400
+        from watchlist_monitor import add_watchlist_item, fetch_watchlist_live_data
+        add_watchlist_item(
+            contract=contract,
+            base_symbol=data.get("base_symbol"),
+            entry_price=data.get("entry_price"),
+            exit_price=data.get("exit_price"),
+            lot_size=data.get("lot_size"),
+            tag=data.get("tag", "MANUAL_WATCH"),
+            note=data.get("note", "")
+        )
+        live_data = fetch_watchlist_live_data(_kite_session)
+        return jsonify({"ok": True, "data": live_data})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+@app.route("/api/watchlist/remove", methods=["POST"])
+def api_watchlist_remove():
+    try:
+        data = request.get_json(force=True, silent=True) or {}
+        contract = data.get("contract", "").strip()
+        if not contract:
+            return jsonify({"ok": False, "error": "Contract name is required"}), 400
+        from watchlist_monitor import remove_watchlist_item, fetch_watchlist_live_data
+        remove_watchlist_item(contract)
+        live_data = fetch_watchlist_live_data(_kite_session)
+        return jsonify({"ok": True, "data": live_data})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 @app.route("/api/token/check")
 def api_token_check():

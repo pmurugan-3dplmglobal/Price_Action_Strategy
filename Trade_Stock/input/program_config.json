@@ -22,10 +22,10 @@
     "timeframe_entry": "3minute",
     "timeframe_anchor": "15minute",
     "capital": 100000,
-    "strike_range": 3,
+    "strike_range": 1,
     "enable_swing_filter": true,
     "swing_min_waves": 3,
-    "strict_macro_gate": false,
+    "strict_macro_gate": true,
     "enable_spot_sl_guard": true,
     "tranche_mode": true
   },

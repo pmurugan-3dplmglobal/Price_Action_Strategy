@@ -405,12 +405,14 @@ def scan_anchor_bcd_breakout_bearish(df_entry, df_anchor, anchor_tf="", entry_tf
             # 1. Discard if SL hit after D (A.high + buffer)
             if float(after_d['close'].max()) >= sl_val:
                 continue
-            # 2. Check if T1 has been reached after D
-            if t1 is not None and float(after_d['close'].min()) <= t1:
-                # If T3 reached or T2 reached or no T2/T3 available -> All targets completed
-                if (t3 is not None and float(after_d['close'].min()) <= t3) or t2 is None or float(after_d['close'].min()) <= t2:
+            # 2. Check if T1 (or 80% T1) has been reached after D
+            t1_80 = entry_close - 0.80 * (entry_close - t1)
+            if t1 is not None and (float(after_d['low'].min()) <= t1_80 or float(after_d['close'].min()) <= t1):
+                t2_gap_pct = ((t1 - t2) / t1) if (t2 is not None and t1 > 0) else 0.0
+                # If T3 reached, T2 reached, no T2 available, or T2 has less gap (< 10%) -> Discard scan
+                if (t3 is not None and float(after_d['close'].min()) <= t3) or t2 is None or t2_gap_pct < 0.10 or float(after_d['close'].min()) <= t2:
                     continue
-                # T1 was hit, but T2/T3 is still pending -> Qualifies as LOW PRIORITY T2 Continuation
+                # T1 was hit with sufficient T2 room -> Qualifies as LOW PRIORITY T2 Continuation
                 stage_status = "T2_CONTINUATION"
                 priority_level = "LOW_PRIORITY"
                 sl_val = t1  # Trailed SL to T1 level to protect banked gains

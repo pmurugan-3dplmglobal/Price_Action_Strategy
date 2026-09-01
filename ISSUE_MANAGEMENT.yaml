@@ -2861,6 +2861,178 @@ issues:
          - Dynamically derives spot_sl and spot_token if missing; checks live spot price before firing option SL exits, preventing false stopouts from option spread wicks when underlying stock holds support.
       4. Verified AST syntax across 100% of workspace files and passed 100% (14/14) tests in scratch/run_full_regression_test.py.
     status: RESOLVED
+  - id: FEATURE-027
+    title: Dual Oracle Cloud Production Deployment & Synchronizer (Bhavni & Poovendan VMs)
+    severity: ENHANCEMENT
+    category: Cloud Infrastructure & VM Orchestration
+    family: DEPLOYMENT
+    date_reported: "2026-08-31"
+    symptom: |
+      Production Price Action Strategy system is deployed across two independent Oracle Cloud VMs (Bhavni: 129.225.69.131 and Poovendan: 140.245.197.71), requiring structured multi-target sync, service status monitoring, and documentation.
+    root_cause: |
+      Sync scripts previously targeted only a single hardcoded host without CLI target switching or unified status probes.
+    affected_files:
+      - oracle/sync_to_oracle_cloud.py
+      - oracle/README.md
+      - MASTER_DOCUMENTATION.yaml
+      - ISSUE_MANAGEMENT.yaml
+    resolution: |
+      1. Upgraded oracle/sync_to_oracle_cloud.py with multi-target support (--target bhavni, --target poovendan, --target all, --status).
+      2. Excluded active credentials and account tokens during deployment sync to protect remote credentials.
+      3. Synchronized and verified systemd services (trading-options on 5050, trading-stock on 5051, trading-export) on both production VMs.
+      4. Updated MASTER_DOCUMENTATION.yaml and oracle/README.md with full endpoint specifications and SSH configurations.
+    status: RESOLVED
+
+  - id: FEATURE-028
+    title: 80% Target 1 Move Exhaustion & T1-T2 Minimum Expansion Gap Invalidation Rules
+    severity: ENHANCEMENT
+    category: Scanning Engine & Target Invalidation
+    family: STRATEGY_RULE
+    date_reported: "2026-08-31"
+    symptom: |
+      Scanners needed to reject setups where subsequent price action already covered >= 80% of the Entry -> T1 profit move or where T1 was hit but the gap between T1 and T2 is too tight (< 10% expansion) to justify risk.
+    root_cause: |
+      is_anchor_valid_and_active previously checked only 100% of T1 without testing the 80% exhaustion threshold or the minimum expansion gap between T1 and T2.
+    affected_files:
+      - common/resolve.py
+      - common/patterns_bull.py
+      - common/patterns_bear.py
+      - MASTER_DOCUMENTATION.yaml
+      - ISSUE_MANAGEMENT.yaml
+    resolution: |
+      1. Updated is_anchor_valid_and_active in common/resolve.py to enforce:
+         - 80% T1 exhaustion check: Evaluates whether subsequent price covered >= 80% of Entry -> T1 distance.
+         - If 80%/100% T1 is reached, setup is invalidated unless T2 is available with >= 10.0% expansion gap over T1.
+         - If subsequent price reached T2, setup is invalidated.
+      2. Updated scan_anchor_bcd_breakout in common/patterns_bull.py and patterns_bear.py to check 80% T1 and minimum 10% T1-T2 gap before qualifying T2 continuation.
+      3. Verified 14/14 tests in scratch/run_full_regression_test.py passing with 100% success.
+    status: RESOLVED
+
+  - id: FEATURE-029
+    title: Live Price Action Reclaim Guard in Position Monitor
+    severity: HIGH
+    category: Risk Management & Trailing Engine
+    family: EXECUTION_GUARD
+    date_reported: "2026-09-01"
+    symptom: |
+      Profitable running trades (e.g. AXISBANK 1300 PE trading at 40.75 in green) were retroactively closed when the position monitor detected that an older 30m historical candle (from 2 hours prior) had closed below the Stop Loss, despite the position having fully reclaimed above entry price and latest closed bar being above SL.
+    root_cause: |
+      The historical candle-close iteration in monitor_active_positions marked sl_hit = True on any post-entry historical bar without verifying if the current live market price had reclaimed above Entry and if the latest completed bar was safely above SL.
+    affected_files:
+      - common/position_monitor.py
+      - docs/LIVE_TRADING_EXPERIENCE_PLAYBOOK.md
+      - MASTER_DOCUMENTATION.yaml
+      - ISSUE_MANAGEMENT.yaml
+    resolution: |
+      1. Added LIVE_RECLAIM_GUARD in common/position_monitor.py:
+         - If a historical candle closed below SL, but live_ltp >= entry_s and latest_completed_close > current_sl, suppress the retroactive SL exit.
+         - Logged [RECLAIM_GUARD] and allowed profitable running trades to continue towards higher profit targets.
+      2. Verified 14/14 regression suite tests passed with 100% success.
+    status: RESOLVED
+
+  - id: BUG-088
+    title: Fix Engine Config Mapping for Strict Macro Gate & Strike Range
+    severity: HIGH
+    category: Configuration & Candidate Arbitrage
+    family: ENGINE_CONFIG
+    date_reported: "2026-09-01"
+    symptom: |
+      Scanners allowed counter-trend option candidates (e.g. ABCAPITAL 410 CE and ANGELONE 285 CE) when Spot Macro Bias was PE (Bearish), logging StrictGate: False even though strict_macro_gate was set to true in program_config.json.
+    root_cause: |
+      load_program_config_for_engine in common/resolve.py only mapped a hardcoded subset of keys and omitted strict_macro_gate, strike_range, enable_spot_sl_guard, and tranche_mode, causing cfg_engine.get("STRICT_MACRO_GATE") to always return default False.
+    affected_files:
+      - common/resolve.py
+      - input/program_config.json
+      - Trade_Option/input/program_config.json
+      - Trade_Stock/input/program_config.json
+      - docs/LIVE_TRADING_EXPERIENCE_PLAYBOOK.md
+      - MASTER_DOCUMENTATION.yaml
+      - ISSUE_MANAGEMENT.yaml
+    resolution: |
+      1. Updated load_program_config_for_engine in common/resolve.py to map all config keys into applied dict in both lowercase and uppercase.
+      2. Explicitly mapped strict_macro_gate, strike_range, enable_spot_sl_guard, tranche_mode, and prefer_itm_strikes.
+      3. Synchronized strict_macro_gate: true across input/program_config.json, Trade_Option/input/program_config.json, and Trade_Stock/input/program_config.json.
+      4. Verified 14/14 regression suite tests passed with 100% success.
+    status: RESOLVED
+
+  - id: FEATURE-030
+    title: Hard Moneyness Guard & Strike Distance Priority (Rejection of Far OTM Strikes)
+    severity: HIGH
+    category: Strike Selection & Moneyness Integrity
+    family: OPTION_GREEK_GUARD
+    date_reported: "2026-09-01"
+    symptom: |
+      Engines occasionally selected far Out-Of-The-Money (OTM) options (e.g. NIFTY 24250 CE when spot was 24,080, and COALINDIA 420 CE when spot was 396) because the candidate arbitrage sorting prioritized Tier 1 ranking (Gold) ahead of Moneyness, causing far OTM contracts with isolated Tier 1 patterns to beat ATM/1-ITM contracts.
+    root_cause: |
+      1. candidate_rank in common/resolve.py sorted by (tier_val, moneyness_rank, ...), allowing an OTM contract with tier_val=1 to rank ahead of an ATM contract with tier_val=2 or 3.
+      2. strike_range was set to 3 for index options, generating candidates up to 150 points away from spot.
+    affected_files:
+      - common/resolve.py
+      - input/program_config.json
+      - Trade_Option/input/program_config.json
+      - Trade_Stock/input/program_config.json
+      - docs/LIVE_TRADING_EXPERIENCE_PLAYBOOK.md
+      - MASTER_DOCUMENTATION.yaml
+      - ISSUE_MANAGEMENT.yaml
+    resolution: |
+      1. Updated common/resolve.py:
+         - Added Hard Moneyness Guard: Strictly filters out Far OTM options where strike distance > 1.15x strike step.
+         - Restructured candidate ranking tuple to prioritize Moneyness first: (moneyness_rank, tier_val, -net_profit, -rr_val, strike_dist).
+      2. Reduced strike_range for index options from 3 to 1 in program_config.json, restricting candidate resolution strictly to ATM ± 1 strike step.
+      3. Verified 14/14 regression suite tests passed with 100% success.
+    status: RESOLVED
+
+  - id: FEATURE-031
+    title: Live Watchlist & Post-Trade Learning Monitor Program
+    severity: ENHANCEMENT
+    category: Market Analytics & Trader Telemetry
+    family: WATCHLIST_MONITOR
+    date_reported: "2026-09-01"
+    symptom: |
+      Traders needed a dedicated real-time watchlist tool to track specific option contracts (both booked losses like ABCAPITAL 410 CE and booked profits like SOLARINDS 19750 PE) to monitor post-exit decay, hypothetical P&L, and spot-option price action telemetry without cluttering active order books.
+    root_cause: |
+      No dedicated standalone watchlist tool existed to monitor exited trades and track post-exit Greek behavior against underlying spot in real time.
+    affected_files:
+      - Trade_Option/watchlist_monitor.py
+      - watch_trades.py
+      - input/watchlist.json
+      - common/paths.py
+      - docs/LIVE_TRADING_EXPERIENCE_PLAYBOOK.md
+      - MASTER_DOCUMENTATION.yaml
+      - ISSUE_MANAGEMENT.yaml
+    resolution: |
+      1. Created Trade_Option/watchlist_monitor.py and root launcher watch_trades.py:
+         - Real-time batch quote fetching from Kite API for option contracts and underlying spot equities/indices.
+         - Computes post-exit metrics: PnL since entry, PnL since exit, and intelligent learning verdicts (e.g. "Great Exit! Saved -INR 2,480" or "Extended Runner").
+         - Outputs live state to output/monitor/watchlist_live.json for web dashboard consumption.
+         - Supports CLI commands: --add, --remove, --list, --loop [INTERVAL], --once.
+      2. Initialized input/watchlist.json with ABCAPITAL 410 CE, SOLARINDS 19750 PE, AXISBANK 1300 PE, ANGELONE 285 CE, and BAJAJHLDNG 11500 CE.
+      3. Integrated dedicated "👁️ Watchlist & Learning" tab in Trade_Option/templates/index.html (Port 5050) next to EMA Scan tab with live rendering, on-demand quotes refresh, and add/remove item actions.
+      4. Added /api/watchlist, /api/watchlist/refresh, /api/watchlist/add, and /api/watchlist/remove endpoints in Trade_Option/app_option_Trade.py.
+      5. Verified 14/14 regression suite tests passed with 100% success.
+    status: RESOLVED
+
+  - id: FEATURE-032
+    title: Trailed Stop Loss Immunity from Initial Spot SL Guard (Breakeven Lock Integrity)
+    severity: HIGH
+    category: Risk Management & Trailing SL
+    family: EXECUTION_GUARD
+    date_reported: "2026-09-01"
+    symptom: |
+      Trades that surged +10% into profit and had their Stop Loss trailed to Breakeven (e.g. BANKNIFTY 57400 CE bought @ 937.15, surged to 1114.60, trailed SL to 997.55) failed to exit at Breakeven when the option price pulled back to 920.00 / 815.00 because SPOT_SL_GUARD continuously suppressed the exit based on the initial morning spot support level (57,087.33, 400 pts away).
+    root_cause: |
+      SPOT_SL_GUARD in common/position_monitor.py was evaluated on all SL triggers without checking trailing_stage, allowing initial sub-entry spot support levels to override active Trailed Breakeven / Trailed Profit Stop Losses.
+    affected_files:
+      - common/position_monitor.py
+      - docs/LIVE_TRADING_EXPERIENCE_PLAYBOOK.md
+      - MASTER_DOCUMENTATION.yaml
+      - ISSUE_MANAGEMENT.yaml
+    resolution: |
+      1. Updated common/position_monitor.py to restrict SPOT_SL_GUARD strictly to initial entry stops (trailing_stage == 0 and current_sl < entry_s).
+      2. Enforced that whenever a position is TRAILED to Breakeven or Profit (trailing_stage >= 1 or current_sl >= entry_s), the Trailed SL executes immediately upon touch, preventing green runner trades from giving back gains into a loss.
+      3. Verified 14/14 regression suite tests passed with 100% success.
+    status: RESOLVED
+
 
 
 

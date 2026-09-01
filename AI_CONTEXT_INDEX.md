@@ -79,6 +79,7 @@ name/content explicitly mentions them.
 
 | Path | What it is | When to use |
 |---|---|---|
+| `docs/` | System reports, strategy references, and `docs/LIVE_TRADING_EXPERIENCE_PLAYBOOK.md` (Daily live trade lessons & tactical knowledge base) | Post-trade reviews, live lessons, or deep strategy specs |
 | `scratch/` | Diagnostic/regression one-off scripts (33 scripts). `run_full_regression_test.py` (10-test regression suite) is the one go-to. Others are throwaway analysis/debug scripts | Explicitly asked about a past debug/analysis; or to run regression |
 | `backtest/` | Backtest scripts + `master_backtest_results.json` | Backtest work / results review only |
 | `archive/` (incl. `legacy_backup/`) | Decommissioned code — do not read, do not resurrect | Never (moved out of production) |

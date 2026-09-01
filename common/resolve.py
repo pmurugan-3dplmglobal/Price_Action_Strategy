@@ -88,6 +88,9 @@ def load_program_config_for_engine(cfg_section, extra_fields=None):
             else:
                 applied["LIVE_MARKET_DEPLOYMENT"] = True
             cfg = full.get(cfg_section, {})
+            for k, v in cfg.items():
+                applied[k.lower()] = v
+                applied[k.upper()] = v
             for src_key, dst_key in [
                 ("timeframe_entry", "TIMEFRAME_ENTRY"),
                 ("timeframe_anchor", "TIMEFRAME_ANCHOR"),
@@ -98,6 +101,11 @@ def load_program_config_for_engine(cfg_section, extra_fields=None):
                 ("enable_swing_filter", "ENABLE_SWING_FILTER"),
                 ("swing_min_waves", "SWING_MIN_WAVES"),
                 ("swing_min_r2", "SWING_MIN_R2"),
+                ("strict_macro_gate", "STRICT_MACRO_GATE"),
+                ("enable_spot_sl_guard", "ENABLE_SPOT_SL_GUARD"),
+                ("strike_range", "STRIKE_RANGE"),
+                ("tranche_mode", "TRANCHE_MODE"),
+                ("prefer_itm_strikes", "PREFER_ITM_STRIKES"),
             ]:
                 if src_key in cfg:
                     applied[dst_key] = cfg[src_key]
@@ -894,13 +902,17 @@ def reconcile_positions(kite, registry, positions_dict, lock, engine, timeframe_
     if save_state_fn:
         save_state_fn()
 
-def is_anchor_valid_and_active(df_anchor, candle_a_time, sl_target, t1_target):
+def is_anchor_valid_and_active(df_anchor, candle_a_time, sl_target, t1_target, t2_target=None, entry_price=None, side="BULL"):
     """
     Generic Universal Rule (Anchor TF Specific):
     For a given Anchor TF dataframe (`df_anchor`), verify that:
     1. Anchor is newest/valid.
     2. No subsequent candle on this Anchor TF closed below SL (closing basis for SL).
-    3. No subsequent candle on this Anchor TF touched T1 (high price >= T1).
+    3. No subsequent candle on this Anchor TF reached T1 / 80% T1 exhaustion:
+       - If price achieves >= 80% of move to T1:
+         * If T2 is not available -> Discard (T1 exhausted).
+         * If T2 is available but gap between T1 and T2 is too small (< 5% expansion) -> Discard (T1/T2 compression).
+         * If subsequent candle also reached T2 -> Discard (T2 exhausted).
     Returns True if Anchor is valid and active; False if invalidated or already completed.
     """
     if df_anchor is None or df_anchor.empty or not candle_a_time:
@@ -918,23 +930,64 @@ def is_anchor_valid_and_active(df_anchor, candle_a_time, sl_target, t1_target):
         
         sl_val = float(sl_target) if sl_target else 0.0
         t1_val = float(t1_target) if t1_target else 0.0
+        t2_val = float(t2_target) if (t2_target is not None and t2_target != "N/A" and float(t2_target or 0) > 0) else None
+        ep_val = float(entry_price) if (entry_price is not None and float(entry_price or 0) > 0) else None
+        is_bear = str(side or "").upper() in ["BEAR", "PE", "SELL"]
         
-        # Rule 1: Discard if any subsequent Anchor TF candle closed below SL
-        if sl_val > 0 and (subseq['close'].astype(float) <= sl_val).any():
-            return False
+        # Rule 1: Discard if any subsequent Anchor TF candle closed below SL (Bull) or above SL (Bear)
+        if sl_val > 0:
+            if is_bear:
+                if (subseq['close'].astype(float) >= sl_val).any():
+                    return False
+            else:
+                if (subseq['close'].astype(float) <= sl_val).any():
+                    return False
             
-        # Rule 2: Discard if any subsequent Anchor TF candle touched T1 (high >= T1)
-        if t1_val > 0 and (subseq['high'].astype(float) >= t1_val).any():
-            return False
+        # Rule 2: Check T1 and 80% T1 exhaustion
+        if t1_val > 0:
+            if not is_bear:
+                # Bullish: 80% T1 threshold
+                t1_80 = (ep_val + 0.80 * (t1_val - ep_val)) if (ep_val and t1_val > ep_val) else t1_val
+                max_subseq_high = float(subseq['high'].astype(float).max())
+                
+                # Check if T1 or 80% of T1 was reached
+                if max_subseq_high >= t1_80 or max_subseq_high >= t1_val:
+                    # If no T2 available -> Invalidate (T1 hit / exhausted)
+                    if t2_val is None or t2_val <= t1_val:
+                        return False
+                    # If T2 is available, check if T1 to T2 gap is too small (< 10% expansion)
+                    gap_pct = (t2_val - t1_val) / t1_val
+                    if gap_pct < 0.10:
+                        return False  # Less gap with T2 (< 10%) -> Ignore scan
+                    # If subsequent price already reached T2 as well -> Invalidate
+                    if max_subseq_high >= t2_val:
+                        return False
+            else:
+                # Bearish: 80% T1 threshold
+                t1_80 = (ep_val - 0.80 * (ep_val - t1_val)) if (ep_val and ep_val > t1_val) else t1_val
+                min_subseq_low = float(subseq['low'].astype(float).min())
+                
+                # Check if T1 or 80% of T1 was reached
+                if min_subseq_low <= t1_80 or min_subseq_low <= t1_val:
+                    # If no T2 available -> Invalidate
+                    if t2_val is None or t2_val >= t1_val:
+                        return False
+                    # If T2 is available, check gap (< 10%)
+                    gap_pct = (t1_val - t2_val) / t1_val
+                    if gap_pct < 0.10:
+                        return False  # Less gap with T2 (< 10%) -> Ignore scan
+                    # If subsequent price already reached T2 as well -> Invalidate
+                    if min_subseq_low <= t2_val:
+                        return False
             
         return True
     except Exception as e:
         logging.warning(f"Error checking anchor validity: {e}")
         return True
 
-def get_anchor_invalidation_reason(df_anchor, candle_a_time, sl_target, t1_target):
+def get_anchor_invalidation_reason(df_anchor, candle_a_time, sl_target, t1_target, t2_target=None, entry_price=None, side="BULL"):
     """
-    Returns 'SL' or 'T1' indicating which level invalidated the anchor,
+    Returns 'SL', 'T1 (80%+ Reached, No T2)', 'T1 (80%+ Reached, T2 Gap < 10%)', 'T2 (Reached)',
     or None if the anchor is still valid/active.
     """
     if df_anchor is None or df_anchor.empty or not candle_a_time:
@@ -949,18 +1002,47 @@ def get_anchor_invalidation_reason(df_anchor, candle_a_time, sl_target, t1_targe
             return None
         sl_val = float(sl_target) if sl_target else 0.0
         t1_val = float(t1_target) if t1_target else 0.0
-        if sl_val > 0 and (subseq['close'].astype(float) <= sl_val).any():
-            return "SL"
-        if t1_val > 0 and (subseq['high'].astype(float) >= t1_val).any():
-            return "T1"
+        t2_val = float(t2_target) if (t2_target is not None and t2_target != "N/A" and float(t2_target or 0) > 0) else None
+        ep_val = float(entry_price) if (entry_price is not None and float(entry_price or 0) > 0) else None
+        is_bear = str(side or "").upper() in ["BEAR", "PE", "SELL"]
+
+        if sl_val > 0:
+            if is_bear and (subseq['close'].astype(float) >= sl_val).any():
+                return "SL"
+            elif not is_bear and (subseq['close'].astype(float) <= sl_val).any():
+                return "SL"
+
+        if t1_val > 0:
+            if not is_bear:
+                t1_80 = (ep_val + 0.80 * (t1_val - ep_val)) if (ep_val and t1_val > ep_val) else t1_val
+                max_high = float(subseq['high'].astype(float).max())
+                if max_high >= t1_80 or max_high >= t1_val:
+                    if t2_val is None or t2_val <= t1_val:
+                        return "T1 (80%+ Reached, No T2)"
+                    gap_pct = (t2_val - t1_val) / t1_val
+                    if gap_pct < 0.10:
+                        return "T1 (80%+ Reached, T2 Gap < 10%)"
+                    if max_high >= t2_val:
+                        return "T2 (Reached)"
+            else:
+                t1_80 = (ep_val - 0.80 * (ep_val - t1_val)) if (ep_val and ep_val > t1_val) else t1_val
+                min_low = float(subseq['low'].astype(float).min())
+                if min_low <= t1_80 or min_low <= t1_val:
+                    if t2_val is None or t2_val >= t1_val:
+                        return "T1 (80%+ Reached, No T2)"
+                    gap_pct = (t1_val - t2_val) / t1_val
+                    if gap_pct < 0.10:
+                        return "T1 (80%+ Reached, T2 Gap < 10%)"
+                    if min_low <= t2_val:
+                        return "T2 (Reached)"
         return None
     except Exception as e:
         logging.warning(f"Error checking anchor invalidation reason: {e}")
         return None
 
-def is_setup_already_completed(df_candles, candle_time, t1_target, sl_target):
+def is_setup_already_completed(df_candles, candle_time, t1_target, sl_target, t2_target=None, entry_price=None, side="BULL"):
     """Return True if setup was completed or invalidated."""
-    return not is_anchor_valid_and_active(df_candles, candle_time, sl_target, t1_target)
+    return not is_anchor_valid_and_active(df_candles, candle_time, sl_target, t1_target, t2_target=t2_target, entry_price=entry_price, side=side)
 
 def find_newest_valid_anchor(df):
     """
@@ -992,7 +1074,7 @@ def find_newest_valid_anchor(df):
                 t1, t2, t3 = find_profit_targets(df, result["Close"], stop_loss=sl_val)
                 
                 # Check validity on all subsequent candles in the full dataframe
-                if is_anchor_valid_and_active(df, candle_a_time, sl_val, t1):
+                if is_anchor_valid_and_active(df, candle_a_time, sl_val, t1, t2_target=t2, entry_price=result["Close"], side="BULL"):
                     risk = round(result["Close"] - sl_val, 2) if (result["Close"] > sl_val) else 0.0
                     rr = round((t1 - result["Close"]) / risk, 2) if (t1 and risk > 0) else 0.0
                     return {
@@ -1191,8 +1273,8 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                                    target=0, rr=0, event_time=candle_time)
                             continue
 
-                        if not is_anchor_valid_and_active(df_ce_a, candle_a_time or candle_time, result_ce.get("SL"), result_ce.get("T1")):
-                            invalid_reason = get_anchor_invalidation_reason(df_ce_a, candle_a_time or candle_time, result_ce.get("SL"), result_ce.get("T1"))
+                        if not is_anchor_valid_and_active(df_ce_a, candle_a_time or candle_time, result_ce.get("SL"), result_ce.get("T1"), t2_target=result_ce.get("T2"), entry_price=result_ce.get("Close"), side="BULL"):
+                            invalid_reason = get_anchor_invalidation_reason(df_ce_a, candle_a_time or candle_time, result_ce.get("SL"), result_ce.get("T1"), t2_target=result_ce.get("T2"), entry_price=result_ce.get("Close"), side="BULL")
                             skip_reason = f"already completed {invalid_reason} (skip)" if invalid_reason else "already completed (skip)"
                             logging.info(f"CE MATCH {skip_reason}: {ce['tradingsymbol']} | {result_ce['Pattern']}")
                             continue
@@ -1239,8 +1321,8 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                                    target=0, rr=0, event_time=candle_time)
                             continue
 
-                        if not is_anchor_valid_and_active(df_pe_a, candle_a_time or candle_time, result_pe.get("SL"), result_pe.get("T1")):
-                            invalid_reason = get_anchor_invalidation_reason(df_pe_a, candle_a_time or candle_time, result_pe.get("SL"), result_pe.get("T1"))
+                        if not is_anchor_valid_and_active(df_pe_a, candle_a_time or candle_time, result_pe.get("SL"), result_pe.get("T1"), t2_target=result_pe.get("T2"), entry_price=result_pe.get("Close"), side="BEAR"):
+                            invalid_reason = get_anchor_invalidation_reason(df_pe_a, candle_a_time or candle_time, result_pe.get("SL"), result_pe.get("T1"), t2_target=result_pe.get("T2"), entry_price=result_pe.get("Close"), side="BEAR")
                             skip_reason = f"already completed {invalid_reason} (skip)" if invalid_reason else "already completed (skip)"
                             logging.info(f"PE MATCH {skip_reason}: {pe['tradingsymbol']} | {result_pe['Pattern']}")
                             continue
@@ -1293,43 +1375,61 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
             pool = preferred_candidates if preferred_candidates else symbol_candidates
 
         if pool:
-            # Step 2: Sort pool by:
-            #   1. Tier Ranking (🥇 T1 Gold < 🥈 T2 Core < 🥉 T3 Momentum)
-            #   2. Moneyness Preference (0: 1-Step ITM / ATM -> 1: Deep ITM -> 2: OTM)
-            #   3. Net Profit potential to T1 (highest first)
-            #   4. Risk-to-Reward Ratio (highest first)
-            #   5. Strike Distance to Spot
-            def _candidate_rank(c):
-                tier_val = int(c.get("tier", 2))
-                rr_val = float(c.get("rr") or 0.0)
-                ep = float(c.get("entry_spot") or 0.0)
-                t1 = float(c.get("t1") or 0.0)
-                net_profit = max(0.0, t1 - ep)
+            # Step 2: Moneyness Classification & Far OTM Filtering
+            # Moneyness classification:
+            #   0: 1-Step ITM or ATM (Highest Priority: resilient Delta ~0.50-0.60, narrowest spread)
+            #   1: 1-Step OTM (Permissible for high-velocity momentum)
+            #   2: Deep ITM
+            #   3: Far OTM (Distance > 1.25 * strike_step -> Strictly Rejected by Moneyness Guard)
+            def _calc_moneyness_rank(c):
                 strike_val = float(c.get("strike", 0))
                 side_val = str(c.get("side", "CE")).upper()
                 step_val = float(c.get("strike_step") or 50.0)
-                
-                # Moneyness classification: Prioritize 1-Step ITM & ATM to defeat Theta decay and Call/Put writing resistance
+                dist = abs(strike_val - current_spot)
+                # True ATM (closest strike within half step) always qualifies as Rank 0
+                is_atm = dist <= (step_val * 0.55)
                 if side_val == "CE":
-                    if strike_val <= current_spot and (current_spot - strike_val) <= (step_val * 1.5):
-                        moneyness_rank = 0  # 1-Step ITM or ATM
+                    if is_atm or (strike_val < current_spot and (current_spot - strike_val) <= (step_val * 1.25)):
+                        return 0  # ATM or 1-Step ITM
+                    elif strike_val > current_spot and (strike_val - current_spot) <= (step_val * 1.25):
+                        return 1  # 1-Step OTM
                     elif strike_val < current_spot:
-                        moneyness_rank = 1  # Deep ITM
+                        return 2  # Deep ITM
                     else:
-                        moneyness_rank = 2  # OTM
+                        return 3  # Far OTM (> 1.25 steps away)
                 else: # PE
-                    if strike_val >= current_spot and (strike_val - current_spot) <= (step_val * 1.5):
-                        moneyness_rank = 0  # 1-Step ITM or ATM
+                    if is_atm or (strike_val > current_spot and (strike_val - current_spot) <= (step_val * 1.25)):
+                        return 0  # ATM or 1-Step ITM
+                    elif strike_val < current_spot and (current_spot - strike_val) <= (step_val * 1.25):
+                        return 1  # 1-Step OTM
                     elif strike_val > current_spot:
-                        moneyness_rank = 1  # Deep ITM
+                        return 2  # Deep ITM
                     else:
-                        moneyness_rank = 2  # OTM
+                        return 3  # Far OTM (> 1.25 steps away)
 
-                strike_dist = abs(strike_val - current_spot)
-                return (tier_val, moneyness_rank, -net_profit, -rr_val, strike_dist)
+            # Hard Moneyness Guard: Strictly reject Far OTM strikes (Rank 3) to protect against Delta collapse & Theta decay
+            non_far_otm = [c for c in pool if _calc_moneyness_rank(c) < 3]
+            if non_far_otm:
+                pool = non_far_otm
+            else:
+                logging.info(f"[MONEYNESS_GUARD] Suppressed {symbol} options: All candidates are far OTM (> 1 strike step from spot {current_spot:.2f}).")
+                pool = []
 
-            pool.sort(key=_candidate_rank)
-            best_trade = pool[0]
+            if pool:
+                def _candidate_rank(c):
+                    m_rank = _calc_moneyness_rank(c)
+                    tier_val = int(c.get("tier", 2))
+                    rr_val = float(c.get("rr") or 0.0)
+                    ep = float(c.get("entry_spot") or 0.0)
+                    t1 = float(c.get("t1") or 0.0)
+                    net_profit = max(0.0, t1 - ep)
+                    strike_val = float(c.get("strike", 0))
+                    strike_dist = abs(strike_val - current_spot)
+                    # Priority: 1. Moneyness (ATM/1-ITM first) -> 2. Tier (Gold/Core) -> 3. Profit -> 4. RR -> 5. Distance
+                    return (m_rank, tier_val, -net_profit, -rr_val, strike_dist)
+
+                pool.sort(key=_candidate_rank)
+                best_trade = pool[0]
 
             logging.info(f"[ARBITRAGE WINNER] {symbol}: Selected {best_trade['contract']} ({best_trade['side']} | Strike {best_trade.get('strike')}) | Tier: {best_trade.get('tier_label')} | Profit: {float(best_trade.get('t1',0))-float(best_trade.get('entry_spot',0)):.2f} pts | RR: {best_trade.get('rr')} | MacroBias: {macro_bias} | StrictGate: {strict_gate}")
             
