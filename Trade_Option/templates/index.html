@@ -1667,10 +1667,22 @@
             const fb = document.getElementById('token-feedback');
             const raw = input.value.trim();
             if (!raw) { fb.textContent = 'Please paste the redirect URL'; fb.style.color = '#f85149'; return; }
+            
+            if (raw.includes('/connect/login') || raw.includes('sess_id=')) {
+                fb.innerHTML = '⚠️ <strong>Login not completed yet!</strong><br>You pasted the Kite login URL. Please enter your Kite password & TOTP in the browser tab first. Once logged in, copy the final redirected URL (containing <code>request_token=...</code>) and paste it here.';
+                fb.style.color = '#d29922';
+                return;
+            }
+
             let requestToken = raw;
             if (requestToken.includes('request_token=')) {
                 requestToken = requestToken.split('request_token=')[1].split('&')[0];
+            } else if (requestToken.startsWith('http')) {
+                fb.innerHTML = '⚠️ <strong>Invalid URL:</strong> The URL does not contain <code>request_token=</code>. Please ensure you finished Kite login and were redirected.';
+                fb.style.color = '#f85149';
+                return;
             }
+
             fb.textContent = 'Exchanging token...';
             fb.style.color = '#8b949e';
             try {
@@ -1681,7 +1693,7 @@
                 });
                 const d = await r.json();
                 if (d.ok) {
-                    fb.textContent = 'Token saved successfully!';
+                    fb.textContent = '✅ Token saved successfully! Refreshing...';
                     fb.style.color = '#3fb950';
                     document.getElementById('token-gen-btn').style.display = 'none';
                     setTimeout(() => { hideTokenPanel(); refreshData(); }, 1500);
