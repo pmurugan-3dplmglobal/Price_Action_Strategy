@@ -22,7 +22,8 @@ from trading_core import (
     is_contract_exit_executed,
     log_to_journal,
     fetch_and_resample_candles,
-    calc_rr
+    calc_rr,
+    get_ist_now
 )
 from ema_engine import (
     start_ema_engine, stop_ema_engine, get_ema_engine_status, get_ema_scan_data,
@@ -686,7 +687,7 @@ def refresh_data(single_run=False):
                                     _, sl_val = sanitize_sl_and_entry(effective_entry, raw_sl, t_stage, side_val, high_price=hp_val)
 
                                     clean_sym = str(contract_name).replace(" ", "").upper()
-                                    now_t = dt.now().time()
+                                    now_t = get_ist_now().time()
                                     cfg_f = load_config()
                                     fs_start_str = cfg_f.get("failsafe_start_time", "09:45")
                                     try:
@@ -1549,7 +1550,7 @@ def api_export_monthly():
 def api_live_execution():
     if request.method == "POST":
         enabled = request.get_json(force=True, silent=True).get("enabled", False)
-        flag_path = os.path.join(BASE_DIR, LIVE_EXECUTION_FLAG)
+        flag_path = LIVE_EXECUTION_FLAG
         if enabled:
             with open(flag_path, "w") as f:
                 f.write("1")
@@ -1559,13 +1560,13 @@ def api_live_execution():
         with data_lock:
             cached_data["live_execution"] = enabled
         return jsonify({"ok": True, "enabled": enabled})
-    return jsonify({"enabled": os.path.exists(os.path.join(BASE_DIR, LIVE_EXECUTION_FLAG))})
+    return jsonify({"enabled": os.path.exists(LIVE_EXECUTION_FLAG)})
 
 @app.route("/api/live-execution/index", methods=["GET", "POST"])
 def api_live_execution_index():
     if request.method == "POST":
         enabled = request.get_json(force=True, silent=True).get("enabled", False)
-        flag_path = os.path.join(BASE_DIR, LIVE_EXECUTION_FLAG_INDEX)
+        flag_path = LIVE_EXECUTION_FLAG_INDEX
         if enabled:
             with open(flag_path, "w") as f:
                 f.write("1")
@@ -1575,7 +1576,7 @@ def api_live_execution_index():
         with data_lock:
             cached_data["live_execution_index"] = enabled
         return jsonify({"ok": True, "enabled": enabled})
-    return jsonify({"enabled": os.path.exists(os.path.join(BASE_DIR, LIVE_EXECUTION_FLAG_INDEX))})
+    return jsonify({"enabled": os.path.exists(LIVE_EXECUTION_FLAG_INDEX)})
 
 @app.route("/api/edit-lock", methods=["POST"])
 def api_edit_lock():

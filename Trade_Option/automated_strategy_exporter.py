@@ -19,6 +19,7 @@ import trade_db
 from trading_core import (
     load_kite_session,
     fetch_and_resample_candles,
+    get_ist_now,
     scan_anchor_bcd_breakout,
     find_anchor_bullish_engulfing,
     find_anchor_ll_sweep,
@@ -195,8 +196,9 @@ def export_trades_to_csv(trades, csv_path, scan_slot):
     logging.info(f"Exported {len(df)} rows to: {csv_path}")
 
 def execute_scheduled_export(slot_name=None):
+    now_ist = get_ist_now()
     if not slot_name:
-        now_time = dt.now().time()
+        now_time = now_ist.time()
         if now_time < dt.strptime("11:30", "%H:%M").time():
             slot_name = "10_30_AM"
         elif now_time < dt.strptime("14:00", "%H:%M").time():
@@ -204,7 +206,7 @@ def execute_scheduled_export(slot_name=None):
         else:
             slot_name = "03_15_PM"
 
-    today_folder_name = dt.now().strftime("%d_%b_%y")  # e.g., 30_Jul_26
+    today_folder_name = now_ist.strftime("%d_%b_%y")  # e.g., 30_Jul_26
     slot_dir = os.path.join(BASE_EXPORT_DIR, today_folder_name, slot_name)
     os.makedirs(slot_dir, exist_ok=True)
 

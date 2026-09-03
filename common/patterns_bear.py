@@ -201,13 +201,20 @@ def find_anchor_bearish_harami(df):
     if len(df) < 2:
         return None
     bullish_mother, bearish_inside = df.iloc[-2], df.iloc[-1]
-    if not (float(bullish_mother['close']) > float(bullish_mother['open']) and float(bearish_inside['close']) < float(bearish_inside['open'])):
+    m_open, m_close = float(bullish_mother['open']), float(bullish_mother['close'])
+    i_open, i_close = float(bearish_inside['open']), float(bearish_inside['close'])
+    if not (m_close > m_open and i_close < i_open):
         return None
-    if not (float(bearish_inside['high']) <= float(bullish_mother['close']) and float(bearish_inside['low']) >= float(bullish_mother['open'])):
+    if not (float(bearish_inside['high']) <= m_close and float(bearish_inside['low']) >= m_open):
+        return None
+    # Body size ratio check: Inside body must be <= 65% of mother body (Datta rulebook)
+    mother_body = m_close - m_open
+    inside_body = i_open - i_close
+    if mother_body > 0 and (inside_body / mother_body) > 0.65:
         return None
     inside_high = float(bearish_inside['high'])
     inside_low = float(bearish_inside['low'])
-    anchor_close = float(bearish_inside['close'])
+    anchor_close = i_close
     sl_val = calculate_sl_buffer(inside_high, side="BEAR")
     return {
         "Pattern": "BEAR_A_Harami",
@@ -309,11 +316,25 @@ def scan_anchor_bcd_breakout_bearish(df_entry, df_anchor, anchor_tf="", entry_tf
                 except Exception:
                     pass
 
-        anchor_entry_matches = df_entry[df_entry['date'] == a_date] if 'date' in df_entry.columns else pd.DataFrame()
-        if anchor_entry_matches.empty:
-            continue
+        e_anchor_idx = None
+        if 'date' in df_entry.columns:
+            exact_matches = df_entry[df_entry['date'] == a_date]
+            if not exact_matches.empty:
+                e_anchor_idx = exact_matches.index[0]
+            else:
+                # Normalized prefix comparison (e.g. YYYY-MM-DD) for multi-timeframe scans
+                a_str = str(a_date).split("T")[0].split(" ")[0].strip()
+                if len(a_str) >= 10:
+                    for ei in range(len(df_entry)):
+                        e_str = str(df_entry.iloc[ei].get('date', '')).split("T")[0].split(" ")[0].strip()
+                        if e_str == a_str:
+                            e_anchor_idx = ei
+                            break
+        else:
+            e_anchor_idx = a_idx
 
-        e_anchor_idx = anchor_entry_matches.index[0]
+        if e_anchor_idx is None:
+            continue
 
         if not check_left_side_rule_bearish(df_entry, a_high, setup_count=0, skip_adjacent=(len(df_entry) - 1 - e_anchor_idx)):
             continue
@@ -422,8 +443,42 @@ def scan_anchor_bcd_breakout_bearish(df_entry, df_anchor, anchor_tf="", entry_tf
             continue
 
         rr = (entry_close - t1) / risk
-        if rr < 1.5:
+        if round(rr, 2) < 1.5:
             continue
+
+        # ── Volume Profile Analysis on B-C-D (Bearish Breakdown) ──
+        vol_b_ratio = 1.0
+        vol_c_ratio = 1.0
+        vol_d_ratio = 1.0
+        vol_confirmed = True
+        vol_profile_score = 3
+        if 'volume' in df_entry.columns and d_idx >= 5:
+            try:
+                avg_vol_20 = float(df_entry['volume'].iloc[max(0, d_idx - 20):d_idx].mean())
+                if avg_vol_20 > 0:
+                    vb = float(df_entry['volume'].iloc[b_idx])
+                    vc = float(df_entry['volume'].iloc[c_idx])
+                    vd = float(df_entry['volume'].iloc[d_idx])
+                    vol_b_ratio = round(vb / avg_vol_20, 2)
+                    vol_c_ratio = round(vc / vb, 2) if vb > 0 else round(vc / avg_vol_20, 2)
+                    vol_d_ratio = round(vd / avg_vol_20, 2)
+
+                    # Retest Volume Dry-up: VC should ideally be lower than VB (pullback on declining volume)
+                    # Trigger Volume Expansion: VD should be expanding relative to 20-period avg
+                    is_c_dryup = (vol_c_ratio <= 0.90) or (vc <= avg_vol_20)
+                    is_d_expansion = (vol_d_ratio >= 1.0) or (is_near_close_d and vol_d_ratio >= 0.60)
+                    vol_confirmed = bool(is_c_dryup and is_d_expansion)
+
+                    if vol_confirmed and vol_d_ratio >= 1.3:
+                        vol_profile_score = 5
+                    elif vol_confirmed:
+                        vol_profile_score = 4
+                    elif is_c_dryup or is_d_expansion:
+                        vol_profile_score = 3
+                    else:
+                        vol_profile_score = 2
+            except Exception:
+                pass
 
         setup_data = {
             "Pattern": pattern_type,
@@ -440,7 +495,12 @@ def scan_anchor_bcd_breakout_bearish(df_entry, df_anchor, anchor_tf="", entry_tf
             "Direction": "BEAR",
             "Stage_Status": stage_status,
             "Priority": priority_level,
-            "d_idx": d_idx
+            "d_idx": d_idx,
+            "vol_b_ratio": vol_b_ratio,
+            "vol_c_ratio": vol_c_ratio,
+            "vol_d_ratio": vol_d_ratio,
+            "vol_confirmed": vol_confirmed,
+            "vol_score": vol_profile_score
         }
 
         if best_match is None or setup_data["d_idx"] > best_match.get("d_idx", -1) or \

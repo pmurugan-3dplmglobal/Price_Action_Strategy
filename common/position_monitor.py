@@ -781,24 +781,26 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
             #      d) Tier 1 Gold setup: tier == 1 / TIER_1_GOLD & P&L >= 0.0%
             #    - SQUARE OFF if Stagnant / Underwater:
             #      Entered earlier in session, P&L < +2.0%, T1 untouched. Eliminates 66-hr weekend theta tax.
-            now_dt = dt.now()
+            now_dt = get_ist_now().replace(tzinfo=None)
+            is_thursday = now_dt.weekday() == 3
             is_friday = now_dt.weekday() == 4
             is_eod_time = now_dt.strftime("%H:%M") >= "15:15"
             pos_tf_str = str(pos.get("timeframe") or timeframe_entry or "").lower()
             is_short_tf = any(tf in pos_tf_str for tf in ["3m", "3min", "3minute", "5m", "5min", "5minute"])
             is_index_contract = (engine_name == "index") or (pos.get("engine") == "index") or any(idx_sym in c_str for idx_sym in ["NIFTY", "BANKNIFTY", "SENSEX", "MIDCPNIFTY", "FINNIFTY", "BANKEX"])
 
-            if is_friday and is_eod_time and not is_stock:
+            if (is_friday or is_thursday) and is_eod_time and not is_stock:
                 entry_s = float(pos.get("entry_spot") or pos.get("entry_price") or 0.0)
                 curr_p = live_ltp if live_ltp > 0 else (cp if cp > 0 else entry_s)
                 curr_pnl_pct = ((curr_p - entry_s) / entry_s * 100) if entry_s > 0 else 0.0
 
                 should_squareoff = False
                 squareoff_reason = ""
+                day_name = "Thursday" if is_thursday else "Friday"
 
                 if is_short_tf or is_index_contract:
                     should_squareoff = True
-                    squareoff_reason = "Friday 15:15 EOD Index/Intraday Auto-Squareoff [WEEKEND_DECAY_GUARD]"
+                    squareoff_reason = f"{day_name} 15:15 EOD Index/Intraday Auto-Squareoff [{'WEEKLY_THETA_GUARD' if is_thursday else 'WEEKEND_DECAY_GUARD'}]"
                 else:
                     # Stock Option: Apply Intelligent Carry Gate
                     is_runner_be = int(pos.get("trailing_stage") or 0) >= 1
@@ -823,17 +825,17 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
 
                     if not qualified_to_hold:
                         should_squareoff = True
-                        squareoff_reason = f"Friday 15:15 EOD Stagnant Square-off [THETA_PROTECTION] (PnL {curr_pnl_pct:.2f}% < +2.0%, T1 untouched)"
+                        squareoff_reason = f"{day_name} 15:15 EOD Stagnant Square-off [THETA_PROTECTION] (PnL {curr_pnl_pct:.2f}% < +2.0%, T1 untouched)"
                     else:
                         hold_tag = "RUNNER_BE" if is_runner_be else ("PROFIT_CUSHION" if is_solid_profit else ("FRESH_PM_ENTRY" if is_fresh_pm else "TIER_1_GOLD_ACCUMULATION"))
-                        logging.info(f"[FRIDAY 15:15 CARRY APPROVED] Holding {sym} ({contract}) over weekend for Monday open: Tag={hold_tag} | PnL {curr_pnl_pct:.2f}% | Entry {entry_s:.2f} -> LTP {curr_p:.2f}")
+                        logging.info(f"[{day_name.upper()} 15:15 CARRY APPROVED] Holding {sym} ({contract}) into next session: Tag={hold_tag} | PnL {curr_pnl_pct:.2f}% | Entry {entry_s:.2f} -> LTP {curr_p:.2f}")
 
                 if should_squareoff:
-                    logging.info(f"[FRIDAY 15:15 EOD SQUAREOFF] Closing {sym} ({contract}) | {squareoff_reason}")
+                    logging.info(f"[{day_name.upper()} 15:15 EOD SQUAREOFF] Closing {sym} ({contract}) | {squareoff_reason}")
                     close_position(kite, pos, live, product_type)
                     exit_price = curr_p
                     pnl = curr_pnl_pct
-                    log_fn(sym, pos.get("pattern", ""), pos_tf, "EXIT_EOD_FRIDAY", "CLOSED",
+                    log_fn(sym, pos.get("pattern", ""), pos_tf, f"EXIT_EOD_{day_name.upper()}", "CLOSED",
                            f"{squareoff_reason} (Exit @ {exit_price:.2f})", pnl,
                            entry=entry_s, sl=pos.get("current_sl", ""), target=pos.get("t1", ""),
                            event_time=last.get('date'))
@@ -848,7 +850,7 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                     continue
 
             # 1) SL Evaluation (Separated SL Monitor: Skipped 09:15-09:45 AM, Active at 09:45 AM+)
-            now_time_str = dt.now().strftime("%H:%M")
+            now_time_str = get_ist_now().strftime("%H:%M")
             is_before_0945 = now_time_str < "09:45"
             is_start_0945 = "09:45" <= now_time_str <= "09:47"
 

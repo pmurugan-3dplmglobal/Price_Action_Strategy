@@ -4,6 +4,7 @@ import logging
 import threading
 import time
 from datetime import datetime as dt, time as datetime_time
+from timeframe_utils import get_ist_now
 
 _GLOBAL_WS_MONITOR = None
 _WS_LOCK = threading.Lock()
@@ -148,7 +149,7 @@ class ActivePositionWebSocketMonitor:
         1. Checks 09:45 AM Opening Market Volatility Guard.
         2. Checks UI Active Edit Lock.
         """
-        if dt.now().time() < self.fs_start_t:
+        if get_ist_now().time() < self.fs_start_t:
             logging.info(f"[WEBSOCKET FLEX PAUSE BEFORE {self.failsafe_start_str} AM] Exit check paused for {symbol}.")
             return False
 

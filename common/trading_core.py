@@ -57,6 +57,8 @@ from registries import (
     STOCK_REGISTRY,
     INDEX_REGISTRY,
     SUPER_STOCKS,
+    SECTOR_MAP,
+    get_symbol_sector,
     sync_stock_tokens,
     sync_fno_stock_registry,
     match_registry_symbol,
@@ -184,4 +186,16 @@ from dashboard_sl_overrides import (
     clean_stale_overrides,
     purge_sl_override
 )
+
+# ── vix_guard ──
+from vix_guard import (
+    get_india_vix,
+    evaluate_vix_regime
+)
+
+# ── portfolio_risk ──
+from portfolio_risk import (
+    check_portfolio_risk_caps
+)
+
 

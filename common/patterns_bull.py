@@ -195,13 +195,20 @@ def find_anchor_bullish_harami(df):
     if len(df) < 2:
         return None
     bearish_mother, bullish_inside = df.iloc[-2], df.iloc[-1]
-    if not (float(bearish_mother['close']) < float(bearish_mother['open']) and float(bullish_inside['close']) > float(bullish_inside['open'])):
+    m_open, m_close = float(bearish_mother['open']), float(bearish_mother['close'])
+    i_open, i_close = float(bullish_inside['open']), float(bullish_inside['close'])
+    if not (m_close < m_open and i_close > i_open):
         return None
-    if not (float(bullish_inside['high']) <= float(bearish_mother['open']) and float(bullish_inside['low']) >= float(bearish_mother['close'])):
+    if not (float(bullish_inside['high']) <= m_open and float(bullish_inside['low']) >= m_close):
+        return None
+    # Body size ratio check: Inside body must be <= 65% of mother body (Datta rulebook)
+    mother_body = m_open - m_close
+    inside_body = i_close - i_open
+    if mother_body > 0 and (inside_body / mother_body) > 0.65:
         return None
     inside_high = float(bullish_inside['high'])
     inside_low = float(bullish_inside['low'])
-    anchor_close = float(bullish_inside['close'])
+    anchor_close = i_close
     sl_val = calculate_sl_buffer(inside_low, side="BULL")
     return {
         "Pattern": "BULL_A_Harami",
@@ -488,6 +495,39 @@ def scan_anchor_bcd_breakout(df_entry, df_anchor, anchor_tf="", entry_tf="", ena
         d_time_str = str(d.get("date", ""))
         a_time_str = str(cand.get("a_time") or a.get("date", ""))
 
+        # ── Volume Profile Analysis on B-C-D ──
+        vol_b_ratio = 1.0
+        vol_c_ratio = 1.0
+        vol_d_ratio = 1.0
+        vol_confirmed = True
+        vol_profile_score = 3
+        if 'volume' in df_entry.columns and d_idx >= 5:
+            try:
+                avg_vol_20 = float(df_entry['volume'].iloc[max(0, d_idx - 20):d_idx].mean())
+                if avg_vol_20 > 0:
+                    vb = float(df_entry['volume'].iloc[b_idx])
+                    vc = float(df_entry['volume'].iloc[c_idx])
+                    vd = float(df_entry['volume'].iloc[d_idx])
+                    vol_b_ratio = round(vb / avg_vol_20, 2)
+                    vol_c_ratio = round(vc / vb, 2) if vb > 0 else round(vc / avg_vol_20, 2)
+                    vol_d_ratio = round(vd / avg_vol_20, 2)
+
+                    # Retest Volume Dry-up: VC should ideally be lower than VB (pullback on declining volume)
+                    # Trigger Volume Expansion: VD should be expanding relative to 20-period avg
+                    is_c_dryup = (vol_c_ratio <= 0.90) or (vc <= avg_vol_20)
+                    is_d_expansion = (vol_d_ratio >= 1.0) or (is_near_close_d and vol_d_ratio >= 0.60)
+                    vol_confirmed = bool(is_c_dryup and is_d_expansion)
+
+                    if vol_confirmed and vol_d_ratio >= 1.3:
+                        vol_profile_score = 5
+                    elif vol_confirmed:
+                        vol_profile_score = 4
+                    elif is_c_dryup or is_d_expansion:
+                        vol_profile_score = 3
+                    else:
+                        vol_profile_score = 2
+            except Exception:
+                pass
 
         valid_matches.append({
             "Pattern": pattern_label,
@@ -504,7 +544,12 @@ def scan_anchor_bcd_breakout(df_entry, df_anchor, anchor_tf="", entry_tf="", ena
             "Direction": "BULL",
             "Stage_Status": stage_status,
             "Priority": priority_level,
-            "d_idx": d_idx
+            "d_idx": d_idx,
+            "vol_b_ratio": vol_b_ratio,
+            "vol_c_ratio": vol_c_ratio,
+            "vol_d_ratio": vol_d_ratio,
+            "vol_confirmed": vol_confirmed,
+            "vol_score": vol_profile_score
         })
 
     if not valid_matches:

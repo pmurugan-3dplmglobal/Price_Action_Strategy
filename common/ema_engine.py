@@ -88,10 +88,38 @@ def get_atm_strike(spot_price, strike_step):
         return round(spot_price)
     return round(spot_price / strike_step) * strike_step
 
+
+def _get_monthly_expiry_month_str(now=None):
+    """
+    Determine the appropriate contract month string for monthly options.
+    If <= 6 days remain to the last Thursday of the current month (monthly expiry),
+    automatically rolls over to the next month's series to avoid extreme theta decay.
+    """
+    if now is None:
+        now = datetime.datetime.now()
+    import calendar
+    year = now.year
+    month = now.month
+    last_day = calendar.monthrange(year, month)[1]
+    last_date = datetime.date(year, month, last_day)
+    # Find last Thursday of current month (weekday 3)
+    offset = (last_date.weekday() - 3) % 7
+    last_thursday = last_date - datetime.timedelta(days=offset)
+    today = now.date() if isinstance(now, datetime.datetime) else now
+    days_to_expiry = (last_thursday - today).days
+
+    # 6-Day Monthly Rollover Rule: If <= 6 days to expiry, roll to next month
+    if days_to_expiry <= 6:
+        next_month = month + 1 if month < 12 else 1
+        next_year = year if month < 12 else year + 1
+        next_dt = datetime.date(next_year, next_month, 1)
+        return next_dt.strftime("%y"), next_dt.strftime("%b").upper()
+    else:
+        return now.strftime("%y"), now.strftime("%b").upper()
+
 def get_option_contract_symbol(symbol, strike, side="CE"):
     now = datetime.datetime.now()
-    month_str = now.strftime("%b").upper()
-    yr_str = now.strftime("%y")
+    yr_str, month_str = _get_monthly_expiry_month_str(now)
     strike_val = int(strike) if int(strike) == strike else strike
     return f"{symbol}{yr_str}{month_str}{strike_val}{side}"
 

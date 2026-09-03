@@ -55,6 +55,8 @@ from patterns_bear import (
     scan_trend_continuation_reentry_bearish,
     scan_anchor_bcd_breakout_generic
 )
+from vix_guard import evaluate_vix_regime
+from portfolio_risk import check_portfolio_risk_caps
 
 def _match_registry_symbol(registry, tradingsymbol):
     """Return the registry key that best matches a tradingsymbol, longest-match first.
@@ -1279,14 +1281,22 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                             logging.info(f"CE MATCH {skip_reason}: {ce['tradingsymbol']} | {result_ce['Pattern']}")
                             continue
 
-                        pos_size = calculate_position_size(current_spot, result_ce["SL"])
+                        ce_lot = int(ce.get("lot_size") or config.get("lot_size", 1))
+                        pos_size = calculate_position_size(
+                            spot_price=result_ce["Close"],
+                            stop_loss=result_ce["SL"],
+                            capital=float(cfg_engine.get("capital") or 100000.0),
+                            risk_percent=float(cfg_engine.get("MAX_RISK_PERCENT") or 1.0),
+                            lot_size=ce_lot,
+                            is_option=True
+                        )
                         trade_data = {
                             "symbol": symbol, "contract": ce['tradingsymbol'], "option_token": ce['token'],
                             "index_token": config["token"], "spot_token": config["token"], "spot_entry": current_spot,
                             "spot_sl": spot_sl_ce, "strike": strike, "entry_spot": result_ce["Close"],
                             "current_sl": result_ce["SL"], "t1": result_ce["T1"], "t2": result_ce["T2"],
                             "t3": result_ce["T3"], "rr": result_ce.get("RR"), "trailing_stage": 0,
-                            "lot_size": ce.get("lot_size") or config.get("lot_size", 1), "position_size": pos_size,
+                            "lot_size": ce_lot, "position_size": pos_size,
                             "pattern": result_ce["Pattern"], "timeframe": timeframe_entry, "side": "CE",
                             "strike_step": config["strike_step"], "entry_time": candle_time,
                             "candle_a_time": candle_a_time,
@@ -1327,14 +1337,22 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                             logging.info(f"PE MATCH {skip_reason}: {pe['tradingsymbol']} | {result_pe['Pattern']}")
                             continue
 
-                        pos_size = calculate_position_size(current_spot, result_pe["SL"])
+                        pe_lot = int(pe.get("lot_size") or config.get("lot_size", 1))
+                        pos_size = calculate_position_size(
+                            spot_price=result_pe["Close"],
+                            stop_loss=result_pe["SL"],
+                            capital=float(cfg_engine.get("capital") or 100000.0),
+                            risk_percent=float(cfg_engine.get("MAX_RISK_PERCENT") or 1.0),
+                            lot_size=pe_lot,
+                            is_option=True
+                        )
                         trade_data = {
                             "symbol": symbol, "contract": pe['tradingsymbol'], "option_token": pe['token'],
                             "index_token": config["token"], "spot_token": config["token"], "spot_entry": current_spot,
                             "spot_sl": spot_sl_pe, "strike": strike, "entry_spot": result_pe["Close"],
                             "current_sl": result_pe["SL"], "t1": result_pe["T1"], "t2": result_pe["T2"],
                             "t3": result_pe["T3"], "rr": result_pe.get("RR"), "trailing_stage": 0,
-                            "lot_size": pe.get("lot_size") or config.get("lot_size", 1), "position_size": pos_size,
+                            "lot_size": pe_lot, "position_size": pos_size,
                             "pattern": result_pe["Pattern"], "timeframe": timeframe_entry, "side": "PE",
                             "strike_step": config["strike_step"], "entry_time": candle_time,
                             "candle_a_time": candle_a_time,
@@ -1432,6 +1450,25 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                 best_trade = pool[0]
 
             logging.info(f"[ARBITRAGE WINNER] {symbol}: Selected {best_trade['contract']} ({best_trade['side']} | Strike {best_trade.get('strike')}) | Tier: {best_trade.get('tier_label')} | Profit: {float(best_trade.get('t1',0))-float(best_trade.get('entry_spot',0)):.2f} pts | RR: {best_trade.get('rr')} | MacroBias: {macro_bias} | StrictGate: {strict_gate}")
+
+            # ── VIX Regime Gate Check ──
+            vix_allowed, vix_reason, vix_val = evaluate_vix_regime(kite, tier_val=best_trade.get("tier", 2))
+            if not vix_allowed:
+                logging.info(f"[VIX_REGIME_GATE] Suppressed staging for {symbol} ({best_trade['contract']}): {vix_reason}")
+                return []
+
+            # ── Portfolio Risk & Sector Caps Check ──
+            cap_amount = float(cfg_engine.get("capital") or 100000.0)
+            p_allowed, p_reason, p_details = check_portfolio_risk_caps(
+                engine=engine_name,
+                symbol=symbol,
+                candidate_tier=best_trade.get("tier", 2),
+                capital=cap_amount,
+                live_positions=active_positions
+            )
+            if not p_allowed:
+                logging.info(f"[PORTFOLIO_RISK_CAP] Suppressed staging for {symbol} ({best_trade['contract']}): {p_reason}")
+                return []
             
             live_flag = paths.INDEX_LIVE_FLAG if engine_name == "index" else paths.NIFTY50_LIVE_FLAG
             is_live = False

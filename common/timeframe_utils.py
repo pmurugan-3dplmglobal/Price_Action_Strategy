@@ -75,11 +75,12 @@ def is_live_candle_near_close(candle_date, timeframe_str, completion_pct=0.80):
     Check if the active forming candle is currently within the last 20% (or completion_pct)
     of its duration during live market hours.
     Returns True if elapsed time >= completion_pct * tf_minutes.
+    Uses Indian Standard Time (IST) consistently across local and cloud environments.
     """
     if not candle_date or str(candle_date).strip() == "":
         return False
     try:
-        now = dt.now()
+        now = get_ist_now().replace(tzinfo=None)
         c_dt = pd.to_datetime(candle_date)
         if hasattr(c_dt, 'tz') and c_dt.tz is not None:
             c_dt = c_dt.tz_localize(None)

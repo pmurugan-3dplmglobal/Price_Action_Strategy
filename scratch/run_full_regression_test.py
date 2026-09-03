@@ -316,6 +316,114 @@ except Exception as e:
     errors.append(f"Dashboard Auth Test Failed: {e}")
     print(f" FAILED [ERR] ({e})", flush=True)
 
+# Test 15: VIX Macro Gate & Portfolio Risk Governance Invariants
+print("[TEST 15] Testing VIX Macro Gate & Portfolio Risk Governance Invariants...", end="", flush=True)
+try:
+    import vix_guard
+    import portfolio_risk
+    import registries
+    
+    # 1. VIX threshold logic
+    v_norm, reg_norm, _ = vix_guard.evaluate_vix_regime(candidate_tier=2, vix_value=15.0)
+    v_elev, reg_elev, _ = vix_guard.evaluate_vix_regime(candidate_tier=2, vix_value=22.0)
+    v_elev_t1, _, _ = vix_guard.evaluate_vix_regime(candidate_tier=1, vix_value=22.0)
+    v_ext, reg_ext, _ = vix_guard.evaluate_vix_regime(candidate_tier=1, vix_value=28.0)
+    assert v_norm is True, "Normal VIX (15.0) must permit Tier 2"
+    assert v_elev is False, "Elevated VIX (22.0) must suppress Tier 2"
+    assert v_elev_t1 is True, "Elevated VIX (22.0) must permit Tier 1 Gold"
+    assert v_ext is False, "Extreme VIX (28.0) must halt all entries"
+
+    # 2. Portfolio Risk & Sector map
+    assert len(registries.SECTOR_MAP) >= 150, f"SECTOR_MAP must cover at least 150 symbols (found {len(registries.SECTOR_MAP)})"
+    assert registries.get_symbol_sector("HDFCBANK") == "BANKING_FINANCE", "HDFCBANK sector mismatch"
+    assert registries.get_symbol_sector("TCS") == "IT", "TCS sector mismatch"
+
+    # 3. Portfolio concurrent & sector caps
+    fake_pos = [
+        {"symbol": "HDFCBANK", "contract": "HDFCBANK26SEP1600CE", "engine": "nifty50"},
+        {"symbol": "ICICIBANK", "contract": "ICICIBANK26SEP1200CE", "engine": "nifty50"}
+    ]
+    p_ok, p_reason, _ = portfolio_risk.check_portfolio_risk_caps("nifty50", "TCS", live_positions=fake_pos, include_db_trades=False)
+    assert p_ok is True, f"TCS entry in IT sector should be allowed: {p_reason}"
+
+    p_block, p_reason_blk, _ = portfolio_risk.check_portfolio_risk_caps("nifty50", "SBIN", live_positions=fake_pos, include_db_trades=False)
+    assert p_block is False and ("MAX_SECTOR_POSITIONS_REACHED" in p_reason_blk or "SECTOR" in p_reason_blk), f"3rd banking stock SBIN must be blocked by sector cap: {p_reason_blk}"
+    print(" PASSED [OK]", flush=True)
+except Exception as e:
+    errors.append(f"VIX & Portfolio Risk Invariant Failed: {e}")
+    print(f" FAILED [ERR] ({e})", flush=True)
+
+# Test 16: Option Position Sizing & Monthly Expiry Rollover Invariants
+print("[TEST 16] Testing Option Position Sizing & Monthly Expiry Rollover Invariants...", end="", flush=True)
+try:
+    import targets
+    import ema_engine
+    from datetime import datetime as dt
+
+    # 1. Option position sizing
+    cash_sz = targets.calculate_position_size(spot_price=2800, stop_loss=2750, capital=100000, risk_percent=1.0, is_option=False)
+    assert cash_sz == 20, f"Cash size expected 20, got {cash_sz}"
+
+    opt_sz = targets.calculate_position_size(spot_price=100, stop_loss=90, capital=100000, risk_percent=1.0, lot_size=500, is_option=True)
+    assert opt_sz == 1, f"Option size expected 1 lot, got {opt_sz}"
+
+    # 2. EMA rollover helper
+    yr_mid, mo_mid = ema_engine._get_monthly_expiry_month_str(dt(2026, 1, 10))
+    assert mo_mid == "JAN", f"Expected JAN for Jan 10, got {mo_mid}"
+    yr_exp, mo_exp = ema_engine._get_monthly_expiry_month_str(dt(2026, 1, 26))
+    assert mo_exp == "FEB", f"Expected FEB rollover for Jan 26, got {mo_exp}"
+    print(" PASSED [OK]", flush=True)
+except Exception as e:
+    errors.append(f"Option Sizing & Rollover Invariant Failed: {e}")
+    print(f" FAILED [ERR] ({e})", flush=True)
+
+# Test 17: Candlestick Pattern Geometries (Harami Body Ratio & Bearish Multi-TF Mapping)
+print("[TEST 17] Testing Harami Body Ratio & Multi-TF Candlestick Geometry...", end="", flush=True)
+try:
+    from patterns_bull import find_anchor_bullish_harami
+    from patterns_bear import find_anchor_bearish_harami, scan_anchor_bcd_breakout_bearish
+    import pandas as pd
+
+    # 1. Bullish Harami <= 65% ratio
+    df_h_valid = pd.DataFrame([
+        {"open": 100.0, "high": 101.0, "low": 89.0, "close": 90.0, "date": "2026-09-01 09:15:00"},
+        {"open": 92.0, "high": 97.0, "low": 91.0, "close": 96.0, "date": "2026-09-01 09:45:00"}
+    ])
+    df_h_invalid = pd.DataFrame([
+        {"open": 100.0, "high": 101.0, "low": 89.0, "close": 90.0, "date": "2026-09-01 09:15:00"},
+        {"open": 91.0, "high": 99.5, "low": 90.5, "close": 99.0, "date": "2026-09-01 09:45:00"}
+    ])
+    assert find_anchor_bullish_harami(df_h_valid) is not None, "Valid Harami was rejected"
+    assert find_anchor_bullish_harami(df_h_invalid) is None, "Tweezer/railway inside bar should be rejected"
+
+    # 2. Bearish multi-TF date mapping
+    dates_a = pd.date_range("2026-08-20", periods=10, freq="D")
+    df_ba = pd.DataFrame({
+        "date": [d.strftime("%Y-%m-%d 00:00:00") for d in dates_a],
+        "open": [100.0] * 10, "high": [102.0] * 10, "low": [98.0] * 10, "close": [101.0] * 10, "volume": [10000] * 10
+    })
+    df_ba.loc[8, "open"] = 100.0; df_ba.loc[8, "high"] = 105.0; df_ba.loc[8, "low"] = 98.0; df_ba.loc[8, "close"] = 104.0
+    df_ba.loc[9, "open"] = 104.0; df_ba.loc[9, "high"] = 106.0; df_ba.loc[9, "low"] = 95.0; df_ba.loc[9, "close"] = 96.0; df_ba.loc[9, "date"] = "2026-09-01 00:00:00"
+
+    dates_e = pd.date_range("2026-09-01 09:15", periods=20, freq="15min")
+    df_be = pd.DataFrame({
+        "date": [d.strftime("%Y-%m-%d %H:%M:%S+05:30") for d in dates_e],
+        "open": [96.0] * 20, "high": [97.0] * 20, "low": [95.5] * 20, "close": [96.0] * 20, "volume": [10000] * 20
+    })
+    df_be.loc[5, "open"] = 95.5; df_be.loc[5, "close"] = 92.0; df_be.loc[5, "low"] = 91.5; df_be.loc[5, "high"] = 95.5; df_be.loc[5, "volume"] = 25000
+    df_be.loc[6, "open"] = 92.0; df_be.loc[6, "close"] = 93.0; df_be.loc[6, "low"] = 91.8; df_be.loc[6, "high"] = 93.5
+    df_be.loc[8, "open"] = 93.0; df_be.loc[8, "close"] = 96.0; df_be.loc[8, "low"] = 93.0; df_be.loc[8, "high"] = 96.5; df_be.loc[8, "volume"] = 7000
+    df_be.loc[11, "open"] = 95.5; df_be.loc[11, "close"] = 91.0; df_be.loc[11, "low"] = 90.5; df_be.loc[11, "high"] = 95.5; df_be.loc[11, "volume"] = 30000
+    for i in range(12, 20):
+        df_be.loc[i, "open"] = 91.0; df_be.loc[i, "close"] = 91.0; df_be.loc[i, "high"] = 91.5; df_be.loc[i, "low"] = 90.5
+
+    res_b = scan_anchor_bcd_breakout_bearish(df_be, df_ba, anchor_tf="day", entry_tf="15minute", enable_swing_filter=False)
+    assert res_b is not None and res_b.get("Direction") == "BEAR", "Bearish multi-TF breakout mapping failed"
+    print(" PASSED [OK]", flush=True)
+except Exception as e:
+    errors.append(f"Candlestick Geometry Test Failed: {e}")
+    print(f" FAILED [ERR] ({e})", flush=True)
+
 print("\n" + "=" * 100)
 if not errors:
     print("      ALL REGRESSION TESTS PASSED WITH 100% SUCCESS -- ZERO REGRESSIONS FOUND!")

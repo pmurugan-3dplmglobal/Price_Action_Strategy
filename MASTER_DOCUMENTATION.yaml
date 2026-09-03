@@ -414,4 +414,5 @@ system_integrity_safeguards:
   broker_product_authority: "Live Broker Product Authority: close_position() queries live kite.positions() dynamically to match the exact open product type (NRML or MIS), completely eliminating Zerodha RMS naked writing margin rejections."
   cross_strike_contract_isolation: "Strict Contract Isolation (_is_match): Dashboard /api/update-position endpoints strictly match by full contract identifier, preventing cross-strike SL override collisions across multi-strike option holdings."
   cloud_vm_deployment_pipeline: "Strict Cloud Deployment Rule: NEVER modify code directly on remote VMs. Mandatory pipeline: 1. Local Development -> 2. 14-Test Regression Suite (100% Pass) -> 3. Git Push -> 4. VM Git Pull & Service Restart. Machine credentials remain isolated per environment."
+  utc_cloud_ist_clock_normalization: "UTC Cloud IST Clock Normalization: All time-of-day conditionals, opening volatility guards (09:45 AM failsafe), EOD squareoffs, and export schedules use get_ist_now() to guarantee flawless execution regardless of whether the host OS runs in UTC, GMT, or IST."
 

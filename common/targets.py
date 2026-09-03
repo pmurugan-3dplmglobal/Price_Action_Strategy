@@ -146,13 +146,36 @@ def find_profit_targets(df_hist, entry_close, stop_loss=None):
 
     return t1, t2, t3
 
-def calculate_position_size(spot_price, stop_loss, capital=100000.0, risk_percent=1.0):
-    risk_per_unit = abs(spot_price - stop_loss)
-    if risk_per_unit <= 0:
-        return 0
-    max_risk_amount = capital * (risk_percent / 100.0)
-    units = int(max_risk_amount / risk_per_unit)
-    return max(units, 1)
+def calculate_position_size(spot_price, stop_loss, capital=100000.0, risk_percent=1.0, lot_size=1, is_option=False):
+    """
+    Fixed-fractional position sizing:
+    - For Cash Equities: units = max_risk_amount / abs(entry - sl)
+    - For Options: lots = min(max_risk_amount / risk_per_lot, max_capital_lots)
+      where max_capital_lots caps capital deployed in a single option to 25% of account.
+    """
+    try:
+        sp = float(spot_price or 0.0)
+        sl = float(stop_loss or 0.0)
+        risk_per_unit = abs(sp - sl)
+        if risk_per_unit <= 0:
+            return 1
+        cap = float(capital or 100000.0)
+        risk_pct = float(risk_percent or 1.0)
+        max_risk_amount = cap * (risk_pct / 100.0)
+
+        if is_option and int(lot_size or 1) > 1:
+            lot_sz = int(lot_size)
+            risk_per_lot = max(0.50, risk_per_unit) * lot_sz
+            max_lots_risk = max(1, int(max_risk_amount / risk_per_lot))
+            # Capital ceiling: max 25% of capital deployed into a single option strike
+            opt_premium = max(1.0, sp)
+            max_lots_capital = max(1, int((cap * 0.25) / (opt_premium * lot_sz)))
+            return min(max_lots_risk, max_lots_capital)
+        else:
+            units = int(max_risk_amount / risk_per_unit)
+            return max(units, 1)
+    except Exception:
+        return 1
 
 def calculate_sl_buffer(price_level, side="BULL"):
     """

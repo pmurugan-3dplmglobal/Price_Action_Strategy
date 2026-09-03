@@ -26,7 +26,9 @@ from trading_core import (
     write_scan_display_data as shared_write_display,
     clean_timestamp,
     STOCK_REGISTRY,
-    detect_parabolic_multi_swings
+    detect_parabolic_multi_swings,
+    evaluate_vix_regime,
+    check_portfolio_risk_caps
 )
 from equity_universe import get_universe_symbols_and_tokens, is_liquid_cash_stock
 
@@ -267,6 +269,25 @@ def run_scan(kite):
                             logging.info(f"Skipping {symbol} - Anchor A ({candle_a_time}) preceded terminal swing base ({swing_meta['terminal_date']})")
                             continue
 
+                    # ── VIX Regime Gate Check ──
+                    vix_allowed, vix_reason, _ = evaluate_vix_regime(kite, tier_val=result.get("tier", 2))
+                    if not vix_allowed:
+                        logging.info(f"  -> VIX GATE FILTER: {symbol} skipped ({vix_reason})")
+                        matched = True
+                        break
+
+                    # ── Portfolio Risk & Sector Caps Check ──
+                    p_allowed, p_reason, _ = check_portfolio_risk_caps(
+                        engine=PROFILE["config_section"],
+                        symbol=symbol,
+                        candidate_tier=result.get("tier", 2),
+                        live_positions=ACTIVE_POSITIONS
+                    )
+                    if not p_allowed:
+                        logging.info(f"  -> PORTFOLIO RISK FILTER: {symbol} skipped ({p_reason})")
+                        matched = True
+                        break
+
                     entry_px = float(result.get("Close") or result.get("Entry") or result.get("entry") or 0.0)
                     result["Close"] = entry_px
                     result["Entry"] = entry_px
@@ -310,7 +331,7 @@ def run_scan(kite):
                             "swing_waves": r.get("swing_waves", 0),
                             "terminal_base": r.get("terminal_base", False)
                         } for r in all_disp if r.get("Symbol") or r.get("symbol")]
-                        shared_write_display(formatted_all, dict(ACTIVE_POSITIONS), SCAN_DISPLAY_FILE, "nifty50")
+                        shared_write_display(formatted_all, dict(ACTIVE_POSITIONS), PROFILE["display_file"], PROFILE["config_section"])
                     matched = True
                     break
             if not matched:
