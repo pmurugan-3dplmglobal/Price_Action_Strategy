@@ -134,6 +134,7 @@ PROGRAMS = {
                 "options": ["day", "week", "4hr", "1hr", "75min", "30min", "15min"],
                 "default": "day"
             },
+            "max_daily_loss_pct": {"label": "Daily Loss Limit (%)", "type": "number", "default": 3.0},
             "enable_swing_filter": {"label": "Swing Filter", "type": "select", "options": ["true", "false"], "default": "true"},
             "swing_min_waves": {"label": "Min Swings", "type": "number", "default": 2},
             "swing_min_r2": {"label": "Swing R² (0.0-1.0)", "type": "number", "default": 0.55}
@@ -164,6 +165,7 @@ PROGRAMS = {
                 "options": ["day", "week", "4hr", "1hr", "75min", "30min", "15min"],
                 "default": "day"
             },
+            "max_daily_loss_pct": {"label": "Daily Loss Limit (%)", "type": "number", "default": 3.0},
             "enable_swing_filter": {"label": "Swing Filter", "type": "select", "options": ["true", "false"], "default": "true"},
             "swing_min_waves": {"label": "Min Swings", "type": "number", "default": 2},
             "swing_min_r2": {"label": "Swing R² (0.0-1.0)", "type": "number", "default": 0.55}
@@ -328,6 +330,10 @@ def save_config(prog_id, data):
         else:
             cleaned[k] = v
     cfg[prog_id] = cleaned
+    if "max_daily_loss_pct" in cleaned:
+        if "portfolio_risk" not in cfg or not isinstance(cfg["portfolio_risk"], dict):
+            cfg["portfolio_risk"] = {}
+        cfg["portfolio_risk"]["max_daily_loss_pct"] = float(cleaned["max_daily_loss_pct"])
     os.makedirs(os.path.dirname(CONFIG_FILE), exist_ok=True)
     with open(CONFIG_FILE, "w") as f:
         json.dump(cfg, f, indent=2)
@@ -1020,6 +1026,11 @@ def api_status():
                 "scan_summary": cached_data["scan_summary"].get(pid, {"anchors": {}, "abc_matches": {}})
             }
         cfg = load_config()
+        p_risk_dl = float(cfg.get("portfolio_risk", {}).get("max_daily_loss_pct", 3.0))
+        for p_id in ["daily", "bear_trade"]:
+            if p_id in cfg and isinstance(cfg[p_id], dict):
+                if "max_daily_loss_pct" not in cfg[p_id]:
+                    cfg[p_id]["max_daily_loss_pct"] = p_risk_dl
         return jsonify({
             "programs": prog_status,
             "positions": cached_data["positions"],

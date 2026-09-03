@@ -119,6 +119,7 @@ PROGRAMS = {
             "timeframe_entry": {"label": "Entry Timeframe", "type": "select", "options": ["3minute","5minute","10minute","15minute","30minute","60minute","75min","4hr","day","week"], "default": "3minute"},
             "timeframe_anchor": {"label": "Anchor Timeframe", "type": "select", "options": ["3minute","5minute","10minute","15minute","30minute","60minute","75min","4hr","day","week"], "default": "15minute"},
             "capital": {"label": "Capital", "type": "number", "default": 100000.0},
+            "max_daily_loss_pct": {"label": "Daily Loss Limit (%)", "type": "number", "default": 3.0},
             "strike_range": {"label": "Strike Range (±)", "type": "number", "default": 1},
             "enable_swing_filter": {"label": "Swing Filter", "type": "select", "options": ["true", "false"], "default": "true"},
             "swing_min_waves": {"label": "Min Swings", "type": "number", "default": 2},
@@ -136,6 +137,7 @@ PROGRAMS = {
             "timeframe_entry": {"label": "Entry Timeframe", "type": "select", "options": ["3minute","5minute","10minute","15minute","30minute","60minute","75min","4hr","day","week"], "default": "15minute"},
             "timeframe_anchor": {"label": "Anchor Timeframe", "type": "select", "options": ["3minute","5minute","10minute","15minute","30minute","60minute","75min","4hr","day","week"], "default": "30minute"},
             "capital": {"label": "Capital", "type": "number", "default": 100000.0},
+            "max_daily_loss_pct": {"label": "Daily Loss Limit (%)", "type": "number", "default": 3.0},
             "strike_range": {"label": "Strike Range (±)", "type": "number", "default": 1},
             "enable_swing_filter": {"label": "Swing Filter", "type": "select", "options": ["true", "false"], "default": "true"},
             "swing_min_waves": {"label": "Min Swings", "type": "number", "default": 2},
@@ -272,6 +274,10 @@ def save_config(prog_id, data):
         else:
             cleaned[k] = v
     cfg[prog_id] = cleaned
+    if "max_daily_loss_pct" in cleaned:
+        if "portfolio_risk" not in cfg or not isinstance(cfg["portfolio_risk"], dict):
+            cfg["portfolio_risk"] = {}
+        cfg["portfolio_risk"]["max_daily_loss_pct"] = float(cleaned["max_daily_loss_pct"])
     os.makedirs(os.path.dirname(CONFIG_FILE), exist_ok=True)
     with open(CONFIG_FILE, "w") as f:
         json.dump(cfg, f, indent=2)
@@ -1047,6 +1053,11 @@ def api_status():
                 "scan_summary": cached_data["scan_summary"].get(pid, {"anchors": {}, "abc_matches": {}})
             }
         cfg = load_config()
+        p_risk_dl = float(cfg.get("portfolio_risk", {}).get("max_daily_loss_pct", 3.0))
+        for p_id in ["index", "nifty50"]:
+            if p_id in cfg and isinstance(cfg[p_id], dict):
+                if "max_daily_loss_pct" not in cfg[p_id]:
+                    cfg[p_id]["max_daily_loss_pct"] = p_risk_dl
         return jsonify({
             "programs": prog_status,
             "positions": cached_data["positions"],

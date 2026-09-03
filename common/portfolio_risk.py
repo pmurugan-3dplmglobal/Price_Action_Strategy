@@ -21,14 +21,16 @@ from registries import get_symbol_sector
 
 def _load_portfolio_risk_config(config=None, capital=None):
     """Load portfolio risk configuration with safe defaults and dynamic capital scaling."""
-    if config is None:
+    cfg_all = {}
+    if os.path.exists(paths.PROGRAM_CONFIG_FILE):
         try:
-            if os.path.exists(paths.PROGRAM_CONFIG_FILE):
-                with open(paths.PROGRAM_CONFIG_FILE, "r", encoding="utf-8") as f:
-                    cfg_all = json.load(f)
-                    config = cfg_all.get("portfolio_risk", {})
+            with open(paths.PROGRAM_CONFIG_FILE, "r", encoding="utf-8") as f:
+                cfg_all = json.load(f)
         except Exception:
-            config = {}
+            cfg_all = {}
+
+    if config is None:
+        config = cfg_all.get("portfolio_risk", {})
 
     p_cfg = config.get("portfolio_risk", config) if isinstance(config, dict) else {}
     if not isinstance(p_cfg, dict):
@@ -50,10 +52,19 @@ def _load_portfolio_risk_config(config=None, capital=None):
         calc_max_concurrent = int(raw_max_concurrent or 6)
         calc_max_sector = int(p_cfg.get("max_same_sector_positions", 2))
 
+    # Resolve max_daily_loss_pct with full fallback hierarchy
+    daily_loss = p_cfg.get("max_daily_loss_pct")
+    if daily_loss is None and isinstance(config, dict):
+        daily_loss = config.get("max_daily_loss_pct")
+    if daily_loss is None and isinstance(cfg_all.get("portfolio_risk"), dict):
+        daily_loss = cfg_all["portfolio_risk"].get("max_daily_loss_pct")
+    if daily_loss is None:
+        daily_loss = 3.0
+
     return {
         "enable": enable,
         "max_concurrent_positions": calc_max_concurrent,
-        "max_daily_loss_pct": float(p_cfg.get("max_daily_loss_pct", 3.0)),
+        "max_daily_loss_pct": float(daily_loss),
         "max_same_sector_positions": calc_max_sector,
         "dynamic_scaling": dynamic_scaling,
         "effective_capital": effective_cap
