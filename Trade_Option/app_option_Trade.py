@@ -1786,10 +1786,18 @@ def api_buy_scanned_trade():
                     if price <= 0:
                         price = round(entry_spot * 1.005, 1)
                 
-                from trading_core import INDEX_REGISTRY, STOCK_REGISTRY, get_option_lot_size
+                from trading_core import INDEX_REGISTRY, STOCK_REGISTRY, get_option_lot_size, check_bid_ask_spread_liquidity
                 registry = INDEX_REGISTRY if engine == "index" else STOCK_REGISTRY
                 lot_size = get_option_lot_size(contract) or registry.get(symbol, {}).get("lot_size", 1)
                 prod = _kite_session.PRODUCT_CNC if exch == "NSE" else _kite_session.PRODUCT_NRML
+
+                force_order = bool(data.get("force", False))
+                liq_ok, spread_val, liq_msg, _ = check_bid_ask_spread_liquidity(
+                    kite=_kite_session, exchange=exch, contract=contract, max_spread_pct=0.025
+                )
+                if not liq_ok and not force_order:
+                    logging.warning(f"[1-CLICK BUY LIQUIDITY WARNING] {contract}: {liq_msg}")
+                    return jsonify({"ok": False, "error": f"Liquidity Trap Alert: {liq_msg}"}), 400
                 
                 from trading_core import is_market_open
                 market_open = is_market_open()

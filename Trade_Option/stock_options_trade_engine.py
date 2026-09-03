@@ -385,11 +385,41 @@ def execute_highest_rr_trade(kite, staged):
     pos_size = calculate_position_size(cp, best["current_sl"])
     target_strike = strike if strike else int(round(cp / strike_step) * strike_step)
     opt_type = "CE" if side == "CE" else "PE"
-    contract = resolve_option_contract(sym, cp, strike_step, opt_type, target_strike)
+
+    cfg_eng = load_program_config_for_engine("nifty50")
+    exec_mode = str(cfg_eng.get("execution_mode", "AUTO")).upper()
+    use_spread = (exec_mode == "SPREAD_ONLY") or (exec_mode == "AUTO" and TIMEFRAME_ENTRY in ["15minute", "30minute", "60minute", "day"])
+
+    spread_info = None
+    contract = None
+    option_token = None
+    if use_spread:
+        try:
+            from common.position_monitor import _get_nfo_cache
+            from resolve import resolve_option_spread
+            nfo_df = _get_nfo_cache()
+            spread_info = resolve_option_spread(
+                nfo_instruments=nfo_df,
+                base_symbol=sym,
+                spot_price=cp,
+                step_size=strike_step,
+                direction=best.get("direction", "BULL"),
+                target_price=best.get("t1")
+            )
+            if spread_info:
+                contract = spread_info["leg1"]["contract"]
+                option_token = spread_info["leg1"]["token"]
+                target_strike = spread_info["leg1"]["strike"]
+                logging.info(f"[DEBIT SPREAD RESOLVED] {sym}: Leg 1 (Long)={contract} @ {target_strike} | Leg 2 (Short)={spread_info['leg2']['contract']} @ {spread_info['leg2']['strike']}")
+        except Exception as spread_err:
+            logging.warning(f"Spread resolution fallback to naked for {sym}: {spread_err}")
+
     if not contract:
-        logging.error(f"Could not resolve option for {sym}")
-        return
-    option_token = _resolve_option_token(contract)
+        contract = resolve_option_contract(sym, cp, strike_step, opt_type, target_strike)
+        if not contract:
+            logging.error(f"Could not resolve option for {sym}")
+            return
+        option_token = _resolve_option_token(contract)
 
     # Entry limit order placed strictly at A's high / Benchmark price + 0.5% buffer
     benchmark_val = float(best.get("benchmark") or cp)
@@ -416,6 +446,22 @@ def execute_highest_rr_trade(kite, staged):
             logging.info(f"[PORTFOLIO_RISK_CAP] Auto-execution skipped for {sym} ({contract}): {p_msg}")
             return
 
+        from liquidity_guard import check_bid_ask_spread_liquidity
+        cfg_liq = cfg_eng.get("liquidity_gate", {})
+        max_spread = float(cfg_liq.get("max_spread_pct", 0.02))
+        liq_ok, spread_val, liq_msg, _ = check_bid_ask_spread_liquidity(
+            kite=kite,
+            exchange=kite.EXCHANGE_NFO,
+            contract=contract,
+            max_spread_pct=max_spread
+        )
+        if not liq_ok:
+            logging.warning(f"[LIQUIDITY_GATE] Auto-execution rejected for {sym} ({contract}): {liq_msg}")
+            log_to_journal(sym, best["pattern"], TIMEFRAME_ENTRY, "SKIP_ILLIQUID_SPREAD", "REJECTED",
+                           liq_msg, entry=limit_price, sl=best["current_sl"], target=best["t1"],
+                           event_time=best.get("entry_time"))
+            return
+
         with position_lock:
             if sym in ACTIVE_POSITIONS:
                 logging.info(f"TF Entry: {TIMEFRAME_ENTRY} | Anchor: {TIMEFRAME_ANCHOR} | Interval: {SCAN_INTERVAL_SECONDS}s | Risk: {MAX_RISK_PERCENT}%")
@@ -431,11 +477,18 @@ def execute_highest_rr_trade(kite, staged):
                 "benchmark": benchmark_val, "anchor_floor": best.get("anchor_floor"),
                 "direction": best.get("direction", "BULL"),
                 "entry_time": dt.now().isoformat(),
-                "position_type": "option",
+                "position_type": "option_spread" if spread_info else "option",
                 "tier": best.get("tier", 1),
                 "tier_label": best.get("tier_label", "TIER_1_GOLD"),
                 "tier_badge": best.get("tier_badge", "🥇 T1")
             }
+            if spread_info:
+                pos["spread_type"] = spread_info["spread_type"]
+                pos["leg2_contract"] = spread_info["leg2"]["contract"]
+                pos["leg2_token"] = spread_info["leg2"]["token"]
+                pos["leg2_strike"] = spread_info["leg2"]["strike"]
+                pos["leg2_qty"] = best["lot_size"] * pos_size
+
             pos["trade_id"], _created = trade_db.create_trade("nifty50", sym, {k: v for k, v in pos.items() if k != "trade_id"})
             ACTIVE_POSITIONS[sym] = pos
         save_state()
@@ -452,6 +505,19 @@ def execute_highest_rr_trade(kite, staged):
                 product=kite.PRODUCT_NRML
             )
             logging.info(f"🥇 T1 AUTO-EXECUTE BUY LIMIT: {contract} Qty={qty} @ Benchmark Limit Price={limit_price} (Order ID: {oid})")
+
+            if spread_info:
+                try:
+                    leg2_c = spread_info["leg2"]["contract"]
+                    oid2 = kite.place_order(
+                        variety=kite.VARIETY_REGULAR, tradingsymbol=leg2_c,
+                        exchange=kite.EXCHANGE_NFO, transaction_type=kite.TRANSACTION_TYPE_SELL,
+                        quantity=qty, order_type=kite.ORDER_TYPE_MARKET,
+                        product=kite.PRODUCT_NRML
+                    )
+                    logging.info(f"[DEBIT SPREAD SHORT LEG] Placed {leg2_c} Qty={qty} (Order ID: {oid2})")
+                except Exception as leg2_err:
+                    logging.error(f"[DEBIT SPREAD SHORT LEG FAILED] {spread_info['leg2']['contract']}: {leg2_err}")
             log_to_journal(sym, best["pattern"], TIMEFRAME_ENTRY, "BUY", "SUCCESS",
                            f"Order: {oid}, Qty: {qty}, {opt_type}@{target_strike} @ Benchmark Limit={limit_price} (🥇 T1 Gold)", entry=limit_price, sl=best["current_sl"], target=best["t1"], rr=avg_rr,
                            event_time=best.get("entry_time"))

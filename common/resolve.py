@@ -1653,6 +1653,91 @@ def resolve_option_strikes(nfo_instruments, base_symbol, spot_price, step_size, 
     return out
 
 
+def resolve_option_spread(nfo_instruments, base_symbol, spot_price, step_size, direction="BULL", target_price=None, spread_width_steps=2):
+    """
+    Resolve a 2-leg Debit Spread to neutralize theta decay during intraday consolidation:
+    - BULL (Bull Call Spread): Buy ATM CE (Leg 1) + Sell OTM CE (Leg 2 at/near Target T1)
+    - BEAR (Bear Put Spread):  Buy ATM PE (Leg 1) + Sell OTM PE (Leg 2 at/near Target T1)
+    """
+    if nfo_instruments is None or (hasattr(nfo_instruments, "empty") and nfo_instruments.empty):
+        return None
+
+    is_bull = str(direction).upper().startswith("BULL")
+    opt_type = "CE" if is_bull else "PE"
+    atm_strike = int(round(spot_price / step_size) * step_size)
+
+    # Determine desired short leg strike
+    if is_bull:
+        if target_price and target_price > atm_strike:
+            target_strike = int(round(target_price / step_size) * step_size)
+            if target_strike <= atm_strike:
+                target_strike = atm_strike + spread_width_steps * step_size
+        else:
+            target_strike = atm_strike + spread_width_steps * step_size
+    else:
+        if target_price and target_price < atm_strike:
+            target_strike = int(round(target_price / step_size) * step_size)
+            if target_strike >= atm_strike:
+                target_strike = atm_strike - spread_width_steps * step_size
+        else:
+            target_strike = atm_strike - spread_width_steps * step_size
+
+    step_offset = abs(int(round((target_strike - atm_strike) / step_size)))
+    n_range = max(3, step_offset + 1)
+
+    strikes_pool = resolve_option_strikes(nfo_instruments, base_symbol, spot_price, step_size, opt_type, n_range=n_range)
+    if not strikes_pool:
+        return None
+
+    strike_map = {int(s["strike"]): s for s in strikes_pool}
+    leg1 = strike_map.get(atm_strike)
+    if not leg1:
+        closest_strike = min(strike_map.keys(), key=lambda k: abs(k - atm_strike))
+        leg1 = strike_map[closest_strike]
+
+    leg2 = strike_map.get(target_strike)
+    if not leg2:
+        if is_bull:
+            otm_candidates = [k for k in strike_map.keys() if k > leg1["strike"]]
+            if otm_candidates:
+                best_otm = min(otm_candidates, key=lambda k: abs(k - target_strike))
+                leg2 = strike_map[best_otm]
+        else:
+            otm_candidates = [k for k in strike_map.keys() if k < leg1["strike"]]
+            if otm_candidates:
+                best_otm = min(otm_candidates, key=lambda k: abs(k - target_strike))
+                leg2 = strike_map[best_otm]
+
+    if not leg1 or not leg2 or leg1["strike"] == leg2["strike"]:
+        return None
+
+    return {
+        "spread_type": "BULL_CALL_SPREAD" if is_bull else "BEAR_PUT_SPREAD",
+        "direction": "BULL" if is_bull else "BEAR",
+        "base_symbol": base_symbol.strip().upper(),
+        "spot_price": spot_price,
+        "leg1": {
+            "action": "BUY",
+            "contract": leg1["tradingsymbol"],
+            "token": leg1["token"],
+            "strike": leg1["strike"],
+            "option_type": opt_type,
+            "lot_size": leg1.get("lot_size")
+        },
+        "leg2": {
+            "action": "SELL",
+            "contract": leg2["tradingsymbol"],
+            "token": leg2["token"],
+            "strike": leg2["strike"],
+            "option_type": opt_type,
+            "lot_size": leg2.get("lot_size")
+        },
+        "strike_diff": abs(leg2["strike"] - leg1["strike"]),
+        "lot_size": leg1.get("lot_size") or leg2.get("lot_size")
+    }
+
+
+
 # ──────────────────────────────────────────────
 #  BEARISH REVERSAL PATTERNS & NEGATION TARGETS
 # ──────────────────────────────────────────────

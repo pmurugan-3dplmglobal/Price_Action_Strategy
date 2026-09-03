@@ -540,6 +540,22 @@ def close_position(kite, pos, live_market=True, product=None, qty_override=None)
         if not qty_override:
             save_executed_exit(contract, oid, {"type": "LIMIT", "price": price, "qty": qty})
         logging.info(f"Closed {contract} with Marketable LIMIT order price {price} on exchange {target_exch} (Order ID: {oid}, Qty: {qty})")
+
+        # Spread Exit: If 2-leg Debit Spread, cover the short leg concurrently
+        if pos.get("position_type") == "option_spread" and pos.get("leg2_contract"):
+            leg2_c = pos.get("leg2_contract")
+            leg2_qty = pos.get("leg2_qty") or qty
+            try:
+                oid_leg2 = kite.place_order(
+                    variety=kite.VARIETY_REGULAR, tradingsymbol=leg2_c,
+                    exchange=target_exch, transaction_type=kite.TRANSACTION_TYPE_BUY,
+                    quantity=leg2_qty, order_type=kite.ORDER_TYPE_MARKET,
+                    product=target_product
+                )
+                save_executed_exit(leg2_c, oid_leg2, {"type": "SPREAD_LEG2_EXIT", "qty": leg2_qty})
+                logging.info(f"[SPREAD EXIT] Covered short leg {leg2_c} (Order ID: {oid_leg2}, Qty: {leg2_qty})")
+            except Exception as leg2_err:
+                logging.error(f"[SPREAD EXIT ERROR] Failed to exit short leg {leg2_c}: {leg2_err}")
     except Exception as primary_err:
         logging.warning(f"Primary LIMIT exit with {target_product} on {target_exch} failed for {contract}: {primary_err}. Retrying with aggressive limit fallback...")
         try:

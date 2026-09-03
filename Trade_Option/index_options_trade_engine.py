@@ -229,6 +229,15 @@ def execute_index_entry(kite, pos):
         else:
             price = round((ask if ask > 0 else ltp) * 1.005, 1)
         lot_sz = pos.get("lot_size") or get_option_lot_size(pos["contract"]) or INDEX_REGISTRY.get(pos.get("symbol", ""), {}).get("lot_size", 1)
+
+        from liquidity_guard import check_bid_ask_spread_liquidity
+        liq_ok, spread_val, liq_msg, _ = check_bid_ask_spread_liquidity(
+            kite=kite, exchange=target_exch, contract=pos["contract"], max_spread_pct=0.02
+        )
+        if not liq_ok:
+            logging.warning(f"[LIQUIDITY_GATE] Entry rejected for {pos['contract']}: {liq_msg}")
+            return False
+
         kite.place_order(
             variety=kite.VARIETY_REGULAR, tradingsymbol=pos["contract"],
             exchange=target_exch, transaction_type=kite.TRANSACTION_TYPE_BUY,

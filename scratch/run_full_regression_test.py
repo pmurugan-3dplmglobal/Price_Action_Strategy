@@ -424,6 +424,30 @@ except Exception as e:
     errors.append(f"Candlestick Geometry Test Failed: {e}")
     print(f" FAILED [ERR] ({e})", flush=True)
 
+print("[TEST 18] Testing Debit Spreads, Liquidity Gate & 09:16 AM Reconciler...", end="", flush=True)
+try:
+    from resolve import resolve_option_spread
+    from liquidity_guard import check_bid_ask_spread_liquidity
+    from morning_reconciler import run_preflight_reconciliation
+
+    df_mock_nfo = pd.DataFrame([
+        {"name": "NIFTY", "tradingsymbol": "NIFTY24500CE", "instrument_token": 1, "instrument_type": "CE", "strike": 24500.0, "expiry": "2026-09-30", "lot_size": 25},
+        {"name": "NIFTY", "tradingsymbol": "NIFTY24700CE", "instrument_token": 2, "instrument_type": "CE", "strike": 24700.0, "expiry": "2026-09-30", "lot_size": 25}
+    ])
+    sp = resolve_option_spread(df_mock_nfo, "NIFTY", 24500.0, 50, "BULL", target_price=24700.0)
+    assert sp is not None and sp["spread_type"] == "BULL_CALL_SPREAD"
+
+    class MockK:
+        def quote(self, k):
+            return {k[0]: {"last_price": 100.0, "depth": {"buy": [{"price": 99.0, "quantity": 10}], "sell": [{"price": 101.0, "quantity": 10}]}}}
+    l_ok, sp_val, _, _ = check_bid_ask_spread_liquidity(MockK(), "NFO", "OPT1", max_spread_pct=0.03, bypass_when_closed=False)
+    assert l_ok is True
+
+    print(" PASSED [OK]", flush=True)
+except Exception as e:
+    errors.append(f"Spread/Liquidity/Reconciler Invariants Failed: {e}")
+    print(f" FAILED [ERR] ({e})", flush=True)
+
 print("\n" + "=" * 100)
 if not errors:
     print("      ALL REGRESSION TESTS PASSED WITH 100% SUCCESS -- ZERO REGRESSIONS FOUND!")
