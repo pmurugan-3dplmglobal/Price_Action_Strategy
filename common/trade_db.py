@@ -523,6 +523,58 @@ def reconcile_broker_live_positions(kite):
             continue
         p_info = net_pos.get(contract) or day_pos.get(contract)
         net_qty = int(p_info.get("quantity", 0)) if p_info else 0
+
+        # Handle 2-leg option spread asymmetric reconciliation
+        is_spread = t.get("position_type") == "option_spread" or bool(t.get("leg2_contract"))
+        if is_spread and t.get("leg2_contract"):
+            leg2_c = _normalize_contract(t.get("leg2_contract"))
+            p_leg2 = net_pos.get(leg2_c) or day_pos.get(leg2_c)
+            leg2_qty = int(p_leg2.get("quantity", 0)) if p_leg2 else 0
+
+            # Sub-case A: Long leg closed on Kite (net_qty <= 0)
+            if net_qty <= 0:
+                # If short leg is STILL open on broker (leg2_qty < 0), emergency auto-cover it!
+                if leg2_qty < 0 and kite:
+                    abs_qty = abs(leg2_qty)
+                    try:
+                        oid_cover = kite.place_order(
+                            variety=kite.VARIETY_REGULAR, tradingsymbol=leg2_c,
+                            exchange="NFO", transaction_type=kite.TRANSACTION_TYPE_BUY,
+                            quantity=abs_qty, order_type=kite.ORDER_TYPE_MARKET,
+                            product=p_leg2.get("product", "NRML")
+                        )
+                        logging.warning(f"[SPREAD AUTO-SAFETY] Long leg {contract} was closed on Kite. Auto-covered orphan short leg {leg2_c} Qty={abs_qty} (Order ID: {oid_cover}) to protect from naked short trap.")
+                    except Exception as cover_err:
+                        logging.error(f"[SPREAD AUTO-SAFETY ERROR] Failed auto-covering orphan short leg {leg2_c}: {cover_err}")
+
+                logging.info(f"[trade_db] Spread Trade #{t['id']} completed (Long leg {contract} closed on broker)")
+                try:
+                    update_trade_status(
+                        t["id"], "COMPLETED",
+                        exit_price=p_info.get("sell_price") or p_info.get("last_price") if p_info else None,
+                        exit_reason="BROKER_SPREAD_CLOSED_RECONCILED",
+                        details="Auto-reconciled: Long leg held quantity is 0 on Kite",
+                        exit_time=now_str
+                    )
+                    reconciled += 1
+                except Exception as e:
+                    logging.warning(f"[trade_db] reconcile spread close failed for #{t['id']}: {e}")
+                continue
+
+            # Sub-case B: Short leg was manually closed on Kite (leg2_qty >= 0), but Long leg is STILL open (net_qty > 0)
+            elif leg2_qty >= 0:
+                logging.info(f"[SPREAD RECONCILE] Short leg {leg2_c} closed on Kite. Mutating Trade #{t['id']} to naked Long option.")
+                update_trade(t["id"], {
+                    "position_type": "option",
+                    "spread_type": None,
+                    "leg2_contract": None,
+                    "leg2_token": None,
+                    "leg2_strike": None,
+                    "leg2_qty": None
+                })
+                continue
+
+        # Standard single-leg check
         if net_qty <= 0:
             logging.info(f"[trade_db] Auto-reconciling zero-qty broker position: Trade #{t['id']} {contract} (Broker Net Qty: {net_qty})")
             try:

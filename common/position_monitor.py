@@ -545,17 +545,33 @@ def close_position(kite, pos, live_market=True, product=None, qty_override=None)
         if pos.get("position_type") == "option_spread" and pos.get("leg2_contract"):
             leg2_c = pos.get("leg2_contract")
             leg2_qty = pos.get("leg2_qty") or qty
-            try:
-                oid_leg2 = kite.place_order(
-                    variety=kite.VARIETY_REGULAR, tradingsymbol=leg2_c,
-                    exchange=target_exch, transaction_type=kite.TRANSACTION_TYPE_BUY,
-                    quantity=leg2_qty, order_type=kite.ORDER_TYPE_MARKET,
-                    product=target_product
-                )
-                save_executed_exit(leg2_c, oid_leg2, {"type": "SPREAD_LEG2_EXIT", "qty": leg2_qty})
-                logging.info(f"[SPREAD EXIT] Covered short leg {leg2_c} (Order ID: {oid_leg2}, Qty: {leg2_qty})")
-            except Exception as leg2_err:
-                logging.error(f"[SPREAD EXIT ERROR] Failed to exit short leg {leg2_c}: {leg2_err}")
+            leg2_already_closed = False
+            if kite and live_market:
+                try:
+                    for p in kite.positions().get("net", []):
+                        if p.get("tradingsymbol") == leg2_c:
+                            live_short_qty = int(p.get("quantity", 0))
+                            if live_short_qty >= 0:
+                                leg2_already_closed = True
+                                logging.info(f"[SPREAD EXIT] Short leg {leg2_c} already covered on Kite (Qty: {live_short_qty}). Skipping duplicate order.")
+                            else:
+                                leg2_qty = min(leg2_qty, abs(live_short_qty))
+                            break
+                except Exception as leg2_check_err:
+                    logging.warning(f"Could not verify live net quantity for leg2 {leg2_c}: {leg2_check_err}")
+
+            if not leg2_already_closed:
+                try:
+                    oid_leg2 = kite.place_order(
+                        variety=kite.VARIETY_REGULAR, tradingsymbol=leg2_c,
+                        exchange=target_exch, transaction_type=kite.TRANSACTION_TYPE_BUY,
+                        quantity=leg2_qty, order_type=kite.ORDER_TYPE_MARKET,
+                        product=target_product
+                    )
+                    save_executed_exit(leg2_c, oid_leg2, {"type": "SPREAD_LEG2_EXIT", "qty": leg2_qty})
+                    logging.info(f"[SPREAD EXIT] Covered short leg {leg2_c} (Order ID: {oid_leg2}, Qty: {leg2_qty})")
+                except Exception as leg2_err:
+                    logging.error(f"[SPREAD EXIT ERROR] Failed to exit short leg {leg2_c}: {leg2_err}")
     except Exception as primary_err:
         logging.warning(f"Primary LIMIT exit with {target_product} on {target_exch} failed for {contract}: {primary_err}. Retrying with aggressive limit fallback...")
         try:
