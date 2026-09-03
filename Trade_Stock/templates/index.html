@@ -711,7 +711,7 @@
             }
 
             const statusFilterEl = document.getElementById('scan-status-filter');
-            const statusFilter = statusFilterEl ? statusFilterEl.value : 'fresh';
+            const statusFilter = statusFilterEl ? statusFilterEl.value : 'all';
             const tierFilterEl = document.getElementById('scan-tier-filter');
             const tierFilter = tierFilterEl ? tierFilterEl.value : 'all';
 
@@ -724,7 +724,12 @@
 
             engines.forEach(eng => {
                 const data = sd[eng] || {};
-                const staged = (data.staged_trades && data.staged_trades.length) ? data.staged_trades : (data.all_staged_today || []);
+                const staged = [
+                    ...(data.staged_trades || []),
+                    ...(data.all_staged_today || []),
+                    ...(data.carry_forward || []),
+                    ...(data.active_live || [])
+                ];
 
                 const tradeMap = new Map();
                 staged.forEach(t => {
@@ -2057,8 +2062,8 @@
                         <span>Trade Details</span>
                         <div style="display:flex;gap:12px;align-items:center">
                             <select id="scan-status-filter" onchange="renderScanTab()" class="filter-select" style="width:auto;background:#238636;color:#ffffff;font-weight:600;border:1px solid #2ea043">
-                                <option value="fresh" selected>🟢 Fresh (Pre-T1 Only)</option>
-                                <option value="all">📋 All Scanned Setups</option>
+                                <option value="all" selected>📋 All Scanned Setups</option>
+                                <option value="fresh">🟢 Fresh (Pre-T1 Only)</option>
                                 <option value="t1_reached">🎯 T1+ Reached</option>
                                 <option value="exited">🏷️ Exited / SL Hit</option>
                             </select>
