@@ -3541,4 +3541,23 @@ issues:
     5. Verified bidirectional save roundtrip, 47/47 unit tests passing, and 17/17 master regression suite passing.'
   status: RESOLVED
 
+- id: ISSUE-083
+  family: SECURITY_CONFIG
+  date_reported: '2026-09-03'
+  symptom: 'API key and secret credentials risked cross-pollination or git exposure when synchronized via file payloads across multi-cloud VM environments (Bhavni and Poovendan VMs).'
+  root_cause: 'Kite API credentials were read from files (program_config.json) that could be overwritten by automated deployments across different cloud instances.'
+  affected_files:
+  - oracle/setup_systemd_vm.sh
+  - oracle/sync_to_oracle_cloud.py
+  - Trade_Option/app_option_Trade.py
+  - Trade_Stock/app_Stock_Trade.py
+  - ISSUE_MANAGEMENT.yaml
+  resolution: '1. Decoupled Kite API credentials into dedicated /etc/trading.env files on each VM (chmod 600) containing machine-specific KITE_API_KEY and KITE_API_SECRET.
+    2. Configured systemd service definitions (trading-options, trading-stock, trading-export) with EnvironmentFile=-/etc/trading.env to inject credentials directly into process runtime environment.
+    3. Stripped API credentials from sync_to_oracle_cloud.py and setup_systemd_vm.sh commandlines.
+    4. Enhanced package_codebase to sanitize program_config.json by automatically stripping api_key and api_secret before archiving.
+    5. Verified live process environments on both Bhavni and Poovendan VMs confirm 100% credential isolation with zero credentials in git.'
+  status: RESOLVED
+
+
 
