@@ -67,6 +67,10 @@ RestartSec=10
 WantedBy=multi-user.target
 EOF
 
+systemctl stop trading-options trading-stock trading-export || true
+pkill -f "$APP_DIR" || true
+sleep 2
+
 systemctl daemon-reload
 systemctl enable trading-options trading-stock trading-export
 systemctl restart trading-options trading-stock trading-export
