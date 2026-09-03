@@ -3559,5 +3559,30 @@ issues:
     5. Verified live process environments on both Bhavni and Poovendan VMs confirm 100% credential isolation with zero credentials in git.'
   status: RESOLVED
 
+- id: ISSUE-084
+  family: QUANT_ENHANCEMENTS
+  date_reported: '2026-09-03'
+  symptom: '1) Naked option buying suffered severe theta decay during intraday consolidation on 15m/30m setups. 2) Orders risked slippage on illiquid contracts with wide bid-ask spreads. 3) Overnight price gaps and out-of-band broker executions were not audited promptly at market open.'
+  root_cause: 'Lack of multi-leg spread resolution, absence of pre-trade market depth/spread liquidity checks, and absence of an automated 09:16 AM pre-flight market open state reconciliation task.'
+  affected_files:
+  - common/liquidity_guard.py
+  - common/morning_reconciler.py
+  - common/resolve.py
+  - common/position_monitor.py
+  - common/trading_core.py
+  - Trade_Option/stock_options_trade_engine.py
+  - Trade_Option/index_options_trade_engine.py
+  - Trade_Option/run_export_scheduler_daemon.py
+  - Trade_Option/app_option_Trade.py
+  - Trade_Stock/app_Stock_Trade.py
+  - input/program_config.json
+  - ISSUE_MANAGEMENT.yaml
+  resolution: '1. Phase 1 (Debit Spreads): Implemented resolve_option_spread() in resolve.py supporting 2-leg Bull Call Spreads (Buy ATM CE + Sell OTM CE at T1) and Bear Put Spreads (Buy ATM PE + Sell OTM PE at T1). Updated stock_options_trade_engine.py and position_monitor.py close_position() to place and close both legs concurrently.
+    2. Phase 2 (Liquidity Gate): Created liquidity_guard.py with check_bid_ask_spread_liquidity() enforcing (Ask - Bid) / LTP <= 0.02 and book depth validation before order placement across engines and 1-Click Buy.
+    3. Phase 3 (Morning Reconciler): Created morning_reconciler.py and scheduled 09:16 AM pre-flight audit in run_export_scheduler_daemon.py to reconcile broker net positions with SQLite trade_db, audit opening gaps against SL/T1, and verify account margin health.
+    4. Unit test coverage expanded to 54 tests (100% pass) and master regression suite expanded to 18 suites (100% pass).'
+  status: RESOLVED
+
+
 
 
