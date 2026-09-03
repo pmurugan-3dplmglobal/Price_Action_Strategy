@@ -1195,3 +1195,144 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
         save_state_fn()
 
 
+def monitor_all_active_positions(kite, live=True):
+    """
+    Standalone position monitor: actively protects ALL open trades across all engines
+    (index, nifty50, daily, bear_trade, ema_engine) independently of scanner loops.
+    """
+    if kite is None:
+        return 0
+
+    import trade_db
+    from session import log_to_journal
+    from registries import STOCK_REGISTRY, INDEX_REGISTRY
+
+    # 1. Auto-reconcile zero-qty broker positions
+    try:
+        trade_db.reconcile_broker_live_positions(kite)
+    except Exception as e:
+        logging.debug(f"[STANDALONE_MONITOR] Reconcile error: {e}")
+
+    # 2. Get active trades from DB
+    try:
+        active_trades = trade_db.get_active_trades()
+    except Exception as e:
+        logging.error(f"[STANDALONE_MONITOR] Error reading active trades: {e}")
+        active_trades = []
+
+    # 3. Group by engine/type
+    index_positions = {}
+    stock_options_positions = {}
+    stock_cash_positions = {}
+
+    for t in active_trades:
+        sym = t.get("symbol") or t.get("contract")
+        if not sym:
+            continue
+        eng = str(t.get("engine", "nifty50")).lower()
+        pos_data = dict(t)
+        if eng == "index" or ("NIFTY" in str(sym).upper() and ("CE" in str(sym).upper() or "PE" in str(sym).upper())) or ("SENSEX" in str(sym).upper() and ("CE" in str(sym).upper() or "PE" in str(sym).upper())):
+            index_positions[sym] = pos_data
+        elif pos_data.get("position_type") == "stock" or eng in ["daily", "bear_trade", "weekly", "weekly_bear"]:
+            stock_cash_positions[sym] = pos_data
+        else:
+            stock_options_positions[sym] = pos_data
+
+    # 4. Check for unlinked live broker positions on Kite
+    try:
+        pos_data = kite.positions()
+        net_pos = [p for p in pos_data.get("net", []) if p.get("tradingsymbol") and int(p.get("quantity", 0)) != 0]
+        for p in net_pos:
+            tsym = p.get("tradingsymbol")
+            if not tsym:
+                continue
+            # If not in any active group, auto-stage into monitor dict
+            if tsym not in index_positions and tsym not in stock_options_positions and tsym not in stock_cash_positions:
+                c_str = tsym.upper()
+                is_index = ("NIFTY" in c_str or "BANKNIFTY" in c_str or "SENSEX" in c_str or "FINNIFTY" in c_str or "MIDCPNIFTY" in c_str)
+                is_opt = ("CE" in c_str or "PE" in c_str)
+                eng_type = "index" if is_index else ("nifty50" if is_opt else "daily")
+                
+                # Auto-lookup scan SL/targets from trade history or chart
+                from resolve import lookup_scan_sl_target
+                sl_info = lookup_scan_sl_target(tsym, tsym, eng_type, kite=kite, entry_price=float(p.get("average_price", 0)))
+                
+                broker_pos_dict = {
+                    "contract": tsym,
+                    "symbol": tsym,
+                    "quantity": int(p.get("quantity", 0)),
+                    "position_size": int(p.get("quantity", 0)),
+                    "entry_spot": float(p.get("average_price", 0)),
+                    "entry_price": float(p.get("average_price", 0)),
+                    "current_sl": float(sl_info.get("current_sl") or 0.0) if sl_info else 0.0,
+                    "t1": float(sl_info.get("t1") or 0.0) if sl_info else 0.0,
+                    "t2": float(sl_info.get("t2") or 0.0) if sl_info else 0.0,
+                    "t3": float(sl_info.get("t3") or 0.0) if sl_info else 0.0,
+                    "trailing_stage": int(sl_info.get("trailing_stage") or 0) if sl_info else 0,
+                    "pattern": sl_info.get("pattern", "BROKER_RECOVERED") if sl_info else "BROKER_RECOVERED",
+                    "position_type": "option" if is_opt else "stock",
+                    "source": "kite"
+                }
+                if is_index and is_opt:
+                    index_positions[tsym] = broker_pos_dict
+                elif is_opt:
+                    stock_options_positions[tsym] = broker_pos_dict
+                else:
+                    stock_cash_positions[tsym] = broker_pos_dict
+    except Exception as e:
+        logging.debug(f"[STANDALONE_MONITOR] Broker position fetch error: {e}")
+
+    # 5. Monitor each group
+    monitored_count = 0
+    if index_positions:
+        lock_idx = threading.Lock()
+        monitor_active_positions(
+            kite=kite,
+            registry=INDEX_REGISTRY,
+            positions_dict=index_positions,
+            lock=lock_idx,
+            product_type="NRML",
+            engine_name="index",
+            timeframe_entry="3minute",
+            trade_db=trade_db,
+            log_fn=log_to_journal,
+            live=live
+        )
+        monitored_count += len(index_positions)
+
+    if stock_options_positions:
+        lock_opt = threading.Lock()
+        monitor_active_positions(
+            kite=kite,
+            registry=STOCK_REGISTRY,
+            positions_dict=stock_options_positions,
+            lock=lock_opt,
+            product_type="NRML",
+            engine_name="nifty50",
+            timeframe_entry="30minute",
+            trade_db=trade_db,
+            log_fn=log_to_journal,
+            live=live
+        )
+        monitored_count += len(stock_options_positions)
+
+    if stock_cash_positions:
+        lock_cash = threading.Lock()
+        monitor_active_positions(
+            kite=kite,
+            registry=STOCK_REGISTRY,
+            positions_dict=stock_cash_positions,
+            lock=lock_cash,
+            product_type="CNC",
+            engine_name="daily",
+            timeframe_entry="day",
+            trade_db=trade_db,
+            log_fn=log_to_journal,
+            live=live
+        )
+        monitored_count += len(stock_cash_positions)
+
+    return monitored_count
+
+
+

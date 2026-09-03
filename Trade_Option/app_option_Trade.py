@@ -2421,6 +2421,39 @@ def auto_eod_journal_scheduler():
             logging.warning(f"[AUTO EOD JOURNAL] Error in scheduler: {e}")
         time.sleep(60)
 
+def standalone_position_monitor_daemon():
+    """Standalone 24/7 background position monitor for Port 5050.
+    Starts immediately upon application launch and continuously guards ALL active
+    trades (SL, Trailing SL, T1/T2/T3, Emergency Hard SL) as soon as Kite session is valid,
+    without requiring any scanner or engine to be manually started.
+    """
+    logging.info("[STANDALONE_POSITION_MONITOR] Background position guardian initialized.")
+    while True:
+        try:
+            from session import load_kite_session, ensure_kite_session
+            from position_monitor import monitor_all_active_positions
+            global _kite_session
+            if not _kite_session:
+                try:
+                    api_k, acc_t = load_kite_session(TOKEN_FILE)
+                    ks = KiteConnect(api_key=api_k)
+                    ks.set_access_token(acc_t)
+                    _kite_session = ks
+                except Exception:
+                    _kite_session = None
+            else:
+                try:
+                    ensure_kite_session(_kite_session, TOKEN_FILE)
+                except Exception:
+                    pass
+
+            if _kite_session:
+                live_opt = os.path.exists(LIVE_EXECUTION_FLAG) or os.path.exists(LIVE_EXECUTION_FLAG_INDEX)
+                monitor_all_active_positions(_kite_session, live=live_opt)
+        except Exception as e:
+            logging.debug(f"[STANDALONE_POSITION_MONITOR] Iteration error: {e}")
+        time.sleep(2)
+
 def main():
     os.makedirs(paths.INPUT_DIR, exist_ok=True)
     os.makedirs(paths.LOGS_DIR, exist_ok=True)
@@ -2431,6 +2464,8 @@ def main():
     worker.start()
     eod_worker = threading.Thread(target=auto_eod_journal_scheduler, daemon=True)
     eod_worker.start()
+    monitor_worker = threading.Thread(target=standalone_position_monitor_daemon, daemon=True)
+    monitor_worker.start()
     print(f"Trading Control Center starting on http://localhost:{DASHBOARD_PORT}")
     print(f"Refresh interval: {REFRESH_SECONDS}s")
     print("Available programs:")
@@ -2440,3 +2475,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

@@ -3362,4 +3362,45 @@ issues:
     3. Deployed and verified 100% test pass on regression suite.
     '
   status: RESOLVED
+- id: FEATURE-033
+  title: Dynamic Capital-Scaled Portfolio Risk Limits (Concurrent Positions & Sector Caps)
+  severity: ENHANCEMENT
+  category: Risk Management & Portfolio Governance
+  family: RISK_MANAGEMENT
+  date_reported: '2026-09-03'
+  symptom: 'Max concurrent positions cap was statically fixed at 6 positions regardless of user capital setting on UI (e.g. 50k, 200k, 500k), causing under-allocation on larger accounts and over-allocation on smaller accounts.
+    '
+  root_cause: '`_load_portfolio_risk_config` in `common/portfolio_risk.py` read a static `max_concurrent_positions: 6` integer without factoring the engine-specific capital passed from UI settings.
+    '
+  affected_files:
+  - common/portfolio_risk.py
+  - common/resolve.py
+  - ISSUE_MANAGEMENT.yaml
+  resolution: '1. Implemented dynamic capital scaling in `portfolio_risk.py`: scales concurrent positions proportionally with capital (6 positions per Rs 100k capital, e.g. 3 for 50k, 12 for 200k, 30 for 500k, min 2).
+    2. Scaled sector exposure caps proportionally with capital (2 positions per sector per 100k capital).
+    3. Added unit tests in `scratch/test_portfolio_dynamic_risk.py` and verified 100% test pass rate.
+    '
+  status: RESOLVED
+- id: FEATURE-034
+  title: Standalone 24/7 Position Monitor Daemon & Decoupled Session Guardian
+  severity: ENHANCEMENT
+  category: Architecture & Position Monitoring
+  family: EXECUTION_GUARD
+  date_reported: '2026-09-03'
+  symptom: 'Active positions were only monitored when individual scanners/engines were actively running in loop; if engines were stopped or scanners throttled, overnight/live positions remained unmonitored.
+    '
+  root_cause: '`monitor_active_positions` was coupled inside engine scan cycles rather than running as an autonomous background daemon.
+    '
+  affected_files:
+  - common/position_monitor.py
+  - Trade_Option/app_option_Trade.py
+  - Trade_Stock/app_Stock_Trade.py
+  - ISSUE_MANAGEMENT.yaml
+  resolution: '1. Created `monitor_all_active_positions(kite, live=True)` in `common/position_monitor.py` to monitor all active trades across all engines (index, nifty50, daily, bear_trade, ema_engine) in a unified call.
+    2. Added `standalone_position_monitor_daemon` background thread in `Trade_Option/app_option_Trade.py` (Port 5050) and `Trade_Stock/app_Stock_Trade.py` (Port 5051) running on a continuous 2-second high-frequency loop.
+    3. Integrated automatic Kite token hot-reloading so positions are actively guarded immediately upon dashboard startup or token refresh, completely independent of scanner start/stop state.
+    4. Verified across 17-test regression suite with 100% pass rate.
+    '
+  status: RESOLVED
+
 

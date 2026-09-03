@@ -43,5 +43,14 @@
     "lot_size": 50,
     "tag": "ACTIVE_MONITOR",
     "note": "Active Runner | Watching T2 298.85 / T3 338.20 targets"
+  },
+  {
+    "contract": "FINNIFTYSEP25700PE",
+    "base_symbol": "FINNIFTYSEP",
+    "entry_price": 300.0,
+    "exit_price": 167.0,
+    "lot_size": null,
+    "tag": "MANUAL_WATCH",
+    "note": ""
   }
 ]

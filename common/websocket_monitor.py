@@ -102,8 +102,7 @@ class ActivePositionWebSocketMonitor:
             self.kws.on_reconnect = on_reconnect
             self.kws.on_noreconnect = on_noreconnect
 
-            self._thread = threading.Thread(target=self.kws.connect, kwargs={"threaded": False}, daemon=True)
-            self._thread.start()
+            self.kws.connect(threaded=True)
             self.is_running = True
             logging.info("[WEBSOCKET] Active position tick monitor started in background.")
         except Exception as e:

@@ -2257,6 +2257,39 @@ def auto_export_if_new_month():
     except Exception as e:
         print(f"Auto-export error: {e}")
 
+def standalone_position_monitor_daemon():
+    """Standalone 24/7 background position monitor for Port 5051.
+    Starts immediately upon application launch and continuously guards ALL active
+    trades (SL, Trailing SL, T1/T2/T3, Emergency Hard SL) as soon as Kite session is valid,
+    without requiring any scanner or engine to be manually started.
+    """
+    logging.info("[STANDALONE_POSITION_MONITOR_STOCK] Background position guardian initialized.")
+    while True:
+        try:
+            from session import load_kite_session, ensure_kite_session
+            from position_monitor import monitor_all_active_positions
+            global _kite_session
+            if not _kite_session:
+                try:
+                    api_k, acc_t = load_kite_session(TOKEN_FILE)
+                    ks = KiteConnect(api_key=api_k)
+                    ks.set_access_token(acc_t)
+                    _kite_session = ks
+                except Exception:
+                    _kite_session = None
+            else:
+                try:
+                    ensure_kite_session(_kite_session, TOKEN_FILE)
+                except Exception:
+                    pass
+
+            if _kite_session:
+                live_stock = os.path.exists(LIVE_EXECUTION_FLAG)
+                monitor_all_active_positions(_kite_session, live=live_stock)
+        except Exception as e:
+            logging.debug(f"[STANDALONE_POSITION_MONITOR_STOCK] Iteration error: {e}")
+        time.sleep(2)
+
 def main():
     os.makedirs(paths.INPUT_DIR, exist_ok=True)
     os.makedirs(paths.LOGS_DIR, exist_ok=True)
@@ -2265,6 +2298,8 @@ def main():
     threading.Thread(target=auto_export_if_new_month, daemon=True).start()
     worker = threading.Thread(target=refresh_data, daemon=True)
     worker.start()
+    monitor_worker = threading.Thread(target=standalone_position_monitor_daemon, daemon=True)
+    monitor_worker.start()
     print(f"Trading Control Center starting on http://localhost:{DASHBOARD_PORT}")
     print(f"Refresh interval: {REFRESH_SECONDS}s")
     print("Available programs:")
@@ -2274,3 +2309,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

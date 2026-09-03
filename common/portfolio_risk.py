@@ -19,8 +19,8 @@ from timeframe_utils import get_ist_now
 from registries import get_symbol_sector
 
 
-def _load_portfolio_risk_config(config=None):
-    """Load portfolio risk configuration with safe defaults."""
+def _load_portfolio_risk_config(config=None, capital=None):
+    """Load portfolio risk configuration with safe defaults and dynamic capital scaling."""
     if config is None:
         try:
             if os.path.exists(paths.PROGRAM_CONFIG_FILE):
@@ -34,11 +34,29 @@ def _load_portfolio_risk_config(config=None):
     if not isinstance(p_cfg, dict):
         p_cfg = {}
 
+    enable = bool(p_cfg.get("enable", True))
+    dynamic_scaling = bool(p_cfg.get("dynamic_scaling", True))
+    raw_max_concurrent = p_cfg.get("max_concurrent_positions")
+    base_per_100k = float(p_cfg.get("base_positions_per_100k", 6.0))
+    base_sector_per_100k = float(p_cfg.get("base_sector_positions_per_100k", 2.0))
+
+    # Dynamic Capital Scaling Calculation
+    effective_cap = float(capital or 100000.0)
+    if dynamic_scaling or raw_max_concurrent in [None, "auto", 0]:
+        # Scale dynamically based on capital (default: 6 per 100k capital, min 2)
+        calc_max_concurrent = max(2, int(round((effective_cap / 100000.0) * base_per_100k)))
+        calc_max_sector = max(1, int(round((effective_cap / 100000.0) * base_sector_per_100k)))
+    else:
+        calc_max_concurrent = int(raw_max_concurrent or 6)
+        calc_max_sector = int(p_cfg.get("max_same_sector_positions", 2))
+
     return {
-        "enable": bool(p_cfg.get("enable", True)),
-        "max_concurrent_positions": int(p_cfg.get("max_concurrent_positions", 6)),
+        "enable": enable,
+        "max_concurrent_positions": calc_max_concurrent,
         "max_daily_loss_pct": float(p_cfg.get("max_daily_loss_pct", 3.0)),
-        "max_same_sector_positions": int(p_cfg.get("max_same_sector_positions", 2))
+        "max_same_sector_positions": calc_max_sector,
+        "dynamic_scaling": dynamic_scaling,
+        "effective_capital": effective_cap
     }
 
 
@@ -58,7 +76,17 @@ def check_portfolio_risk_caps(engine, symbol, candidate_tier=2, capital=100000.0
     Returns:
     - (is_allowed: bool, reason: str, details: dict)
     """
-    p_cfg = _load_portfolio_risk_config(config)
+    cap_val = float(capital or 100000.0)
+    if cap_val <= 0:
+        try:
+            if os.path.exists(paths.PROGRAM_CONFIG_FILE):
+                with open(paths.PROGRAM_CONFIG_FILE, "r", encoding="utf-8") as f:
+                    cfg_all = json.load(f)
+                    cap_val = float(cfg_all.get(engine, {}).get("capital", 100000.0))
+        except Exception:
+            cap_val = 100000.0
+
+    p_cfg = _load_portfolio_risk_config(config, capital=cap_val)
     if not p_cfg["enable"]:
         return True, "PORTFOLIO_RISK_GUARD_DISABLED", {}
 
@@ -111,11 +139,12 @@ def check_portfolio_risk_caps(engine, symbol, candidate_tier=2, capital=100000.0
 
     # ── RULE 1: Max Concurrent Positions Cap ──
     if total_active_count >= max_concurrent:
-        reason = f"MAX_CONCURRENT_POSITIONS_REACHED ({total_active_count}/{max_concurrent} active trades across portfolio)"
+        reason = f"MAX_CONCURRENT_POSITIONS_REACHED ({total_active_count}/{max_concurrent} active trades across portfolio [Capital: Rs {cap_val:,.0f}])"
         return False, reason, {
             "rule": "max_concurrent_positions",
             "active_count": total_active_count,
-            "limit": max_concurrent
+            "limit": max_concurrent,
+            "capital": cap_val
         }
 
     # ── RULE 2: Max Same-Sector Positions Cap ──
