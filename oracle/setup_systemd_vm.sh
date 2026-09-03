@@ -68,7 +68,13 @@ WantedBy=multi-user.target
 EOF
 
 systemctl stop trading-options trading-stock trading-export || true
-pkill -f "$APP_DIR" || true
+pkill -f "$APP_DIR/venv/bin/python" || true
+pkill -f "app_option_Trade.py" || true
+pkill -f "app_Stock_Trade.py" || true
+pkill -f "run_export_scheduler_daemon.py" || true
+pkill -f "stock_reversal_scanner.py" || true
+pkill -f "index_options_trade_engine.py" || true
+pkill -f "stock_options_trade_engine.py" || true
 sleep 2
 
 systemctl daemon-reload
