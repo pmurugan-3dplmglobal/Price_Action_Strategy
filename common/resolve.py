@@ -1455,9 +1455,11 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
 
             # ── VIX Regime Gate Check ──
             vix_allowed, vix_reason, vix_val = evaluate_vix_regime(kite, tier_val=best_trade.get("tier", 2))
+            best_trade["vix_allowed"] = vix_allowed
+            best_trade["vix_reason"] = vix_reason
+            best_trade["vix_val"] = vix_val
             if not vix_allowed:
-                logging.info(f"[VIX_REGIME_GATE] Suppressed staging for {symbol} ({best_trade['contract']}): {vix_reason}")
-                return []
+                logging.info(f"[VIX_REGIME_GATE] Execution capped for {symbol} ({best_trade['contract']}): {vix_reason} (loaded for scan display)")
 
             # ── Portfolio Risk & Sector Caps Check ──
             cap_amount = float(cfg_engine.get("capital") or 100000.0)
@@ -1468,9 +1470,10 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                 capital=cap_amount,
                 live_positions=active_positions
             )
+            best_trade["portfolio_risk_allowed"] = p_allowed
+            best_trade["portfolio_risk_reason"] = p_reason
             if not p_allowed:
-                logging.info(f"[PORTFOLIO_RISK_CAP] Suppressed staging for {symbol} ({best_trade['contract']}): {p_reason}")
-                return []
+                logging.info(f"[PORTFOLIO_RISK_CAP] Execution capped for {symbol} ({best_trade['contract']}): {p_reason} (loaded for scan display)")
             
             live_flag = paths.INDEX_LIVE_FLAG if engine_name == "index" else paths.NIFTY50_LIVE_FLAG
             is_live = False

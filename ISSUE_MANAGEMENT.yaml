@@ -3402,5 +3402,48 @@ issues:
     4. Verified across 17-test regression suite with 100% pass rate.
     '
   status: RESOLVED
-
-
+- id: FEATURE-035
+  title: 100% Dynamic ATR Volatility Scaling for Swing Leg Geometry (Equities & F&O)
+  severity: ENHANCEMENT
+  category: Strategy & Geometry Engine
+  family: SWING_DETECTION
+  date_reported: '2026-09-03'
+  symptom: 'Hardcoded stock overrides (TATAMOTORS, ADANIENT, RELIANCE, HDFCBANK) created static bias in dynamic market conditions, missing tight base breakouts during low-volatility compressions and requiring manual override maintenance.
+    '
+  root_cause: '`swing_leg_config` in `input/program_config.json` maintained static stock overrides instead of relying on the built-in Tier 2 14-period ATR% dynamic volatility adapter.
+    '
+  affected_files:
+  - input/program_config.json
+  - Trade_Stock/input/program_config.json
+  - Trade_Option/input/program_config.json
+  - ISSUE_MANAGEMENT.yaml
+  resolution: '1. Removed hardcoded equity overrides (TATAMOTORS, ADANIENT, RELIANCE, HDFCBANK) from `swing_leg_config` across all config files.
+    2. Retained index-only overrides (NIFTY: 2, BANKNIFTY: 2) for rapid 3m/15m index option execution.
+    3. All 200+ F&O equities now dynamically adjust leg lengths (2 to 5 candles) based on real-time 14-period ATR% without manual configuration.
+    4. Verified across all 17 regression tests with 100% pass rate.
+    '
+  status: RESOLVED
+- id: FEATURE-036
+  title: Decoupled Scan Discovery from Portfolio Risk & VIX Execution Guards
+  severity: ENHANCEMENT
+  category: Architecture & Strategy Discovery
+  family: SCAN_AND_EXECUTION_SEPARATION
+  date_reported: '2026-09-03'
+  symptom: 'When user had 5-6 open active positions, scanners suppressed staging and did not load discovered setups into the Scan Tab UI, hiding all market discovery when position limits were reached.
+    '
+  root_cause: '`scan_symbol` in `common/resolve.py` and `run_scan` in `stock_reversal_scanner.py` returned empty lists or broke early upon `check_portfolio_risk_caps` returning False, mixing visual discovery with execution gating.
+    '
+  affected_files:
+  - common/resolve.py
+  - Trade_Stock/stock_reversal_scanner.py
+  - Trade_Option/stock_options_trade_engine.py
+  - Trade_Option/index_options_trade_engine.py
+  - Trade_Option/app_option_Trade.py
+  - Trade_Stock/app_Stock_Trade.py
+  - ISSUE_MANAGEMENT.yaml
+  resolution: '1. Decoupled visual setup discovery from execution gating: scanners now always stage and load all valid price action patterns into `scan_display.json` and the Scan Tab with attached risk metadata (`portfolio_risk_allowed`, `vix_allowed`).
+    2. Moved strict Portfolio Risk and VIX regime enforcement to automated order execution (`execute_highest_rr_trade` in stock/index option engines) and manual 1-Click Buy API endpoints (`/api/buy-scanned-trade` in Option and Stock apps).
+    3. If 5-6 positions are already active, setups remain visible in the Scan Tab for monitoring, while Auto-Trade and 1-Click Buy safely block order placement with clear user feedback.
+    4. Verified across all 17 regression tests with 100% pass rate.
+    '
+  status: RESOLVED

@@ -263,6 +263,26 @@ def execute_highest_rr_trade(kite, staged):
         pos["entry_time"] = dt.now().isoformat()
         pos.setdefault("position_type", "option")
         if live_ok:
+            from vix_guard import evaluate_vix_regime
+            vix_ok, vix_msg, _ = evaluate_vix_regime(kite, tier_val=best.get("tier", 1))
+            if not vix_ok:
+                logging.info(f"[VIX_REGIME_GATE] Auto-execution skipped for {best['symbol']} ({best['contract']}): {vix_msg}")
+                return
+
+            from portfolio_risk import check_portfolio_risk_caps
+            cfg_eng = load_config().get("index", {})
+            cap_val = float(cfg_eng.get("capital") or 100000.0)
+            p_ok, p_msg, _ = check_portfolio_risk_caps(
+                engine="index",
+                symbol=best["symbol"],
+                candidate_tier=best.get("tier", 1),
+                capital=cap_val,
+                live_positions=ACTIVE_POSITIONS
+            )
+            if not p_ok:
+                logging.info(f"[PORTFOLIO_RISK_CAP] Auto-execution skipped for {best['symbol']} ({best['contract']}): {p_msg}")
+                return
+
             with position_lock:
                 if best["symbol"] in ACTIVE_POSITIONS:
                     logging.info(f"{best['symbol']} already active; skipping new trade")

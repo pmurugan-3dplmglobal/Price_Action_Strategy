@@ -396,6 +396,26 @@ def execute_highest_rr_trade(kite, staged):
     limit_price = round(benchmark_val * 1.005, 1) if benchmark_val > 0 else round(cp * 1.005, 1)
 
     if live_ok:
+        from vix_guard import evaluate_vix_regime
+        vix_ok, vix_msg, _ = evaluate_vix_regime(kite, tier_val=best.get("tier", 1))
+        if not vix_ok:
+            logging.info(f"[VIX_REGIME_GATE] Auto-execution skipped for {sym} ({contract}): {vix_msg}")
+            return
+
+        from portfolio_risk import check_portfolio_risk_caps
+        cfg_eng = load_config().get("nifty50", {})
+        cap_val = float(cfg_eng.get("capital") or 100000.0)
+        p_ok, p_msg, _ = check_portfolio_risk_caps(
+            engine="nifty50",
+            symbol=sym,
+            candidate_tier=best.get("tier", 1),
+            capital=cap_val,
+            live_positions=ACTIVE_POSITIONS
+        )
+        if not p_ok:
+            logging.info(f"[PORTFOLIO_RISK_CAP] Auto-execution skipped for {sym} ({contract}): {p_msg}")
+            return
+
         with position_lock:
             if sym in ACTIVE_POSITIONS:
                 logging.info(f"TF Entry: {TIMEFRAME_ENTRY} | Anchor: {TIMEFRAME_ANCHOR} | Interval: {SCAN_INTERVAL_SECONDS}s | Risk: {MAX_RISK_PERCENT}%")

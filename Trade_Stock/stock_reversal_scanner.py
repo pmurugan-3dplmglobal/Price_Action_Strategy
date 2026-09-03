@@ -271,10 +271,10 @@ def run_scan(kite):
 
                     # ── VIX Regime Gate Check ──
                     vix_allowed, vix_reason, _ = evaluate_vix_regime(kite, tier_val=result.get("tier", 2))
+                    result["vix_allowed"] = vix_allowed
+                    result["vix_reason"] = vix_reason
                     if not vix_allowed:
-                        logging.info(f"  -> VIX GATE FILTER: {symbol} skipped ({vix_reason})")
-                        matched = True
-                        break
+                        logging.info(f"  -> VIX GATE: {symbol} execution capped ({vix_reason}) - loaded for scan display")
 
                     # ── Portfolio Risk & Sector Caps Check ──
                     p_allowed, p_reason, _ = check_portfolio_risk_caps(
@@ -283,10 +283,10 @@ def run_scan(kite):
                         candidate_tier=result.get("tier", 2),
                         live_positions=ACTIVE_POSITIONS
                     )
+                    result["portfolio_risk_allowed"] = p_allowed
+                    result["portfolio_risk_reason"] = p_reason
                     if not p_allowed:
-                        logging.info(f"  -> PORTFOLIO RISK FILTER: {symbol} skipped ({p_reason})")
-                        matched = True
-                        break
+                        logging.info(f"  -> PORTFOLIO RISK: {symbol} execution capped ({p_reason}) - loaded for scan display")
 
                     entry_px = float(result.get("Close") or result.get("Entry") or result.get("entry") or 0.0)
                     result["Close"] = entry_px

@@ -1742,6 +1742,25 @@ def api_buy_scanned_trade():
                 logging.warning(f"1-Click Buy auto-init kite session failed: {init_err}")
 
         if _kite_session:
+            # ── Portfolio Risk & Sector Caps Enforcement ──
+            try:
+                from portfolio_risk import check_portfolio_risk_caps
+                cfg_all = load_config()
+                cap_amount = float(cfg_all.get(engine, {}).get("capital") or 100000.0)
+                cand_tier = int(data.get("tier") or 2)
+                p_allowed, p_reason, _ = check_portfolio_risk_caps(
+                    engine=engine,
+                    symbol=symbol,
+                    candidate_tier=cand_tier,
+                    capital=cap_amount,
+                    include_db_trades=True
+                )
+                if not p_allowed:
+                    logging.warning(f"[1-CLICK BUY REJECTED] {symbol} ({contract}): {p_reason}")
+                    return jsonify({"ok": False, "error": f"Portfolio Risk Guard: {p_reason}"}), 400
+            except Exception as p_err:
+                logging.warning(f"Portfolio risk check error in 1-Click Buy: {p_err}")
+
             try:
                 q_key = f"{exch}:{contract}"
                 q = _kite_session.quote([q_key])

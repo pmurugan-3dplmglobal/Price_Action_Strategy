@@ -50,11 +50,7 @@
     "volatility_adaptive": true,
     "overrides": {
       "NIFTY": 2,
-      "BANKNIFTY": 2,
-      "RELIANCE": 2,
-      "HDFCBANK": 2,
-      "TATAMOTORS": 4,
-      "ADANIENT": 4
+      "BANKNIFTY": 2
     }
   }
 }
