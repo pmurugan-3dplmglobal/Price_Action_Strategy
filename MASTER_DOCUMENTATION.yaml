@@ -38,9 +38,11 @@ architecture:
     common:
       paths.py: "Single source of truth for canonical system file paths across engines and dashboards (TRADES_DB, ACTIVE_POSITIONS_DB, SCAN_DISPLAY_*, TOKEN_FILE, etc.)"
       swing_detection.py: "Institutional-grade Phase 0 Parabolic Multi-Swing Cascade Filter with Unified Hybrid Dynamic Legs (get_adaptive_leg_length, is_parabolic_arch_enhanced, extract_swing_pivots, validate_parabolic_cascade_structure, detect_parabolic_multi_swings) supporting ATR volatility scaling (2-5 bars), symbol overrides, BOS integrity, and terminal base absorption."
-      ema_engine.py: "13 EMA & 44 EMA crossover scanner and display output builder for options (5050) and stock spot (5051) modes"
+      vix_guard.py: "India VIX Macro Regime Gate (60s TTL RAM cache) evaluating normal (<=20.0), elevated (20-25), and extreme (>25.0) market volatility states"
+      portfolio_risk.py: "Cross-engine portfolio risk governor enforcing max concurrent positions (6), max daily drawdown limit (-3.0%), and sector caps (max 2 per sector across 235 stocks in registries.py)"
+      ema_engine.py: "13 EMA & 44 EMA crossover scanner and display output builder with 6-day monthly option contract rollover rule"
       trading_core.py: "Canonical re-export hub for backward compatibility across all modules."
-      trade_db.py: "Thread-safe JSON trade database, cycle staging, duplicate active position rejection, expired position purging, and executed pattern deduplication"
+      trade_db.py: "ACID SQLite WAL database (trades.sqlite3) with JSON backward compatibility, cycle staging, and ghost exit cleanup"
       dashboard_auth.py: "User authentication & access control module (PBKDF2 password hashing, admin/user role hierarchy, approval workflow)"
       daily_trade_journal.py: "Daily trade journal sync & statistical analytics engine (get_trade_journal_analytics: Win Rate %, Profit Factor, PnL by Pattern, Timeframe, Engine, and Outcome)"
       dashboard_sl_overrides.py: "Shared read/write of user-edited SL/T1/T2/T3 overrides (sl_target_overrides.json) used by both dashboards"
@@ -70,7 +72,8 @@ architecture:
       test_option_strike_fetch.py: "Zerodha NFO Option Strike token & candle fetch test script"
       test_spot_scan.py: "Spot & Option pattern scanner verification test script"
     scratch:
-      description: "Temporary Diagnostic Scripts & Re-usable Maintenance Utilities for debug, audit, process checking, and batch target updates"
+      run_full_regression_test.py: "17-test Master Strategy Regression Test Suite (Imports, Auth, Invalidation, Serializers, Chart API, DB Invariants, Paths, Trailed-SL Floor, JS V8, Parabolic Math, Auth, VIX Gate, Option Sizing, Harami Ratio)"
+      test_vix_portfolio_volume.py: "38-test Unit Verification Suite (VIX Regimes, Portfolio Caps, 235-Stock Sector Map, BCD Volume Profile, EMA Rollover, IST Timing, Harami Ratios, Bear Date Mapping)"
       analyze_all_active.py: "Active position metrics analysis utility"
       apply_30m_targets_to_all_active.py: "Batch target updater for active trades"
       audit_targets.py: "Target calculation auditor script"

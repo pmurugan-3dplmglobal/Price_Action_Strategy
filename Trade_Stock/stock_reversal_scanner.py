@@ -269,8 +269,12 @@ def run_scan(kite):
                             logging.info(f"Skipping {symbol} - Anchor A ({candle_a_time}) preceded terminal swing base ({swing_meta['terminal_date']})")
                             continue
 
+                    # ── Resolve effective tier from swing metadata (populated before scanner call) ──
+                    effective_tier = swing_meta.get("tier", result.get("tier", 2))
+                    result["tier"] = effective_tier
+
                     # ── VIX Regime Gate Check ──
-                    vix_allowed, vix_reason, _ = evaluate_vix_regime(kite, tier_val=result.get("tier", 2))
+                    vix_allowed, vix_reason, _ = evaluate_vix_regime(kite, tier_val=effective_tier)
                     result["vix_allowed"] = vix_allowed
                     result["vix_reason"] = vix_reason
                     if not vix_allowed:
@@ -280,7 +284,7 @@ def run_scan(kite):
                     p_allowed, p_reason, _ = check_portfolio_risk_caps(
                         engine=PROFILE["config_section"],
                         symbol=symbol,
-                        candidate_tier=result.get("tier", 2),
+                        candidate_tier=effective_tier,
                         live_positions=ACTIVE_POSITIONS
                     )
                     result["portfolio_risk_allowed"] = p_allowed

@@ -50,7 +50,8 @@ from trading_core import (
     STOCK_REGISTRY,
     match_registry_symbol,
     extract_underlying_symbol,
-    get_option_lot_size
+    get_option_lot_size,
+    calculate_sl_buffer
 )
 
 LIVE_MARKET_DEPLOYMENT = True
@@ -403,7 +404,7 @@ def execute_highest_rr_trade(kite, staged):
             return
 
         from portfolio_risk import check_portfolio_risk_caps
-        cfg_eng = load_config().get("nifty50", {})
+        cfg_eng = load_program_config_for_engine("nifty50")
         cap_val = float(cfg_eng.get("capital") or 100000.0)
         p_ok, p_msg, _ = check_portfolio_risk_caps(
             engine="nifty50",

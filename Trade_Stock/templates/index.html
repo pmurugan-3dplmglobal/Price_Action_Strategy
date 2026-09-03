@@ -578,18 +578,37 @@
                 const t3v = t.t3 !== undefined && t.t3 !== null && parseFloat(t.t3) > 0 ? parseFloat(t.t3).toFixed(2) : '-';
 
                 function formatTimestamp(ts, symbolKey, fieldName) {
-                    if (!ts && symbolKey && d && d.all_trades) {
-                        let cleanKey = (symbolKey || '').replace(/\s+/g, '').toUpperCase();
-                        let dbMatch = d.all_trades.find(dbT => {
-                            let dbK = (dbT.contract || dbT.symbol || '').replace(/\s+/g, '').toUpperCase();
-                            return dbK === cleanKey;
-                        });
-                        if (dbMatch) {
-                            ts = dbMatch[fieldName] || dbMatch.candle_a_time || dbMatch.entry_time || dbMatch.created_at;
+                    if (fieldName === 'candle_a_time') {
+                        if (!ts && symbolKey && d && d.all_trades) {
+                            let cleanKey = (symbolKey || '').replace(/\s+/g, '').toUpperCase();
+                            let dbMatch = d.all_trades.find(dbT => {
+                                let dbK = (dbT.contract || dbT.symbol || '').replace(/\s+/g, '').toUpperCase();
+                                return dbK === cleanKey;
+                            });
+                            if (dbMatch) {
+                                ts = dbMatch.candle_a_time || dbMatch.CandleATime;
+                            }
                         }
-                    }
-                    if (!ts && t) {
-                        ts = t[fieldName] || t.candle_a_time || t.entry_time || t.created_at;
+                        if (!ts && t) {
+                            ts = t.candle_a_time || t.CandleATime;
+                        }
+                        if (ts && t && t.pattern === 'KITE_RECOVERED' && String(ts).slice(0, 16) === String(t.entry_time || '').slice(0, 16)) {
+                            ts = '';
+                        }
+                    } else {
+                        if (!ts && symbolKey && d && d.all_trades) {
+                            let cleanKey = (symbolKey || '').replace(/\s+/g, '').toUpperCase();
+                            let dbMatch = d.all_trades.find(dbT => {
+                                let dbK = (dbT.contract || dbT.symbol || '').replace(/\s+/g, '').toUpperCase();
+                                return dbK === cleanKey;
+                            });
+                            if (dbMatch) {
+                                ts = dbMatch.entry_time || dbMatch.created_at;
+                            }
+                        }
+                        if (!ts && t) {
+                            ts = t.entry_time || t.created_at;
+                        }
                     }
                     if (!ts) return '-';
                     let s = String(ts).split('+')[0].replace('T', ' ').trim();

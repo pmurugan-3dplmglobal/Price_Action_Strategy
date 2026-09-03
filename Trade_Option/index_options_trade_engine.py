@@ -270,7 +270,7 @@ def execute_highest_rr_trade(kite, staged):
                 return
 
             from portfolio_risk import check_portfolio_risk_caps
-            cfg_eng = load_config().get("index", {})
+            cfg_eng = load_program_config_for_engine("index")
             cap_val = float(cfg_eng.get("capital") or 100000.0)
             p_ok, p_msg, _ = check_portfolio_risk_caps(
                 engine="index",

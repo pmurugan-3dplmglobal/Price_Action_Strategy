@@ -331,7 +331,7 @@ def scan_anchor_bcd_breakout_bearish(df_entry, df_anchor, anchor_tf="", entry_tf
                             e_anchor_idx = ei
                             break
         else:
-            e_anchor_idx = a_idx
+            e_anchor_idx = anchor_idx
 
         if e_anchor_idx is None:
             continue
