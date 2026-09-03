@@ -12,12 +12,16 @@ SERVERS = {
         "host": "opc@129.225.69.131",
         "public_ip": "129.225.69.131",
         "remote_dir": "/home/trade/Trade_Kite/Price_Action_Strategy",
+        "api_key": "jgdjmtymfyea4yn4",
+        "api_secret": "gr5mha1oag9rgguetvsx8cgg9xh2id52",
     },
     "poovendan": {
         "name": "Poovendan Oracle Cloud VM",
         "host": "opc@140.245.197.71",
         "public_ip": "140.245.197.71",
         "remote_dir": "/home/opc/Price_Action_Strategy",
+        "api_key": "o8nnw6kxykvrsrhg",
+        "api_secret": "9g7d5kktr38d7yvq11njsm4upz8kc6s1",
     }
 }
 
@@ -47,12 +51,25 @@ def sync_and_deploy(target_key, srv, key_path, tar_p):
         return False
     print(" -> Upload complete.")
 
-    # 2. Extract and Restart on VM
-    print("\n[2/3] Extracting payload and restarting systemd services on VM...")
-    cmd = f"cd {srv['remote_dir']} && tar -xzf cloud_sync_payload.tar.gz && rm -f cloud_sync_payload.tar.gz && sudo bash {srv['remote_dir']}/oracle/setup_systemd_vm.sh"
+    # 2. Extract and Restart on VM (with strict Account Credentials Isolation)
+    print("\n[2/3] Extracting payload and enforcing server credentials on VM...")
+    creds_enforce = (
+        f"python3 -c \\\"import json, os; "
+        f"p='{srv['remote_dir']}/input/program_config.json'; "
+        f"d=json.load(open(p)) if os.path.exists(p) else {{}}; "
+        f"d['api_key']='{srv['api_key']}'; d['api_secret']='{srv['api_secret']}'; "
+        f"json.dump(d, open(p, 'w'), indent=2);\\\""
+    )
+    cmd = (
+        f"cd {srv['remote_dir']} && "
+        f"tar -xzf cloud_sync_payload.tar.gz && "
+        f"rm -f cloud_sync_payload.tar.gz && "
+        f"{creds_enforce} && "
+        f"sudo bash {srv['remote_dir']}/oracle/setup_systemd_vm.sh"
+    )
     res = subprocess.run(["ssh", "-i", key_path, "-o", "StrictHostKeyChecking=no", srv["host"], cmd], capture_output=True, text=True, encoding="utf-8", errors="replace")
     print(res.stdout or res.stderr)
-    print(" -> Services restarted.")
+    print(" -> Services restarted with dedicated account credentials.")
 
     # 3. Launch trading engines via API
     print("\n[3/3] Launching trading engines via API...")
