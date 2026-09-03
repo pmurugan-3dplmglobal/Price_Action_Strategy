@@ -53,19 +53,11 @@ def sync_and_deploy(target_key, srv, key_path, tar_p):
 
     # 2. Extract and Restart on VM (with strict Account Credentials Isolation)
     print("\n[2/3] Extracting payload and enforcing server credentials on VM...")
-    creds_enforce = (
-        f"python3 -c \\\"import json, os; "
-        f"p='{srv['remote_dir']}/input/program_config.json'; "
-        f"d=json.load(open(p)) if os.path.exists(p) else {{}}; "
-        f"d['api_key']='{srv['api_key']}'; d['api_secret']='{srv['api_secret']}'; "
-        f"json.dump(d, open(p, 'w'), indent=2);\\\""
-    )
     cmd = (
         f"cd {srv['remote_dir']} && "
         f"tar -xzf cloud_sync_payload.tar.gz && "
         f"rm -f cloud_sync_payload.tar.gz && "
-        f"{creds_enforce} && "
-        f"sudo bash {srv['remote_dir']}/oracle/setup_systemd_vm.sh"
+        f"sudo bash {srv['remote_dir']}/oracle/setup_systemd_vm.sh '{srv['api_key']}' '{srv['api_secret']}'"
     )
     res = subprocess.run(["ssh", "-i", key_path, "-o", "StrictHostKeyChecking=no", srv["host"], cmd], capture_output=True, text=True, encoding="utf-8", errors="replace")
     print(res.stdout or res.stderr)

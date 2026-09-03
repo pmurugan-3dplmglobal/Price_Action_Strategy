@@ -10,6 +10,23 @@ fi
 
 echo "Configuring systemd services for $APP_DIR (User: $RUN_USER)..."
 
+API_KEY="$1"
+API_SECRET="$2"
+if [ -n "$API_KEY" ] && [ -n "$API_SECRET" ]; then
+    echo "Enforcing server-specific API credentials for $RUN_USER..."
+    python3 -c "
+import json, os
+p = '$APP_DIR/input/program_config.json'
+if os.path.exists(p):
+    with open(p) as f:
+        d = json.load(f)
+    d['api_key'] = '$API_KEY'
+    d['api_secret'] = '$API_SECRET'
+    with open(p, 'w') as f:
+        json.dump(d, f, indent=2)
+" || true
+fi
+
 if command -v getenforce &> /dev/null && [ "$(getenforce)" != "Disabled" ]; then
     chcon -R -t bin_t "$APP_DIR/venv/bin/" || true
 fi
