@@ -1791,20 +1791,46 @@ def api_buy_scanned_trade():
                 lot_size = get_option_lot_size(contract) or registry.get(symbol, {}).get("lot_size", 1)
                 prod = _kite_session.PRODUCT_CNC if exch == "NSE" else _kite_session.PRODUCT_NRML
                 
-                order_id = _kite_session.place_order(
-                    variety=_kite_session.VARIETY_REGULAR,
-                    tradingsymbol=contract,
-                    exchange=exch,
-                    transaction_type=_kite_session.TRANSACTION_TYPE_BUY,
-                    quantity=lot_size,
-                    order_type=_kite_session.ORDER_TYPE_LIMIT,
-                    price=price,
-                    product=prod
-                )
-                logging.info(f"[1-CLICK BUY] Placed buy order for {contract} on {exch} (Order ID: {order_id})")
+                from trading_core import is_market_open
+                market_open = is_market_open()
+                order_variety = _kite_session.VARIETY_REGULAR if market_open else _kite_session.VARIETY_AMO
+
+                try:
+                    order_id = _kite_session.place_order(
+                        variety=order_variety,
+                        tradingsymbol=contract,
+                        exchange=exch,
+                        transaction_type=_kite_session.TRANSACTION_TYPE_BUY,
+                        quantity=lot_size,
+                        order_type=_kite_session.ORDER_TYPE_LIMIT,
+                        price=price,
+                        product=prod
+                    )
+                    v_label = "regular order" if order_variety == _kite_session.VARIETY_REGULAR else "After Market Order (AMO)"
+                    logging.info(f"[1-CLICK BUY] Placed {v_label} for {contract} on {exch} (Order ID: {order_id})")
+                except Exception as first_err:
+                    if order_variety == _kite_session.VARIETY_REGULAR and "After Market Order" in str(first_err):
+                        logging.info(f"[1-CLICK BUY] Regular order rejected; retrying with VARIETY_AMO for {contract}...")
+                        order_id = _kite_session.place_order(
+                            variety=_kite_session.VARIETY_AMO,
+                            tradingsymbol=contract,
+                            exchange=exch,
+                            transaction_type=_kite_session.TRANSACTION_TYPE_BUY,
+                            quantity=lot_size,
+                            order_type=_kite_session.ORDER_TYPE_LIMIT,
+                            price=price,
+                            product=prod
+                        )
+                        logging.info(f"[1-CLICK BUY] Placed After Market Order (AMO) for {contract} on {exch} (Order ID: {order_id})")
+                    else:
+                        raise first_err
             except Exception as k_err:
                 logging.warning(f"[1-CLICK BUY KITE ORDER WARNING] {contract}: {k_err}")
-                return jsonify({"ok": False, "error": f"Kite Order Placement Failed: {k_err}"}), 400
+                err_msg = str(k_err)
+                from trading_core import is_market_open
+                if not is_market_open():
+                    err_msg = f"Markets are closed (trading hours: 09:15 - 15:30 IST). Broker response: {err_msg}"
+                return jsonify({"ok": False, "error": f"Kite Order Placement Failed: {err_msg}"}), 400
 
         tf_param = data.get("timeframe") or data.get("timeframe_entry")
         if not tf_param:
