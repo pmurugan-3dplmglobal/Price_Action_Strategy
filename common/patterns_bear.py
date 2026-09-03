@@ -411,7 +411,7 @@ def scan_anchor_bcd_breakout_bearish(df_entry, df_anchor, anchor_tf="", entry_tf
 
         entry_candle = df_entry.iloc[d_idx]
         entry_close = float(entry_candle['close'])
-        sl_val = round(a_high + max(0.50, a_high * 0.02), 2)
+        sl_val = det_result.get("SL") if (det_result and det_result.get("SL")) else calculate_sl_buffer(a_high, side="BEAR")
 
         t1, t2, t3 = find_profit_targets_bearish(df_anchor, entry_close, stop_loss=sl_val)
         if not t1 or t1 >= entry_close:
@@ -543,77 +543,6 @@ def scan_anchor_bcd_breakout_bearish(df_entry, df_anchor, anchor_tf="", entry_tf
         best_match["terminal_base"] = term_base
     return best_match
 
-
-
-def scan_trend_continuation_reentry(df_entry, df_anchor):
-    """
-    Setup Page 16 (Bullish Trend Continuation + Re-Entry):
-    1. Context: Established Uptrend (Higher Highs & Higher Lows in preceding window).
-    2. Retest: Price pulls back to prior swing support level.
-    3. Trigger: Bullish Engulfing or Reclaim candle forms at support.
-    4. Execution: Immediate Re-entry on the next candle close (No BCD delay).
-    """
-    if len(df_entry) < 20:
-        return None
-
-    lookback = df_entry.iloc[-25:-2]
-    if lookback.empty or len(lookback) < 10:
-        return None
-
-    mid_point = len(lookback) // 2
-    part1 = lookback.iloc[:mid_point]
-    part2 = lookback.iloc[mid_point:]
-
-    if not (part2['high'].max() > part1['high'].max() and part2['low'].min() > part1['low'].min()):
-        return None
-
-    trigger_candle = df_entry.iloc[-2]
-    current_candle = df_entry.iloc[-1]
-
-    is_green_trigger = float(trigger_candle['close']) > float(trigger_candle['open'])
-    if not is_green_trigger:
-        return None
-
-    support_level = float(part2['low'].min())
-    trigger_low = float(trigger_candle['low'])
-    trigger_close = float(trigger_candle['close'])
-
-    if not (trigger_low <= (support_level * 1.015) and trigger_close >= support_level):
-        return None
-
-    entry_price = float(current_candle['close'])
-    sl_val = round(trigger_low - max(0.50, trigger_low * 0.02), 2)
-
-    if entry_price <= sl_val:
-        return None
-
-    t1, t2, t3 = find_profit_targets(df_anchor, entry_price, stop_loss=sl_val)
-    if t1 is None or t1 <= entry_price:
-        return None
-
-    risk = entry_price - sl_val
-    if risk <= 0 or risk < entry_price * 0.002 or ((t1 - entry_price) / risk) < 1.5:
-        return None
-
-    rr = (t1 - entry_price) / risk
-    return {
-        "Pattern": "TREND_CONT_BULL",
-        "SL": sl_val,
-        "T1": t1,
-        "T2": t2,
-        "T3": t3,
-        "Entry": entry_price,
-        "Close": entry_price,
-        "RR": round(rr, 2),
-        "Signal": "Immediate_ReEntry",
-        "D_time": str(current_candle.get("date", "")),
-        "A_time": str(trigger_candle.get("date", "")),
-        "tier": 3,
-        "tier_label": "TIER_3_MOMENTUM",
-        "tier_badge": "🥉 T3",
-        "swing_waves": 1,
-        "terminal_base": False
-    }
 
 def scan_trend_continuation_reentry_bearish(df_entry, df_anchor):
     """

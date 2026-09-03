@@ -164,34 +164,57 @@ def check_portfolio_risk_caps(engine, symbol, candidate_tier=2, capital=100000.0
             "limit": max_same_sector
         }
 
-    # ── RULE 3: Max Daily Drawdown / Loss Limit ──
+    # ── RULE 3: Max Daily Drawdown / Loss Limit (Realized + Unrealized) ──
     today_str = get_ist_now().strftime("%Y-%m-%d")
     today_realized_loss_inr = 0.0
+    today_unrealized_loss_inr = 0.0
     if include_db_trades:
         all_trades = trade_db.get_all_trades(engine=None)
         for t in all_trades:
             created_at = str(t.get("created_at") or t.get("entry_time") or "")
             exit_time = str(t.get("exit_time") or "")
             status = t.get("status")
-            # Check if trade was closed/completed today
+
+            # Determine correct price basis for INR PnL:
+            # For options, use option_entry/entry_price (the premium paid);
+            # for equities, use entry_spot (the stock price).
+            is_opt = bool(t.get("position_type") == "option" or t.get("lot_size", 1) > 1)
+            if is_opt:
+                price_basis = float(t.get("option_entry") or t.get("entry_price") or t.get("entry_spot") or 0.0)
+            else:
+                price_basis = float(t.get("entry_spot") or t.get("entry_price") or 0.0)
+            lot_sz = int(t.get("lot_size") or 1)
+            pos_sz = int(t.get("position_size") or 1)
+
+            if price_basis <= 0:
+                continue
+
+            # Closed/completed trades today → realized PnL
             if (today_str in created_at or today_str in exit_time) and status in ["COMPLETED", "SL_HIT", "CLOSED", "TARGET_HIT"]:
                 pnl_pct = float(t.get("pnl_percent") or 0.0)
-                entry_spot = float(t.get("entry_spot") or t.get("entry_price") or 0.0)
-                lot_sz = int(t.get("lot_size") or 1)
-                pos_sz = int(t.get("position_size") or 1)
-                # Estimate INR PnL
-                if entry_spot > 0:
-                    trade_inr_pnl = (pnl_pct / 100.0) * entry_spot * lot_sz * pos_sz
-                    today_realized_loss_inr += trade_inr_pnl
+                trade_inr_pnl = (pnl_pct / 100.0) * price_basis * lot_sz * pos_sz
+                today_realized_loss_inr += trade_inr_pnl
 
+            # Active trades opened today → unrealized floating PnL
+            elif today_str in created_at and status == "ACTIVE":
+                current_pnl_pct = float(t.get("pnl_percent") or t.get("current_pnl_pct") or 0.0)
+                if current_pnl_pct < 0:
+                    unrealized_inr = (current_pnl_pct / 100.0) * price_basis * lot_sz * pos_sz
+                    today_unrealized_loss_inr += unrealized_inr
+
+    total_daily_pnl_inr = today_realized_loss_inr + today_unrealized_loss_inr
     cap_val = float(capital or 100000.0)
     max_loss_allowed_inr = -1.0 * (max_daily_loss_pct / 100.0) * cap_val
 
-    if today_realized_loss_inr < max_loss_allowed_inr:
-        reason = f"DAILY_DRAWDOWN_CAP_EXCEEDED (Today PnL: Rs {today_realized_loss_inr:.2f} <= Max Allowed Loss: Rs {max_loss_allowed_inr:.2f} [{-max_daily_loss_pct:.1f}%])"
+    if total_daily_pnl_inr < max_loss_allowed_inr:
+        reason = (f"DAILY_DRAWDOWN_CAP_EXCEEDED (Today Realized: Rs {today_realized_loss_inr:.2f} + "
+                  f"Unrealized: Rs {today_unrealized_loss_inr:.2f} = Rs {total_daily_pnl_inr:.2f} "
+                  f"<= Max Allowed Loss: Rs {max_loss_allowed_inr:.2f} [{-max_daily_loss_pct:.1f}%])")
         return False, reason, {
             "rule": "max_daily_loss_pct",
             "today_realized_pnl_inr": today_realized_loss_inr,
+            "today_unrealized_pnl_inr": today_unrealized_loss_inr,
+            "today_total_pnl_inr": total_daily_pnl_inr,
             "max_loss_limit_inr": max_loss_allowed_inr,
             "capital": cap_val
         }
@@ -201,5 +224,7 @@ def check_portfolio_risk_caps(engine, symbol, candidate_tier=2, capital=100000.0
         "max_concurrent": max_concurrent,
         "candidate_sector": candidate_sector,
         "sector_count": current_sector_count,
-        "today_realized_pnl_inr": today_realized_loss_inr
+        "today_realized_pnl_inr": today_realized_loss_inr,
+        "today_unrealized_pnl_inr": today_unrealized_loss_inr,
+        "today_total_pnl_inr": today_realized_loss_inr + today_unrealized_loss_inr
     }

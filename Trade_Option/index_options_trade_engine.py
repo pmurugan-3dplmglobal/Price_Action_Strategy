@@ -65,8 +65,7 @@ BACKTEST_DATE = None
 ACTIVE_POSITIONS = {}
 position_lock = threading.Lock()
 instrument_dump = None
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-ANCHOR_SCAN_REQUEST_FILE = os.path.join(BASE_DIR, "output", "monitor", "anchor_scan_request.txt")
+ANCHOR_SCAN_REQUEST_FILE = paths.monitor_file("anchor_scan_request.txt")
 LIVE_EXECUTION_FLAG = paths.INDEX_LIVE_FLAG
 SCAN_DISPLAY_FILE = paths.SCAN_DISPLAY_INDEX_FILE
 SL_TARGET_OVERRIDES_FILE = paths.SL_TARGET_OVERRIDES_FILE
@@ -452,6 +451,18 @@ def main_scan_loop(kite):
                                         logging.info(f"[OVERRIDE] Applied SL/T for {target_pos.get('contract', sym)}: SL={target_pos.get('current_sl')} T1={target_pos.get('t1')} T2={target_pos.get('t2')} T3={target_pos.get('t3')}")
                 except Exception as e:
                     logging.warning(f"Override apply failed: {e}")
+            if os.path.exists(ANCHOR_SCAN_REQUEST_FILE):
+                try:
+                    with open(ANCHOR_SCAN_REQUEST_FILE) as f:
+                        engine_req = f.read().strip()
+                    os.remove(ANCHOR_SCAN_REQUEST_FILE)
+                    if engine_req != "index":
+                        logging.info(f"Anchor scan flag not for index, skipping (got {engine_req})")
+                    else:
+                        logging.info(f"Anchor scan requested via flag file (engine: {engine_req})")
+                        run_anchor_scan(kite)
+                except Exception:
+                    pass
             temp_stored_trades = run_scan_cycle(kite)
 
             if temp_stored_trades:

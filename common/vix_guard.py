@@ -108,7 +108,11 @@ def evaluate_vix_regime(kite=None, tier_val=2, config=None, vix_value=None, **kw
     else:
         vix_val = get_india_vix(kite)
 
+    fail_open = bool(vix_cfg.get("fail_open", True))
+
     if vix_val is None or vix_val <= 0:
+        if not fail_open:
+            return False, "VIX_DATA_UNAVAILABLE_BLOCKED (fail_open=False)", None
         # If VIX is unreachable, do not block trading
         return True, "VIX_DATA_UNAVAILABLE_PERMITTED", None
 

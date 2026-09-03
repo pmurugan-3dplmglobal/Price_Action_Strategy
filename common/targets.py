@@ -173,7 +173,10 @@ def calculate_position_size(spot_price, stop_loss, capital=100000.0, risk_percen
             return min(max_lots_risk, max_lots_capital)
         else:
             units = int(max_risk_amount / risk_per_unit)
-            return max(units, 1)
+            # Capital ceiling for Cash Equities: max 100% of capital deployed to a single stock
+            # to prevent runaway leverage when stop-loss is very close to entry.
+            max_units_capital = max(1, int(cap / max(1.0, sp)))
+            return max(1, min(units, max_units_capital))
     except Exception:
         return 1
 

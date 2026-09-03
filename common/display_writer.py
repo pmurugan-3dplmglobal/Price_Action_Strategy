@@ -112,7 +112,7 @@ def write_scan_display_data(staged, active, display_file, engine_name=None):
                 "result": result,
                 "carry_forward": False,
                 "rr": round(rr_num, 2),
-                "candle_a_time": clean_timestamp(ca_time or t.get("entry_time", "")),
+                "candle_a_time": clean_timestamp(ca_time or ""),
                 "timeframe": t.get("timeframe", ""),
                 "candle_tf_time": t.get("candle_tf_time", ""),
                 "benchmark": t.get("benchmark"),
