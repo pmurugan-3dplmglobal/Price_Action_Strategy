@@ -116,6 +116,7 @@ PROGRAMS = {
         "color": "#58a6ff",
         "log_file": INDEX_LOG_FILE,
         "config_fields": {
+            "execution_mode": {"label": "Execution Mode", "type": "select", "options": ["AUTO", "DEBIT_SPREAD", "NAKED_ONLY"], "default": "AUTO"},
             "timeframe_entry": {"label": "Entry Timeframe", "type": "select", "options": ["3minute","5minute","10minute","15minute","30minute","60minute","75min","4hr","day","week"], "default": "3minute"},
             "timeframe_anchor": {"label": "Anchor Timeframe", "type": "select", "options": ["3minute","5minute","10minute","15minute","30minute","60minute","75min","4hr","day","week"], "default": "15minute"},
             "capital": {"label": "Capital", "type": "number", "default": 100000.0},
@@ -133,6 +134,7 @@ PROGRAMS = {
         "color": "#3fb950",
         "log_file": NIFTY50_LOG_FILE,
         "config_fields": {
+            "execution_mode": {"label": "Execution Mode", "type": "select", "options": ["AUTO", "DEBIT_SPREAD", "NAKED_ONLY"], "default": "AUTO"},
             "target_universe": {"label": "Target Universe", "type": "select", "options": ["FNO_ALL", "NIFTY50", "NIFTY_NEXT_100", "NIFTY_MIDCAP_100"], "default": "FNO_ALL"},
             "timeframe_entry": {"label": "Entry Timeframe", "type": "select", "options": ["3minute","5minute","10minute","15minute","30minute","60minute","75min","4hr","day","week"], "default": "15minute"},
             "timeframe_anchor": {"label": "Anchor Timeframe", "type": "select", "options": ["3minute","5minute","10minute","15minute","30minute","60minute","75min","4hr","day","week"], "default": "30minute"},
