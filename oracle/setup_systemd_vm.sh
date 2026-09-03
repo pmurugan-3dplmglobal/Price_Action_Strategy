@@ -10,23 +10,6 @@ fi
 
 echo "Configuring systemd services for $APP_DIR (User: $RUN_USER)..."
 
-API_KEY="$1"
-API_SECRET="$2"
-if [ -n "$API_KEY" ] && [ -n "$API_SECRET" ]; then
-    echo "Enforcing server-specific API credentials for $RUN_USER..."
-    python3 -c "
-import json, os
-p = '$APP_DIR/input/program_config.json'
-if os.path.exists(p):
-    with open(p) as f:
-        d = json.load(f)
-    d['api_key'] = '$API_KEY'
-    d['api_secret'] = '$API_SECRET'
-    with open(p, 'w') as f:
-        json.dump(d, f, indent=2)
-" || true
-fi
-
 if command -v getenforce &> /dev/null && [ "$(getenforce)" != "Disabled" ]; then
     chcon -R -t bin_t "$APP_DIR/venv/bin/" || true
 fi
@@ -39,6 +22,7 @@ After=network.target
 [Service]
 User=$RUN_USER
 WorkingDirectory=$APP_DIR/Trade_Option
+EnvironmentFile=-/etc/trading.env
 Environment=PORT=5050
 Environment=PYTHONUNBUFFERED=1
 ExecStart=$APP_DIR/venv/bin/python $APP_DIR/Trade_Option/app_option_Trade.py
@@ -57,6 +41,7 @@ After=network.target
 [Service]
 User=$RUN_USER
 WorkingDirectory=$APP_DIR/Trade_Stock
+EnvironmentFile=-/etc/trading.env
 Environment=PORT=5051
 Environment=PYTHONUNBUFFERED=1
 ExecStart=$APP_DIR/venv/bin/python $APP_DIR/Trade_Stock/app_Stock_Trade.py
@@ -75,6 +60,7 @@ After=network.target
 [Service]
 User=$RUN_USER
 WorkingDirectory=$APP_DIR
+EnvironmentFile=-/etc/trading.env
 Environment=PYTHONUNBUFFERED=1
 ExecStart=$APP_DIR/venv/bin/python $APP_DIR/Trade_Option/run_export_scheduler_daemon.py
 Restart=always

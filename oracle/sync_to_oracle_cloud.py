@@ -12,16 +12,12 @@ SERVERS = {
         "host": "opc@129.225.69.131",
         "public_ip": "129.225.69.131",
         "remote_dir": "/home/trade/Trade_Kite/Price_Action_Strategy",
-        "api_key": "jgdjmtymfyea4yn4",
-        "api_secret": "gr5mha1oag9rgguetvsx8cgg9xh2id52",
     },
     "poovendan": {
         "name": "Poovendan Oracle Cloud VM",
         "host": "opc@140.245.197.71",
         "public_ip": "140.245.197.71",
         "remote_dir": "/home/opc/Price_Action_Strategy",
-        "api_key": "o8nnw6kxykvrsrhg",
-        "api_secret": "9g7d5kktr38d7yvq11njsm4upz8kc6s1",
     }
 }
 
@@ -51,17 +47,12 @@ def sync_and_deploy(target_key, srv, key_path, tar_p):
         return False
     print(" -> Upload complete.")
 
-    # 2. Extract and Restart on VM (with strict Account Credentials Isolation)
-    print("\n[2/3] Extracting payload and enforcing server credentials on VM...")
-    cmd = (
-        f"cd {srv['remote_dir']} && "
-        f"tar -xzf cloud_sync_payload.tar.gz && "
-        f"rm -f cloud_sync_payload.tar.gz && "
-        f"sudo bash {srv['remote_dir']}/oracle/setup_systemd_vm.sh '{srv['api_key']}' '{srv['api_secret']}'"
-    )
+    # 2. Extract and Restart on VM (loads credentials from /etc/trading.env)
+    print("\n[2/3] Extracting payload and restarting systemd services on VM...")
+    cmd = f"cd {srv['remote_dir']} && tar -xzf cloud_sync_payload.tar.gz && rm -f cloud_sync_payload.tar.gz && sudo bash {srv['remote_dir']}/oracle/setup_systemd_vm.sh"
     res = subprocess.run(["ssh", "-i", key_path, "-o", "StrictHostKeyChecking=no", srv["host"], cmd], capture_output=True, text=True, encoding="utf-8", errors="replace")
     print(res.stdout or res.stderr)
-    print(" -> Services restarted with dedicated account credentials.")
+    print(" -> Services restarted.")
 
     # 3. Launch trading engines via API
     print("\n[3/3] Launching trading engines via API...")
@@ -90,6 +81,21 @@ def package_codebase(tar_p):
             for item in os.listdir(input_dir):
                 if "token" in item.lower():
                     continue  # Never overwrite VM account tokens
+                if item == "program_config.json":
+                    src_cfg = os.path.join(input_dir, item)
+                    try:
+                        with open(src_cfg, "r", encoding="utf-8") as cf:
+                            c_dict = json.load(cf)
+                        c_dict.pop("api_key", None)
+                        c_dict.pop("api_secret", None)
+                        tmp_clean = os.path.join(PROJECT_ROOT, "scratch", "clean_program_config.json")
+                        os.makedirs(os.path.dirname(tmp_clean), exist_ok=True)
+                        with open(tmp_clean, "w", encoding="utf-8") as cf_clean:
+                            json.dump(c_dict, cf_clean, indent=2)
+                        tar.add(tmp_clean, arcname=os.path.join("input", "program_config.json"))
+                    except Exception:
+                        pass
+                    continue
                 item_path = os.path.join(input_dir, item)
                 tar.add(item_path, arcname=os.path.join("input", item))
         
