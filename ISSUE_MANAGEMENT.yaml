@@ -3482,6 +3482,43 @@ issues:
     6. Added account capital ceiling to cash equities in calculate_position_size (max 100% capital).
     7. Removed dead duplicate function from patterns_bear.py and aligned bear breakout SL with calculate_sl_buffer.
     8. Switched ANCHOR_SCAN_REQUEST_FILE to canonical paths.monitor_file and wired on-demand scan flag handling into index options engine.
-    9. Expanded test_vix_portfolio_volume.py to 43 unit tests (100% pass) and verified 17-test master regression suite (100% pass).
+  status: RESOLVED
+- id: ISSUE-081
+  title: Fix Scan Tab Trade Scarcity, Token Resolution, and Timeframe Candle Time Alignment
+  severity: HIGH
+  category: Scanner Discovery, Registry Resolution & UI Data Presentation
+  family: SCANNER_DISCOVERY
+  date_reported: '2026-09-03'
+  symptom: '1. Scan Tab displayed very few or zero trades when running stock reversal scans.
+    2. Scanner crashed mid-scan with TypeError: ''>'' not supported between instances of ''NoneType'' and ''int'' when evaluating check_portfolio_risk_caps on existing trades with lot_size=None.
+    3. Option contract tokens from NFO cache polluted STOCK_REGISTRY for non-Nifty50 symbols (Midcap/Smallcap), causing cash equity scanners to fetch option candles with distorted prices and low option volumes.
+    4. is_liquid_cash_stock rejected 100% of stocks on intraday timeframes (15m, 30m, 1hr) and high-value equities (DIXON, OFSS) on daily charts due to unscaled volume and turnover thresholds.
+    5. Raw string comparison between candle_a_time and swing_meta["terminal_date"] erroneously discarded valid Anchor A setups that formed on the exact same date as the terminal swing base.
+    6. stock_reversal_scanner.py assigned Anchor A time to both entry_time and candle_a_time, discarding actual Point D entry breakout times.
+    7. formatTimestamp in UI dashboards forcibly returned "09:15" for daily/weekly candles (00:00:00) instead of displaying the actual date/candle time of the timeframe set while scanning.
+    '
+  root_cause: 'Token pollution in _populate_stock_registry_from_cache, static daily volume filters applied to intraday bars, un-normalized string date comparisons in terminal swing filters, variable mixup between Point A and Point D in scanner display formatting, and hardcoded 09:15 override in UI formatTimestamp.
+    '
+  affected_files:
+  - common/portfolio_risk.py
+  - common/registries.py
+  - common/equity_universe.py
+  - common/patterns_bull.py
+  - common/patterns_bear.py
+  - common/resolve.py
+  - Trade_Stock/stock_reversal_scanner.py
+  - Trade_Stock/templates/index.html
+  - Trade_Option/templates/index.html
+  - scratch/test_vix_portfolio_volume.py
+  - ISSUE_MANAGEMENT.yaml
+  resolution: '1. Handled None lot_size in check_portfolio_risk_caps in portfolio_risk.py, resolving TypeError.
+    2. Initialized non-Nifty50 tokens to 0 in _populate_stock_registry_from_cache so equity scanners resolve valid NSE cash tokens from instrument master rather than NFO option contracts.
+    3. Made is_liquid_cash_stock timeframe-aware: dynamically scales 20-period volume by candles_per_day and uses realistic 2.0 Cr turnover / 100k volume bounds.
+    4. Normalized timestamps with clean_timestamp()[:10] in stock_reversal_scanner.py and resolve.py so same-day terminal base setups are retained.
+    5. Mapped entry_time to CandleTime/D_time and candle_a_time to CandleATime/A_time in stock_reversal_scanner.py.
+    6. Added CandleTime and CandleATime aliases to scan_trend_continuation_reentry in patterns_bull.py and patterns_bear.py.
+    7. Updated formatTimestamp in Option and Stock UI templates to display proper date without forcing 09:15 for Daily/Weekly candles, while retaining exact candle timestamps for intraday timeframes.
+    8. Unit test suite expanded to 47 tests (100% pass) and master regression test suite verified 17/17 passed (100%).
     '
   status: RESOLVED
+

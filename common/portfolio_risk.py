@@ -178,7 +178,9 @@ def check_portfolio_risk_caps(engine, symbol, candidate_tier=2, capital=100000.0
             # Determine correct price basis for INR PnL:
             # For options, use option_entry/entry_price (the premium paid);
             # for equities, use entry_spot (the stock price).
-            is_opt = bool(t.get("position_type") == "option" or t.get("lot_size", 1) > 1)
+            lot_sz_raw = t.get("lot_size")
+            lot_sz = int(lot_sz_raw) if (lot_sz_raw is not None and str(lot_sz_raw).isdigit()) else 1
+            is_opt = bool(t.get("position_type") == "option" or lot_sz > 1)
             if is_opt:
                 price_basis = float(t.get("option_entry") or t.get("entry_price") or t.get("entry_spot") or 0.0)
             else:

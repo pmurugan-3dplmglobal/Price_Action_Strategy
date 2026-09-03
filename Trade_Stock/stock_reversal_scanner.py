@@ -231,7 +231,7 @@ def run_scan(kite):
                 with results_lock:
                     results.append({"Symbol": symbol, "Pattern": "NO_DATA"})
                 continue
-            if TARGET_INDEX != "NIFTY50" and not is_liquid_cash_stock(df_e):
+            if TARGET_INDEX != "NIFTY50" and not is_liquid_cash_stock(df_e, timeframe=TIMEFRAME_ENTRY):
                 logging.info(f"Skipping {symbol} - failed cash liquidity shield (low volume/turnover)")
                 with results_lock:
                     results.append({"Symbol": symbol, "Pattern": "ILLIQUID_SKIPPED"})
@@ -265,8 +265,10 @@ def run_scan(kite):
                     candle_a_time = clean_timestamp(result.get("CandleATime") or result.get("CandleTime") or "")
                     # Enforce Anchor A occurs at or after the 4th/terminal swing base
                     if ENABLE_SWING_FILTER and swing_meta.get("terminal_date") and candle_a_time:
-                        if str(candle_a_time) < str(swing_meta["terminal_date"]):
-                            logging.info(f"Skipping {symbol} - Anchor A ({candle_a_time}) preceded terminal swing base ({swing_meta['terminal_date']})")
+                        a_dt_str = clean_timestamp(candle_a_time)
+                        term_dt_str = clean_timestamp(swing_meta["terminal_date"])
+                        if a_dt_str and term_dt_str and a_dt_str[:10] < term_dt_str[:10]:
+                            logging.info(f"Skipping {symbol} - Anchor A ({a_dt_str}) preceded terminal swing base ({term_dt_str})")
                             continue
 
                     # ── Resolve effective tier from swing metadata (populated before scanner call) ──
@@ -330,8 +332,8 @@ def run_scan(kite):
                             "anchor_tf": r.get("anchor_tf", TIMEFRAME_ANCHOR),
                             "entry_tf": r.get("entry_tf", TIMEFRAME_ENTRY),
                             "side": PROFILE["display_side"],
-                            "entry_time": clean_timestamp(r.get("CandleATime") or r.get("CandleTime")),
-                            "candle_a_time": clean_timestamp(r.get("CandleATime") or r.get("CandleTime")),
+                            "entry_time": clean_timestamp(r.get("CandleTime") or r.get("D_time") or ""),
+                            "candle_a_time": clean_timestamp(r.get("CandleATime") or r.get("A_time") or ""),
                             "swing_waves": r.get("swing_waves", 0),
                             "terminal_base": r.get("terminal_base", False)
                         } for r in all_disp if r.get("Symbol") or r.get("symbol")]
@@ -344,7 +346,6 @@ def run_scan(kite):
     formed_display = []
     for r in results:
         if r.get("Pattern") and r.get("Pattern") not in ["NO_MATCH", "ERROR", "NO_DATA", "NO_TOKEN", "ILLIQUID_SKIPPED", "SWING_FILTER_SKIPPED"] and r.get("T1") is not None:
-            c_time = clean_timestamp(r.get("CandleATime") or r.get("CandleTime") or r.get("Scan_Date"))
             formed_display.append({
                 "symbol": r.get("Symbol"),
                 "contract": r.get("Symbol"),
@@ -360,8 +361,8 @@ def run_scan(kite):
                 "anchor_tf": r.get("anchor_tf", TIMEFRAME_ANCHOR),
                 "entry_tf": r.get("entry_tf", TIMEFRAME_ENTRY),
                 "side": PROFILE["display_side"],
-                "entry_time": c_time,
-                "candle_a_time": c_time,
+                "entry_time": clean_timestamp(r.get("CandleTime") or r.get("D_time") or r.get("Scan_Date") or ""),
+                "candle_a_time": clean_timestamp(r.get("CandleATime") or r.get("A_time") or ""),
                 "swing_waves": r.get("swing_waves", 0),
                 "terminal_base": r.get("terminal_base", False),
                 "tier": r.get("tier", 2),

@@ -122,18 +122,17 @@ def _populate_stock_registry_from_cache():
                     if sym in index_names:
                         continue
                     lot = int(group.iloc[0]['lot_size']) if 'lot_size' in group.columns else 1
-                    tok = int(group.iloc[0]['instrument_token']) if 'instrument_token' in group.columns else 0
                     strikes = sorted(group['strike'].dropna().unique()) if 'strike' in group.columns else []
                     if len(strikes) >= 2:
                         diffs = [round(float(strikes[i+1] - strikes[i]), 2) for i in range(min(10, len(strikes)-1)) if strikes[i+1] > strikes[i]]
                         step = float(min(diffs)) if diffs else 10.0
                     else:
                         step = 10.0
+                    # Note: Do NOT store NFO option contract token as the stock equity token!
+                    # Token must be resolved from NSE cash equity instrument master.
                     if sym not in STOCK_REGISTRY:
-                        STOCK_REGISTRY[sym] = {"token": tok, "lot_size": lot, "strike_step": step}
+                        STOCK_REGISTRY[sym] = {"token": 0, "lot_size": lot, "strike_step": step}
                     else:
-                        if tok > 0 and STOCK_REGISTRY[sym].get("token", 0) == 0:
-                            STOCK_REGISTRY[sym]["token"] = tok
                         STOCK_REGISTRY[sym]["lot_size"] = lot
                         if "strike_step" not in STOCK_REGISTRY[sym] or not STOCK_REGISTRY[sym]["strike_step"]:
                             STOCK_REGISTRY[sym]["strike_step"] = step

@@ -130,19 +130,40 @@ def get_universe_symbols_and_tokens(kite=None, target_index_name="NIFTY50"):
 #  LIQUIDITY & TURNOVER SHIELD
 # ──────────────────────────────────────────────
 
-def is_liquid_cash_stock(df, min_volume=500000, min_turnover_cr=10.0):
+def is_liquid_cash_stock(df, min_volume=100000, min_turnover_cr=2.0, timeframe="day"):
     """
     Evaluates whether a cash stock meets minimum daily volume and turnover shields
     to prevent illiquid slippage or low-cap trap setups.
+    Adapts thresholds based on timeframe (intraday bars have fractional volume of daily).
     """
     if df is None or df.empty or len(df) < 5:
         return False
     try:
         avg_vol = float(df['volume'].tail(20).mean()) if 'volume' in df.columns else 0
         avg_close = float(df['close'].tail(20).mean()) if 'close' in df.columns else 0
-        turnover_cr = (avg_vol * avg_close) / 10_000_000.0
         
-        if avg_vol < min_volume and turnover_cr < min_turnover_cr:
+        tf_s = str(timeframe or "day").lower()
+        if "15m" in tf_s:
+            candles_per_day = 25.0
+        elif "30m" in tf_s:
+            candles_per_day = 13.0
+        elif "60m" in tf_s or "1h" in tf_s:
+            candles_per_day = 6.25
+        elif "75m" in tf_s:
+            candles_per_day = 5.0
+        elif "3m" in tf_s:
+            candles_per_day = 125.0
+        elif "5m" in tf_s:
+            candles_per_day = 75.0
+        elif "week" in tf_s:
+            candles_per_day = 0.2
+        else:
+            candles_per_day = 1.0
+
+        daily_vol_est = avg_vol * candles_per_day
+        daily_turnover_cr = (daily_vol_est * avg_close) / 10_000_000.0
+        
+        if daily_vol_est < min_volume and daily_turnover_cr < min_turnover_cr:
             return False
         return True
     except Exception as e:

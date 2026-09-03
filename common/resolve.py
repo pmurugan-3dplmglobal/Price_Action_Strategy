@@ -1266,8 +1266,10 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                         candle_time = str(result_ce.get("CandleTime") or df_ce_e.iloc[-1]['date'])
                         candle_a_time = str(result_ce.get("CandleATime", ""))
                         if enable_swing and swing_meta_ce["terminal_date"] and candle_a_time:
-                            if str(candle_a_time) < str(swing_meta_ce["terminal_date"]):
-                                logging.info(f"CE SKIP {ce['tradingsymbol']}: Anchor A ({candle_a_time}) preceded terminal swing base ({swing_meta_ce['terminal_date']})")
+                            a_dt_str = clean_timestamp(candle_a_time)
+                            term_dt_str = clean_timestamp(swing_meta_ce["terminal_date"])
+                            if a_dt_str and term_dt_str and a_dt_str[:10] < term_dt_str[:10]:
+                                logging.info(f"CE SKIP {ce['tradingsymbol']}: Anchor A ({a_dt_str}) preceded terminal swing base ({term_dt_str})")
                                 continue
 
                         if result_ce["Close"] < 300 and result_ce["T1"] > result_ce["Close"] * 5:
@@ -1322,8 +1324,10 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                         candle_time = str(result_pe.get("CandleTime") or df_pe_e.iloc[-1]['date'])
                         candle_a_time = str(result_pe.get("CandleATime", ""))
                         if enable_swing and swing_meta_pe["terminal_date"] and candle_a_time:
-                            if str(candle_a_time) < str(swing_meta_pe["terminal_date"]):
-                                logging.info(f"PE SKIP {pe['tradingsymbol']}: Anchor A ({candle_a_time}) preceded terminal swing base ({swing_meta_pe['terminal_date']})")
+                            a_dt_str = clean_timestamp(candle_a_time)
+                            term_dt_str = clean_timestamp(swing_meta_pe["terminal_date"])
+                            if a_dt_str and term_dt_str and a_dt_str[:10] < term_dt_str[:10]:
+                                logging.info(f"PE SKIP {pe['tradingsymbol']}: Anchor A ({a_dt_str}) preceded terminal swing base ({term_dt_str})")
                                 continue
 
                         if result_pe["Close"] < 300 and result_pe["T1"] > result_pe["Close"] * 5:

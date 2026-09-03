@@ -677,6 +677,8 @@ def scan_trend_continuation_reentry(df_entry, df_anchor):
         "Close": entry_price,
         "RR": round(rr, 2),
         "Signal": "Immediate_ReEntry",
+        "CandleTime": str(current_candle.get("date", "")),
+        "CandleATime": str(trigger_candle.get("date", "")),
         "D_time": str(current_candle.get("date", "")),
         "A_time": str(trigger_candle.get("date", "")),
         "tier": 3,

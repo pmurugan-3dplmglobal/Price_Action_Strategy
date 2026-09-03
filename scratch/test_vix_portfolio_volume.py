@@ -393,6 +393,43 @@ test("Portfolio risk details include unrealized PnL key", "today_unrealized_pnl_
 test("Portfolio risk details include total PnL key", "today_total_pnl_inr" in p_details_dd)
 
 
+# ──────────────────────────────────────────────
+#  TEST 12: TIMEFRAME-AWARE LIQUIDITY SHIELD & CANDLE TIME INVARIANTS
+# ──────────────────────────────────────────────
+print("\n[TEST 12] Testing Timeframe-Aware Liquidity Shield & Candle Time Invariants...")
+from equity_universe import is_liquid_cash_stock
+from display_writer import clean_timestamp
+
+# 1. High price stock (e.g. DIXON at Rs 14000, 150k daily volume -> Rs 21 Cr daily turnover)
+df_dixon_daily = pd.DataFrame({
+    "date": pd.date_range("2026-08-01", periods=25, freq="D"),
+    "open": [14000.0] * 25, "high": [14100.0] * 25, "low": [13900.0] * 25,
+    "close": [14000.0] * 25, "volume": [150000] * 25
+})
+test("Liquid midcap stock with high price passes daily liquidity shield", is_liquid_cash_stock(df_dixon_daily, timeframe="day"))
+
+# 2. Intraday 15min chart where each bar has 10k shares (25 bars * 10k = 250k daily equivalent)
+df_intraday_15m = pd.DataFrame({
+    "date": pd.date_range("2026-09-01 09:15", periods=25, freq="15min"),
+    "open": [500.0] * 25, "high": [505.0] * 25, "low": [498.0] * 25,
+    "close": [500.0] * 25, "volume": [10000] * 25
+})
+test("Intraday 15min chart adapts volume threshold to daily equivalent", is_liquid_cash_stock(df_intraday_15m, timeframe="15min"))
+
+# 3. Penny illiquid stock (Rs 10, 2000 volume -> Rs 20,000 turnover)
+df_illiquid = pd.DataFrame({
+    "date": pd.date_range("2026-08-01", periods=25, freq="D"),
+    "open": [10.0] * 25, "high": [10.2] * 25, "low": [9.8] * 25,
+    "close": [10.0] * 25, "volume": [2000] * 25
+})
+test("Illiquid penny stock is safely blocked by liquidity shield", not is_liquid_cash_stock(df_illiquid, timeframe="day"))
+
+# 4. Normalized timestamp calendar date comparison
+same_day_anchor = clean_timestamp("2026-08-17 00:00")
+same_day_terminal = clean_timestamp("2026-08-17 00:00:00+05:30")
+test("Normalized same-day terminal swing base is NOT skipped", not (same_day_anchor[:10] < same_day_terminal[:10]))
+
+
 print("\n" + "=" * 80)
 print(f"  FINAL TEST SUMMARY: {passed} PASSED, {failed} FAILED")
 print("=" * 80)

@@ -618,8 +618,13 @@
                     let p = s.split(' ');
                     let dp = p[0] ? p[0].split('-') : [];
                     let tp = p[1] ? p[1].split(':') : [];
-                    if (dp.length === 3 && tp.length >= 2) {
+                    if (dp.length === 3) {
                         let dateStr = dp[0].length === 4 ? `${dp[2]}-${dp[1]}-${dp[0].slice(-2)}` : `${dp[0]}-${dp[1]}-${dp[2].slice(-2)}`;
+                        let tfStr = String(t.timeframe || t.entry_tf || '').toLowerCase();
+                        let isDailyOrWeekly = tfStr === 'day' || tfStr === 'week' || tfStr === '1d' || tfStr === '1w' || tfStr.includes('day') || tfStr.includes('week');
+                        if (tp.length < 2 || (parseInt(tp[0] || '0', 10) === 0 && parseInt(tp[1] || '0', 10) === 0) || isDailyOrWeekly) {
+                            return dateStr;
+                        }
                         let hr = parseInt(tp[0], 10);
                         let min = parseInt(tp[1], 10);
                         if (hr >= 16 || hr < 9 || (hr === 15 && min > 30)) {
