@@ -968,6 +968,8 @@
                         benchmark: dbMatch ? (dbMatch.benchmark || 0) : (kp.benchmark || 0),
                         anchor_floor: dbMatch ? (dbMatch.anchor_floor || 0) : (kp.anchor_floor || 0),
                         direction: dbMatch ? (dbMatch.direction || 'BULL') : (kp.direction || 'BULL'),
+                        spread_type: dbMatch ? (dbMatch.spread_type || (dbMatch.position_type === 'option_spread' ? 'SPREAD' : '')) : '',
+                        leg2_contract: dbMatch ? (dbMatch.leg2_contract || '') : '',
                         status: 'ACTIVE',
                         source: 'kite'
                     };
@@ -1012,6 +1014,8 @@
                     benchmark: t.benchmark || 0,
                     anchor_floor: t.anchor_floor || 0,
                     direction: t.direction || 'BULL',
+                    spread_type: t.spread_type || (t.position_type === 'option_spread' ? 'SPREAD' : ''),
+                    leg2_contract: t.leg2_contract || '',
                     source: 'db'
                 });
             });
@@ -1086,7 +1090,8 @@
                             actCell = `<td></td>`;
                         }
                     }
-                    posHtml += `<tr><td><strong>${t.symbol}</strong></td><td>${t.source}</td><td><span class="badge badge-open">${t.pattern||''}</span></td>${entryCell}${slCell}${t1Cell}${t2Cell}${t3Cell}<td>${displayLtp || '-'}</td><td>${qty}</td><td><span class="badge ${badge}">${stLabel}</span></td><td>${pnlStr !== '' ? `<span class="badge ${pnlBadge}">${pnlStr}</span>` : '-'}</td>${chartCellPos}${actCell}</tr>`;
+                    const spreadBadge = t.spread_type ? `<span class="badge" style="background:#8957e5;color:#fff;font-size:9px;padding:1px 4px;border-radius:3px;margin-left:4px;" title="Hedge Leg: ${t.leg2_contract || 'Active'}">🛡️ SPREAD</span>` : '';
+                    posHtml += `<tr><td><strong>${t.symbol}</strong>${spreadBadge}</td><td>${t.source}</td><td><span class="badge badge-open">${t.pattern||''}</span></td>${entryCell}${slCell}${t1Cell}${t2Cell}${t3Cell}<td>${displayLtp || '-'}</td><td>${qty}</td><td><span class="badge ${badge}">${stLabel}</span></td><td>${pnlStr !== '' ? `<span class="badge ${pnlBadge}">${pnlStr}</span>` : '-'}</td>${chartCellPos}${actCell}</tr>`;
                 });
                 posHtml += '</tbody></table></div>';
             } else {
