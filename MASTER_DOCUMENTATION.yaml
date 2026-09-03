@@ -227,6 +227,9 @@ backtest_suite:
 
     risk_management:
       check_interval: "Every 5 seconds / WebSocket heartbeat daemon"
+      portfolio_risk_drawdown: "Max Daily Drawdown evaluates combined realized loss + active unrealized floating loss across all positions against -3.0% capital threshold."
+      cash_equity_capital_cap: "Cash equity position sizing strictly caps units to 100% of available capital to eliminate excessive leverage exposure on micro stop losses."
+      vix_regime_governance: "India VIX regime gates entries: Normal (<=20.0) permits all tiers, Elevated (20-25) permits Tier 1 Gold only, Extreme (>25.0) halts all new entries. Supports configurable fail_open policy."
       friday_eod_index_squareoff: "On Fridays (weekday == 4) at 15:15 IST, all short-timeframe (<= 5m) or Index option positions are automatically squared off (EXIT_EOD_FRIDAY) to eliminate 2-day weekend theta decay and Monday opening gap risk."
       expiry_rollover_protection: "Stock options in monthly expiry week (days_rem <= 6) automatically roll over to the next monthly series (expiries[1]) to eliminate terminal gamma/theta risk. Index options preserve active weekly near-expiry."
       stale_outlier_entry_guard: "Positions with >300% divergence between entry_spot and live LTP (or manual overrides) are protected from false immediate Emergency Hard SL triggers."

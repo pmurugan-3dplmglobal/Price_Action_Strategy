@@ -356,6 +356,43 @@ if res_bear_norm:
     test("Bearish scanner calculates valid RR (>= 1.5)", res_bear_norm.get("RR", 0) >= 1.5)
 
 
+# ──────────────────────────────────────────────
+#  TEST 9: CASH EQUITY CAPITAL CEILING ON TIGHT SL
+# ──────────────────────────────────────────────
+print("\n[TEST 9] Testing Cash Equity Capital Ceiling on Micro SL...")
+# Spot = Rs 2500, SL = Rs 2499.90 (0.10 pt risk), Capital = Rs 100,000, 1% risk (Rs 1,000 max risk)
+# Without cap: 1000 / 0.10 = 10,000 shares (Rs 2.5 Crore exposure)
+# With cap: 100,000 / 2500 = 40 shares (Rs 100,000 exposure)
+tight_sl_size = calculate_position_size(spot_price=2500, stop_loss=2499.90, capital=100000.0, risk_percent=1.0, is_option=False)
+test("Cash equity sizing caps at account capital (40 shares, not 10,000)", tight_sl_size == 40)
+
+# ──────────────────────────────────────────────
+#  TEST 10: VIX GUARD CONFIGURABLE FAIL-OPEN POLICY
+# ──────────────────────────────────────────────
+print("\n[TEST 10] Testing VIX Guard Configurable fail_open Policy...")
+# When vix is None and fail_open=True (default): permitted
+vix_ok_default, _, _ = evaluate_vix_regime(kite=None, vix_value=None, config={"fail_open": True})
+test("VIX guard permits when data unavailable and fail_open=True", vix_ok_default is True)
+
+# When vix is None and fail_open=False: blocked
+vix_ok_strict, _, _ = evaluate_vix_regime(kite=None, vix_value=None, config={"fail_open": False})
+test("VIX guard blocks when data unavailable and fail_open=False", vix_ok_strict is False)
+
+# ──────────────────────────────────────────────
+#  TEST 11: PORTFOLIO RISK REALIZED + UNREALIZED LOSS
+# ──────────────────────────────────────────────
+print("\n[TEST 11] Testing Portfolio Risk Realized + Unrealized Drawdown...")
+# Verify check_portfolio_risk_caps returns total_pnl including unrealized
+p_ok_dd, p_msg_dd, p_details_dd = check_portfolio_risk_caps(
+    engine="nifty50",
+    symbol="INFY",
+    capital=100000.0,
+    include_db_trades=False
+)
+test("Portfolio risk details include unrealized PnL key", "today_unrealized_pnl_inr" in p_details_dd)
+test("Portfolio risk details include total PnL key", "today_total_pnl_inr" in p_details_dd)
+
+
 print("\n" + "=" * 80)
 print(f"  FINAL TEST SUMMARY: {passed} PASSED, {failed} FAILED")
 print("=" * 80)

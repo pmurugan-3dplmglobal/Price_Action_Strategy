@@ -3447,3 +3447,41 @@ issues:
     4. Verified across all 17 regression tests with 100% pass rate.
     '
   status: RESOLVED
+- id: ISSUE-080
+  title: Comprehensive Expert Codebase Audit & Execution Pipeline Bug Fixes (P0-P3)
+  severity: HIGH
+  category: Execution Pipeline, Risk Management & Code Integrity
+  family: ZERO_REGRESSION_AUDIT
+  date_reported: '2026-09-03'
+  symptom: '1. Live auto-execution in stock_options_trade_engine.py and index_options_trade_engine.py threw NameError: name ''load_config'' is not defined on valid setup triggers.
+    2. Orphaned position recovery in stock_options_trade_engine.py crashed on missing calculate_sl_buffer import.
+    3. Bear scanner fallback crashed on missing a_idx variable when date column was absent.
+    4. Stock reversal scanner evaluated VIX and portfolio risk checks with tier defaulting to 2 before swing metadata was merged.
+    5. Portfolio risk daily drawdown check only aggregated closed trades, ignoring floating unrealized losses on open positions, and used underlying spot price instead of option premium for option PnL.
+    6. Cash equity position sizing was uncapped by account capital, allowing micro-tight stop losses to calculate runaway leverage exposure.
+    7. Dead duplicate bullish function in patterns_bear.py with broken import.
+    8. ANCHOR_SCAN_REQUEST_FILE used local CWD-relative path in option engines instead of canonical paths.monitor_file.
+    '
+  root_cause: 'Accumulated drift across decompressed modules and missing imports in auto-execution and risk evaluation pipelines.
+    '
+  affected_files:
+  - Trade_Option/stock_options_trade_engine.py
+  - Trade_Option/index_options_trade_engine.py
+  - Trade_Stock/stock_reversal_scanner.py
+  - common/patterns_bear.py
+  - common/portfolio_risk.py
+  - common/targets.py
+  - common/vix_guard.py
+  - scratch/test_vix_portfolio_volume.py
+  - ISSUE_MANAGEMENT.yaml
+  resolution: '1. Replaced load_config() with canonical load_program_config_for_engine in both options engines.
+    2. Added calculate_sl_buffer to stock_options_trade_engine.py imports.
+    3. Fixed a_idx -> anchor_idx in patterns_bear.py.
+    4. Resolved effective_tier from swing_meta before VIX/portfolio risk checks in stock_reversal_scanner.py.
+    5. Enhanced check_portfolio_risk_caps to compute realized + active unrealized floating drawdown and use option premium basis for option trades.
+    6. Added account capital ceiling to cash equities in calculate_position_size (max 100% capital).
+    7. Removed dead duplicate function from patterns_bear.py and aligned bear breakout SL with calculate_sl_buffer.
+    8. Switched ANCHOR_SCAN_REQUEST_FILE to canonical paths.monitor_file and wired on-demand scan flag handling into index options engine.
+    9. Expanded test_vix_portfolio_volume.py to 43 unit tests (100% pass) and verified 17-test master regression suite (100% pass).
+    '
+  status: RESOLVED
