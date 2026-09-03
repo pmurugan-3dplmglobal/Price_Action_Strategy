@@ -12,6 +12,7 @@ from trading_core import (
     scan_anchor_bcd_breakout_generic,
     find_profit_targets,
     find_profit_targets_bearish,
+    get_ist_now,
     STOCK_REGISTRY,
     INDEX_REGISTRY
 )
@@ -66,8 +67,8 @@ def evaluate_spot_trend_and_t1(kite, underlying_symbol, timeframe="day"):
         if not token:
             return "UNKNOWN", "N/A"
 
-        from_date = (dt.now() - timedelta(days=365)).strftime("%Y-%m-%d")
-        to_date = dt.now().strftime("%Y-%m-%d")
+        from_date = (get_ist_now(naive=True) - timedelta(days=365)).strftime("%Y-%m-%d")
+        to_date = get_ist_now(naive=True).strftime("%Y-%m-%d")
         
         df_raw = fetch_and_resample_candles(kite, token, from_date, to_date, timeframe)
         if df_raw is None or df_raw.empty:

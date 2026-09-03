@@ -8,6 +8,7 @@ import json
 import logging
 from datetime import datetime as dt
 import paths
+from timeframe_utils import get_ist_now
 from position_monitor import contract_is_expired
 
 def clean_timestamp(ts):
@@ -30,8 +31,8 @@ def clean_timestamp(ts):
 
 def write_scan_display_data(staged, active, display_file, engine_name=None):
     try:
-        now_str = dt.now().strftime("%Y-%m-%d %H:%M:%S")
-        today = dt.now().strftime("%Y-%m-%d")
+        now_str = get_ist_now().strftime("%Y-%m-%d %H:%M:%S")
+        today = get_ist_now().strftime("%Y-%m-%d")
         import trade_db
         db_trades = trade_db.get_all_trades(engine_name) if engine_name else []
         db_map = {}

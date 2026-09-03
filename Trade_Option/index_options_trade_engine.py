@@ -21,6 +21,8 @@ from trading_core import (
     fetch_and_resample_candles,
     log_to_journal,
     is_market_open,
+    get_ist_date,
+    get_ist_now,
     scan_anchor_bcd_breakout,
     scan_trend_continuation_reentry,
     find_anchor_bullish_engulfing,
@@ -122,7 +124,7 @@ def resolve_option_contract(base_symbol, spot_price, step_size, option_type, exp
         if df.empty:
             return None
         df['expiry'] = pd.to_datetime(df['expiry']).dt.date
-        df = df[df['expiry'] >= dt.now().date()].sort_values(by='expiry')
+        df = df[df['expiry'] >= get_ist_date()].sort_values(by='expiry')
         if df.empty:
             return None
         expiries = df['expiry'].unique()

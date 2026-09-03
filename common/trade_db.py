@@ -19,6 +19,7 @@ import threading
 from datetime import datetime, datetime as dt
 
 import paths
+from timeframe_utils import get_ist_now
 
 # ── SQLite database path ──
 _DB_PATH = os.path.join(os.path.dirname(paths.TRADES_DB), "trades.sqlite3")
@@ -515,7 +516,7 @@ def reconcile_broker_live_positions(kite):
         return 0
 
     reconciled = 0
-    now_str = dt.now().strftime("%Y-%m-%d %H:%M:%S")
+    now_str = get_ist_now().strftime("%Y-%m-%d %H:%M:%S")
     for t in get_active_trades():
         contract = _normalize_contract(t.get("contract") or t.get("symbol"))
         if not contract:

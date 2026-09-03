@@ -22,16 +22,26 @@ LOOKBACK_LIMITS = {
     "week": 2000, "w": 2000, "1w": 2000, "weekly": 2000
 }
 
-def get_ist_now():
+def get_ist_now(naive=False):
     """Return timezone-aware or localized current datetime in Indian Standard Time (IST, UTC+05:30).
     Ensures correct market hour and timing calculations whether running locally or on UTC cloud servers.
+    If naive=True, returns timezone-naive datetime representing IST wall-clock time.
     """
     try:
         import pytz
-        return dt.now(pytz.timezone('Asia/Kolkata'))
+        now_ist = dt.now(pytz.timezone('Asia/Kolkata'))
     except Exception:
         from datetime import timezone
-        return dt.now(timezone(timedelta(hours=5, minutes=30)))
+        now_ist = dt.now(timezone(timedelta(hours=5, minutes=30)))
+    return now_ist.replace(tzinfo=None) if naive else now_ist
+
+def get_ist_date():
+    """Return current date in Indian Standard Time (IST)."""
+    return get_ist_now().date()
+
+def get_ist_time():
+    """Return current time of day in Indian Standard Time (IST)."""
+    return get_ist_now().time()
 
 def get_next_candle_start_time(candle_date, timeframe_str):
     try:

@@ -22,6 +22,8 @@ from trading_core import (
     fetch_and_resample_candles,
     log_to_journal,
     is_market_open,
+    get_ist_date,
+    get_ist_now,
     calculate_position_size,
     scan_anchor_bcd_breakout,
     scan_trend_continuation_reentry,
@@ -183,7 +185,7 @@ def resolve_option_contract(symbol, spot, step, opt_type, target_strike=None):
                 sel = m.loc[idx]
             else:
                 sub['expiry_dt'] = pd.to_datetime(sub['expiry']).dt.date
-                today = dt.now().date()
+                today = get_ist_date()
                 future = sub[sub['expiry_dt'] >= today].sort_values(by='expiry_dt')
                 if not future.empty:
                     expiries = future['expiry_dt'].unique()

@@ -16,7 +16,7 @@ import threading
 from datetime import datetime as dt, timedelta, time as datetime_time
 import pandas as pd
 import paths
-from timeframe_utils import fetch_and_resample_candles, get_ist_now
+from timeframe_utils import fetch_and_resample_candles, get_ist_now, get_ist_date, get_ist_time
 
 NFO_CACHE_FILE = paths.NFO_CACHE_FILE
 EXECUTED_EXITS_FILE = paths.EXECUTED_EXITS_FILE
@@ -82,7 +82,7 @@ def contract_is_expired(contract):
             if not row.empty:
                 exp_str = str(row.iloc[0]['expiry'])
                 exp_date = pd.to_datetime(exp_str).date()
-                return exp_date < dt.now().date()
+                return exp_date < get_ist_date()
     except Exception as e:
         logging.warning(f"Expiry cache lookup failed for {c}: {e}")
     # Check standard monthly contract pattern (e.g. RELIANCE26AUG1340PE)
@@ -92,7 +92,7 @@ def contract_is_expired(contract):
         yy = int("20" + m_mon.group(1))
         mon_str = m_mon.group(2)
         month_num = _MONTH_MAP[mon_str]
-        today = dt.now().date()
+        today = get_ist_date()
         if yy < today.year:
             return True
         if yy == today.year and month_num < today.month:
@@ -122,7 +122,7 @@ def contract_is_expired(contract):
                 if 1 <= mm <= 12 and 1 <= dd <= 31:
                     try:
                         exp_date = dt.strptime("20%02d-%02d-%02d" % (yy, mm, dd), "%Y-%m-%d").date()
-                        return exp_date < dt.now().date()
+                        return exp_date < get_ist_date()
                     except Exception:
                         continue
     return False
@@ -659,8 +659,8 @@ def sanitize_entry_time(pos, now_ts=None):
 def monitor_active_positions(kite, registry, positions_dict, lock, product_type, engine_name,
                               timeframe_entry, trade_db, log_fn, save_state_fn=None,
                               live=True):
-    from_date = (dt.now() - timedelta(days=2)).strftime("%Y-%m-%d")
-    to_date = dt.now().strftime("%Y-%m-%d")
+    from_date = (get_ist_now(naive=True) - timedelta(days=2)).strftime("%Y-%m-%d")
+    to_date = get_ist_now(naive=True).strftime("%Y-%m-%d")
     to_clear = []
 
     # Load sl_mode from program config if available ("hybrid", "candle_close", or "tick_ltp")

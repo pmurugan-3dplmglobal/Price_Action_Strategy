@@ -475,7 +475,7 @@ def refresh_data(single_run=False):
                 scan_lines, anchors, abc_matches = parse_scans_for_program(log_lines, pid)
                 cached_data["scans"][pid] = scan_lines
                 cached_data["scan_summary"][pid] = {"anchors": anchors, "abc_matches": abc_matches}
-            now_ist = dt.now()
+            now_ist = get_ist_now(naive=True)
             today_str = now_ist.strftime("%Y-%m-%d")
             market_open = now_ist.replace(hour=9, minute=0, second=0, microsecond=0)
             if _last_scan_reset != today_str and now_ist >= market_open:
@@ -533,7 +533,7 @@ def refresh_data(single_run=False):
                 cached_data["executed_exits"] = dict(EXECUTED_EXITS)
             except Exception:
                 pass
-            day_key = dt.now().strftime("%Y-%m-%d")
+            day_key = get_ist_now().strftime("%Y-%m-%d")
             if _expired_cache_day != day_key:
                 try:
                     from trading_core import contract_is_expired

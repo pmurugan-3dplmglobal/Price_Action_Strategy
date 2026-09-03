@@ -25,6 +25,8 @@ from timeframe_utils import (
     resample_timeframe,
     get_fetch_timeframe,
     get_ist_now,
+    get_ist_date,
+    get_ist_time,
     LOOKBACK_LIMITS
 )
 from display_writer import clean_timestamp
@@ -1504,9 +1506,9 @@ def simulate_trade_outcome(kite, trade, target_date, resolve_token_fn=None):
             try:
                 target_date = dt.strptime(target_date, "%Y-%m-%d")
             except ValueError:
-                target_date = dt.now()
+                target_date = get_ist_date()
         elif target_date is None:
-            target_date = dt.now().date()
+            target_date = get_ist_date()
         if isinstance(target_date, dt):
             target_date = target_date.date()
         sym = trade["symbol"]
@@ -1604,7 +1606,7 @@ def resolve_option_strikes(nfo_instruments, base_symbol, spot_price, step_size, 
             if df.empty:
                 continue
             df['expiry_dt'] = pd.to_datetime(df['expiry']).dt.date
-            today = dt.now().date()
+            today = get_ist_date()
             future = df[df['expiry_dt'] >= today].sort_values(by='expiry_dt')
             if not future.empty:
                 expiries = future['expiry_dt'].unique()

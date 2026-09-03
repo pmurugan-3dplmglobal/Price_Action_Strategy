@@ -9,6 +9,7 @@ if COMMON_DIR not in sys.path:
     sys.path.insert(0, COMMON_DIR)
 
 import paths
+from timeframe_utils import get_ist_now
 from automated_strategy_exporter import execute_scheduled_export
 
 log_p = paths.log_file("export_scheduler_daemon.log")
@@ -38,11 +39,11 @@ def main():
     print(" Monitoring clock for slots: 10:30 AM, 1:00 PM, 3:15 PM")
     print("=========================================================")
 
-    current_day = dt.now().strftime("%Y-%m-%d")
+    current_day = get_ist_now().strftime("%Y-%m-%d")
 
     while True:
         try:
-            now = dt.now()
+            now = get_ist_now(naive=True)
             today_str = now.strftime("%Y-%m-%d")
 
             # Reset executed set at midnight

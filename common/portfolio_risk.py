@@ -15,6 +15,7 @@ import os
 import time
 from datetime import datetime as dt
 import paths
+from timeframe_utils import get_ist_now
 from registries import get_symbol_sector
 
 
@@ -135,7 +136,7 @@ def check_portfolio_risk_caps(engine, symbol, candidate_tier=2, capital=100000.0
         }
 
     # ── RULE 3: Max Daily Drawdown / Loss Limit ──
-    today_str = dt.now().strftime("%Y-%m-%d")
+    today_str = get_ist_now().strftime("%Y-%m-%d")
     today_realized_loss_inr = 0.0
     if include_db_trades:
         all_trades = trade_db.get_all_trades(engine=None)
