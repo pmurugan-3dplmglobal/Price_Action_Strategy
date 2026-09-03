@@ -3522,3 +3522,23 @@ issues:
     '
   status: RESOLVED
 
+- id: ISSUE-082
+  family: RISK_MANAGEMENT
+  date_reported: '2026-09-03'
+  symptom: 'Portfolio Risk Guard daily drawdown limit was fixed at 3.0% in backend code/config without an interactive UI parameter in dashboard program cards. When a loss occurred (e.g. FINNIFTY SL hit), users had to manually edit JSON files to adjust or raise the daily circuit breaker threshold.'
+  root_cause: 'PROGRAMS config_fields dictionary in app_option_Trade.py and app_Stock_Trade.py did not expose max_daily_loss_pct as an editable number input row, and save_config did not synchronize program-level edits back into the global portfolio_risk section of program_config.json.'
+  affected_files:
+  - common/portfolio_risk.py
+  - common/resolve.py
+  - Trade_Option/app_option_Trade.py
+  - Trade_Stock/app_Stock_Trade.py
+  - input/program_config.json
+  - ISSUE_MANAGEMENT.yaml
+  resolution: '1. Added "max_daily_loss_pct" (Daily Loss Limit %) number input with default 3.0 to config_fields for all trading engines (index, nifty50, daily, bear_trade) in app_option_Trade.py and app_Stock_Trade.py.
+    2. Enhanced save_config in both dashboard backends to synchronize max_daily_loss_pct directly to cfg["portfolio_risk"]["max_daily_loss_pct"] in program_config.json.
+    3. Enhanced /api/data and /api/status endpoints to pre-fill max_daily_loss_pct from cfg["portfolio_risk"] across all program cards on page load/refresh.
+    4. Enhanced _load_portfolio_risk_config in portfolio_risk.py to resolve max_daily_loss_pct with full fallback hierarchy (p_cfg -> config -> cfg_all["portfolio_risk"] -> default 3.0).
+    5. Verified bidirectional save roundtrip, 47/47 unit tests passing, and 17/17 master regression suite passing.'
+  status: RESOLVED
+
+

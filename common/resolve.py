@@ -110,9 +110,12 @@ def load_program_config_for_engine(cfg_section, extra_fields=None):
                 ("strike_range", "STRIKE_RANGE"),
                 ("tranche_mode", "TRANCHE_MODE"),
                 ("prefer_itm_strikes", "PREFER_ITM_STRIKES"),
+                ("max_daily_loss_pct", "MAX_DAILY_LOSS_PCT"),
             ]:
                 if src_key in cfg:
                     applied[dst_key] = cfg[src_key]
+                elif "portfolio_risk" in full and src_key in full["portfolio_risk"]:
+                    applied[dst_key] = full["portfolio_risk"][src_key]
             if extra_fields:
                 for src_key, dst_key in extra_fields:
                     if src_key in cfg:
