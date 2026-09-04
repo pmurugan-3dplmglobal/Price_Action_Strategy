@@ -569,6 +569,15 @@ def scan_anchor_bcd_breakout_bearish(df_entry, df_anchor, anchor_tf="", entry_tf
         best_match["tier_badge"] = tier_badge
         best_match["swing_waves"] = sw_waves
         best_match["terminal_base"] = term_base
+        try:
+            from swing_detection import calculate_vcp_metrics
+        except ImportError:
+            from common.swing_detection import calculate_vcp_metrics
+        vcp_m = calculate_vcp_metrics(df_entry)
+        best_match["atr_ratio"] = vcp_m.get("atr_ratio", 1.0)
+        best_match["is_squeeze"] = vcp_m.get("is_squeeze", False)
+        best_match["vcp_tier"] = vcp_m.get("vcp_tier", "NORMAL")
+        best_match["vcp_badge"] = vcp_m.get("vcp_badge", "")
     return best_match
 
 
@@ -606,8 +615,18 @@ def scan_pattern_lifecycle_stage_bearish(df_entry, df_anchor, anchor_tf="", entr
             "tier_badge": full_setup.get("tier_badge", "🥈 T2"),
             "candle_a_time": full_setup.get("CandleATime"),
             "candle_d_time": full_setup.get("CandleTime"),
-            "anchor_floor": full_setup.get("AnchorFloor")
+            "anchor_floor": full_setup.get("AnchorFloor"),
+            "atr_ratio": full_setup.get("atr_ratio", 1.0),
+            "is_squeeze": full_setup.get("is_squeeze", False),
+            "vcp_tier": full_setup.get("vcp_tier", "NORMAL"),
+            "vcp_badge": full_setup.get("vcp_badge", "")
         }
+
+    try:
+        from swing_detection import calculate_vcp_metrics
+    except ImportError:
+        from common.swing_detection import calculate_vcp_metrics
+    vcp_metrics = calculate_vcp_metrics(df_entry)
 
     # Step 2: Evaluate Institutional Parabolic Multi-Swing context on Anchor TF
     swing_meta = {"swing_waves": 0, "terminal_base": False, "terminal_date": ""}
@@ -746,7 +765,11 @@ def scan_pattern_lifecycle_stage_bearish(df_entry, df_anchor, anchor_tf="", entr
                     "anchor_floor": a_high,
                     "swing_waves": swing_meta.get("swing_waves", 0),
                     "terminal_base": swing_meta.get("terminal_base", False),
-                    "direction": "BEAR"
+                    "direction": "BEAR",
+                    "atr_ratio": vcp_metrics.get("atr_ratio", 1.0),
+                    "is_squeeze": vcp_metrics.get("is_squeeze", False),
+                    "vcp_tier": vcp_metrics.get("vcp_tier", "NORMAL"),
+                    "vcp_badge": vcp_metrics.get("vcp_badge", "")
                 }
 
         # Stage B Bearish: Valid Anchor A formed, waiting for B / C
@@ -768,7 +791,11 @@ def scan_pattern_lifecycle_stage_bearish(df_entry, df_anchor, anchor_tf="", entr
             "anchor_floor": a_high,
             "swing_waves": swing_meta.get("swing_waves", 0),
             "terminal_base": swing_meta.get("terminal_base", False),
-            "direction": "BEAR"
+            "direction": "BEAR",
+            "atr_ratio": vcp_metrics.get("atr_ratio", 1.0),
+            "is_squeeze": vcp_metrics.get("is_squeeze", False),
+            "vcp_tier": vcp_metrics.get("vcp_tier", "NORMAL"),
+            "vcp_badge": vcp_metrics.get("vcp_badge", "")
         }
 
     return None

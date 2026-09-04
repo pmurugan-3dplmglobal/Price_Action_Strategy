@@ -341,10 +341,20 @@ def _avg_target_rank(trade):
     if not targets:
         return 0
     avg_target = sum(targets) / len(targets)
-    risk = trade.get("entry_spot", 0) - trade.get("current_sl", 0)
+    risk = abs(trade.get("entry_spot", 0) - trade.get("current_sl", 0))
     if risk <= 0:
         return 0
-    return (avg_target - trade["entry_spot"]) / risk
+    base_rr = abs(avg_target - trade["entry_spot"]) / risk
+
+    # Volatility Contraction / Squeeze ranking bonus:
+    # Setups coiled in a TTM squeeze or heavy ATR compression get priority execution
+    vcp_bonus = 0.0
+    if trade.get("is_squeeze"):
+        vcp_bonus = 0.50
+    elif float(trade.get("atr_ratio", 1.0) or 1.0) <= 0.60:
+        vcp_bonus = 0.30
+
+    return base_rr + vcp_bonus
 
 def execute_highest_rr_trade(kite, staged):
     """After a scan cycle, filter ONLY Tier 1 (🥇 T1 Gold) candidates, pick best by avg RR and execute (if live) at Benchmark limit price."""

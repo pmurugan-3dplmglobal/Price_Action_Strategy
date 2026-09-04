@@ -623,6 +623,15 @@ def scan_anchor_bcd_breakout(df_entry, df_anchor, anchor_tf="", entry_tf="", ena
     best_latest["tier_badge"] = tier_badge
     best_latest["swing_waves"] = sw_waves
     best_latest["terminal_base"] = term_base
+    try:
+        from swing_detection import calculate_vcp_metrics
+    except ImportError:
+        from common.swing_detection import calculate_vcp_metrics
+    vcp_m = calculate_vcp_metrics(df_entry)
+    best_latest["atr_ratio"] = vcp_m.get("atr_ratio", 1.0)
+    best_latest["is_squeeze"] = vcp_m.get("is_squeeze", False)
+    best_latest["vcp_tier"] = vcp_m.get("vcp_tier", "NORMAL")
+    best_latest["vcp_badge"] = vcp_m.get("vcp_badge", "")
     return best_latest
 
 
@@ -660,7 +669,11 @@ def scan_pattern_lifecycle_stage(df_entry, df_anchor, anchor_tf="", entry_tf="",
             "tier_badge": full_setup.get("tier_badge", "🥈 T2"),
             "candle_a_time": full_setup.get("CandleATime"),
             "candle_d_time": full_setup.get("CandleTime"),
-            "anchor_floor": full_setup.get("AnchorFloor")
+            "anchor_floor": full_setup.get("AnchorFloor"),
+            "atr_ratio": full_setup.get("atr_ratio", 1.0),
+            "is_squeeze": full_setup.get("is_squeeze", False),
+            "vcp_tier": full_setup.get("vcp_tier", "NORMAL"),
+            "vcp_badge": full_setup.get("vcp_badge", "")
         }
 
     # Step 2: Evaluate Institutional Parabolic Multi-Swing context on Anchor TF
@@ -688,6 +701,12 @@ def scan_pattern_lifecycle_stage(df_entry, df_anchor, anchor_tf="", entry_tf="",
             "tier_label": sw_res.get("tier_label", "TIER_2_CORE"),
             "tier_badge": sw_res.get("tier_badge", "🥈 T2")
         }
+
+    try:
+        from swing_detection import calculate_vcp_metrics
+    except ImportError:
+        from common.swing_detection import calculate_vcp_metrics
+    vcp_metrics = calculate_vcp_metrics(df_entry)
 
     anchor_funcs = [
         find_anchor_bullish_engulfing,
@@ -804,7 +823,11 @@ def scan_pattern_lifecycle_stage(df_entry, df_anchor, anchor_tf="", entry_tf="",
                     "candle_c_time": str(c_row.get("date", "")),
                     "anchor_floor": a_low,
                     "swing_waves": swing_meta.get("swing_waves", 0),
-                    "terminal_base": swing_meta.get("terminal_base", False)
+                    "terminal_base": swing_meta.get("terminal_base", False),
+                    "atr_ratio": vcp_metrics.get("atr_ratio", 1.0),
+                    "is_squeeze": vcp_metrics.get("is_squeeze", False),
+                    "vcp_tier": vcp_metrics.get("vcp_tier", "NORMAL"),
+                    "vcp_badge": vcp_metrics.get("vcp_badge", "")
                 }
 
         # Stage B: Valid Anchor A formed, waiting for B / C
@@ -825,7 +848,11 @@ def scan_pattern_lifecycle_stage(df_entry, df_anchor, anchor_tf="", entry_tf="",
             "candle_a_time": a_time_val,
             "anchor_floor": a_low,
             "swing_waves": swing_meta.get("swing_waves", 0),
-            "terminal_base": swing_meta.get("terminal_base", False)
+            "terminal_base": swing_meta.get("terminal_base", False),
+            "atr_ratio": vcp_metrics.get("atr_ratio", 1.0),
+            "is_squeeze": vcp_metrics.get("is_squeeze", False),
+            "vcp_tier": vcp_metrics.get("vcp_tier", "NORMAL"),
+            "vcp_badge": vcp_metrics.get("vcp_badge", "")
         }
 
     return None

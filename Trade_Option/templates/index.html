@@ -553,6 +553,20 @@
             const a = funnel.category_a || [];
             const b = funnel.category_b || [];
 
+            function getVcpBadge(item) {
+                if (item.is_squeeze) {
+                    const ratioStr = (item.atr_ratio !== undefined && item.atr_ratio !== null) ? Number(item.atr_ratio).toFixed(2) : '';
+                    return `<span class="badge" style="background:#5c2b00;color:#ff9800;border:1px solid #ff9800;font-weight:700" title="TTM Squeeze Active (Bollinger inside Keltner)">🔥 SQZ ${ratioStr}</span>`;
+                }
+                if (item.atr_ratio !== undefined && item.atr_ratio !== null && Number(item.atr_ratio) <= 0.60) {
+                    return `<span class="badge" style="background:#1f3a22;color:#3fb950;border:1px solid #238636;font-weight:700" title="Volatility Compression >= 40%">⚡ VCP ${Number(item.atr_ratio).toFixed(2)}</span>`;
+                }
+                if (item.atr_ratio !== undefined && item.atr_ratio !== null) {
+                    return `<span style="color:#8b949e;font-size:11px">${Number(item.atr_ratio).toFixed(2)}</span>`;
+                }
+                return '<span style="color:#484f58;font-size:11px">---</span>';
+            }
+
             let html = '';
 
             // Metric pills
@@ -580,7 +594,7 @@
                 html += '<p class="empty-state" style="padding:10px">No Category A+ setups currently coiled. High-frequency radar monitoring active.</p>';
             } else {
                 html += '<div style="overflow-x:auto"><table><thead><tr>' +
-                    '<th>Symbol</th><th>Contract</th><th>Side</th><th>Pattern</th><th>D-Trigger (BM)</th><th>Current SL</th><th>T1</th><th>T2</th><th>T3</th><th>R:R</th><th>Stage</th><th>Surveillance</th>' +
+                    '<th>Symbol</th><th>Contract</th><th>Side</th><th>Pattern</th><th>VCP</th><th>D-Trigger (BM)</th><th>Current SL</th><th>T1</th><th>T2</th><th>T3</th><th>R:R</th><th>Stage</th><th>Surveillance</th>' +
                     '</tr></thead><tbody>';
                 a_plus.forEach(item => {
                     const sideColor = item.side === 'CE' ? '#3fb950' : '#f85149';
@@ -589,6 +603,7 @@
                         <td style="font-size:11px;color:#c9d1d9">${item.contract || item.symbol || ''}</td>
                         <td><span style="color:${sideColor};font-weight:bold">${item.side || 'CE'}</span></td>
                         <td><span class="badge" style="background:#21262d;border:1px solid #d29922;color:#d29922">${item.pattern || ''}</span></td>
+                        <td>${getVcpBadge(item)}</td>
                         <td style="font-weight:bold;color:#f0883e">${item.benchmark || '---'}</td>
                         <td style="color:#f85149">${item.current_sl || '---'}</td>
                         <td style="color:#3fb950">${item.t1 || '---'}</td>
@@ -608,7 +623,7 @@
                 html += '<p class="empty-state" style="padding:10px">No Category A setups waiting at D trigger.</p>';
             } else {
                 html += '<div style="overflow-x:auto"><table><thead><tr>' +
-                    '<th>Symbol</th><th>Contract</th><th>Side</th><th>Pattern</th><th>D-Trigger (BM)</th><th>Current SL</th><th>T1</th><th>T2</th><th>T3</th><th>R:R</th><th>Stage</th><th>Status</th>' +
+                    '<th>Symbol</th><th>Contract</th><th>Side</th><th>Pattern</th><th>VCP</th><th>D-Trigger (BM)</th><th>Current SL</th><th>T1</th><th>T2</th><th>T3</th><th>R:R</th><th>Stage</th><th>Status</th>' +
                     '</tr></thead><tbody>';
                 a.forEach(item => {
                     const sideColor = item.side === 'CE' ? '#3fb950' : '#f85149';
@@ -617,6 +632,7 @@
                         <td style="font-size:11px;color:#c9d1d9">${item.contract || item.symbol || ''}</td>
                         <td><span style="color:${sideColor};font-weight:bold">${item.side || 'CE'}</span></td>
                         <td><span class="badge" style="background:#21262d;border:1px solid #388bfd;color:#58a6ff">${item.pattern || ''}</span></td>
+                        <td>${getVcpBadge(item)}</td>
                         <td style="font-weight:bold;color:#58a6ff">${item.benchmark || '---'}</td>
                         <td style="color:#f85149">${item.current_sl || '---'}</td>
                         <td style="color:#3fb950">${item.t1 || '---'}</td>
@@ -636,7 +652,7 @@
                 html += '<p class="empty-state" style="padding:10px">No incubating anchors. Run a scan cycle to discover new anchors across the universe.</p>';
             } else {
                 html += '<div style="overflow-x:auto"><table><thead><tr>' +
-                    '<th>Symbol</th><th>Side</th><th>Anchor Pattern</th><th>Anchor High</th><th>Anchor Low</th><th>Timeframe</th><th>Stage</th><th>Incubation State</th>' +
+                    '<th>Symbol</th><th>Side</th><th>Anchor Pattern</th><th>VCP</th><th>Anchor High</th><th>Anchor Low</th><th>Timeframe</th><th>Stage</th><th>Incubation State</th>' +
                     '</tr></thead><tbody>';
                 b.forEach(item => {
                     const sideColor = item.side === 'CE' ? '#3fb950' : '#f85149';
@@ -644,6 +660,7 @@
                         <td><strong>${item.symbol || ''}</strong></td>
                         <td><span style="color:${sideColor};font-weight:bold">${item.side || 'CE'}</span></td>
                         <td><span class="badge" style="background:#21262d;border:1px solid #8957e5;color:#bc8cff">${item.pattern || ''}</span></td>
+                        <td>${getVcpBadge(item)}</td>
                         <td style="color:#3fb950">${item.anchor_high || '---'}</td>
                         <td style="color:#f85149">${item.anchor_low || '---'}</td>
                         <td>${item.timeframe || 'day'}</td>
@@ -846,7 +863,15 @@
                     swingBadge = ` <span class="badge" style="background:#6e7681;color:#ffffff;font-size:10px;margin-left:4px;" title="Parabolic Multi-Swings: ${t.swing_waves} waves${t.terminal_base ? ' + Terminal Base Absorption' : ''}">🌊 ${t.swing_waves}S${baseTag}</span>`;
                 }
 
-                return `<tr><td>${tierBadge}${t.symbol||''}</td><td style="font-size:11px">${t.contract||''}</td><td>${t.side||''}</td><td>${entry}</td><td>${sl}</td><td>${t1v}</td><td>${t2v}</td><td>${t3v}</td><td style="font-size:11px">${atFormatted}</td><td style="font-size:11px">${etFormatted}</td><td><span class="badge ${resultBadge}">${res}</span>${swingBadge}</td><td>${cf}</td><td>${rr}</td>${chartCell}${actCell}</tr>`;
+                let vcpBadge = '';
+                if (t.is_squeeze) {
+                    let rStr = (t.atr_ratio !== undefined && t.atr_ratio !== null) ? Number(t.atr_ratio).toFixed(2) : '';
+                    vcpBadge = ` <span class="badge" style="background:#5c2b00;color:#ff9800;border:1px solid #ff9800;font-size:10px;margin-left:4px;font-weight:700" title="TTM Squeeze Active (ATR Ratio: ${t.atr_ratio})">🔥 SQZ ${rStr}</span>`;
+                } else if (t.atr_ratio !== undefined && t.atr_ratio !== null && Number(t.atr_ratio) <= 0.60) {
+                    vcpBadge = ` <span class="badge" style="background:#1f3a22;color:#3fb950;border:1px solid #238636;font-size:10px;margin-left:4px;font-weight:700" title="VCP Volatility Compression >= 40% (ATR Ratio: ${t.atr_ratio})">⚡ VCP ${Number(t.atr_ratio).toFixed(2)}</span>`;
+                }
+
+                return `<tr><td>${tierBadge}${t.symbol||''}</td><td style="font-size:11px">${t.contract||''}</td><td>${t.side||''}</td><td>${entry}</td><td>${sl}</td><td>${t1v}</td><td>${t2v}</td><td>${t3v}</td><td style="font-size:11px">${atFormatted}</td><td style="font-size:11px">${etFormatted}</td><td><span class="badge ${resultBadge}">${res}</span>${swingBadge}${vcpBadge}</td><td>${cf}</td><td>${rr}</td>${chartCell}${actCell}</tr>`;
             }
 
             if (window._scanCleared) {

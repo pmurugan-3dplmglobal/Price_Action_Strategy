@@ -725,7 +725,15 @@
                     swingBadge = ` <span class="badge" style="background:#6e7681;color:#ffffff;font-size:10px;margin-left:4px;" title="Parabolic Multi-Swings: ${t.swing_waves} waves${t.terminal_base ? ' + Terminal Base Absorption' : ''}">🌊 ${t.swing_waves}S${baseTag}</span>`;
                 }
 
-                return `<tr><td>${tierBadge}${t.symbol||''}</td><td style="font-size:11px">${t.contract||''}</td><td>${t.side||''}</td><td>${entry}</td><td>${sl}</td><td>${t1v}</td><td>${t2v}</td><td>${t3v}</td><td style="font-size:11px">${atFormatted}</td><td style="font-size:11px">${etFormatted}</td><td><span class="badge ${resultBadge}">${res}</span>${swingBadge}</td><td>${cf}</td><td>${rr}</td>${chartCell}${actCell}</tr>`;
+                let vcpBadge = '';
+                if (t.is_squeeze) {
+                    let rStr = (t.atr_ratio !== undefined && t.atr_ratio !== null) ? Number(t.atr_ratio).toFixed(2) : '';
+                    vcpBadge = ` <span class="badge" style="background:#5c2b00;color:#ff9800;border:1px solid #ff9800;font-size:10px;margin-left:4px;font-weight:700" title="TTM Squeeze Active (ATR Ratio: ${t.atr_ratio})">🔥 SQZ ${rStr}</span>`;
+                } else if (t.atr_ratio !== undefined && t.atr_ratio !== null && Number(t.atr_ratio) <= 0.60) {
+                    vcpBadge = ` <span class="badge" style="background:#1f3a22;color:#3fb950;border:1px solid #238636;font-size:10px;margin-left:4px;font-weight:700" title="VCP Volatility Compression >= 40% (ATR Ratio: ${t.atr_ratio})">⚡ VCP ${Number(t.atr_ratio).toFixed(2)}</span>`;
+                }
+
+                return `<tr><td>${tierBadge}${t.symbol||''}</td><td style="font-size:11px">${t.contract||''}</td><td>${t.side||''}</td><td>${entry}</td><td>${sl}</td><td>${t1v}</td><td>${t2v}</td><td>${t3v}</td><td style="font-size:11px">${atFormatted}</td><td style="font-size:11px">${etFormatted}</td><td><span class="badge ${resultBadge}">${res}</span>${swingBadge}${vcpBadge}</td><td>${cf}</td><td>${rr}</td>${chartCell}${actCell}</tr>`;
             }
 
             if (window._scanCleared) {

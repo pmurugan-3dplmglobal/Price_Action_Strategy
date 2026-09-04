@@ -628,6 +628,10 @@ def write_scan_display_data(staged, active, display_file, engine_name=None):
                 "tier": t.get("tier", 2),
                 "tier_label": t.get("tier_label", "TIER_2_CORE"),
                 "tier_badge": t.get("tier_badge", "🥈 T2"),
+                "atr_ratio": t.get("atr_ratio", 1.0),
+                "is_squeeze": t.get("is_squeeze", False),
+                "vcp_tier": t.get("vcp_tier", "NORMAL"),
+                "vcp_badge": t.get("vcp_badge", ""),
                 "spot_token": t.get("spot_token") or t.get("index_token"),
                 "spot_sl": t.get("spot_sl"),
                 "spot_entry": t.get("spot_entry")
@@ -1316,7 +1320,11 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                             "terminal_base": swing_meta_ce["terminal_base"],
                             "tier": result_ce.get("tier", 2),
                             "tier_label": result_ce.get("tier_label", "TIER_2_CORE"),
-                            "tier_badge": result_ce.get("tier_badge", "🥈 T2")
+                            "tier_badge": result_ce.get("tier_badge", "🥈 T2"),
+                            "atr_ratio": result_ce.get("atr_ratio", 1.0),
+                            "is_squeeze": result_ce.get("is_squeeze", False),
+                            "vcp_tier": result_ce.get("vcp_tier", "NORMAL"),
+                            "vcp_badge": result_ce.get("vcp_badge", "")
                         }
                         symbol_candidates.append(trade_data)
                         pattern_funnel.evict_item(engine_name, ce['tradingsymbol'])
@@ -1339,6 +1347,10 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                                     "candle_c_time": stage_ce.get("candle_c_time", ""),
                                     "tier": stage_ce.get("tier", 2), "tier_label": stage_ce.get("tier_label", "TIER_2_CORE"),
                                     "tier_badge": stage_ce.get("tier_badge", "🥈 T2"),
+                                    "atr_ratio": stage_ce.get("atr_ratio", 1.0),
+                                    "is_squeeze": stage_ce.get("is_squeeze", False),
+                                    "vcp_tier": stage_ce.get("vcp_tier", "NORMAL"),
+                                    "vcp_badge": stage_ce.get("vcp_badge", ""),
                                     "stage": f_stage
                                 }
                                 pattern_funnel.promote_item(engine_name, funnel_item, f_stage)
@@ -1399,7 +1411,11 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                             "terminal_base": swing_meta_pe["terminal_base"],
                             "tier": result_pe.get("tier", 2),
                             "tier_label": result_pe.get("tier_label", "TIER_2_CORE"),
-                            "tier_badge": result_pe.get("tier_badge", "🥈 T2")
+                            "tier_badge": result_pe.get("tier_badge", "🥈 T2"),
+                            "atr_ratio": result_pe.get("atr_ratio", 1.0),
+                            "is_squeeze": result_pe.get("is_squeeze", False),
+                            "vcp_tier": result_pe.get("vcp_tier", "NORMAL"),
+                            "vcp_badge": result_pe.get("vcp_badge", "")
                         }
                         symbol_candidates.append(trade_data)
                         pattern_funnel.evict_item(engine_name, pe['tradingsymbol'])
@@ -1422,6 +1438,10 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                                     "candle_c_time": stage_pe.get("candle_c_time", ""),
                                     "tier": stage_pe.get("tier", 2), "tier_label": stage_pe.get("tier_label", "TIER_2_CORE"),
                                     "tier_badge": stage_pe.get("tier_badge", "🥈 T2"),
+                                    "atr_ratio": stage_pe.get("atr_ratio", 1.0),
+                                    "is_squeeze": stage_pe.get("is_squeeze", False),
+                                    "vcp_tier": stage_pe.get("vcp_tier", "NORMAL"),
+                                    "vcp_badge": stage_pe.get("vcp_badge", ""),
                                     "stage": f_stage
                                 }
                                 pattern_funnel.promote_item(engine_name, funnel_item, f_stage)

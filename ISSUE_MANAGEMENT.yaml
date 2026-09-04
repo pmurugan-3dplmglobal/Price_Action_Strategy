@@ -4,6 +4,30 @@ meta:
   last_updated: '2026-08-30'
   purpose: Document operational failures, root causes, regression fixes, and system enhancements.
 issues:
+- id: FEATURE-031
+  title: Volatility Contraction Pattern (VCP) Metrics, ATR Compression Ratio & TTM Squeeze Integration
+  severity: ENHANCEMENT
+  category: Quantitative Price Action, Volatility Analysis & Candidate Prioritization
+  family: VCP_METRICS
+  date_reported: '2026-09-04'
+  symptom: 'Trading engine lacked quantitative measurement of volatility compression before breakout, treating wide high-volatility bases and ultra-tight coiled structures identically in trade execution prioritization.'
+  root_cause: 'Missing mathematical quantification of volatility contraction (ATR3 / ATR14) and Bollinger/Keltner channel squeeze in pattern lifecycle and candidate ranking algorithms.'
+  affected_files:
+  - common/swing_detection.py
+  - common/patterns_bull.py
+  - common/patterns_bear.py
+  - common/resolve.py
+  - common/display_writer.py
+  - Trade_Option/stock_options_trade_engine.py
+  - Trade_Option/templates/index.html
+  - Trade_Stock/templates/index.html
+  resolution: '1. Implemented calculate_vcp_metrics in common/swing_detection.py computing True Range, ATR(14), ATR(3), Bollinger Bands (20, 2.0 std), and Keltner Channels (20, 1.5 ATR) to derive Contraction Ratio (ATR3/ATR14) and TTM Squeeze state.
+    2. Enriched pattern lifecycle detectors in common/patterns_bull.py and common/patterns_bear.py with atr_ratio, is_squeeze, vcp_tier, and vcp_badge across Full ABCD, Stage A+, Stage A, and Stage B.
+    3. Updated common/resolve.py and display_writer.py to propagate VCP metrics into trade_data, funnel_items, and dashboard serializations.
+    4. Enhanced candidate prioritization (_avg_target_rank) in stock_options_trade_engine.py with ranking bonuses for active TTM squeeze (+0.50) and heavy ATR compression (+0.30).
+    5. Added dynamic visual badges (🔥 ULTRA SQZ, ⚡ VCP) and VCP metrics column to Pattern Radar and Scans tabs in Options and Stock dashboards.
+    6. Verified 100% pass across dedicated VCP unit tests and full 20-test regression suite.'
+  status: RESOLVED
 - id: FEATURE-030
   title: Price Action Surveillance Radar (Categories A+, A, B), Sub-15s Fast Execution Loop & Candidate Non-Blocking
   severity: ENHANCEMENT

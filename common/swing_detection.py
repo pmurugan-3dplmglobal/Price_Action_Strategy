@@ -408,3 +408,85 @@ def detect_parabolic_multi_swings(
     if 'date' in df.columns and len(df) > terminal_idx:
         res["terminal_swing_date"] = str(df['date'].iloc[terminal_idx])
     return res
+
+
+def calculate_vcp_metrics(df: Optional[pd.DataFrame]) -> Dict[str, Any]:
+    """
+    Calculates Volatility Contraction Pattern (VCP) metrics:
+    1. Contraction Ratio: ATR(3) / ATR(14)
+       - When ATR(3) / ATR(14) <= 0.60, volatility has compressed >= 40% vs recent baseline.
+    2. TTM Squeeze: Bollinger Bands (20, 2.0 std) strictly inside Keltner Channels (20, 1.5 ATR20).
+    3. Returns classification: 'ULTRA_SQUEEZE' | 'SQUEEZE' | 'VCP_COILED' | 'NORMAL' and formatted display badge.
+    """
+    default_res = {
+        "atr_ratio": 1.0,
+        "is_squeeze": False,
+        "vcp_tier": "NORMAL",
+        "vcp_badge": "",
+        "atr3": 0.0,
+        "atr14": 0.0
+    }
+    if df is None or len(df) < 20:
+        return default_res
+
+    try:
+        high = df['high'].values.astype(float)
+        low = df['low'].values.astype(float)
+        close = df['close'].values.astype(float)
+        n = len(df)
+        if n < 20:
+            return default_res
+
+        # True Range calculation
+        prev_close = np.roll(close, 1)
+        prev_close[0] = close[0]
+        tr = np.maximum(high - low, np.maximum(np.abs(high - prev_close), np.abs(low - prev_close)))
+
+        # ATR 14 and ATR 3
+        atr14 = float(np.mean(tr[-14:])) if n >= 14 else float(np.mean(tr))
+        atr3 = float(np.mean(tr[-3:])) if n >= 3 else float(np.mean(tr))
+        atr_ratio = round(atr3 / atr14, 2) if atr14 > 1e-6 else 1.0
+
+        # Bollinger Bands (20 period, 2.0 std dev)
+        slice_close_20 = close[-20:]
+        sma20 = float(np.mean(slice_close_20))
+        std20 = float(np.std(slice_close_20))
+        bb_upper = sma20 + (2.0 * std20)
+        bb_lower = sma20 - (2.0 * std20)
+
+        # Keltner Channels (20 period EMA + 1.5 * ATR20)
+        alpha = 2.0 / (20.0 + 1.0)
+        ema20 = float(slice_close_20[0])
+        for val in slice_close_20[1:]:
+            ema20 = alpha * float(val) + (1.0 - alpha) * ema20
+
+        atr20 = float(np.mean(tr[-20:]))
+        kc_upper = ema20 + (1.5 * atr20)
+        kc_lower = ema20 - (1.5 * atr20)
+
+        # Squeeze condition: Bollinger Bands strictly inside Keltner Channel
+        is_squeeze = bool(bb_upper < kc_upper and bb_lower > kc_lower)
+
+        if is_squeeze and atr_ratio <= 0.60:
+            vcp_tier = "ULTRA_SQUEEZE"
+            vcp_badge = f"🔥 ULTRA SQZ {atr_ratio:.2f}"
+        elif is_squeeze:
+            vcp_tier = "SQUEEZE"
+            vcp_badge = f"🔥 SQZ {atr_ratio:.2f}"
+        elif atr_ratio <= 0.60:
+            vcp_tier = "VCP_COILED"
+            vcp_badge = f"⚡ VCP {atr_ratio:.2f}"
+        else:
+            vcp_tier = "NORMAL"
+            vcp_badge = ""
+
+        return {
+            "atr_ratio": atr_ratio,
+            "is_squeeze": is_squeeze,
+            "vcp_tier": vcp_tier,
+            "vcp_badge": vcp_badge,
+            "atr3": round(atr3, 2),
+            "atr14": round(atr14, 2)
+        }
+    except Exception:
+        return default_res

@@ -122,7 +122,11 @@ def write_scan_display_data(staged, active, display_file, engine_name=None):
                 "terminal_base": bool(t.get("terminal_base", t.get("has_terminal_base", False))),
                 "tier": t.get("tier", 2),
                 "tier_label": t.get("tier_label", "TIER_2_CORE"),
-                "tier_badge": t.get("tier_badge", "🥈 T2")
+                "tier_badge": t.get("tier_badge", "🥈 T2"),
+                "atr_ratio": t.get("atr_ratio", 1.0),
+                "is_squeeze": t.get("is_squeeze", False),
+                "vcp_tier": t.get("vcp_tier", "NORMAL"),
+                "vcp_badge": t.get("vcp_badge", "")
             }
         new_staged = [build_trade(t, t.get("pattern", "BE_ABCD"), t.get("entry_time", now_str), None, is_staged=True) for t in (staged or [])]
         carry_fwd = []
