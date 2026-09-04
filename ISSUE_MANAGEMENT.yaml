@@ -4,6 +4,37 @@ meta:
   last_updated: '2026-08-30'
   purpose: Document operational failures, root causes, regression fixes, and system enhancements.
 issues:
+- id: FEATURE-029
+  title: Expert Algo Audit Phase 3 — Broker Exit Safety (CVE-1/2), Morning Circuit (CVE-3), Candle API Decoupling (CVE-4), +BE Trailing & Pattern Parity
+  severity: HIGH
+  category: Execution Safety, Risk Governance & Pattern Geometry
+  family: EXECUTION_GUARDS
+  date_reported: '2026-09-04'
+  symptom: '1. If all 3 exit tiers failed, save_executed_exit marked REJECTED_ERROR, permanently blocking subsequent exit retries while positions remained naked on Zerodha.
+    2. monitor_active_positions prematurely evicted positions from memory and updated trade_db even when Kite exit orders failed.
+    3. The 09:15-09:45 AM SL blindspot left positions unprotected against catastrophic opening gap-down drops.
+    4. Historical candle REST API outages completely bypassed live tick monitoring and emergency stop losses.
+    5. Trailing stop to flat Breakeven on +10% gains resulted in spread slippage losses on fast reversals.
+    6. Bear scanner accepted any candle color for Point C (no green retest enforcement) and was capped at 30 bars per leg.
+    7. Hammer and Shooting Star baby candle detectors lacked mother candle base/peak containment checks.
+    '
+  root_cause: 'Missing retry backoff for REJECTED_ERROR in exit guard, unverified broker fill on memory eviction, absence of morning catastrophic circuit breaker, coupling of tick checks to candle fetch, flat breakeven instead of positive slippage cushion, and structural asymmetries between bull and bear pattern modules.
+    '
+  affected_files:
+  - common/position_monitor.py
+  - common/patterns_bear.py
+  - common/patterns_bull.py
+  - Notes_Inputs.txt
+  resolution: '1. CVE-1 Fix: Implemented exponential backoff and retry count tracking for REJECTED_ERROR in close_position and close_stock_position.
+    2. CVE-2 Fix: Made memory eviction (to_clear.append) and trade_db status updates strictly conditional on verified broker order success.
+    3. CVE-3 Fix: Added Morning Catastrophic Circuit Breaker active during 09:15-09:45 AM (triggers immediate exit on >= 25% drop for options, >= 12% for stocks).
+    4. CVE-4 Fix: Decoupled live tick quote lookup from historical candle REST endpoint, ensuring emergency stops run even if candle fetch fails.
+    5. Feature 5 Fix: Implemented Positive Breakeven (+BE: Entry + 2% for Bull, Entry - 2% for Bear, snapped to 0.05 tick) upon reaching +10% peak gain.
+    6. Pattern Parity: Enforced green retest candle on Bear Point C and expanded search window to 60 bars with staleness protection.
+    7. Geometric Precision: Added base containment check on find_anchor_hammer_baby and peak containment on find_anchor_shooting_star_baby.
+    8. Verified with 100% pass across 47 unit tests and all 18 regression tests.
+    '
+  status: RESOLVED
 - id: FEATURE-028
   title: Expert Review Phase 2 — EMA Option Rollover, IST Standardization, Option Sizing, Harami Ratio & Theta Guards
   severity: ENHANCEMENT
@@ -3481,7 +3512,7 @@ issues:
     5. Enhanced check_portfolio_risk_caps to compute realized + active unrealized floating drawdown and use option premium basis for option trades.
     6. Added account capital ceiling to cash equities in calculate_position_size (max 100% capital).
     7. Removed dead duplicate function from patterns_bear.py and aligned bear breakout SL with calculate_sl_buffer.
-    8. Switched ANCHOR_SCAN_REQUEST_FILE to canonical paths.monitor_file and wired on-demand scan flag handling into index options engine.
+    8. Switched ANCHOR_SCAN_REQUEST_FILE to canonical paths.monitor_file and wired on-demand scan flag handling into index options engine.'
   status: RESOLVED
 - id: ISSUE-081
   title: Fix Scan Tab Trade Scarcity, Token Resolution, and Timeframe Candle Time Alignment
@@ -3581,8 +3612,34 @@ issues:
     2. Phase 2 (Liquidity Gate): Created liquidity_guard.py with check_bid_ask_spread_liquidity() enforcing (Ask - Bid) / LTP <= 0.02 and book depth validation before order placement across engines and 1-Click Buy.
     3. Phase 3 (Morning Reconciler): Created morning_reconciler.py and scheduled 09:16 AM pre-flight audit in run_export_scheduler_daemon.py to reconcile broker net positions with SQLite trade_db, audit opening gaps against SL/T1, and verify account margin health.
     4. Unit test coverage expanded to 54 tests (100% pass) and master regression suite expanded to 18 suites (100% pass).'
+- id: FEATURE-029
+  family: ALGO_AUDIT_CVE
+  date_reported: '2026-09-04'
+  title: Comprehensive Algo Audit & CVE Hardening - Execution Failsafe, Morning Circuit Breaker, Retest Spacing, Post-Market Filter & Feature 5 (+BE Entry + 2%)
+  severity: HIGH
+  category: Risk Management & Pattern Execution Hardening
+  symptom: '1) When exit orders encountered REJECTED_ERROR, retry tracking was not persisted, risking rapid spam and premature memory eviction.
+    2) Positions open during volatile 09:15-09:45 AM opening lacked a catastrophic safety floor against gap-down crashes.
+    3) If candle fetch API experienced intermittent downtime or returned empty data, live tick LTP was bypassed instead of checking SL.
+    4) Feature 5: TRAIL-1 (+10% Gain Lock) set SL to exact entry (BE), which after slippage and broker STT/charges produced a net negative return.
+    5) Retest Point C in patterns_bear.py did not require a green retest candle, and Hammer Baby / Shooting Star Baby lacked mother candle containment checks.
+    6) Phantom trade in MIDCPNIFTY26SEP14750CE formed because post-market synthetic auction ticks (15:33:00) generated Anchor A, and a 70-candle runaway drop (> 40 pts) was falsely matched as Point C retest due to unbounded B-to-C distance.'
+  root_cause: 'Unbounded retry loops on order reject, absence of opening circuit breaker, coupling of tick monitoring to historical candle fetch, flat entry breakeven without profit buffer, asymmetric bear retest rules, floating baby candles, and unstripped post-15:30 auction bars with unbounded B-to-C retest search.'
+  affected_files:
+  - common/position_monitor.py
+  - common/patterns_bull.py
+  - common/patterns_bear.py
+  - common/timeframe_utils.py
+  - Notes_Inputs.txt
+  - scratch/test_cve_fixes.py
+  - scratch/run_full_regression_test.py
+  - ISSUE_MANAGEMENT.yaml
+  resolution: '1. CVE-1 & CVE-2: Updated position_monitor.py save_executed_exit to increment retry_count on REJECTED_ERROR with 15s backoff; memory eviction and trade_db updates made strictly conditional on verified broker fill (exit_ok).
+    2. CVE-3: Implemented Morning Catastrophic Circuit Breaker active during 09:15-09:45 AM (-25% for options, -12% for stocks) to prevent deep drawdowns on catastrophic opening shocks.
+    3. CVE-4: Decoupled live tick quote lookup from historical candle REST API outages in position_monitor.py.
+    4. Feature 5: Updated TRAIL-1 (+10% Gain Lock) to lock Positive Breakeven at +BE: Entry + 2% for Bull (Entry - 2% for Bear), snapped to nearest 0.05 tick.
+    5. Pattern Parity & Geometry: Enforced green retest candle for Bear Point C in patterns_bear.py; added mother candle base containment for Hammer Baby (patterns_bull.py) and peak containment for Shooting Star Baby (patterns_bear.py).
+    6. Post-Market Filter: Stripped synthetic auction candles (>= 15:30:00 IST) in timeframe_utils.py fetch_and_resample_candles for intraday timeframes.
+    7. Retest B-to-C Spacing & Runaway Excursion Guards: Restricted Point C retest search to <= 25 bars after Point B, and invalidated patterns if price rallies/drops > 1.5x risk (or reaches T1) before Point C.
+    8. Regression Test Suite: Expanded to 19 test suites in run_full_regression_test.py and 5 targeted unit tests in test_cve_fixes.py, with 100% pass across all tests.'
   status: RESOLVED
-
-
-
-

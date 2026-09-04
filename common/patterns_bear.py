@@ -184,6 +184,11 @@ def find_anchor_shooting_star_baby(df):
     if close_position > 0.40:
         return None
 
+    # 4. Containment / Location: Star must test the peak/upper region of the bullish mother candle
+    m_close = float(mother_candle['close'])
+    if b_high < (m_close * 0.995):
+        return None
+
     anchor_close = b_close
     sl_val = calculate_sl_buffer(b_high, side="BEAR")
     return {
@@ -340,7 +345,7 @@ def scan_anchor_bcd_breakout_bearish(df_entry, df_anchor, anchor_tf="", entry_tf
             continue
 
         b_idx = None
-        for i in range(e_anchor_idx + 1, min(e_anchor_idx + 30, len(df_entry))):
+        for i in range(e_anchor_idx + 1, min(e_anchor_idx + 60, len(df_entry))):
             candle = df_entry.iloc[i]
             if float(candle['close']) > a_high:
                 break
@@ -352,11 +357,30 @@ def scan_anchor_bcd_breakout_bearish(df_entry, df_anchor, anchor_tf="", entry_tf
             continue
 
         c_idx = None
-        for i in range(b_idx + 1, min(b_idx + 30, len(df_entry))):
+        risk_dist = max(0.50, a_high - a_low)
+        min_b_excursion = a_low - (1.5 * risk_dist)
+        try:
+            t1_target, _, _ = find_profit_targets_bearish(df_anchor, a_low, stop_loss=a_high)
+            if t1_target is not None and t1_target < a_low:
+                min_b_excursion = max(min_b_excursion, float(t1_target))
+        except Exception:
+            pass
+
+        for i in range(b_idx + 1, min(b_idx + 26, len(df_entry))):
             candle = df_entry.iloc[i]
-            if float(candle['close']) > a_high:
+            # Excursion guard: If price already dropped > 1.5x risk below benchmark, move is exhausted
+            if float(candle['low']) < min_b_excursion:
                 break
-            if float(candle['high']) >= a_low and float(candle['close']) < a_high:
+            c_close = float(candle['close'])
+            c_open = float(candle['open'])
+            c_high = float(candle['high'])
+            is_green = c_close > c_open
+            if c_close > a_high:
+                break
+            # Point C Retest: Must test broken benchmark a_low with green retest candle
+            # or green rejection upper wick, holding below a_high ceiling (exact parity with Bull Point C)
+            if ((c_high >= a_low and c_close <= a_high and is_green) or
+                (c_high >= a_high and c_close <= a_high and c_close > float(anchor_candle['open']) and is_green)):
                 c_idx = i
                 break
 
@@ -365,7 +389,7 @@ def scan_anchor_bcd_breakout_bearish(df_entry, df_anchor, anchor_tf="", entry_tf
 
         d_idx = None
         is_near_close_d = False
-        for i in range(c_idx + 1, min(c_idx + 30, len(df_entry))):
+        for i in range(c_idx + 1, min(c_idx + 60, len(df_entry))):
             candle = df_entry.iloc[i]
             c_close = float(candle['close'])
             c_open = float(candle['open'])
@@ -399,6 +423,10 @@ def scan_anchor_bcd_breakout_bearish(df_entry, df_anchor, anchor_tf="", entry_tf
                             break
 
         if d_idx is None:
+            continue
+
+        candles_since_d = len(df_entry) - 1 - d_idx
+        if candles_since_d > 60:
             continue
 
         intermediate_bars = df_entry.iloc[e_anchor_idx:d_idx + 1]

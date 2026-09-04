@@ -78,7 +78,7 @@ Move API credentials to .env file (Local & Cloud VM)
     2. Systemd services (`trading-options.service`, `trading-stock.service`, `trading-export.service`): add `EnvironmentFile=$APP_DIR/.env`.
     3. `sync_to_oracle_cloud.py`: Ensure `.env` is skipped from tar package to preserve VM credentials.
 --------------------------------------------------------------------------------
-Feature:5 : Pending / Future Idea
+Feature:5 : Completed
 Positive Breakeven (+BE: Entry + 2% / +2 Ticks) Gain Lock on +10% Spikes
 
 • Concept: When an option contract moves into substantial profit (High >= Entry + 10%), trail Stop-Loss to `Entry + 2%` or `Entry + 2 Ticks` (e.g. ₹5.85 on ₹5.75 entry) instead of flat Breakeven (₹5.75).

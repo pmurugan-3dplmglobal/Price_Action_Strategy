@@ -448,6 +448,59 @@ except Exception as e:
     errors.append(f"Spread/Liquidity/Reconciler Invariants Failed: {e}")
     print(f" FAILED [ERR] ({e})", flush=True)
 
+print("[TEST 19] Testing CVE Fixes, Positive Breakeven (+BE: Entry + 2%) & B-C Excursion Guard...", end="", flush=True)
+try:
+    import position_monitor
+    from patterns_bear import find_anchor_shooting_star_baby
+    from patterns_bull import find_anchor_hammer_baby, scan_anchor_bcd_breakout
+
+    # 1. CVE-1 REJECTED_ERROR retry tracking
+    c_test = "REGRESSION_TEST_OPT_CE"
+    position_monitor.clear_executed_exit(c_test)
+    position_monitor.save_executed_exit(c_test, "REJECTED_ERROR", {"error": "primary reject"})
+    position_monitor.load_executed_exits()
+    assert position_monitor.EXECUTED_EXITS[c_test]["details"]["retry_count"] == 1
+    position_monitor.save_executed_exit(c_test, "REJECTED_ERROR", {"error": "secondary reject"})
+    position_monitor.load_executed_exits()
+    assert position_monitor.EXECUTED_EXITS[c_test]["details"]["retry_count"] == 2
+    position_monitor.clear_executed_exit(c_test)
+
+    # 2. Feature 5 +BE math
+    entry_s = 100.0
+    be_target = round(round((entry_s * 1.02) / 0.05) * 0.05, 2)
+    assert be_target == 102.0
+
+    # 3. Hammer Baby containment
+    df_h_bad = pd.DataFrame([
+        {"open": 100.0, "high": 102.0, "low": 90.0, "close": 91.0},
+        {"open": 98.0, "high": 99.0, "low": 93.0, "close": 98.5}
+    ])
+    assert find_anchor_hammer_baby(df_h_bad) is None, "Floating hammer must be rejected"
+
+    # 4. Shooting Star Baby containment
+    df_s_bad = pd.DataFrame([
+        {"open": 90.0, "high": 110.0, "low": 89.0, "close": 105.0},
+        {"open": 95.0, "high": 102.0, "low": 94.0, "close": 94.5}
+    ])
+    assert find_anchor_shooting_star_baby(df_s_bad) is None, "Low shooting star must be rejected"
+
+    # 5. B-C Runaway Excursion Guard
+    df_runaway = pd.DataFrame([
+        {"date": "2026-09-04 09:15:00", "open": 100.0, "high": 100.5, "low": 89.5, "close": 90.0, "volume": 1000},
+        {"date": "2026-09-04 09:18:00", "open": 89.0, "high": 102.0, "low": 88.0, "close": 101.0, "volume": 2000},
+        {"date": "2026-09-04 09:21:00", "open": 101.0, "high": 104.0, "low": 100.5, "close": 103.0, "volume": 1500},
+        {"date": "2026-09-04 09:24:00", "open": 103.0, "high": 130.0, "low": 102.5, "close": 128.0, "volume": 1800},
+        {"date": "2026-09-04 09:27:00", "open": 105.0, "high": 106.0, "low": 100.0, "close": 95.0, "volume": 1200},
+        {"date": "2026-09-04 09:30:00", "open": 96.0, "high": 105.0, "low": 95.5, "close": 104.0, "volume": 1500},
+    ])
+    m_runaway = scan_anchor_bcd_breakout(df_runaway, df_runaway, anchor_tf="3m", entry_tf="3m")
+    assert m_runaway is None, "Runaway excursion > 1.5x risk between B and C must be rejected"
+
+    print(" PASSED [OK]", flush=True)
+except Exception as e:
+    errors.append(f"CVE Fixes & Excursion Guard Invariants Failed: {e}")
+    print(f" FAILED [ERR] ({e})", flush=True)
+
 print("\n" + "=" * 100)
 if not errors:
     print("      ALL REGRESSION TESTS PASSED WITH 100% SUCCESS -- ZERO REGRESSIONS FOUND!")

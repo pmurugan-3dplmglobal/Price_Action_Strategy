@@ -178,6 +178,11 @@ def find_anchor_hammer_baby(df):
     if close_position < 0.60:
         return None
 
+    # 4. Containment / Location: Hammer must test the lower base/support of the bearish mother candle
+    m_close = float(mother_candle['close'])
+    if b_low > (m_close * 1.005):
+        return None
+
     anchor_close = b_close
     sl_val = calculate_sl_buffer(b_low, side="BULL")
     return {
@@ -362,6 +367,7 @@ def scan_anchor_bcd_breakout(df_entry, df_anchor, anchor_tf="", entry_tf="", ena
         invalidation = cand["invalidation"]
         anchor_name = cand["anchor_name"]
         a_low = cand["a_low"]
+        t1 = cand.get("t1")
 
         remaining = df_entry.iloc[a_idx + 1:]
         if len(remaining) < 3:
@@ -379,8 +385,19 @@ def scan_anchor_bcd_breakout(df_entry, df_anchor, anchor_tf="", entry_tf="", ena
         # Point C: FIRST candle AFTER B with red retest (dips to/close to benchmark, stays above A.low)
         c_slice = df_entry.iloc[b_idx + 1:]
         c_idx = None
+        risk_dist = max(0.50, benchmark - a_low)
+        max_b_excursion = benchmark + (1.5 * risk_dist)
+        if t1 is not None and t1 > benchmark:
+            max_b_excursion = min(max_b_excursion, float(t1))
+
         for j in range(len(c_slice)):
+            # Spacing guard: Retest C must form within 25 candles of breakout B
+            if j > 25:
+                break
             c_row = c_slice.iloc[j]
+            # Excursion guard: If price already rallied > 1.5x risk or reached T1, move is exhausted
+            if float(c_row['high']) > max_b_excursion:
+                break
             c_low = float(c_row['low'])
             c_close = float(c_row['close'])
             c_open = float(c_row['open'])

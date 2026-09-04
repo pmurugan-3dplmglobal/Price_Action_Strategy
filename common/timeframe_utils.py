@@ -294,6 +294,15 @@ def fetch_and_resample_candles(kite, token, from_date, to_date, timeframe_str):
         return pd.DataFrame()
 
     df = pd.DataFrame(raw)
+    # Filter out post-market settlement / closing auction candles (>= 15:30 IST) for intraday data
+    if not df.empty and 'date' in df.columns and fetch_tf not in ["day", "daily", "week", "weekly"]:
+        try:
+            d_col = pd.to_datetime(df['date'])
+            cutoff_time = dt.strptime("15:30:00", "%H:%M:%S").time()
+            df = df[d_col.dt.time < cutoff_time].reset_index(drop=True)
+        except Exception as filter_err:
+            logging.debug(f"Post-market candle filtering error: {filter_err}")
+
     _HISTORICAL_CANDLE_CACHE[cache_key] = (df.copy(), now)
     return resample_timeframe(df, timeframe_str)
 

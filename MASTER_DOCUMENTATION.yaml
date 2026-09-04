@@ -72,8 +72,9 @@ architecture:
       test_option_strike_fetch.py: "Zerodha NFO Option Strike token & candle fetch test script"
       test_spot_scan.py: "Spot & Option pattern scanner verification test script"
     scratch:
-      run_full_regression_test.py: "17-test Master Strategy Regression Test Suite (Imports, Auth, Invalidation, Serializers, Chart API, DB Invariants, Paths, Trailed-SL Floor, JS V8, Parabolic Math, Auth, VIX Gate, Option Sizing, Harami Ratio)"
-      test_vix_portfolio_volume.py: "38-test Unit Verification Suite (VIX Regimes, Portfolio Caps, 235-Stock Sector Map, BCD Volume Profile, EMA Rollover, IST Timing, Harami Ratios, Bear Date Mapping)"
+      run_full_regression_test.py: "19-test Master Strategy Regression Test Suite (Imports, Auth, Invalidation, Serializers, Chart API, DB Invariants, Paths, Trailed-SL Floor, JS V8, Parabolic Math, Auth, VIX Gate, Option Sizing, Harami Ratio, Debit Spreads, Liquidity Gate, 09:16 AM Reconciler, CVE-1..4 Hardening, Feature 5 Positive Breakeven, B-C Excursion Guards)"
+      test_vix_portfolio_volume.py: "47-test Unit Verification Suite (VIX Regimes, Portfolio Caps, 235-Stock Sector Map, BCD Volume Profile, EMA Rollover, IST Timing, Harami Ratios, Bear Date Mapping, Capital Ceilings, Liquidity Shield)"
+      test_cve_fixes.py: "6-test Targeted CVE & Feature Verification Suite (CVE-1..4, Feature 5 Positive Breakeven, Hammer/Shooting Star Containment, B-C Excursion Guard)"
       analyze_all_active.py: "Active position metrics analysis utility"
       apply_30m_targets_to_all_active.py: "Batch target updater for active trades"
       audit_targets.py: "Target calculation auditor script"

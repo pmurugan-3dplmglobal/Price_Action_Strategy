@@ -134,7 +134,7 @@ def close_stock_position(kite, pos, live_market=True, product=None, qty_override
     contract = pos.get("contract") or pos.get("symbol")
     if not contract:
         logging.error("close_stock_position failed: missing contract/symbol name")
-        return
+        return {"success": False, "reason": "NO_CONTRACT"}
 
     qty = qty_override if qty_override is not None else pos.get("position_size", pos.get("quantity", 1))
 
@@ -148,7 +148,7 @@ def close_stock_position(kite, pos, live_market=True, product=None, qty_override
                     if live_held <= 0:
                         logging.info(f"[ALREADY CLOSED] Stock {contract} has {live_held} quantity in Kite net positions. Skipping duplicate exit.")
                         save_executed_exit(contract, "ALREADY_CLOSED", {"status": "ZERO_QTY"})
-                        return
+                        return {"success": True, "order_id": "ALREADY_CLOSED", "status": "ZERO_QTY"}
                     qty = min(qty, live_held)
                     break
         except Exception as p_err:
@@ -188,6 +188,26 @@ def close_stock_position(kite, pos, live_market=True, product=None, qty_override
         if is_reentry:
             logging.info(f"[EXIT GUARD RESET] Stock {contract} is a fresh re-entry (entry_time={pos_entry_time} > exit_ts={prev_ts}). Resetting stale exit guard order {oid}.")
             clear_executed_exit(contract)
+        elif oid == "REJECTED_ERROR":
+            # CVE-1 FIX: Handle REJECTED_ERROR with backoff retry rather than permanent lockout
+            elapsed_secs = 999
+            if prev_ts:
+                try:
+                    elapsed_secs = (dt.now() - dt.fromisoformat(prev_ts.split("+")[0])).total_seconds()
+                except Exception:
+                    pass
+            retry_count = int(prev.get("details", {}).get("retry_count", 0))
+            if elapsed_secs < 15:
+                logging.info(f"[EXIT GUARD BACKOFF] Stock {contract} previous exit failed. Backing off ({elapsed_secs:.0f}s < 15s).")
+                return {"success": False, "order_id": "REJECTED_ERROR", "status": "BACKOFF"}
+            elif retry_count < 5:
+                logging.warning(f"[EXIT RETRY] Retrying failed exit for stock {contract} (attempt {retry_count + 1}/5, elapsed={elapsed_secs:.0f}s)...")
+                clear_executed_exit(contract)
+            else:
+                logging.critical(f"[EXIT RETRY EXHAUSTED] All 5 exit attempts failed for stock {contract}! Manual intervention required.")
+                if elapsed_secs >= 60:
+                    clear_executed_exit(contract)
+                return {"success": False, "order_id": "REJECTED_ERROR", "status": "MAX_RETRIES_EXCEEDED"}
         elif oid and kite and live_market and oid != "ALREADY_CLOSED":
             o_status = None
             try:
@@ -205,7 +225,7 @@ def close_stock_position(kite, pos, live_market=True, product=None, qty_override
                             pass
                     if elapsed_secs < 15:
                         logging.info(f"[EXIT GUARD BLOCK] Stock {contract} exit order {oid} is {o_status} (placed {elapsed_secs:.0f}s ago). Waiting for fill.")
-                        return
+                        return {"success": False, "order_id": oid, "status": "WAITING_FILL"}
                     logging.warning(f"[PENDING LIMIT EXIT DETECTED] Stock order {oid} for {contract} is OPEN/UNFILLED after {elapsed_secs:.0f}s. Cancelling and executing fallback...")
                     try:
                         kite.cancel_order(variety=kite.VARIETY_REGULAR, order_id=oid)
@@ -221,19 +241,19 @@ def close_stock_position(kite, pos, live_market=True, product=None, qty_override
                             pass
                     if elapsed_secs < 30:
                         logging.info(f"[EXIT GUARD COOLDOWN] Stock order {oid} for {contract} was {o_status} ({elapsed_secs:.0f}s ago). Backing off before retry.")
-                        return
+                        return {"success": False, "order_id": oid, "status": "COOLDOWN"}
                     logging.warning(f"[EXIT GUARD RESET] Stock order {oid} for {contract} was {o_status} > 30s ago. Retrying exit.")
                     clear_executed_exit(contract)
                 else:
                     logging.info(f"[EXIT GUARD BLOCK] Stock {contract} exit order {oid} is {o_status or 'UNKNOWN'}. Skipping duplicate exit call.")
-                    return
+                    return {"success": False, "order_id": oid, "status": o_status or "UNKNOWN"}
             except Exception as check_err:
                 logging.debug(f"Could not verify exit order status for {contract}: {check_err}")
                 logging.info(f"[EXIT GUARD BLOCK] Stock {contract} exit order {oid} status could not be verified. Skipping duplicate exit call.")
-                return
+                return {"success": False, "order_id": oid, "status": "VERIFY_FAILED"}
         else:
             logging.info(f"[EXIT GUARD BLOCK] Stock {contract} exit order already submitted (Order ID: {prev.get('order_id')}). Skipping duplicate exit call.")
-            return
+            return {"success": False, "order_id": str(prev.get('order_id')), "status": "ALREADY_SUBMITTED"}
 
     target_product = product
     try:
@@ -263,6 +283,7 @@ def close_stock_position(kite, pos, live_market=True, product=None, qty_override
             )
             save_executed_exit(contract, oid, {"type": "LIMIT", "price": price, "qty": qty})
             logging.info(f"Closed stock {contract} with product {target_product} (Order ID: {oid})")
+            return {"success": True, "order_id": str(oid), "type": "LIMIT", "price": price, "qty": qty}
         except Exception as primary_err:
             logging.warning(f"Primary stock exit with {target_product} failed for {contract}: {primary_err}. Retrying with fallback...")
             alt_product = kite.PRODUCT_MIS if target_product == kite.PRODUCT_CNC else kite.PRODUCT_CNC
@@ -275,6 +296,7 @@ def close_stock_position(kite, pos, live_market=True, product=None, qty_override
                 )
                 save_executed_exit(contract, oid, {"type": "LIMIT_ALT", "price": price, "qty": qty})
                 logging.info(f"Fallback stock exit SUCCESS for {contract} with product {alt_product} (Order ID: {oid})")
+                return {"success": True, "order_id": str(oid), "type": "LIMIT_ALT", "price": price, "qty": qty}
             except Exception as alt_err:
                 try:
                     oid = kite.place_order(
@@ -285,12 +307,15 @@ def close_stock_position(kite, pos, live_market=True, product=None, qty_override
                     )
                     save_executed_exit(contract, oid, {"type": "MARKET_EMERGENCY", "qty": qty})
                     logging.info(f"Emergency MARKET stock exit SUCCESS for {contract} with product {target_product} (Order ID: {oid})")
+                    return {"success": True, "order_id": str(oid), "type": "MARKET_EMERGENCY", "qty": qty}
                 except Exception as m_final_err:
                     save_executed_exit(contract, "REJECTED_ERROR", {"error": str(m_final_err)})
                     logging.error(f"All stock exit attempts failed for {contract}: primary={primary_err}, alt={alt_err}, market={m_final_err}")
+                    return {"success": False, "order_id": "REJECTED_ERROR", "error": str(m_final_err)}
     except Exception as e:
         save_executed_exit(contract, "REJECTED_ERROR", {"error": str(e)})
         logging.error(f"Stock exit failed for {contract}: {e}")
+        return {"success": False, "order_id": "REJECTED_ERROR", "error": str(e)}
 
 EXECUTED_EXITS_FILE = paths.EXECUTED_EXITS_FILE
 EXECUTED_EXITS = {}
@@ -313,10 +338,14 @@ def load_executed_exits():
 def save_executed_exit(contract, order_id, details=None):
     global EXECUTED_EXITS
     load_executed_exits()
+    details = dict(details) if details else {}
+    if str(order_id) == "REJECTED_ERROR":
+        prev_retries = int(EXECUTED_EXITS.get(contract, {}).get("details", {}).get("retry_count", 0))
+        details["retry_count"] = prev_retries + 1
     EXECUTED_EXITS[contract] = {
         "order_id": str(order_id),
         "timestamp": dt.now().isoformat(),
-        "details": details or {}
+        "details": details
     }
     try:
         os.makedirs(os.path.dirname(EXECUTED_EXITS_FILE), exist_ok=True)
@@ -402,7 +431,7 @@ def close_position(kite, pos, live_market=True, product=None, qty_override=None)
                     if live_held <= 0:
                         logging.info(f"[ALREADY CLOSED] {contract} has {live_held} quantity in Kite net positions. Skipping exit order.")
                         save_executed_exit(contract, "ALREADY_CLOSED", {"status": "ZERO_QTY"})
-                        return
+                        return {"success": True, "order_id": "ALREADY_CLOSED", "status": "ZERO_QTY"}
                     qty = min(qty, live_held)
                     break
         except Exception as p_err:
@@ -425,7 +454,7 @@ def close_position(kite, pos, live_market=True, product=None, qty_override=None)
 
     if kite and live_market and not is_market_open():
         logging.info(f"[MARKET CLOSED] Skipping live Zerodha exit order for {contract} outside market hours (09:15-15:30 IST). Position status logged.")
-        return
+        return {"success": False, "reason": "MARKET_CLOSED"}
 
     # Fetch live quote for LTP & Bid price
     ltp = 0.0
@@ -469,6 +498,26 @@ def close_position(kite, pos, live_market=True, product=None, qty_override=None)
         if is_reentry:
             logging.info(f"[EXIT GUARD RESET] Contract {contract} is a fresh re-entry (entry_time={pos_entry_time} > exit_ts={prev_ts}). Resetting stale exit guard {oid}.")
             clear_executed_exit(contract)
+        elif oid == "REJECTED_ERROR":
+            # CVE-1 FIX: Handle REJECTED_ERROR with backoff retry rather than permanent lockout
+            elapsed_secs = 999
+            if prev_ts:
+                try:
+                    elapsed_secs = (dt.now() - dt.fromisoformat(prev_ts.split("+")[0])).total_seconds()
+                except Exception:
+                    pass
+            retry_count = int(prev.get("details", {}).get("retry_count", 0))
+            if elapsed_secs < 15:
+                logging.info(f"[EXIT GUARD BACKOFF] Contract {contract} previous exit failed. Backing off ({elapsed_secs:.0f}s < 15s).")
+                return {"success": False, "order_id": "REJECTED_ERROR", "status": "BACKOFF"}
+            elif retry_count < 5:
+                logging.warning(f"[EXIT RETRY] Retrying failed exit for contract {contract} (attempt {retry_count + 1}/5, elapsed={elapsed_secs:.0f}s)...")
+                clear_executed_exit(contract)
+            else:
+                logging.critical(f"[EXIT RETRY EXHAUSTED] All 5 exit attempts failed for contract {contract}! Manual intervention required.")
+                if elapsed_secs >= 60:
+                    clear_executed_exit(contract)
+                return {"success": False, "order_id": "REJECTED_ERROR", "status": "MAX_RETRIES_EXCEEDED"}
         elif oid and kite and live_market and oid != "ALREADY_CLOSED":
             o_status = None
             try:
@@ -486,7 +535,7 @@ def close_position(kite, pos, live_market=True, product=None, qty_override=None)
                             pass
                     if elapsed_secs < 15:
                         logging.info(f"[EXIT GUARD BLOCK] {contract} exit order {oid} is {o_status} (placed {elapsed_secs:.0f}s ago). Waiting for fill.")
-                        return
+                        return {"success": False, "order_id": oid, "status": "WAITING_FILL"}
                     logging.warning(f"[PENDING LIMIT EXIT DETECTED] Order {oid} for {contract} has been OPEN for {elapsed_secs:.0f}s. Cancelling order and executing aggressive Marketable LIMIT exit fallback...")
                     try:
                         kite.cancel_order(variety=kite.VARIETY_REGULAR, order_id=oid)
@@ -502,7 +551,7 @@ def close_position(kite, pos, live_market=True, product=None, qty_override=None)
                     )
                     save_executed_exit(contract, m_oid, {"type": "MARKETABLE_LIMIT_FALLBACK", "price": fallback_price, "qty": qty})
                     logging.info(f"Fallback Marketable LIMIT exit SUCCESS for {contract} at price {fallback_price} on exchange {target_exch} (Order ID: {m_oid})")
-                    return
+                    return {"success": True, "order_id": str(m_oid), "type": "MARKETABLE_LIMIT_FALLBACK", "price": fallback_price, "qty": qty}
                 elif o_status in ["CANCELLED", "REJECTED", "EXPIRED", "CANCELLED ALL"]:
                     elapsed_secs = 0
                     if prev_ts:
@@ -512,23 +561,23 @@ def close_position(kite, pos, live_market=True, product=None, qty_override=None)
                             pass
                     if elapsed_secs < 30:
                         logging.info(f"[EXIT GUARD COOLDOWN] Order {oid} for {contract} was {o_status} ({elapsed_secs:.0f}s ago). Backing off before retry.")
-                        return
+                        return {"success": False, "order_id": oid, "status": "COOLDOWN"}
                     logging.warning(f"[EXIT GUARD RESET] Order {oid} for {contract} was {o_status} > 30s ago ({elapsed_secs:.0f}s). Retrying exit.")
                     clear_executed_exit(contract)
                 else:
                     logging.info(f"[EXIT GUARD BLOCK] {contract} exit order {oid} is {o_status or 'UNKNOWN'}. Skipping duplicate exit call.")
-                    return
+                    return {"success": False, "order_id": oid, "status": o_status or "UNKNOWN"}
             except Exception as check_err:
                 logging.debug(f"Could not verify exit order status for {contract}: {check_err}")
                 logging.info(f"[EXIT GUARD BLOCK] {contract} exit order {oid} status could not be verified. Skipping duplicate exit call.")
-                return
+                return {"success": False, "order_id": oid, "status": "VERIFY_FAILED"}
         else:
             logging.info(f"[EXIT GUARD BLOCK] {contract} exit order already submitted (Order ID: {prev.get('order_id')}). Skipping duplicate exit call.")
-            return
+            return {"success": False, "order_id": str(prev.get('order_id')), "status": "ALREADY_SUBMITTED"}
 
     if not live_market:
         logging.info(f"[BACKTEST EXIT] {contract}")
-        return
+        return {"success": True, "reason": "BACKTEST"}
 
     try:
         oid = kite.place_order(
@@ -572,6 +621,7 @@ def close_position(kite, pos, live_market=True, product=None, qty_override=None)
                     logging.info(f"[SPREAD EXIT] Covered short leg {leg2_c} (Order ID: {oid_leg2}, Qty: {leg2_qty})")
                 except Exception as leg2_err:
                     logging.error(f"[SPREAD EXIT ERROR] Failed to exit short leg {leg2_c}: {leg2_err}")
+        return {"success": True, "order_id": str(oid), "type": "LIMIT", "price": price, "qty": qty}
     except Exception as primary_err:
         logging.warning(f"Primary LIMIT exit with {target_product} on {target_exch} failed for {contract}: {primary_err}. Retrying with aggressive limit fallback...")
         try:
@@ -585,6 +635,7 @@ def close_position(kite, pos, live_market=True, product=None, qty_override=None)
             if not qty_override:
                 save_executed_exit(contract, oid, {"type": "LIMIT_FALLBACK", "price": fallback_price, "qty": qty})
             logging.info(f"Fallback Marketable LIMIT exit SUCCESS for {contract} on exchange {target_exch} at price {fallback_price} with product {target_product}")
+            return {"success": True, "order_id": str(oid), "type": "LIMIT_FALLBACK", "price": fallback_price, "qty": qty}
         except Exception as m_err:
             try:
                 oid = kite.place_order(
@@ -596,9 +647,11 @@ def close_position(kite, pos, live_market=True, product=None, qty_override=None)
                 if not qty_override:
                     save_executed_exit(contract, oid, {"type": "MARKET_EMERGENCY", "qty": qty})
                 logging.info(f"Emergency MARKET exit SUCCESS for {contract} on exchange {target_exch} with product {target_product}")
+                return {"success": True, "order_id": str(oid), "type": "MARKET_EMERGENCY", "qty": qty}
             except Exception as m_final_err:
                 save_executed_exit(contract, "REJECTED_ERROR", {"error": str(m_final_err)})
                 logging.error(f"All exit attempts failed for {contract}: primary={primary_err}, alt={m_err}, market={m_final_err}")
+                return {"success": False, "order_id": "REJECTED_ERROR", "error": str(m_final_err)}
 
 def _load_program_config_file():
     possible_paths = [
@@ -752,17 +805,6 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                 logging.warning(f"[MONITOR SKIP] Could not resolve valid token for {contract}. Skipping spot token fallback to prevent target corruption.")
                 continue
 
-            pos_tf = pos.get("timeframe") or timeframe_entry
-            df = fetch_and_resample_candles(kite, token, from_date, to_date, pos_tf)
-            if df.empty:
-                continue
-
-            last = df.iloc[-1]
-            cp = float(last['close'])
-            tid = pos.get("trade_id")
-            is_stock = pos.get("position_type") == "stock"
-            current_sl = float(pos.get("current_sl", 0))
-
             # Fetch live quote: Try WebSocket tick first (sub-millisecond), fallback to REST quote
             live_ltp = 0.0
             if ws_mon and token:
@@ -773,7 +815,7 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
             if live_ltp <= 0 and kite:
                 try:
                     contract_name = pos.get("contract") or pos.get("symbol") or sym
-                    exch = "NSE" if is_stock else ("BFO" if ("SENSEX" in c_str or "BSE" in c_str) else "NFO")
+                    exch = "NSE" if is_stock_spot else ("BFO" if ("SENSEX" in c_str or "BSE" in c_str) else "NFO")
                     q_key = f"{exch}:{contract_name}"
                     q_res = kite.quote([q_key])
                     if q_key in q_res:
@@ -781,6 +823,32 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                         live_ltp = float(q_info.get("last_price", 0))
                 except Exception as q_err:
                     logging.debug(f"Live quote fetch error for {sym}: {q_err}")
+
+            pos_tf = pos.get("timeframe") or timeframe_entry
+            df = fetch_and_resample_candles(kite, token, from_date, to_date, pos_tf)
+            if df.empty:
+                # CVE-4 FIX: Decouple emergency tick protection from candle REST API outages
+                entry_s = float(pos.get("entry_spot") or pos.get("entry_price") or 0.0)
+                current_sl = float(pos.get("current_sl", 0))
+                is_stock = pos.get("position_type") == "stock"
+                if live_ltp > 0 and entry_s > 0:
+                    max_loss_pct = 0.15 if not is_stock else 0.08
+                    hard_max_sl = round(entry_s * (1.0 - max_loss_pct), 2)
+                    if live_ltp <= hard_max_sl or (current_sl > 0 and live_ltp <= current_sl * 0.95):
+                        logging.critical(f"[CANDLE_API_OUTAGE_SHIELD] Candle fetch empty for {sym}, but live LTP {live_ltp:.2f} breached emergency threshold (Entry {entry_s:.2f}, SL {current_sl:.2f}). Executing emergency exit.")
+                        if is_stock:
+                            exit_res = close_stock_position(kite, pos, live, product_type)
+                        else:
+                            exit_res = close_position(kite, pos, live, product_type)
+                        if exit_res and exit_res.get("success"):
+                            to_clear.append(sym)
+                continue
+
+            last = df.iloc[-1]
+            cp = float(last['close'])
+            tid = pos.get("trade_id")
+            is_stock = pos.get("position_type") == "stock"
+            current_sl = float(pos.get("current_sl", 0))
 
             # Compute High (hp) strictly for candles AFTER trade entry_time + live_ltp
             entry_time_str = sanitize_entry_time(pos)
@@ -864,21 +932,27 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
 
                 if should_squareoff:
                     logging.info(f"[{day_name.upper()} 15:15 EOD SQUAREOFF] Closing {sym} ({contract}) | {squareoff_reason}")
-                    close_position(kite, pos, live, product_type)
-                    exit_price = curr_p
-                    pnl = curr_pnl_pct
-                    log_fn(sym, pos.get("pattern", ""), pos_tf, f"EXIT_EOD_{day_name.upper()}", "CLOSED",
-                           f"{squareoff_reason} (Exit @ {exit_price:.2f})", pnl,
-                           entry=entry_s, sl=pos.get("current_sl", ""), target=pos.get("t1", ""),
-                           event_time=last.get('date'))
-                    if tid:
-                        trade_db.update_trade(tid, {
-                            "status": "COMPLETED",
-                            "exit_time": dt.now().strftime("%Y-%m-%d %H:%M:%S"),
-                            "pnl_percent": round(pnl, 2),
-                            "details": f"{squareoff_reason} | Exit @ {exit_price:.2f}"
-                        })
-                    to_clear.append(sym)
+                    exit_res = close_position(kite, pos, live, product_type)
+                    exit_ok = True
+                    if live and kite:
+                        exit_ok = bool(exit_res and exit_res.get("success"))
+                    if exit_ok:
+                        exit_price = curr_p
+                        pnl = curr_pnl_pct
+                        log_fn(sym, pos.get("pattern", ""), pos_tf, f"EXIT_EOD_{day_name.upper()}", "CLOSED",
+                               f"{squareoff_reason} (Exit @ {exit_price:.2f})", pnl,
+                               entry=entry_s, sl=pos.get("current_sl", ""), target=pos.get("t1", ""),
+                               event_time=last.get('date'))
+                        if tid:
+                            trade_db.update_trade(tid, {
+                                "status": "COMPLETED",
+                                "exit_time": dt.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                "pnl_percent": round(pnl, 2),
+                                "details": f"{squareoff_reason} | Exit @ {exit_price:.2f}"
+                            })
+                        to_clear.append(sym)
+                    else:
+                        logging.critical(f"[EOD_SQUAREOFF FAILED] EOD exit order for {sym} failed or pending ({exit_res}). Retaining for retry.")
                     continue
 
             # 1) SL Evaluation (Separated SL Monitor: Skipped 09:15-09:45 AM, Active at 09:45 AM+)
@@ -889,8 +963,23 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
             if current_sl > 0:
                 sl_floor = get_sl_floor_time(pos)
                 if is_before_0945:
-                    # Target monitoring runs from 09:15 AM, but SL is skipped until 09:45 AM
-                    pass
+                    # Target monitoring runs from 09:15 AM, structural candle SL is skipped until 09:45 AM.
+                    # CVE-3 FIX: Morning Catastrophic Circuit Breaker active 09:15-09:45 AM.
+                    # Protects against catastrophic opening gap-downs (>= 25% for options, >= 12% for stocks).
+                    entry_s = float(pos.get("entry_spot") or pos.get("entry_price") or 0.0)
+                    if entry_s > 0 and live_ltp > 0 and not is_outlier_entry:
+                        if not is_stock and live_ltp <= (entry_s * 0.75):
+                            sl_hit = True
+                            drop_pct = (entry_s - live_ltp) / entry_s * 100.0
+                            sl_reason = f"MORNING_CATASTROPHIC_CIRCUIT_25PCT (Option LTP {live_ltp:.2f} down {drop_pct:.1f}% from entry {entry_s:.2f})"
+                            cp = live_ltp
+                            event_time = last.get('date')
+                        elif is_stock and live_ltp <= (entry_s * 0.88):
+                            sl_hit = True
+                            drop_pct = (entry_s - live_ltp) / entry_s * 100.0
+                            sl_reason = f"MORNING_CATASTROPHIC_CIRCUIT_12PCT (Stock LTP {live_ltp:.2f} down {drop_pct:.1f}% from entry {entry_s:.2f})"
+                            cp = live_ltp
+                            event_time = last.get('date')
                 elif is_start_0945:
                     # 09:45 AM Failsafe Check: If trading below SL & prev candle closed below SL & current candle trading below SL
                     prev_date = str(df.iloc[-2]['date']) if len(df) >= 2 else ""
@@ -1022,28 +1111,34 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
             if sl_hit:
                 logging.warning(f"SL [{sl_reason}]: {sym} at {cp} (TF: {pos_tf})")
                 if is_stock:
-                    close_stock_position(kite, pos, live, product_type)
+                    exit_res = close_stock_position(kite, pos, live, product_type)
                 else:
-                    close_position(kite, pos, live, product_type)
-                entry_s = pos.get("entry_spot", 0)
-                # Exit PnL must reflect the actual live price at trigger time, NOT a
-                # stale historical bar close (which caused -12.68% bookings on profitable
-                # fills, e.g. LT26AUG4050PE filled ~80.25 but booked at 50.60).
-                exit_price = live_ltp if live_ltp > 0 else (cp if cp > 0 else current_sl)
-                pnl = ((exit_price - entry_s) / entry_s * 100) if entry_s else 0
-                log_fn(sym, pos.get("pattern", ""), pos_tf, "EXIT_SL", "CLOSED",
-                       f"SL hit [{sl_reason}]: {exit_price:.2f}", pnl,
-                       entry=entry_s, sl=current_sl, target=pos.get("t1", ""),
-                       event_time=event_time)
-                if tid:
-                    trade_db.update_trade(tid, {
-                        "status": "SL_HIT",
-                        "exit_time": dt.now().strftime("%Y-%m-%d %H:%M:%S"),
-                        "pnl_percent": round(pnl, 2),
-                        "details": f"SL hit [{sl_reason}] | TF: {pos_tf}"
-                    })
-                to_clear.append(sym)
+                    exit_res = close_position(kite, pos, live, product_type)
+                
+                exit_ok = True
+                if live and kite:
+                    exit_ok = bool(exit_res and exit_res.get("success"))
+
+                if exit_ok:
+                    entry_s = pos.get("entry_spot", 0)
+                    exit_price = live_ltp if live_ltp > 0 else (cp if cp > 0 else current_sl)
+                    pnl = ((exit_price - entry_s) / entry_s * 100) if entry_s else 0
+                    log_fn(sym, pos.get("pattern", ""), pos_tf, "EXIT_SL", "CLOSED",
+                           f"SL hit [{sl_reason}]: {exit_price:.2f}", pnl,
+                           entry=entry_s, sl=current_sl, target=pos.get("t1", ""),
+                           event_time=event_time)
+                    if tid:
+                        trade_db.update_trade(tid, {
+                            "status": "SL_HIT",
+                            "exit_time": dt.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            "pnl_percent": round(pnl, 2),
+                            "details": f"SL hit [{sl_reason}] | TF: {pos_tf}"
+                        })
+                    to_clear.append(sym)
+                else:
+                    logging.critical(f"[EXIT_SL FAILED] Exit order for {sym} failed or pending ({exit_res}). Retaining in memory for retry.")
                 continue
+
             t1_val = float(pos.get("t1")) if pos.get("t1") is not None and pos.get("t1") != "N/A" else None
             t2_val = float(pos.get("t2")) if pos.get("t2") is not None and pos.get("t2") != "N/A" else None
             t3_val = float(pos.get("t3")) if pos.get("t3") is not None and pos.get("t3") != "N/A" else None
@@ -1065,19 +1160,25 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
             entry_s = float(pos.get("entry_spot") or pos.get("entry_price") or 0.0)
             gain_pct = ((hp - entry_s) / entry_s * 100) if entry_s > 0 else 0.0
 
-            # Breakeven Trail Stage 1: Triggered when peak gain >= +10% (protects green trades from turning red)
+            # Feature 5: Positive Breakeven (+BE: Entry + 2%) Triggered when peak gain >= +10%
             if pos.get("trailing_stage", 0) == 0 and gain_pct >= 10.0 and has_higher_targets:
                 curr_sl = float(pos.get("current_sl") or 0.0)
-                new_sl = max(curr_sl, entry_s) if str(pos.get("side","CE")).upper() in ["CE", "BUY", "BULL"] else min(curr_sl, entry_s) if curr_sl > 0 else entry_s
+                is_bull = str(pos.get("side","CE")).upper() in ["CE", "BUY", "BULL"]
+                if is_bull:
+                    be_target = round(round((entry_s * 1.02) / 0.05) * 0.05, 2)
+                    new_sl = max(curr_sl, be_target)
+                else:
+                    be_target = round(round((entry_s * 0.98) / 0.05) * 0.05, 2)
+                    new_sl = min(curr_sl, be_target) if curr_sl > 0 else be_target
                 sl_stamp = dt.now().isoformat()
                 with lock:
                     if sym in positions_dict:
                         positions_dict[sym]["current_sl"] = new_sl
                         positions_dict[sym]["trailing_stage"] = 1
                         positions_dict[sym]["sl_set_time"] = sl_stamp
-                logging.info(f"TRAIL-1 (+10% Gain Lock) {sym}: High={hp:.2f} (+{gain_pct:.1f}%) -> SL=BE ({new_sl:.2f})")
+                logging.info(f"TRAIL-1 (+10% Gain Lock -> +2% BE) {sym}: High={hp:.2f} (+{gain_pct:.1f}%) -> SL=+BE ({new_sl:.2f})")
                 log_fn(sym, pos.get("pattern", ""), timeframe_entry, "TRAIL_BE", "MUTATED",
-                       f"SL={new_sl:.2f} (+{gain_pct:.1f}% gain locked)",
+                       f"SL=+BE {new_sl:.2f} (+{gain_pct:.1f}% gain locked)",
                        entry=entry_s, sl=new_sl, target=t1_val,
                        event_time=last.get('date'))
                 if tid:
@@ -1088,23 +1189,31 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                 if not has_higher_targets:
                     logging.info(f"T1 FULL EXIT (No T2/T3): {sym} reached {hp:.2f} (Target: {t1_val:.2f}, Buffer: {buf_t1:.2f})")
                     if is_stock:
-                        close_stock_position(kite, pos, live, product_type)
+                        exit_res = close_stock_position(kite, pos, live, product_type)
                     else:
-                        close_position(kite, pos, live, product_type)
-                    exit_price = live_ltp if live_ltp > 0 else (cp if cp > 0 else t1_val)
-                    pnl = ((exit_price - entry_s) / entry_s * 100) if entry_s else 0
-                    log_fn(sym, pos.get("pattern", ""), pos_tf, "EXIT_T1", "CLOSED",
-                           f"T1={t1_val:.2f} (Exit @ {exit_price:.2f})", pnl,
-                           entry=entry_s, sl=pos.get("current_sl", ""), target=t1_val,
-                           event_time=last.get('date'))
-                    if tid:
-                        trade_db.update_trade(tid, {
-                            "status": "TARGET_HIT",
-                            "exit_time": dt.now().strftime("%Y-%m-%d %H:%M:%S"),
-                            "pnl_percent": round(pnl, 2),
-                            "details": f"T1 exit ({hp:.2f} >= {t1_val - buf_t1:.2f})"
-                        })
-                    to_clear.append(sym)
+                        exit_res = close_position(kite, pos, live, product_type)
+                    
+                    exit_ok = True
+                    if live and kite:
+                        exit_ok = bool(exit_res and exit_res.get("success"))
+
+                    if exit_ok:
+                        exit_price = live_ltp if live_ltp > 0 else (cp if cp > 0 else t1_val)
+                        pnl = ((exit_price - entry_s) / entry_s * 100) if entry_s else 0
+                        log_fn(sym, pos.get("pattern", ""), pos_tf, "EXIT_T1", "CLOSED",
+                               f"T1={t1_val:.2f} (Exit @ {exit_price:.2f})", pnl,
+                               entry=entry_s, sl=pos.get("current_sl", ""), target=t1_val,
+                               event_time=last.get('date'))
+                        if tid:
+                            trade_db.update_trade(tid, {
+                                "status": "TARGET_HIT",
+                                "exit_time": dt.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                "pnl_percent": round(pnl, 2),
+                                "details": f"T1 exit ({hp:.2f} >= {t1_val - buf_t1:.2f})"
+                            })
+                        to_clear.append(sym)
+                    else:
+                        logging.critical(f"[EXIT_T1 FAILED] T1 exit order for {sym} failed or pending ({exit_res}). Retaining in memory for retry.")
                     continue
                 elif pos.get("trailing_stage", 0) == 0:
                     pos_size = int(pos.get("position_size", 1))
@@ -1116,41 +1225,53 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                         partial_qty = half_size * lot_sz if not is_stock else half_size
                         logging.info(f"[TRANCHE_1_EXIT] Booking 50% partial profit ({half_size} lots / {partial_qty} qty) at T1 ({t1_val:.2f}) for {sym}. Remaining {pos_size - half_size} lots will ride to T2/T3 with BE SL.")
                         if is_stock:
-                            close_stock_position(kite, pos, live, product_type, qty_override=partial_qty)
+                            exit_res = close_stock_position(kite, pos, live, product_type, qty_override=partial_qty)
                         else:
-                            close_position(kite, pos, live, product_type, qty_override=partial_qty)
-                        with lock:
-                            if sym in positions_dict:
-                                positions_dict[sym]["position_size"] = pos_size - half_size
-                                positions_dict[sym]["current_sl"] = entry_s
-                                positions_dict[sym]["trailing_stage"] = 1
-                                positions_dict[sym]["sl_set_time"] = dt.now().isoformat()
-                        log_fn(sym, pos.get("pattern", ""), pos_tf, "EXIT_T1_PARTIAL", "PARTIAL",
-                               f"T1 Banked 50% @ {t1_val:.2f} | Runner SL=BE ({entry_s:.2f})",
-                               ((t1_val - entry_s) / entry_s * 100) if entry_s else 0,
-                               entry=entry_s, sl=entry_s, target=t2_val or t3_val,
-                               event_time=last.get('date'))
-                        if tid:
-                            trade_db.update_trade(tid, {
-                                "position_size": pos_size - half_size,
-                                "trailing_stage": 1,
-                                "current_sl": entry_s,
-                                "sl_set_time": dt.now().isoformat(),
-                                "details": f"T1 50% Banked @ {t1_val:.2f} | Runner active"
-                            })
+                            exit_res = close_position(kite, pos, live, product_type, qty_override=partial_qty)
+                        
+                        exit_ok = True
+                        if live and kite:
+                            exit_ok = bool(exit_res and exit_res.get("success"))
+
+                        if exit_ok:
+                            is_bull = str(pos.get("side","CE")).upper() in ["CE", "BUY", "BULL"]
+                            be_sl = round(round((entry_s * 1.02)/0.05)*0.05, 2) if is_bull else round(round((entry_s * 0.98)/0.05)*0.05, 2)
+                            with lock:
+                                if sym in positions_dict:
+                                    positions_dict[sym]["position_size"] = pos_size - half_size
+                                    positions_dict[sym]["current_sl"] = be_sl
+                                    positions_dict[sym]["trailing_stage"] = 1
+                                    positions_dict[sym]["sl_set_time"] = dt.now().isoformat()
+                            log_fn(sym, pos.get("pattern", ""), pos_tf, "EXIT_T1_PARTIAL", "PARTIAL",
+                                   f"T1 Banked 50% @ {t1_val:.2f} | Runner SL=+BE ({be_sl:.2f})",
+                                   ((t1_val - entry_s) / entry_s * 100) if entry_s else 0,
+                                   entry=entry_s, sl=be_sl, target=t2_val or t3_val,
+                                   event_time=last.get('date'))
+                            if tid:
+                                trade_db.update_trade(tid, {
+                                    "position_size": pos_size - half_size,
+                                    "trailing_stage": 1,
+                                    "current_sl": be_sl,
+                                    "sl_set_time": dt.now().isoformat(),
+                                    "details": f"T1 50% Banked @ {t1_val:.2f} | Runner active"
+                                })
+                        else:
+                            logging.critical(f"[TRANCHE_1_EXIT FAILED] Partial exit order for {sym} failed ({exit_res}). Preserving full position.")
                     else:
-                        # Single-lot trailing to Breakeven
+                        # Single-lot trailing to Positive Breakeven (+2%)
                         curr_sl = float(pos.get("current_sl") or 0.0)
-                        new_sl = max(curr_sl, entry_s) if str(pos.get("side","CE")).upper() in ["CE", "BUY", "BULL"] else min(curr_sl, entry_s) if curr_sl > 0 else entry_s
+                        is_bull = str(pos.get("side","CE")).upper() in ["CE", "BUY", "BULL"]
+                        be_sl = round(round((entry_s * 1.02)/0.05)*0.05, 2) if is_bull else round(round((entry_s * 0.98)/0.05)*0.05, 2)
+                        new_sl = max(curr_sl, be_sl) if is_bull else (min(curr_sl, be_sl) if curr_sl > 0 else be_sl)
                         sl_stamp = dt.now().isoformat()
                         with lock:
                             if sym in positions_dict:
                                 positions_dict[sym]["current_sl"] = new_sl
                                 positions_dict[sym]["trailing_stage"] = 1
                                 positions_dict[sym]["sl_set_time"] = sl_stamp
-                        logging.info(f"TRAIL-1 {sym}: SL=BE ({new_sl:.2f})")
+                        logging.info(f"TRAIL-1 {sym}: SL=+BE ({new_sl:.2f})")
                         log_fn(sym, pos.get("pattern", ""), timeframe_entry, "TRAIL_BE", "MUTATED",
-                               f"SL={new_sl:.2f}",
+                               f"SL=+BE {new_sl:.2f}",
                                entry=entry_s, sl=new_sl, target=t1_val,
                                event_time=last.get('date'))
                         if tid:
@@ -1162,24 +1283,32 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                     # RULE: If T3 is NOT available, T2 is final target -> FULL EXIT at T2!
                     logging.info(f"T2 FULL EXIT (No T3): {sym} reached {hp:.2f} (Target: {t2_val:.2f}, Buffer: {buf_t2:.2f})")
                     if is_stock:
-                        close_stock_position(kite, pos, live, product_type)
+                        exit_res = close_stock_position(kite, pos, live, product_type)
                     else:
-                        close_position(kite, pos, live, product_type)
-                    entry_s = pos.get("entry_spot", 0)
-                    exit_price = live_ltp if live_ltp > 0 else (cp if cp > 0 else t2_val)
-                    pnl = ((exit_price - entry_s) / entry_s * 100) if entry_s else 0
-                    log_fn(sym, pos.get("pattern", ""), pos_tf, "EXIT_T2", "CLOSED",
-                           f"T2={t2_val:.2f} (Exit @ {exit_price:.2f})", pnl,
-                           entry=entry_s, sl=pos.get("current_sl", ""), target=t2_val,
-                           event_time=last.get('date'))
-                    if tid:
-                        trade_db.update_trade(tid, {
-                            "status": "TARGET_HIT",
-                            "exit_time": dt.now().strftime("%Y-%m-%d %H:%M:%S"),
-                            "pnl_percent": round(pnl, 2),
-                            "details": f"T2 exit ({hp:.2f} >= {t2_val - buf_t2:.2f})"
-                        })
-                    to_clear.append(sym)
+                        exit_res = close_position(kite, pos, live, product_type)
+                    
+                    exit_ok = True
+                    if live and kite:
+                        exit_ok = bool(exit_res and exit_res.get("success"))
+
+                    if exit_ok:
+                        entry_s = pos.get("entry_spot", 0)
+                        exit_price = live_ltp if live_ltp > 0 else (cp if cp > 0 else t2_val)
+                        pnl = ((exit_price - entry_s) / entry_s * 100) if entry_s else 0
+                        log_fn(sym, pos.get("pattern", ""), pos_tf, "EXIT_T2", "CLOSED",
+                               f"T2={t2_val:.2f} (Exit @ {exit_price:.2f})", pnl,
+                               entry=entry_s, sl=pos.get("current_sl", ""), target=t2_val,
+                               event_time=last.get('date'))
+                        if tid:
+                            trade_db.update_trade(tid, {
+                                "status": "TARGET_HIT",
+                                "exit_time": dt.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                "pnl_percent": round(pnl, 2),
+                                "details": f"T2 exit ({hp:.2f} >= {t2_val - buf_t2:.2f})"
+                            })
+                        to_clear.append(sym)
+                    else:
+                        logging.critical(f"[EXIT_T2 FAILED] T2 exit order for {sym} failed or pending ({exit_res}). Retaining in memory for retry.")
                     continue
                 else:
                     curr_sl = float(pos.get("current_sl") or 0.0)
@@ -1202,19 +1331,27 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
             if t3_val and hp >= (t3_val - buf_t3):
                 logging.info(f"T3 EXIT: {sym} reached {hp:.2f} (Target: {t3_val:.2f})")
                 if pos.get("position_type") == "stock":
-                    close_stock_position(kite, pos, live, product_type)
+                    exit_res = close_stock_position(kite, pos, live, product_type)
                 else:
-                    close_position(kite, pos, live, product_type)
-                entry_s = pos.get("entry_spot", 0)
-                exit_price = live_ltp if live_ltp > 0 else (cp if cp > 0 else t3_val)
-                pnl = ((exit_price - entry_s) / entry_s * 100) if entry_s else 0
-                log_fn(sym, pos.get("pattern", ""), timeframe_entry, "EXIT_T3", "CLOSED",
-                       f"T3={t3_val:.2f} (Exit @ {exit_price:.2f})", pnl,
-                       entry=entry_s, sl=pos.get("current_sl", ""), target=t3_val,
-                       event_time=last.get('date'))
-                if tid:
-                    trade_db.update_trade(tid, {"status": "TARGET_HIT", "exit_time": dt.now().strftime("%Y-%m-%d %H:%M:%S"), "pnl_percent": round(pnl, 2)})
-                to_clear.append(sym)
+                    exit_res = close_position(kite, pos, live, product_type)
+                
+                exit_ok = True
+                if live and kite:
+                    exit_ok = bool(exit_res and exit_res.get("success"))
+
+                if exit_ok:
+                    entry_s = pos.get("entry_spot", 0)
+                    exit_price = live_ltp if live_ltp > 0 else (cp if cp > 0 else t3_val)
+                    pnl = ((exit_price - entry_s) / entry_s * 100) if entry_s else 0
+                    log_fn(sym, pos.get("pattern", ""), timeframe_entry, "EXIT_T3", "CLOSED",
+                           f"T3={t3_val:.2f} (Exit @ {exit_price:.2f})", pnl,
+                           entry=entry_s, sl=pos.get("current_sl", ""), target=t3_val,
+                           event_time=last.get('date'))
+                    if tid:
+                        trade_db.update_trade(tid, {"status": "TARGET_HIT", "exit_time": dt.now().strftime("%Y-%m-%d %H:%M:%S"), "pnl_percent": round(pnl, 2)})
+                    to_clear.append(sym)
+                else:
+                    logging.critical(f"[EXIT_T3 FAILED] T3 exit order for {sym} failed or pending ({exit_res}). Retaining in memory for retry.")
         except Exception as e:
             logging.error(f"Risk error {sym}: {e}")
 
