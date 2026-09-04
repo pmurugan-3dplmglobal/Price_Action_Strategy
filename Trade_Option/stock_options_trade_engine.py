@@ -679,6 +679,7 @@ def main_scan_loop(kite):
     while True:
         try:
             ensure_kite_session(kite)
+            load_program_config()
             _sync_counter += 1
             if _sync_counter % 5 == 0 and not BACKTEST_DATE:
                 shared_sync_kite(kite, STOCK_REGISTRY, ACTIVE_POSITIONS, position_lock, "nifty50", TIMEFRAME_ENTRY, TIMEFRAME_ANCHOR)

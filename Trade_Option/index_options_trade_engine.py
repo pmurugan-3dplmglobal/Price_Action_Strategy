@@ -435,6 +435,7 @@ def main_scan_loop(kite):
     while True:
         try:
             ensure_kite_session(kite)
+            load_program_config()
             cycle += 1
             with position_lock:
                 active = len(ACTIVE_POSITIONS)
@@ -579,17 +580,21 @@ def run_multi_day_backtest(kite, start_date, end_date):
     logging.info(f"{'='*60}")
     return results
 
-def main():
-    global BACKTEST_DATE, LIVE_MARKET_DEPLOYMENT
-    cfg_applied = load_program_config_for_engine("index", [("strike_range", "STRIKE_RANGE")])
+def load_program_config():
+    cfg_applied = load_program_config_for_engine("index", [("strike_range", "STRIKE_RANGE"), ("strict_macro_gate", "STRICT_MACRO_GATE")])
     for k, v in cfg_applied.items():
         if k == "STRIKE_RANGE": globals()["STRIKE_RANGE"] = int(v) if isinstance(v, (int, float)) else v
+        elif k == "STRICT_MACRO_GATE": globals()["STRICT_MACRO_GATE"] = bool(v)
         elif k in ("TIMEFRAME_ENTRY", "TIMEFRAME_ANCHOR"): globals()[k] = v
         elif k == "LIVE_MARKET_DEPLOYMENT": globals()["LIVE_MARKET_DEPLOYMENT"] = v
         elif k == "LOOKBACK_DAYS": globals()["LOOKBACK_DAYS"] = int(v)
         elif k == "SCAN_INTERVAL_SECONDS": globals()["SCAN_INTERVAL_SECONDS"] = int(v)
         elif k == "MAX_RISK_PERCENT": globals()["MAX_RISK_PERCENT"] = float(v)
         elif k == "INITIAL_CAPITAL": globals()["INITIAL_CAPITAL"] = float(v)
+
+def main():
+    global BACKTEST_DATE, LIVE_MARKET_DEPLOYMENT
+    load_program_config()
     anchor_only = "--anchor-only" in sys.argv
     date_arg = next((a.split("=", 1)[1] for a in sys.argv[1:] if a.startswith("--date=")), None)
     range_arg = next((a.split("=", 1)[1] for a in sys.argv[1:] if a.startswith("--backtest-range=")), None)
