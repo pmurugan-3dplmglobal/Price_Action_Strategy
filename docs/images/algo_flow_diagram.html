@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  body {
+    background: #0d1117;
+    color: #c9d1d9;
+    padding: 30px;
+    width: 1920px;
+    height: 1080px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+  }
+  .header {
+    border-bottom: 1px solid #30363d;
+    padding-bottom: 15px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .title {
+    font-size: 28px;
+    font-weight: 800;
+    background: linear-gradient(90deg, #58a6ff, #bc8cff, #f0883e);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  .subtitle {
+    font-size: 14px;
+    color: #8b949e;
+    margin-top: 4px;
+  }
+  .badge {
+    background: #1f6feb26;
+    color: #58a6ff;
+    border: 1px solid #388bfd;
+    padding: 6px 14px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 600;
+  }
+  
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    grid-gap: 20px;
+    margin-top: 20px;
+  }
+  .card {
+    background: #161b22;
+    border-radius: 12px;
+    border: 1px solid #30363d;
+    padding: 18px;
+    position: relative;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+  }
+  .card.stage1 { border-top: 4px solid #58a6ff; }
+  .card.stage2 { border-top: 4px solid #3fb950; }
+  .card.stage3 { border-top: 4px solid #bc8cff; }
+  .card.stage4 { border-top: 4px solid #f0883e; box-shadow: 0 0 15px rgba(240, 136, 62, 0.15); }
+  .card.stage5 { border-top: 4px solid #238636; }
+  .card.stage6 { border-top: 4px solid #1f6feb; }
+  .card.stage7 { border-top: 4px solid #a371f7; }
+  
+  .card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+  }
+  .card-title {
+    font-size: 15px;
+    font-weight: 700;
+    color: #f0f6fc;
+  }
+  .step-num {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    background: #21262d;
+    color: #8b949e;
+    font-weight: 700;
+  }
+  
+  .flow-item {
+    background: #0d1117;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    padding: 10px;
+    margin-bottom: 8px;
+    font-size: 12px;
+  }
+  .flow-item strong { color: #f0f6fc; }
+  .flow-item span { display: block; font-size: 11px; color: #8b949e; margin-top: 2px; }
+  
+  .pill-a-plus { background: #5c3a00; border: 1px solid #d29922; color: #ffc554; padding: 2px 6px; border-radius: 4px; font-weight: 700; font-size: 10px; }
+  .pill-a { background: #0c2d6b; border: 1px solid #388bfd; color: #58a6ff; padding: 2px 6px; border-radius: 4px; font-weight: 700; font-size: 10px; }
+  .pill-b { background: #271052; border: 1px solid #8957e5; color: #d2a8ff; padding: 2px 6px; border-radius: 4px; font-weight: 700; font-size: 10px; }
+  
+  .connector {
+    text-align: center;
+    color: #58a6ff;
+    font-size: 14px;
+    margin: 4px 0;
+  }
+  
+  .footer {
+    border-top: 1px solid #30363d;
+    padding-top: 12px;
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+    color: #8b949e;
+  }
+</style>
+</head>
+<body>
+
+  <div class="header">
+    <div>
+      <div class="title">Price Action Unified Strategy — End-to-End Trading Lifecycle Architecture</div>
+      <div class="subtitle">Complete Technical Blueprint: Universe Discovery → Pattern Radar (A+, A, B) → Sub-15s Fast Execution → Trailing Governance</div>
+    </div>
+    <div class="badge">v2.1.0-stable | Production Deployment</div>
+  </div>
+
+  <div class="grid">
+    <!-- STAGE 1 -->
+    <div class="card stage1">
+      <div class="card-header">
+        <div class="card-title">1. Universe & Strike Resolution</div>
+        <div class="step-num">STAGE 01</div>
+      </div>
+      <div class="flow-item">
+        <strong>F&O Discovery (discover_fno_universe)</strong>
+        <span>213 dynamically discovered NSE F&O equities & Index contracts (NIFTY, BANKNIFTY, SENSEX)</span>
+      </div>
+      <div class="connector">▼</div>
+      <div class="flow-item">
+        <strong>Option Strike Resolution (resolve_option_strikes)</strong>
+        <span>Selects ATM & 1-step ITM/OTM strikes based on Spot & Strike Step. Evaluates CE & PE symmetry.</span>
+      </div>
+      <div class="connector">▼</div>
+      <div class="flow-item">
+        <strong>Macro 13/44 EMA Regime Check</strong>
+        <span>Validates institutional alignment on Spot before contract scanning</span>
+      </div>
+    </div>
+
+    <!-- STAGE 2 -->
+    <div class="card stage2">
+      <div class="card-header">
+        <div class="card-title">2. Dual-TF Candlestick Geometry</div>
+        <div class="step-num">STAGE 02</div>
+      </div>
+      <div class="flow-item">
+        <strong>Anchor Detection (Daily Timeframe)</strong>
+        <span>5 Bull Anchors (Engulfing, Sweep, Hammer, Harami, Two HH)<br>5 Bear Anchors (Engulfing, Sweep, Star, Harami, Two LL)</span>
+      </div>
+      <div class="connector">▼</div>
+      <div class="flow-item">
+        <strong>Intraday Breakout Geometry (3m Timeframe)</strong>
+        <span>A-B-C-D geometry: A=Anchor, B=Pullback high, C=Retest HL (red candle), D=Breakout trigger close</span>
+      </div>
+      <div class="connector">▼</div>
+      <div class="flow-item">
+        <strong>Parabolic Multi-Swing Curve Fitting</strong>
+        <span>Quadratic polynomial regression (≥3 waves, R²≥0.55, Terminal Base absorption)</span>
+      </div>
+    </div>
+
+    <!-- STAGE 3 -->
+    <div class="card stage3">
+      <div class="card-header">
+        <div class="card-title">3. 3-Tier Pattern Funnel Manager</div>
+        <div class="step-num">STAGE 03</div>
+      </div>
+      <div class="flow-item">
+        <span class="pill-a-plus">⚡ CATEGORY A+ (IMMINENT)</span>
+        <strong style="margin-top:4px;display:block">Institutional Gold Setup</strong>
+        <span>Parabolic Phase 0 + Anchor A + B + C retraced. Coiled at D trigger Benchmark.</span>
+      </div>
+      <div class="flow-item">
+        <span class="pill-a">🎯 CATEGORY A (READY)</span>
+        <strong style="margin-top:4px;display:block">Core Pre-Breakout Setup</strong>
+        <span>Anchor A + Pullback B + Retracement C confirmed. Waiting for D trigger.</span>
+      </div>
+      <div class="flow-item">
+        <span class="pill-b">🌱 CATEGORY B (INCUBATOR)</span>
+        <strong style="margin-top:4px;display:block">Anchor Base Incubation</strong>
+        <span>Confirmed Anchor A. Pullback B and Retest C actively developing.</span>
+      </div>
+      <div class="flow-item" style="border-left: 3px solid #bc8cff">
+        <strong>Atomic Funnel Persistence</strong>
+        <span>Thread-safe WAL sync to paths.PATTERN_FUNNEL_FILE with mutual stage exclusivity.</span>
+      </div>
+    </div>
+
+    <!-- STAGE 4 -->
+    <div class="card stage4">
+      <div class="card-header">
+        <div class="card-title">4. Fast Surveillance Radar</div>
+        <div class="step-num">STAGE 04</div>
+      </div>
+      <div class="flow-item" style="border-left: 3px solid #f0883e">
+        <strong style="color:#f0883e">⚡ Sub-15s Radar Thread (fast_radar_loop)</strong>
+        <span>Dedicated background surveillance thread running every 15s, completely bypassing 213-symbol cycle delay.</span>
+      </div>
+      <div class="connector">▼</div>
+      <div class="flow-item">
+        <strong>Real-Time Trigger Evaluation</strong>
+        <span>Checks latest candle Close / LTP against Benchmark D trigger:<br>• If Close ≥ Benchmark: Fires immediate order candidate!<br>• If SL breached: Evicts from funnel</span>
+      </div>
+      <div class="connector">▼</div>
+      <div class="flow-item">
+        <strong>Instant Funnel Eviction</strong>
+        <span>Evicts executed contract from funnel to prevent double firing</span>
+      </div>
+    </div>
+
+    <!-- STAGE 5 -->
+    <div class="card stage5">
+      <div class="card-header">
+        <div class="card-title">5. Execution Gating & Non-Blocking</div>
+        <div class="step-num">STAGE 05</div>
+      </div>
+      <div class="flow-item">
+        <strong>Profit & R:R Ranking</strong>
+        <span>Sorts staged candidates in descending order of net profit potential</span>
+      </div>
+      <div class="connector">▼</div>
+      <div class="flow-item" style="border-left: 3px solid #238636">
+        <strong style="color:#3fb950">🔄 Non-Blocking Candidate Loop</strong>
+        <span>If candidate #1 was already executed or gated, gracefully loops to candidate #2, #3, etc. Zero starvation!</span>
+      </div>
+      <div class="connector">▼</div>
+      <div class="flow-item">
+        <strong>Execution Gates Hierarchy</strong>
+        <span>• VIX Regime Gate (India VIX &lt; 20.0)<br>• Portfolio Risk Caps (Max 6 concurrent, Sector cap ≤ 2)<br>• Liquidity Gate (Bid-Ask spread ≤ 2%)</span>
+      </div>
+      <div class="connector">▼</div>
+      <div class="flow-item">
+        <strong>Order Routing (Kite Connect)</strong>
+        <span>NRML Limit Order @ Benchmark + 0.5% cushion. Places debit spread hedge leg if configured.</span>
+      </div>
+    </div>
+
+    <!-- STAGE 6 -->
+    <div class="card stage6">
+      <div class="card-header">
+        <div class="card-title">6. Trade Persistence & Staging</div>
+        <div class="step-num">STAGE 06</div>
+      </div>
+      <div class="flow-item">
+        <strong>ACID SQLite WAL Database (trade_db)</strong>
+        <span>Generates unique trade_id. Records active positions with timestamp, entry, SL, and targets.</span>
+      </div>
+      <div class="connector">▼</div>
+      <div class="flow-item">
+        <strong>Duplicate Execution Lock</strong>
+        <span>Locks symbol+pattern+strike key in executed_patterns.json to block same-session re-entry spam.</span>
+      </div>
+      <div class="connector">▼</div>
+      <div class="flow-item">
+        <strong>Journal Sync (trade_journal.csv)</strong>
+        <span>Logs trade parameters, entry time, and analytical tags for statistical performance audits.</span>
+      </div>
+    </div>
+
+    <!-- STAGE 7 -->
+    <div class="card stage7">
+      <div class="card-header">
+        <div class="card-title">7. Position Trailing & Exits</div>
+        <div class="step-num">STAGE 07</div>
+      </div>
+      <div class="flow-item">
+        <strong>Trailed-SL Floor Guard</strong>
+        <span>Locks entry_time floor. Prohibits retroactive historical candle stopouts.</span>
+      </div>
+      <div class="connector">▼</div>
+      <div class="flow-item" style="border-left: 3px solid #a371f7">
+        <strong style="color:#bc8cff">🔒 Positive Breakeven (+BE) Trailing</strong>
+        <span>Upon reaching +10% gain, ratchets SL to +BE (Entry + 2% cushion) to eliminate slippage losses.</span>
+      </div>
+      <div class="connector">▼</div>
+      <div class="flow-item">
+        <strong>Multi-Tier Profit Targets & Ratchet</strong>
+        <span>• Target 1: Book 50% & trail SL to Breakeven<br>• Target 2: Ratchet SL to Target 1<br>• Target 3: Full exit</span>
+      </div>
+      <div class="connector">▼</div>
+      <div class="flow-item">
+        <strong>Emergency & Time Exits</strong>
+        <span>• Morning Circuit Breaker (09:15-09:45 AM drop ≥25%)<br>• Thursday Pre-Expiry Theta Guard & Friday EOD Square-Off<br>• 3-Tier Exit: Marketable Limit → Aggressive → Emergency Market</span>
+      </div>
+    </div>
+
+    <!-- STAGE 8 / SUMMARY -->
+    <div class="card" style="border-top: 4px solid #e3b341; background: #161b22;">
+      <div class="card-header">
+        <div class="card-title" style="color:#e3b341">8. UI Surveillance & Throttling</div>
+        <div class="step-num">PORT 5050 / 5051</div>
+      </div>
+      <div class="flow-item">
+        <strong>📡 Pattern Surveillance Radar Tab</strong>
+        <span>Live dashboard cards displaying Categories A+, A, and B with benchmark triggers and R:R ratios in real-time.</span>
+      </div>
+      <div class="connector">▼</div>
+      <div class="flow-item">
+        <strong>API Throttling Guard</strong>
+        <span>Kite broker positions fetch throttled from 3s to 15s, completely eliminating HTTP 429 rate limit errors.</span>
+      </div>
+      <div class="connector">▼</div>
+      <div class="flow-item">
+        <strong>Cloud Infrastructure Deployment</strong>
+        <span>Dual Oracle Cloud VM synchronized deployment (systemd services active across Poovendan & Bhavni nodes).</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="footer">
+    <div>Price Action Trading System | Lead Quantitative Systems Architecture | Canonical Root: Prod_code_01/Price_Action_Strategy</div>
+    <div>100% Automated Execution Pipeline | Single Source of Truth Architecture</div>
+  </div>
+
+</body>
+</html>
