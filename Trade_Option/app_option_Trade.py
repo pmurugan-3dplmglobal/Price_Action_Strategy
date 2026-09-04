@@ -2063,8 +2063,10 @@ def api_analyze_trade():
         data = request.json or {}
         symbol = str(data.get("symbol", "")).strip().upper()
         entry_price = float(data.get("entry_price", 0)) if data.get("entry_price") else 0.0
-        timeframe = str(data.get("timeframe", "75min")).strip()
         engine = str(data.get("engine", "nifty50")).strip()
+        cfg = load_config()
+        default_tf = cfg.get(engine, {}).get("timeframe_entry") or ("30minute" if engine == "nifty50" else "15minute")
+        timeframe = str(data.get("timeframe") or default_tf).strip()
         
         if not symbol:
             return jsonify({"ok": False, "error": "Valid Symbol or Contract Name required"}), 400
@@ -2077,7 +2079,7 @@ def api_analyze_trade():
             kite = None
 
         timeframe_entry = timeframe
-        timeframe_anchor = timeframe
+        timeframe_anchor = cfg.get(engine, {}).get("timeframe_anchor") or timeframe
 
         analysis = derive_sl_targets_for_contract(kite, symbol, entry_price, timeframe_entry, timeframe_anchor)
         if not analysis:
@@ -2301,7 +2303,9 @@ def api_get_chart_data():
     try:
         contract = str(request.args.get("symbol", "")).strip().upper()
         chart_type = str(request.args.get("type", "option")).strip().lower()
-        tf = str(request.args.get("timeframe", "30minute")).strip()
+        cfg = load_config()
+        default_tf = cfg.get("nifty50", {}).get("timeframe_entry") or "30minute"
+        tf = str(request.args.get("timeframe") or default_tf).strip()
 
         if not contract:
             return jsonify({"ok": False, "error": "Symbol is required"}), 400

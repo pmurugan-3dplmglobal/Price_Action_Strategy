@@ -25,8 +25,11 @@ def api_analyze_trade():
         data = request.json or {}
         symbol = str(data.get("symbol", "")).strip().upper()
         entry_price = float(data.get("entry_price", 0)) if data.get("entry_price") else 0.0
-        timeframe = str(data.get("timeframe", "75min")).strip()
-        engine = str(data.get("engine", "nifty50")).strip()
+        engine = str(data.get("engine", "daily")).strip()
+        _app = _get_app()
+        cfg = _app.load_config() if hasattr(_app, "load_config") else {}
+        default_tf = cfg.get(engine, {}).get("timeframe") or cfg.get("daily", {}).get("timeframe") or "day"
+        timeframe = str(data.get("timeframe") or default_tf).strip()
 
         if not symbol:
             return jsonify({"ok": False, "error": "Valid Symbol or Contract Name required"}), 400
@@ -38,7 +41,10 @@ def api_analyze_trade():
         except Exception:
             kite = None
 
-        if timeframe == "30minute":
+        if timeframe in ["day", "week"]:
+            timeframe_entry = timeframe
+            timeframe_anchor = timeframe
+        elif timeframe == "30minute":
             timeframe_entry = "30minute"
             timeframe_anchor = "30minute"
         else:
@@ -93,7 +99,10 @@ def api_get_chart_data():
 
         contract = str(request.args.get("symbol", "")).strip().upper()
         chart_type = str(request.args.get("type", "spot")).strip().lower()
-        tf = str(request.args.get("timeframe", "30minute")).strip()
+        _app = _get_app()
+        cfg = _app.load_config() if hasattr(_app, "load_config") else {}
+        default_tf = cfg.get("daily", {}).get("timeframe") or "day"
+        tf = str(request.args.get("timeframe") or default_tf).strip()
 
         if not contract:
             return jsonify({"ok": False, "error": "Symbol is required"}), 400

@@ -699,7 +699,7 @@
                 const isExpired = expiredSet.has(cleanContract) || (t.symbol && expiredSet.has(cleanSymbol));
                 const isExitDone = execExits[cleanContract] || (t.symbol && execExits[cleanSymbol]) || execExits[t.contract || ''] || false;
 
-                const chartCell = `<td style="text-align:center"><button class="btn-chart" onclick="openChartModal('${t.contract||t.symbol||''}','${t.symbol||''}','${t.side||'CE'}',${t.entry_spot||t.entry||0},${t.current_sl||t.sl||0},${t.t1||0},${t.t2||0},${t.t3||0},'${res}','${t.candle_a_time||''}','${t.entry_time||''}',${t.benchmark||0},${t.anchor_floor||0},'${t.direction||'BULL'}')" style="background:#1f6feb;color:#ffffff;border:none;padding:4px 8px;border-radius:4px;font-weight:bold;cursor:pointer;font-size:11px;">📈 Chart</button></td>`;
+                const chartCell = `<td style="text-align:center"><button class="btn-chart" onclick="openChartModal('${t.contract||t.symbol||''}','${t.symbol||''}','${t.side||'CE'}',${t.entry_spot||t.entry||0},${t.current_sl||t.sl||0},${t.t1||0},${t.t2||0},${t.t3||0},'${res}','${t.candle_a_time||''}','${t.entry_time||''}',${t.benchmark||0},${t.anchor_floor||0},'${t.direction||'BULL'}','${t.timeframe||''}')" style="background:#1f6feb;color:#ffffff;border:none;padding:4px 8px;border-radius:4px;font-weight:bold;cursor:pointer;font-size:11px;">📈 Chart</button></td>`;
                 let actCell = '';
                 if (isExpired || isExitDone) {
                     actCell = '<td style="text-align:center"><button disabled class="btn-expired" style="background:' + (isExpired ? '#8957e5' : '#d29922') + ';color:#ffffff;border:none;padding:4px 10px;border-radius:4px;font-weight:bold;cursor:not-allowed;font-size:11px">' + (isExpired ? 'EXPIRED' : 'EXITED') + '</button></td>';
@@ -1120,7 +1120,7 @@
                     const uid = 'pos_' + (t.symbol || 'no_sym') + '_' + (t.source || '');
                     const es = editStates[uid];
                     let slCell, t1Cell, t2Cell, t3Cell, entryCell, actCell;
-                    const chartCellPos = `<td style="text-align:center"><button class="btn-chart" onclick="openChartModal('${t.contract||t.symbol||''}','${t.symbol||''}','${t.side||'CE'}',${t.entry_spot||0},${t.current_sl||t.sl||0},${t.t1||0},${t.t2||0},${t.t3||0},'${t.pattern||''}','${t.candle_a_time||''}','${t.entry_time||''}',${t.benchmark||0},${t.anchor_floor||0},'${t.direction||'BULL'}')" style="background:#1f6feb;color:#ffffff;border:none;padding:2px 6px;border-radius:4px;font-size:10px;cursor:pointer;font-weight:600;">📈 Chart</button></td>`;
+                    const chartCellPos = `<td style="text-align:center"><button class="btn-chart" onclick="openChartModal('${t.contract||t.symbol||''}','${t.symbol||''}','${t.side||'CE'}',${t.entry_spot||0},${t.current_sl||t.sl||0},${t.t1||0},${t.t2||0},${t.t3||0},'${t.pattern||''}','${t.candle_a_time||''}','${t.entry_time||''}',${t.benchmark||0},${t.anchor_floor||0},'${t.direction||'BULL'}','${t.timeframe||''}')" style="background:#1f6feb;color:#ffffff;border:none;padding:2px 6px;border-radius:4px;font-size:10px;cursor:pointer;font-weight:600;">📈 Chart</button></td>`;
                     if (es && es.active) {
                         const eng2 = t.engine === 'Index' ? 'index' : 'nifty50';
                         entryCell = `<td style="color:#8b949e;">${es.entry || '---'} 🔒</td>`;
@@ -1375,7 +1375,7 @@
                 const timeStr = t.entry_time || t.candle_a_time || '-';
                 const pat = t.pattern || 'BULL_EMA_CROSS';
                 
-                const chartCell = `<td style="text-align:center"><button class="btn-chart" onclick="openChartModal('${cnt}','${sym}','${side}',${t.entry_spot||0},${t.sl||0},${t.t1||0},${t.t2||0},${t.t3||0},'${pat}','${t.candle_a_time||''}','${t.entry_time||''}',${t.benchmark||0},${t.anchor_floor||0},'${t.direction||'BULL'}')" style="background:#1f6feb;color:#ffffff;border:none;padding:4px 8px;border-radius:4px;font-weight:bold;cursor:pointer;font-size:11px;">📈 Chart</button></td>`;
+                const chartCell = `<td style="text-align:center"><button class="btn-chart" onclick="openChartModal('${cnt}','${sym}','${side}',${t.entry_spot||0},${t.sl||0},${t.t1||0},${t.t2||0},${t.t3||0},'${pat}','${t.candle_a_time||''}','${t.entry_time||''}',${t.benchmark||0},${t.anchor_floor||0},'${t.direction||'BULL'}','${t.timeframe||''}')" style="background:#1f6feb;color:#ffffff;border:none;padding:4px 8px;border-radius:4px;font-weight:bold;cursor:pointer;font-size:11px;">📈 Chart</button></td>`;
                 const actCell = `<td style="text-align:center"><button class="btn-buy" onclick="buyScannedTrade(this, '${sym}', '${cnt}', '${side}', ${spot}, ${sl}, ${t1}, ${t2}, ${t3}, 'ema_engine', '${t.timeframe||'1d'}', '${(t.candle_a_time||'').replace(/'/g,"")}', '${(t.entry_time||'').replace(/'/g,"")}', ${t.benchmark||0}, ${t.anchor_floor||0}, '${t.direction||'BULL'}')" style="background:#2ea043;color:#ffffff;border:none;padding:4px 12px;border-radius:4px;font-weight:bold;cursor:pointer;font-size:11px">BUY</button></td>`;
                 html += `<tr><td>${sym}</td><td style="font-size:11px">${cnt}</td><td>${side}</td><td>${spot}</td><td>${sl}</td><td>${t1}</td><td>${t2}</td><td>${t3}</td><td style="font-size:11px">${timeStr}</td><td><span class="badge badge-bull">${pat}</span></td>${chartCell}${actCell}</tr>`;
             });
@@ -2322,7 +2322,7 @@
             return closestIdx;
         }
 
-        async function openChartModal(contract, symbol, side, entry, sl, t1, t2, t3, pattern, candle_a_time, entry_time, benchmark, anchor_floor, direction) {
+        async function openChartModal(contract, symbol, side, entry, sl, t1, t2, t3, pattern, candle_a_time, entry_time, benchmark, anchor_floor, direction, tf) {
             currentChartParams = { 
                 contract, symbol, side, 
                 entry: parseFloat(entry)||0, sl: parseFloat(sl)||0, 
@@ -2332,9 +2332,11 @@
                 direction: direction||'BULL'
             };
             currentChartScope = 'spot';
-            currentChartTf = '30minute';
+            const cfg = (window._lastData && window._lastData.config) ? window._lastData.config : {};
+            const configuredTf = (cfg['daily'] && cfg['daily'].timeframe) || (cfg['bear_trade'] && cfg['bear_trade'].timeframe);
+            currentChartTf = tf || configuredTf || 'day';
             const tfSel = document.getElementById('modalTfSelect');
-            if (tfSel) tfSel.value = '30minute';
+            if (tfSel) tfSel.value = currentChartTf;
             document.getElementById('chartModal').style.display = 'flex';
             await loadChartDataAndRender();
         }
