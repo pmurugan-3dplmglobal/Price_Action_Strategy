@@ -150,16 +150,24 @@ def register_partial_pattern(engine_name, item, stage):
     """Register or update an incubating setup at the given stage (A_PLUS, A, or B)."""
     return promote_item(engine_name, item, stage)
 
+def _matches_evict(x, item_or_key):
+    if isinstance(item_or_key, dict):
+        return _get_key(x) == _get_key(item_or_key)
+    target = str(item_or_key).strip().upper()
+    x_key = _get_key(x).upper()
+    x_cntr = str(x.get("contract") or "").strip().upper()
+    x_sym = str(x.get("symbol") or "").strip().upper()
+    return target == x_key or target == x_cntr or target == x_sym
+
 def evict_item(engine_name, item_or_key):
-    """Remove an invalidated or executed item from all funnel categories."""
+    """Remove an invalidated or executed item from all funnel categories (by dict, key, contract, or symbol)."""
     with _funnel_lock:
         current = load_funnel_state(engine_name)
-        key = _get_key(item_or_key) if isinstance(item_or_key, dict) else str(item_or_key)
 
         updated = {
-            "category_a_plus": [x for x in current.get("category_a_plus", []) if _get_key(x) != key],
-            "category_a": [x for x in current.get("category_a", []) if _get_key(x) != key],
-            "category_b": [x for x in current.get("category_b", []) if _get_key(x) != key],
+            "category_a_plus": [x for x in current.get("category_a_plus", []) if not _matches_evict(x, item_or_key)],
+            "category_a": [x for x in current.get("category_a", []) if not _matches_evict(x, item_or_key)],
+            "category_b": [x for x in current.get("category_b", []) if not _matches_evict(x, item_or_key)],
         }
         save_funnel_state(engine_name, updated)
         return updated
