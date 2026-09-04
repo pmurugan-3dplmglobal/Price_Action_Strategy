@@ -3701,3 +3701,22 @@ issues:
     7. Retest B-to-C Spacing & Runaway Excursion Guards: Restricted Point C retest search to <= 25 bars after Point B, and invalidated patterns if price rallies/drops > 1.5x risk (or reaches T1) before Point C.
     8. Regression Test Suite: Expanded to 19 test suites in run_full_regression_test.py and 5 targeted unit tests in test_cve_fixes.py, with 100% pass across all tests.'
   status: RESOLVED
+- id: POLICY-001
+  family: DOMAIN_INVARIANTS
+  date_reported: '2026-09-05'
+  title: Datta & Minervini Law - Risk Discipline, Outcome Bias Immunity & Objective D2 Re-Entry Mandate
+  severity: ARCHITECTURAL
+  category: Strategy & Risk Psychology Invariants
+  symptom: 'Traders suffering from outcome bias after taking a disciplined stop-loss when an asset eventually rallies days later, leading to either premature revenge trading or emotional paralysis that causes missing high-probability D2 re-entries.'
+  root_cause: 'Treating a stop-loss as a lifelong disqualification of the ticker rather than an exit of the immediate risk, and holding OTM strikes during multi-day recovery bases causing severe theta drag.'
+  affected_files:
+  - AGENTS.md
+  - MASTER_DOCUMENTATION.yaml
+  - .agents/skills/datta-price-action-validator/SKILL.md
+  - ISSUE_MANAGEMENT.yaml
+  resolution: 'Enshrined the Datta & Minervini Law across core project rules:
+    1. Stop-Loss as Capital Shield (Outcome Bias Immunity): A triggered stop-loss (e.g. ABCAPITAL 410 CE @ 5.75 protecting against a plunge to 5.05) is an absolute victory of risk discipline; never judge an exit by subsequent market drift.
+    2. SL Exits Risk, Not Symbol: Hitting an SL never disqualifies a ticker permanently. When a ticker establishes a fresh institutional sweep base (e.g. Hammer / LL Sweep at key support) and gives a confirmed D2 breakout, re-entry must be executed objectively without ego or hesitation.
+    3. Moneyness & Theta Preservation: Prioritize At-The-Money (ATM) or In-The-Money (ITM) strikes on secondary multi-day recovery entries to eliminate accumulated Theta drag and capture full spot delta velocity.'
+  status: RESOLVED
+

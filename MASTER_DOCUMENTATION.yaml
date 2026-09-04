@@ -16,6 +16,7 @@ meta:
     - Timeframe-Aware Institutional Accumulation & Distribution Scoring (Daily/Weekly Base Recognition)
     - EARLY_D_ENTRY (80% Candle Completion with Proportional Volume Validation)
     - Unified Hybrid Dynamic Legs (ATR Volatility Adaptive Scaling + Symbol Overrides)
+    - Datta & Minervini Law (Risk Discipline, Outcome Bias Immunity, & Objective D2 Re-Entry Mandate)
 
 architecture:
   diagram: |

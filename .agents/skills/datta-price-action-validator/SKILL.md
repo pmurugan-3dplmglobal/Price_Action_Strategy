@@ -106,6 +106,17 @@ $$\text{Target Timeframe} = \text{Trading Timeframe} + 2 \text{ Higher Timeframe
 
 ---
 
+### Step 5.1: ⚖️ The Datta & Minervini Law (Risk Invariants & D2 Re-Entry Mandate)
+
+1. **Stop-Loss as Capital Shield (Outcome Bias Immunity)**:
+   * A triggered stop-loss (e.g. `ABCAPITAL26SEP410CE` @ ₹5.75 protecting against a plunge to ₹5.05/zero) is an absolute victory of risk management. Never judge an exit by where the asset eventually drifts days later.
+2. **SL Exits the Risk, NOT the Symbol**:
+   * Hitting an SL never disqualifies a ticker permanently. Premature timing $\ne$ bad setup. When a ticker forms a fresh institutional sweep base (e.g. Hammer / LL Sweep at key support) and gives a confirmed D2 breakout, re-entry must be executed objectively without ego or hesitation.
+3. **Moneyness & Theta Preservation on Secondary Entries**:
+   * When re-entering following a multi-day recovery base, prioritize **At-The-Money (ATM)** or **In-The-Money (ITM)** strikes (e.g. 400/405 CE over 410 CE) to eliminate accumulated Theta drag and capture full spot delta velocity.
+
+---
+
 ### Step 6: Timeframe-Aware Institutional Tier Classification
 
 | Timeframe Category | Setup Type | Qualifying Criteria | Awarded Tier |

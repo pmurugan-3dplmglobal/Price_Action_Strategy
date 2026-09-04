@@ -44,6 +44,10 @@ AGY operates with three integrated identities across all tasks:
 - **D1 vs D2 Lifecycle**: Multiple "D" markers on a chart represent the trade lifecycle:
   - **Marker D1**: Initial Base Breakout (`scan_anchor_bcd_breakout`).
   - **Marker D2**: Trend Continuation Re-Entry / Pyramid (`scan_trend_continuation_reentry` — Datta Playbook Page 16/17).
+- **Datta & Minervini Law (Risk Discipline & Objective Re-Entry Mandate)**:
+  - *Stop-Loss as Capital Shield (Outcome Bias Immunity)*: A triggered stop-loss (e.g. ABCAPITAL 410 CE @ 5.75 protecting against a plunge to 5.05/zero) is an absolute victory of risk management. Never judge an exit by subsequent market drift.
+  - *SL Exits the Risk, NOT the Symbol*: Hitting an SL never disqualifies a ticker permanently. Premature timing $\ne$ bad setup. When a ticker forms a fresh institutional sweep base (e.g. Hammer / LL Sweep at key support) and gives a confirmed D2 breakout, re-entry must be executed objectively without ego or hesitation.
+  - *Moneyness & Theta Preservation on Secondary Entries*: When re-entering following a multi-day recovery base, prioritize At-The-Money (ATM) or In-The-Money (ITM) strikes (e.g. 400/405 CE over 410 CE) to eliminate accumulated Theta drag and capture full spot delta velocity.
 - **Dynamic F&O Universe Resolution**: F&O stock & option contracts are dynamically resolved from the NSE/NFO exchange master via `resolve.py` — NOT restricted to a hardcoded static list.
 - **Unlisted Equities**: Symbols like HDBFS (unlisted/pre-IPO) are used for chart demonstrations only; live automated Kite execution only routes listed NSE/BSE cash and F&O symbols.
 
