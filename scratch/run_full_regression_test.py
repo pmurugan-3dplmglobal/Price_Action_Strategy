@@ -501,6 +501,40 @@ except Exception as e:
     errors.append(f"CVE Fixes & Excursion Guard Invariants Failed: {e}")
     print(f" FAILED [ERR] ({e})", flush=True)
 
+# -------------------------------------------------------------------------
+# TEST 20: Pattern Funnel (Categories A+, A, B) & Lifecycle Invariants
+# -------------------------------------------------------------------------
+print("[TEST 20] Testing Pattern Funnel & Lifecycle Stage (A+, A, B) Invariants...", end="", flush=True)
+try:
+    import pattern_funnel
+    t_eng = "reg_test_engine"
+    item = {"symbol": "TESTSYM", "contract": "TESTSYM26SEP100CE", "side": "CE", "pattern": "BE_ABCD", "strike": "100"}
+    
+    # 1. Register B
+    pattern_funnel.register_partial_pattern(t_eng, item, pattern_funnel.STAGE_B)
+    summ = pattern_funnel.get_funnel_summary(t_eng)
+    assert len(summ["category_b"]) == 1, "Must register into Category B"
+    
+    # 2. Promote to A
+    pattern_funnel.promote_item(t_eng, item, pattern_funnel.STAGE_A)
+    summ = pattern_funnel.get_funnel_summary(t_eng)
+    assert len(summ["category_a"]) == 1 and len(summ["category_b"]) == 0, "Must promote to A and evict from B"
+    
+    # 3. Promote to A+
+    pattern_funnel.promote_item(t_eng, item, pattern_funnel.STAGE_A_PLUS)
+    summ = pattern_funnel.get_funnel_summary(t_eng)
+    assert len(summ["category_a_plus"]) == 1 and len(summ["category_a"]) == 0, "Must promote to A+ and evict from A"
+    
+    # 4. Evict on execution
+    pattern_funnel.evict_item(t_eng, item)
+    summ = pattern_funnel.get_funnel_summary(t_eng)
+    assert len(summ["category_a_plus"]) == 0, "Must evict cleanly from all categories"
+    
+    print(" PASSED [OK]", flush=True)
+except Exception as e:
+    errors.append(f"Pattern Funnel Invariants Failed: {e}")
+    print(f" FAILED [ERR] ({e})", flush=True)
+
 print("\n" + "=" * 100)
 if not errors:
     print("      ALL REGRESSION TESTS PASSED WITH 100% SUCCESS -- ZERO REGRESSIONS FOUND!")

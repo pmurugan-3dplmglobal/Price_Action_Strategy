@@ -10,6 +10,7 @@ from datetime import datetime as dt, time as datetime_time, timedelta
 from flask import Flask, render_template_string, jsonify, request, Response, session, redirect
 from kiteconnect import KiteConnect
 import trade_db
+import pattern_funnel
 import dashboard_auth
 from dashboard_sl_overrides import write_sl_overrides
 from trading_core import (
@@ -566,7 +567,7 @@ def refresh_data(single_run=False):
                     pass
             cached_data["expired_contracts"] = sorted(_expired_cache_set)
             now = time.time()
-            if now - _kite_positions_last_fetch > 3:
+            if now - _kite_positions_last_fetch > 15:
                 _kite_positions_last_fetch = now
                 try:
                     if not _kite_session:
@@ -1075,10 +1076,16 @@ def api_status():
             "live_execution": cached_data["live_execution"],
             "live_execution_index": cached_data["live_execution_index"],
             "executed_exits": cached_data.get("executed_exits", {}),
-            "expired_contracts": cached_data.get("expired_contracts", [])
+            "expired_contracts": cached_data.get("expired_contracts", []),
+            "pattern_funnel": pattern_funnel.get_funnel_summary("nifty50")
         })
     except Exception as e:
         return jsonify({"error": str(e), "programs": {}}), 500
+
+@app.route("/api/pattern-funnel")
+def api_pattern_funnel():
+    engine = request.args.get("engine", "nifty50")
+    return jsonify(pattern_funnel.get_funnel_summary(engine))
 
 @app.route("/api/watchlist")
 def api_watchlist():

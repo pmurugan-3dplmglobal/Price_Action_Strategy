@@ -4,6 +4,40 @@ meta:
   last_updated: '2026-08-30'
   purpose: Document operational failures, root causes, regression fixes, and system enhancements.
 issues:
+- id: FEATURE-030
+  title: Price Action Surveillance Radar (Categories A+, A, B), Sub-15s Fast Execution Loop & Candidate Non-Blocking
+  severity: ENHANCEMENT
+  category: Architecture, Engine Latency & Execution Speed
+  family: RADAR_LIFECYCLE
+  date_reported: '2026-09-04'
+  symptom: '1. Scanned trades staged on Scan Tab during live market did not execute on Zerodha Kite because full universe scans (213 F&O symbols) took hours, delaying order firing until after market close.
+    2. execute_highest_rr_trade picked single max() candidate with flat return on rejection or duplication, starving all other high-conviction candidates.
+    3. app_option_Trade called kite.positions() every 3 seconds, triggering HTTP 429 rate limit / Cloudflare 502 bad gateway on Zerodha Kite API.
+    4. Incubating patterns were discarded until full D-trigger breakout, lacking forward surveillance visibility.
+    '
+  root_cause: 'Monolithic scan-and-execute loop with head-of-line blocking, lack of staged pattern lifecycle persistence, and over-aggressive broker position polling.
+    '
+  affected_files:
+  - common/paths.py
+  - common/pattern_funnel.py
+  - common/patterns_bull.py
+  - common/patterns_bear.py
+  - common/trading_core.py
+  - common/resolve.py
+  - Trade_Option/index_options_trade_engine.py
+  - Trade_Option/stock_options_trade_engine.py
+  - Trade_Option/app_option_Trade.py
+  - Trade_Option/templates/index.html
+  - scratch/run_full_regression_test.py
+  resolution: '1. Implemented Pattern Funnel Manager (common/pattern_funnel.py) managing Category A+ (Imminent Velocity), Category A (Ready), and Category B (Incubator) with atomic persistence and exclusivity enforcement.
+    2. Implemented scan_pattern_lifecycle_stage in common/patterns_bull.py and patterns_bear.py.
+    3. Created high-frequency Fast Surveillance Radar thread (fast_radar_loop) in stock_options_trade_engine.py running every 15s to fire orders instantly upon D-trigger cross without waiting for 213-symbol background cycle.
+    4. Eliminated Head-of-Line blocking in execute_highest_rr_trade across stock and index engines using sorted candidate loop with fallback evaluation.
+    5. Throttled broker position fetching in app_option_Trade.py from 3s to 15s.
+    6. Added /api/pattern-funnel endpoint and dedicated Pattern Surveillance Radar tab in templates/index.html.
+    7. Verified with 100% pass across all 20 regression tests.
+    '
+  status: RESOLVED
 - id: FEATURE-029
   title: Expert Algo Audit Phase 3 — Broker Exit Safety (CVE-1/2), Morning Circuit (CVE-3), Candle API Decoupling (CVE-4), +BE Trailing & Pattern Parity
   severity: HIGH

@@ -50,6 +50,7 @@ ACTIVE_POSITIONS_DB = monitor_file("active_positions_db.json")
 SCANNED_TRADES_DB = monitor_file("scanned_trades_db.json")
 CYCLE_STORE_FILE = monitor_file("cycle_trades.json")
 EXECUTED_STORE_FILE = monitor_file("executed_patterns.json")
+PATTERN_FUNNEL_FILE = monitor_file("pattern_funnel.json")
 
 # Scan display files (what the dashboards read)
 SCAN_DISPLAY_FILE = monitor_file("scan_display.json")

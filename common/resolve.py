@@ -45,6 +45,7 @@ from patterns_bull import (
     find_anchor_bullish_harami,
     find_anchor_two_higher_highs,
     scan_anchor_bcd_breakout,
+    scan_pattern_lifecycle_stage,
     scan_trend_continuation_reentry
 )
 from patterns_bear import (
@@ -54,9 +55,11 @@ from patterns_bear import (
     find_anchor_bearish_harami,
     find_anchor_two_lower_lows,
     scan_anchor_bcd_breakout_bearish,
+    scan_pattern_lifecycle_stage_bearish,
     scan_trend_continuation_reentry_bearish,
     scan_anchor_bcd_breakout_generic
 )
+import pattern_funnel
 from vix_guard import evaluate_vix_regime
 from portfolio_risk import check_portfolio_risk_caps
 
@@ -1316,6 +1319,31 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                             "tier_badge": result_ce.get("tier_badge", "🥈 T2")
                         }
                         symbol_candidates.append(trade_data)
+                        pattern_funnel.evict_item(engine_name, ce['tradingsymbol'])
+                    elif name == "Setup_1_Anchor_BCD":
+                        try:
+                            stage_ce = scan_pattern_lifecycle_stage(df_ce_e, df_ce_a, anchor_tf=timeframe_anchor, entry_tf=timeframe_entry)
+                            if stage_ce and stage_ce.get("stage") in ["STAGE_A_PLUS_READY", "STAGE_A_READY", "STAGE_B_ANCHOR"]:
+                                f_stage = pattern_funnel.STAGE_A_PLUS if stage_ce["stage"] == "STAGE_A_PLUS_READY" else (pattern_funnel.STAGE_A if stage_ce["stage"] == "STAGE_A_READY" else pattern_funnel.STAGE_B)
+                                funnel_item = {
+                                    "symbol": symbol, "contract": ce['tradingsymbol'], "option_token": ce['token'],
+                                    "spot_token": config["token"], "spot_entry": current_spot, "strike": strike,
+                                    "entry_spot": stage_ce.get("close", 0.0), "current_sl": stage_ce.get("sl", 0.0),
+                                    "benchmark": stage_ce.get("benchmark", 0.0), "c_low": stage_ce.get("c_low"),
+                                    "dist_to_trigger_pct": stage_ce.get("dist_to_trigger_pct", 0.0),
+                                    "t1": stage_ce.get("t1"), "t2": stage_ce.get("t2"), "t3": stage_ce.get("t3"),
+                                    "rr": stage_ce.get("rr", 0.0), "pattern": stage_ce.get("pattern", "BASE_ABCD"),
+                                    "side": "CE", "timeframe": timeframe_entry,
+                                    "candle_a_time": stage_ce.get("candle_a_time", ""),
+                                    "candle_b_time": stage_ce.get("candle_b_time", ""),
+                                    "candle_c_time": stage_ce.get("candle_c_time", ""),
+                                    "tier": stage_ce.get("tier", 2), "tier_label": stage_ce.get("tier_label", "TIER_2_CORE"),
+                                    "tier_badge": stage_ce.get("tier_badge", "🥈 T2"),
+                                    "stage": f_stage
+                                }
+                                pattern_funnel.promote_item(engine_name, funnel_item, f_stage)
+                        except Exception as funnel_err:
+                            logging.debug(f"Funnel eval error CE for {symbol}: {funnel_err}")
 
             if not df_pe_e.empty:
                 # Layer 3 Check: Skip PE if an active CE position already exists
@@ -1374,15 +1402,64 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                             "tier_badge": result_pe.get("tier_badge", "🥈 T2")
                         }
                         symbol_candidates.append(trade_data)
+                        pattern_funnel.evict_item(engine_name, pe['tradingsymbol'])
+                    elif name == "Setup_1_Anchor_BCD":
+                        try:
+                            stage_pe = scan_pattern_lifecycle_stage_bearish(df_pe_e, df_pe_a, anchor_tf=timeframe_anchor, entry_tf=timeframe_entry)
+                            if stage_pe and stage_pe.get("stage") in ["STAGE_A_PLUS_READY", "STAGE_A_READY", "STAGE_B_ANCHOR"]:
+                                f_stage = pattern_funnel.STAGE_A_PLUS if stage_pe["stage"] == "STAGE_A_PLUS_READY" else (pattern_funnel.STAGE_A if stage_pe["stage"] == "STAGE_A_READY" else pattern_funnel.STAGE_B)
+                                funnel_item = {
+                                    "symbol": symbol, "contract": pe['tradingsymbol'], "option_token": pe['token'],
+                                    "spot_token": config["token"], "spot_entry": current_spot, "strike": strike,
+                                    "entry_spot": stage_pe.get("close", 0.0), "current_sl": stage_pe.get("sl", 0.0),
+                                    "benchmark": stage_pe.get("benchmark", 0.0), "c_high": stage_pe.get("c_high"),
+                                    "dist_to_trigger_pct": stage_pe.get("dist_to_trigger_pct", 0.0),
+                                    "t1": stage_pe.get("t1"), "t2": stage_pe.get("t2"), "t3": stage_pe.get("t3"),
+                                    "rr": stage_pe.get("rr", 0.0), "pattern": stage_pe.get("pattern", "BASE_ABCD"),
+                                    "side": "PE", "timeframe": timeframe_entry,
+                                    "candle_a_time": stage_pe.get("candle_a_time", ""),
+                                    "candle_b_time": stage_pe.get("candle_b_time", ""),
+                                    "candle_c_time": stage_pe.get("candle_c_time", ""),
+                                    "tier": stage_pe.get("tier", 2), "tier_label": stage_pe.get("tier_label", "TIER_2_CORE"),
+                                    "tier_badge": stage_pe.get("tier_badge", "🥈 T2"),
+                                    "stage": f_stage
+                                }
+                                pattern_funnel.promote_item(engine_name, funnel_item, f_stage)
+                        except Exception as funnel_err:
+                            logging.debug(f"Funnel eval error PE for {symbol}: {funnel_err}")
 
         for name, scanner in anchor_scanners:
             res_ce = scanner(df_ce_a) if not df_ce_a.empty else None
             if res_ce:
                 logging.info(f"ANCHOR FORMED: {ce['tradingsymbol']} | {res_ce['Pattern']} | Close: {res_ce['Close']:.2f} | SL: {res_ce['SL']:.2f}")
+                b_item = {
+                    "symbol": symbol, "contract": ce['tradingsymbol'], "option_token": ce['token'],
+                    "spot_token": config["token"], "spot_entry": current_spot, "strike": strike,
+                    "entry_spot": res_ce["Close"], "current_sl": res_ce["SL"],
+                    "benchmark": res_ce.get("AnchorHigh", res_ce["Close"]),
+                    "t1": None, "t2": None, "t3": None, "rr": 0.0,
+                    "pattern": res_ce["Pattern"], "side": "CE",
+                    "timeframe": timeframe_anchor, "candle_a_time": str(res_ce.get("CandleATime", "")),
+                    "tier": 3, "tier_label": "TIER_3_MOMENTUM", "tier_badge": "🌱 B",
+                    "stage": pattern_funnel.STAGE_B
+                }
+                pattern_funnel.promote_item(engine_name, b_item, pattern_funnel.STAGE_B)
                 continue
             res_pe = scanner(df_pe_a) if not df_pe_a.empty else None
             if res_pe:
                 logging.info(f"ANCHOR FORMED: {pe['tradingsymbol']} | {res_pe['Pattern']} | Close: {res_pe['Close']:.2f} | SL: {res_pe['SL']:.2f}")
+                b_item = {
+                    "symbol": symbol, "contract": pe['tradingsymbol'], "option_token": pe['token'],
+                    "spot_token": config["token"], "spot_entry": current_spot, "strike": strike,
+                    "entry_spot": res_pe["Close"], "current_sl": res_pe["SL"],
+                    "benchmark": res_pe.get("AnchorLow", res_pe["Close"]),
+                    "t1": None, "t2": None, "t3": None, "rr": 0.0,
+                    "pattern": res_pe["Pattern"], "side": "PE",
+                    "timeframe": timeframe_anchor, "candle_a_time": str(res_pe.get("CandleATime", "")),
+                    "tier": 3, "tier_label": "TIER_3_MOMENTUM", "tier_badge": "🌱 B",
+                    "stage": pattern_funnel.STAGE_B
+                }
+                pattern_funnel.promote_item(engine_name, b_item, pattern_funnel.STAGE_B)
 
     # Layer 2: Dominant Conviction Arbitrage — Select Single Best Setup per Symbol
     if symbol_candidates:

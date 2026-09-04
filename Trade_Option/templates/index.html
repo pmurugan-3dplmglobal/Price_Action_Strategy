@@ -20,6 +20,7 @@
             if (target) target.classList.add('active');
             if (event && event.target) event.target.classList.add('active');
             if (tabId === 'backtest-tab') renderBacktest();
+            if (tabId === 'radar-funnel-tab') renderRadarTab();
             if (tabId === 'scan-tab-left') renderScanTab();
             if (tabId === 'ema-scan-tab') renderEmaScanTab();
             if (tabId === 'watchlist-tab') renderWatchlistTab();
@@ -541,6 +542,123 @@
             } catch(e) {
                 showToast(`Error: ${e.message}`, 'error');
             }
+        }
+
+        function renderRadarTab() {
+            const d = window._lastData;
+            const container = document.getElementById('radar-funnel-body');
+            if (!container) return;
+            const funnel = d?.pattern_funnel || { category_a_plus: [], category_a: [], category_b: [], counts: {} };
+            const a_plus = funnel.category_a_plus || [];
+            const a = funnel.category_a || [];
+            const b = funnel.category_b || [];
+
+            let html = '';
+
+            // Metric pills
+            html += `<div style="display:flex;gap:12px;margin-bottom:14px;flex-wrap:wrap">
+                <div style="background:#161b22;border:1px solid #d29922;border-radius:6px;padding:8px 14px;flex:1;min-width:180px">
+                    <div style="font-size:11px;color:#d29922;font-weight:600">⚡ CATEGORY A+ (IMMINENT)</div>
+                    <div style="font-size:20px;font-weight:700;color:#f0883e">${a_plus.length}</div>
+                    <div style="font-size:10px;color:#8b949e">Parabolic + Anchor + B + C (Coiled at D)</div>
+                </div>
+                <div style="background:#161b22;border:1px solid #388bfd;border-radius:6px;padding:8px 14px;flex:1;min-width:180px">
+                    <div style="font-size:11px;color:#58a6ff;font-weight:600">🎯 CATEGORY A (READY)</div>
+                    <div style="font-size:20px;font-weight:700;color:#58a6ff">${a.length}</div>
+                    <div style="font-size:10px;color:#8b949e">Anchor + Pullback + Retracement C</div>
+                </div>
+                <div style="background:#161b22;border:1px solid #8957e5;border-radius:6px;padding:8px 14px;flex:1;min-width:180px">
+                    <div style="font-size:11px;color:#bc8cff;font-weight:600">🌱 CATEGORY B (INCUBATOR)</div>
+                    <div style="font-size:20px;font-weight:700;color:#bc8cff">${b.length}</div>
+                    <div style="font-size:10px;color:#8b949e">Confirmed Anchor A (Incubating B & C)</div>
+                </div>
+            </div>`;
+
+            // Category A+ Section
+            html += `<div class="scan-section-title" style="color:#f0883e">⚡ Category A+: Imminent Velocity Breakouts (${a_plus.length})</div>`;
+            if (a_plus.length === 0) {
+                html += '<p class="empty-state" style="padding:10px">No Category A+ setups currently coiled. High-frequency radar monitoring active.</p>';
+            } else {
+                html += '<div style="overflow-x:auto"><table><thead><tr>' +
+                    '<th>Symbol</th><th>Contract</th><th>Side</th><th>Pattern</th><th>D-Trigger (BM)</th><th>Current SL</th><th>T1</th><th>T2</th><th>T3</th><th>R:R</th><th>Stage</th><th>Surveillance</th>' +
+                    '</tr></thead><tbody>';
+                a_plus.forEach(item => {
+                    const sideColor = item.side === 'CE' ? '#3fb950' : '#f85149';
+                    html += `<tr>
+                        <td><strong>${item.symbol || ''}</strong></td>
+                        <td style="font-size:11px;color:#c9d1d9">${item.contract || item.symbol || ''}</td>
+                        <td><span style="color:${sideColor};font-weight:bold">${item.side || 'CE'}</span></td>
+                        <td><span class="badge" style="background:#21262d;border:1px solid #d29922;color:#d29922">${item.pattern || ''}</span></td>
+                        <td style="font-weight:bold;color:#f0883e">${item.benchmark || '---'}</td>
+                        <td style="color:#f85149">${item.current_sl || '---'}</td>
+                        <td style="color:#3fb950">${item.t1 || '---'}</td>
+                        <td style="color:#3fb950">${item.t2 || '---'}</td>
+                        <td style="color:#3fb950">${item.t3 || '---'}</td>
+                        <td><strong>${item.rr || '---'}</strong></td>
+                        <td><span class="badge" style="background:#5c3a00;color:#ffc554">⚡ A+ Coiled</span></td>
+                        <td><span style="color:#3fb950;font-size:11px">⚡ 15s Radar Active</span></td>
+                    </tr>`;
+                });
+                html += '</tbody></table></div>';
+            }
+
+            // Category A Section
+            html += `<div class="scan-section-title" style="color:#58a6ff;margin-top:14px">🎯 Category A: Breakout Ready (${a.length})</div>`;
+            if (a.length === 0) {
+                html += '<p class="empty-state" style="padding:10px">No Category A setups waiting at D trigger.</p>';
+            } else {
+                html += '<div style="overflow-x:auto"><table><thead><tr>' +
+                    '<th>Symbol</th><th>Contract</th><th>Side</th><th>Pattern</th><th>D-Trigger (BM)</th><th>Current SL</th><th>T1</th><th>T2</th><th>T3</th><th>R:R</th><th>Stage</th><th>Status</th>' +
+                    '</tr></thead><tbody>';
+                a.forEach(item => {
+                    const sideColor = item.side === 'CE' ? '#3fb950' : '#f85149';
+                    html += `<tr>
+                        <td><strong>${item.symbol || ''}</strong></td>
+                        <td style="font-size:11px;color:#c9d1d9">${item.contract || item.symbol || ''}</td>
+                        <td><span style="color:${sideColor};font-weight:bold">${item.side || 'CE'}</span></td>
+                        <td><span class="badge" style="background:#21262d;border:1px solid #388bfd;color:#58a6ff">${item.pattern || ''}</span></td>
+                        <td style="font-weight:bold;color:#58a6ff">${item.benchmark || '---'}</td>
+                        <td style="color:#f85149">${item.current_sl || '---'}</td>
+                        <td style="color:#3fb950">${item.t1 || '---'}</td>
+                        <td style="color:#3fb950">${item.t2 || '---'}</td>
+                        <td style="color:#3fb950">${item.t3 || '---'}</td>
+                        <td><strong>${item.rr || '---'}</strong></td>
+                        <td><span class="badge" style="background:#0c2d6b;color:#58a6ff">🎯 A Ready</span></td>
+                        <td style="font-size:11px;color:#8b949e">Awaiting D Breakout</td>
+                    </tr>`;
+                });
+                html += '</tbody></table></div>';
+            }
+
+            // Category B Section
+            html += `<div class="scan-section-title" style="color:#bc8cff;margin-top:14px">🌱 Category B: Anchor Base Incubator (${b.length})</div>`;
+            if (b.length === 0) {
+                html += '<p class="empty-state" style="padding:10px">No incubating anchors. Run a scan cycle to discover new anchors across the universe.</p>';
+            } else {
+                html += '<div style="overflow-x:auto"><table><thead><tr>' +
+                    '<th>Symbol</th><th>Side</th><th>Anchor Pattern</th><th>Anchor High</th><th>Anchor Low</th><th>Timeframe</th><th>Stage</th><th>Incubation State</th>' +
+                    '</tr></thead><tbody>';
+                b.forEach(item => {
+                    const sideColor = item.side === 'CE' ? '#3fb950' : '#f85149';
+                    html += `<tr>
+                        <td><strong>${item.symbol || ''}</strong></td>
+                        <td><span style="color:${sideColor};font-weight:bold">${item.side || 'CE'}</span></td>
+                        <td><span class="badge" style="background:#21262d;border:1px solid #8957e5;color:#bc8cff">${item.pattern || ''}</span></td>
+                        <td style="color:#3fb950">${item.anchor_high || '---'}</td>
+                        <td style="color:#f85149">${item.anchor_low || '---'}</td>
+                        <td>${item.timeframe || 'day'}</td>
+                        <td><span class="badge" style="background:#271052;color:#d2a8ff">🌱 B Anchor</span></td>
+                        <td style="font-size:11px;color:#8b949e">Incubating Retracement B/C</td>
+                    </tr>`;
+                });
+                html += '</tbody></table></div>';
+            }
+
+            if (funnel.updated_at) {
+                html += `<div style="padding:8px 0;font-size:11px;color:#8b949e">Radar Last Updated: ${funnel.updated_at}</div>`;
+            }
+
+            container.innerHTML = html;
         }
 
         let editStates = {};
@@ -1273,6 +1391,7 @@
             }
             document.getElementById('journal-body').innerHTML = jHtml;
             renderScanTab();
+            renderRadarTab();
             renderEmaScanTab();
             renderWatchlistTab();
 
@@ -2206,6 +2325,7 @@
         <div class="reports-left">
             <div class="left-tab-bar">
                 <button class="left-tab-btn active" onclick="switchLeftTab('active-pos-tab')">Live Positions</button>
+                <button class="left-tab-btn" onclick="switchLeftTab('radar-funnel-tab')">📡 Pattern Radar</button>
                 <button class="left-tab-btn" onclick="switchLeftTab('scan-tab-left')">Today's scan</button>
                 <button class="left-tab-btn" onclick="switchLeftTab('ema-scan-tab')">EMA Scan</button>
                 <button class="left-tab-btn" onclick="switchLeftTab('watchlist-tab')">👁️ Watchlist & Learning</button>
@@ -2223,6 +2343,17 @@
                         </div>
                     </div>
                     <div id="active-positions-body"><p class="empty-state">No positions</p></div>
+                </div>
+            </div>
+            <div id="radar-funnel-tab" class="left-tab-content">
+                <div class="section-panel">
+                    <div class="section-header">
+                        <span>📡 Pattern Surveillance Radar (A+, A, B)</span>
+                        <div style="display:flex;gap:8px;align-items:center">
+                            <span style="font-size:11px;color:#8b949e">Priority Funnel: A+ (Coiled) → A (Ready) → B (Anchor)</span>
+                        </div>
+                    </div>
+                    <div id="radar-funnel-body"><p class="empty-state">Loading pattern radar...</p></div>
                 </div>
             </div>
             <div id="scan-tab-left" class="left-tab-content">

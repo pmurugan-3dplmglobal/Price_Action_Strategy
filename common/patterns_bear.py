@@ -572,6 +572,208 @@ def scan_anchor_bcd_breakout_bearish(df_entry, df_anchor, anchor_tf="", entry_tf
     return best_match
 
 
+def scan_pattern_lifecycle_stage_bearish(df_entry, df_anchor, anchor_tf="", entry_tf="", enable_swing_filter=None, swing_min_waves=3, swing_min_r2=0.55):
+    """
+    Evaluates the current maturity of a bearish symbol across the 4-stage lifecycle funnel:
+      1. STAGE_FULL_ABCD: D breakdown confirmed or near-close triggered (Ready for immediate execution).
+      2. STAGE_A_PLUS_READY: Phase 0 Parabolic (>= 3 waves, R^2 >= 0.55, Terminal Base) + A + B + C formed. Coiled at D trigger.
+      3. STAGE_A_READY: Valid Bearish Anchor A + Breakdown B + Retest C formed. Waiting for D trigger.
+      4. STAGE_B_ANCHOR: Valid Anchor A formed (Engulfing, HH Sweep, Shooting Star, Harami, Two LL, Base). B/C developing.
+    Returns: dict with stage details, or None.
+    """
+    if df_entry is None or df_entry.empty or df_anchor is None or df_anchor.empty:
+        return None
+
+    # Step 1: Check if Full ABCD breakdown has already triggered
+    full_setup = scan_anchor_bcd_breakout_bearish(
+        df_entry, df_anchor, anchor_tf=anchor_tf, entry_tf=entry_tf,
+        enable_swing_filter=enable_swing_filter, swing_min_waves=swing_min_waves, swing_min_r2=swing_min_r2
+    )
+    if full_setup:
+        return {
+            "stage": "STAGE_FULL_ABCD",
+            "setup": full_setup,
+            "pattern": full_setup.get("Pattern"),
+            "benchmark": full_setup.get("Benchmark"),
+            "sl": full_setup.get("SL"),
+            "close": full_setup.get("Close"),
+            "t1": full_setup.get("T1"),
+            "t2": full_setup.get("T2"),
+            "t3": full_setup.get("T3"),
+            "rr": full_setup.get("RR"),
+            "tier": full_setup.get("tier", 2),
+            "tier_label": full_setup.get("tier_label", "TIER_2_CORE"),
+            "tier_badge": full_setup.get("tier_badge", "🥈 T2"),
+            "candle_a_time": full_setup.get("CandleATime"),
+            "candle_d_time": full_setup.get("CandleTime"),
+            "anchor_floor": full_setup.get("AnchorFloor")
+        }
+
+    # Step 2: Evaluate Institutional Parabolic Multi-Swing context on Anchor TF
+    swing_meta = {"swing_waves": 0, "terminal_base": False, "terminal_date": ""}
+    if enable_swing_filter is None:
+        try:
+            import json, paths, os
+            if os.path.exists(paths.PROGRAM_CONFIG_FILE):
+                with open(paths.PROGRAM_CONFIG_FILE, "r", encoding="utf-8") as f:
+                    cfg_all = json.load(f)
+                enable_swing_filter = bool(cfg_all.get("bear_trade", {}).get("enable_swing_filter", True))
+                swing_min_waves = int(cfg_all.get("bear_trade", {}).get("swing_min_waves", swing_min_waves))
+                swing_min_r2 = float(cfg_all.get("bear_trade", {}).get("swing_min_r2", swing_min_r2))
+        except Exception:
+            enable_swing_filter = False
+
+    if enable_swing_filter:
+        sw_res = detect_parabolic_multi_swings(df_anchor, side="BEAR", min_swings=swing_min_waves, min_r2=swing_min_r2, max_bars_after_terminal=45, timeframe_str=anchor_tf)
+        swing_meta = {
+            "swing_waves": sw_res.get("valid_arch_count", 0),
+            "terminal_base": sw_res.get("has_terminal_base", False),
+            "terminal_date": sw_res.get("terminal_swing_date", ""),
+            "terminal_idx": sw_res.get("terminal_swing_idx"),
+            "tier": sw_res.get("tier", 2),
+            "tier_label": sw_res.get("tier_label", "TIER_2_CORE"),
+            "tier_badge": sw_res.get("tier_badge", "🥈 T2")
+        }
+
+    detectors = [
+        find_anchor_bearish_engulfing,
+        find_anchor_hh_sweep,
+        find_anchor_two_lower_lows,
+        find_anchor_shooting_star_baby,
+        find_anchor_bearish_harami
+    ]
+
+    short_names = {
+        "BEAR_A_ABCD_Engulf": "BE_ABCD",
+        "BEAR_A_HH_Sweep": "HH_ABCD",
+        "BEAR_A_Two_Lower_Lows": "LL_ABCD",
+        "BEAR_A_Baby_Shooting_Star": "STAR_ABCD",
+        "BEAR_A_Harami": "HARAMI_ABCD"
+    }
+
+    latest_close = float(df_entry.iloc[-1]['close'])
+
+    for anchor_idx in range(len(df_entry) - 2, max(0, len(df_entry) - 75), -1):
+        sub_anchor_df = df_entry.iloc[:anchor_idx + 1]
+        anchor_candle = sub_anchor_df.iloc[-1]
+        
+        det_result = None
+        for det in detectors:
+            res = det(sub_anchor_df)
+            if res:
+                det_result = res
+                break
+        
+        if not det_result:
+            continue
+
+        a_high = float(det_result.get("AnchorHigh", anchor_candle['high']))
+        a_low = float(det_result.get("AnchorLow", anchor_candle['low']))
+        invalidation = det_result["SL"] if "SL" in det_result else calculate_sl_buffer(a_high, side="BEAR")
+        anchor_name = det_result["Pattern"]
+        pattern_label = short_names.get(anchor_name, "BASE_ABCD")
+        a_date = str(det_result.get("CandleATime") or anchor_candle.get('date', ''))
+
+        # Invalidation check: Price must not have closed above invalidation post-A
+        after_a = df_entry.iloc[anchor_idx + 1:]
+        if not after_a.empty and float(after_a['close'].max()) >= invalidation:
+            continue
+        if latest_close >= invalidation:
+            continue
+
+        # Check Point B: breakdown below a_low
+        b_idx = None
+        for j in range(len(after_a)):
+            if float(after_a.iloc[j]['close']) < a_low:
+                b_idx = anchor_idx + 1 + j
+                break
+
+        t1, t2, t3 = find_profit_targets_bearish(df_anchor, a_low, stop_loss=invalidation)
+        risk = invalidation - a_low
+        rr = (a_low - t1) / risk if (t1 and risk > 0) else 0.0
+
+        if b_idx is not None:
+            # Check Point C: green retest
+            c_slice = df_entry.iloc[b_idx + 1:]
+            c_idx = None
+            risk_dist = max(0.50, a_high - a_low)
+            max_b_excursion = a_low - (1.5 * risk_dist)
+            if t1 is not None and t1 < a_low:
+                max_b_excursion = max(max_b_excursion, float(t1))
+
+            for j in range(len(c_slice)):
+                if j > 25:
+                    break
+                c_row = c_slice.iloc[j]
+                if float(c_row['low']) < max_b_excursion:
+                    break
+                c_high = float(c_row['high'])
+                c_close = float(c_row['close'])
+                c_open = float(c_row['open'])
+                is_green = c_close > c_open
+                if (c_high >= a_low and c_close <= a_high and is_green) or \
+                   (c_high >= a_high and c_close <= a_high and c_close > float(anchor_candle['open']) and is_green):
+                    c_idx = b_idx + 1 + j
+                    break
+
+            if c_idx is not None:
+                b_row = df_entry.iloc[b_idx]
+                c_row = df_entry.iloc[c_idx]
+                has_parabolic = bool(swing_meta.get("swing_waves", 0) >= 2 and swing_meta.get("terminal_base", False))
+                stage_name = "STAGE_A_PLUS_READY" if has_parabolic else "STAGE_A_READY"
+                tier_val = 1 if has_parabolic else 2
+                tier_lbl = "TIER_1_GOLD" if has_parabolic else "TIER_2_CORE"
+                tier_bdg = "🥇 T1" if has_parabolic else "🥈 T2"
+                dist_pct = round(((latest_close - a_low) / latest_close) * 100, 2) if latest_close > 0 else 0.0
+
+                return {
+                    "stage": stage_name,
+                    "pattern": pattern_label,
+                    "anchor_name": anchor_name,
+                    "benchmark": a_low,
+                    "sl": invalidation,
+                    "close": latest_close,
+                    "c_high": float(c_row['high']),
+                    "dist_to_trigger_pct": dist_pct,
+                    "t1": t1, "t2": t2, "t3": t3,
+                    "rr": round(rr, 2),
+                    "tier": tier_val,
+                    "tier_label": tier_lbl,
+                    "tier_badge": tier_bdg,
+                    "candle_a_time": a_date,
+                    "candle_b_time": str(b_row.get("date", "")),
+                    "candle_c_time": str(c_row.get("date", "")),
+                    "anchor_floor": a_high,
+                    "swing_waves": swing_meta.get("swing_waves", 0),
+                    "terminal_base": swing_meta.get("terminal_base", False),
+                    "direction": "BEAR"
+                }
+
+        # Stage B Bearish: Valid Anchor A formed, waiting for B / C
+        dist_pct = round(((latest_close - a_low) / latest_close) * 100, 2) if latest_close > 0 else 0.0
+        return {
+            "stage": "STAGE_B_ANCHOR",
+            "pattern": pattern_label,
+            "anchor_name": anchor_name,
+            "benchmark": a_low,
+            "sl": invalidation,
+            "close": latest_close,
+            "dist_to_trigger_pct": dist_pct,
+            "t1": t1, "t2": t2, "t3": t3,
+            "rr": round(rr, 2),
+            "tier": 3,
+            "tier_label": "TIER_3_MOMENTUM",
+            "tier_badge": "🌱 B",
+            "candle_a_time": a_date,
+            "anchor_floor": a_high,
+            "swing_waves": swing_meta.get("swing_waves", 0),
+            "terminal_base": swing_meta.get("terminal_base", False),
+            "direction": "BEAR"
+        }
+
+    return None
+
+
 def scan_trend_continuation_reentry_bearish(df_entry, df_anchor):
     """
     Setup Page 17 (Bearish Trend Continuation + Re-Entry):

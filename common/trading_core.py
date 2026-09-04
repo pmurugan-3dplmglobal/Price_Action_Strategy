@@ -100,6 +100,7 @@ from patterns_bull import (
     find_anchor_bullish_harami,
     find_anchor_two_higher_highs,
     scan_anchor_bcd_breakout,
+    scan_pattern_lifecycle_stage,
     scan_trend_continuation_reentry
 )
 
@@ -111,8 +112,24 @@ from patterns_bear import (
     find_anchor_bearish_harami,
     find_anchor_two_lower_lows,
     scan_anchor_bcd_breakout_bearish,
+    scan_pattern_lifecycle_stage_bearish,
     scan_trend_continuation_reentry_bearish,
     scan_anchor_bcd_breakout_generic
+)
+
+# ── pattern_funnel ──
+import pattern_funnel
+from pattern_funnel import (
+    STAGE_A_PLUS,
+    STAGE_A,
+    STAGE_B,
+    load_funnel_state,
+    save_funnel_state,
+    update_funnel,
+    promote_item,
+    evict_item,
+    clear_funnel,
+    get_funnel_summary
 )
 
 # ── position_monitor ──

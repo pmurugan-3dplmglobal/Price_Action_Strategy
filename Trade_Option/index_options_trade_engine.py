@@ -257,86 +257,97 @@ def simulate_trade_outcome(kite, trade, target_date):
 # ──────────────────────────────────────────────
 
 def execute_highest_rr_trade(kite, staged):
-    """After a scan cycle, pick best by profit and execute (if live)."""
+    """After a scan cycle, evaluate staged candidates in descending order of profit and execute the first unexecuted/valid setup."""
     if not staged:
         return
-    best = max(staged, key=lambda t: (t.get("t3") or t.get("t1") or 0) - t.get("entry_spot", 0))
-    key = f"{best['symbol']}|{best['pattern']}|{best['side']}|{best.get('strike', '')}"
-    if trade_db.is_pattern_executed("index", key):
-        logging.info(f"Best cycle trade {key} already executed; skipping")
-        return
+    sorted_staged = sorted(staged, key=lambda t: (t.get("t3") or t.get("t1") or 0) - t.get("entry_spot", 0), reverse=True)
     live_ok = LIVE_MARKET_DEPLOYMENT and live_execution_enabled(LIVE_EXECUTION_FLAG) and is_market_open()
-    if live_ok or BACKTEST_DATE is not None:
-        pos = best.copy()
-        pos["entry_time"] = dt.now().isoformat()
-        pos.setdefault("position_type", "option")
-        if live_ok:
-            from vix_guard import evaluate_vix_regime
-            vix_ok, vix_msg, _ = evaluate_vix_regime(kite, tier_val=best.get("tier", 1))
-            if not vix_ok:
-                logging.info(f"[VIX_REGIME_GATE] Auto-execution skipped for {best['symbol']} ({best['contract']}): {vix_msg}")
-                return
 
-            from portfolio_risk import check_portfolio_risk_caps
-            cfg_eng = load_program_config_for_engine("index")
-            cap_val = float(cfg_eng.get("capital") or 100000.0)
-            p_ok, p_msg, _ = check_portfolio_risk_caps(
-                engine="index",
-                symbol=best["symbol"],
-                candidate_tier=best.get("tier", 1),
-                capital=cap_val,
-                live_positions=ACTIVE_POSITIONS
-            )
-            if not p_ok:
-                logging.info(f"[PORTFOLIO_RISK_CAP] Auto-execution skipped for {best['symbol']} ({best['contract']}): {p_msg}")
-                return
+    for best in sorted_staged:
+        key = f"{best['symbol']}|{best['pattern']}|{best['side']}|{best.get('strike', '')}"
+        if trade_db.is_pattern_executed("index", key):
+            logging.info(f"Candidate trade {key} already executed; evaluating next candidate")
+            continue
 
-            with position_lock:
-                if best["symbol"] in ACTIVE_POSITIONS:
-                    logging.info(f"{best['symbol']} already active; skipping new trade")
-                    return
-                pos["trade_id"], _created = trade_db.create_trade("index", best["symbol"], {k: v for k, v in pos.items() if k != "trade_id"})
-                ACTIVE_POSITIONS[best["symbol"]] = pos
-        trade_db.record_executed_pattern("index", key, {"contract": best["contract"], "entry": best["entry_spot"]})
-        ok = execute_index_entry(kite, pos)
-        if ok:
-            profit = round((best.get("t3") or best.get("t1") or 0) - best["entry_spot"], 2)
-            rr_best = best.get("rr", "")
+        if live_ok or BACKTEST_DATE is not None:
+            pos = best.copy()
+            pos["entry_time"] = dt.now().isoformat()
+            pos.setdefault("position_type", "option")
             if live_ok:
-                log_to_journal(best["symbol"], best["pattern"], best["timeframe"],
-                               "BUY_" + best["side"], "SUCCESS", f"Contract: {best['contract']}, Qty: {best['position_size']}",
-                               entry=best["entry_spot"], sl=best["current_sl"], target=best.get("t1", ""), rr=rr_best,
-                               event_time=best.get("entry_time"))
-            else:
-                log_to_journal(best["symbol"], best["pattern"], best["timeframe"],
-                               "DRY_" + best["side"], "SUCCESS", f"Contract: {best['contract']}, Size: {best['position_size']}",
-                               entry=best["entry_spot"], sl=best["current_sl"], target=best.get("t1", ""), rr=rr_best,
-                               event_time=best.get("entry_time"))
-                sim = simulate_trade_outcome(kite, best, BACKTEST_DATE)
-                if sim["result"]:
+                from vix_guard import evaluate_vix_regime
+                vix_ok, vix_msg, _ = evaluate_vix_regime(kite, tier_val=best.get("tier", 1))
+                if not vix_ok:
+                    logging.info(f"[VIX_REGIME_GATE] Auto-execution skipped for {best['symbol']} ({best['contract']}): {vix_msg}")
+                    continue
+
+                from portfolio_risk import check_portfolio_risk_caps
+                cfg_eng = load_program_config_for_engine("index")
+                cap_val = float(cfg_eng.get("capital") or 100000.0)
+                p_ok, p_msg, _ = check_portfolio_risk_caps(
+                    engine="index",
+                    symbol=best["symbol"],
+                    candidate_tier=best.get("tier", 1),
+                    capital=cap_val,
+                    live_positions=ACTIVE_POSITIONS
+                )
+                if not p_ok:
+                    logging.info(f"[PORTFOLIO_RISK_CAP] Auto-execution skipped for {best['symbol']} ({best['contract']}): {p_msg}")
+                    continue
+
+                with position_lock:
+                    if best["symbol"] in ACTIVE_POSITIONS:
+                        logging.info(f"{best['symbol']} already active; evaluating next candidate")
+                        continue
+                    pos["trade_id"], _created = trade_db.create_trade("index", best["symbol"], {k: v for k, v in pos.items() if k != "trade_id"})
+                    ACTIVE_POSITIONS[best["symbol"]] = pos
+
+            trade_db.record_executed_pattern("index", key, {"contract": best["contract"], "entry": best["entry_spot"]})
+            ok = execute_index_entry(kite, pos)
+            if not ok:
+                if live_ok:
+                    with position_lock:
+                        ACTIVE_POSITIONS.pop(best["symbol"], None)
+                continue
+            if ok:
+                profit = round((best.get("t3") or best.get("t1") or 0) - best["entry_spot"], 2)
+                rr_best = best.get("rr", "")
+                if live_ok:
                     log_to_journal(best["symbol"], best["pattern"], best["timeframe"],
-                                   sim["result"], "COMPLETED", sim["detail"],
+                                   "BUY_" + best["side"], "SUCCESS", f"Contract: {best['contract']}, Qty: {best['position_size']}",
                                    entry=best["entry_spot"], sl=best["current_sl"], target=best.get("t1", ""), rr=rr_best,
-                                   event_time=sim.get("exit_time") or sim.get("entry_time"))
-                    logging.info(f"[BACKTEST] Trade outcome: {sim['result']} | {sim['detail']}")
-            logging.info(f"EXECUTED best cycle trade: {best['symbol']} {best['side']} | {best['pattern']} | max-profit={profit}")
+                                   event_time=best.get("entry_time"))
+                else:
+                    log_to_journal(best["symbol"], best["pattern"], best["timeframe"],
+                                   "DRY_" + best["side"], "SUCCESS", f"Contract: {best['contract']}, Size: {best['position_size']}",
+                                   entry=best["entry_spot"], sl=best["current_sl"], target=best.get("t1", ""), rr=rr_best,
+                                   event_time=best.get("entry_time"))
+                    sim = simulate_trade_outcome(kite, best, BACKTEST_DATE)
+                    if sim["result"]:
+                        log_to_journal(best["symbol"], best["pattern"], best["timeframe"],
+                                       sim["result"], "COMPLETED", sim["detail"],
+                                       entry=best["entry_spot"], sl=best["current_sl"], target=best.get("t1", ""), rr=rr_best,
+                                       event_time=sim.get("exit_time") or sim.get("entry_time"))
+                        logging.info(f"[BACKTEST] Trade outcome: {sim['result']} | {sim['detail']}")
+                logging.info(f"EXECUTED best cycle trade: {best['symbol']} {best['side']} | {best['pattern']} | max-profit={profit}")
+                break
+            else:
+                with position_lock:
+                    ACTIVE_POSITIONS.pop(best["symbol"], None)
+                if pos.get("trade_id"):
+                    trade_db.update_trade(pos["trade_id"], {"status": "FAILED", "updated_at": dt.now().strftime("%Y-%m-%d %H:%M:%S")})
+                logging.warning(f"Order placement failed for {best['contract']}. Locked pattern {key} to prevent rate-limit spam loops.")
+                continue
         else:
-            with position_lock:
-                ACTIVE_POSITIONS.pop(best["symbol"], None)
-            if pos.get("trade_id"):
-                trade_db.update_trade(pos["trade_id"], {"status": "FAILED", "updated_at": dt.now().strftime("%Y-%m-%d %H:%M:%S")})
-            logging.warning(f"Order placement failed for {best['contract']}. Locked pattern {key} to prevent rate-limit spam loops.")
-    else:
-        cp = best["entry_spot"]
-        contract = best.get("contract", "")
-        pos_size = best.get("position_size", 0)
-        log_to_journal(best["symbol"], best["pattern"], best["timeframe"],
-                       "SCAN_READY", "SUCCESS",
-                       f"Contract: {contract}, Size: {pos_size} | Manual entry pending",
-                       entry=cp, sl=best["current_sl"], target=best.get("t1", ""),
-                       event_time=best.get("entry_time"))
-        logging.info(f"SCAN_READY best trade: {best['symbol']} {contract} | Entry: {cp} | SL: {best['current_sl']}")
-        return
+            cp = best["entry_spot"]
+            contract = best.get("contract", "")
+            pos_size = best.get("position_size", 0)
+            log_to_journal(best["symbol"], best["pattern"], best["timeframe"],
+                           "SCAN_READY", "SUCCESS",
+                           f"Contract: {contract}, Size: {pos_size} | Manual entry pending",
+                           entry=cp, sl=best["current_sl"], target=best.get("t1", ""),
+                           event_time=best.get("entry_time"))
+            logging.info(f"SCAN_READY best trade: {best['symbol']} {contract} | Entry: {cp} | SL: {best['current_sl']}")
+            break
 
 def monitor_active_positions(kite):
     return shared_monitor_positions(kite, INDEX_REGISTRY, ACTIVE_POSITIONS, position_lock,

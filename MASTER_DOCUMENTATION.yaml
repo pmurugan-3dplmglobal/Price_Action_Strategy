@@ -37,6 +37,7 @@ architecture:
   directory:
     common:
       paths.py: "Single source of truth for canonical system file paths across engines and dashboards (TRADES_DB, ACTIVE_POSITIONS_DB, SCAN_DISPLAY_*, TOKEN_FILE, etc.)"
+      pattern_funnel.py: "Price Action Surveillance Radar & Funnel Manager maintaining 3-tier lifecycle stages (Category A+ Imminent Velocity, Category A Breakout Ready, Category B Anchor Incubator) with sub-15s execution dispatch and thread-safe persistence."
       swing_detection.py: "Institutional-grade Phase 0 Parabolic Multi-Swing Cascade Filter with Unified Hybrid Dynamic Legs (get_adaptive_leg_length, is_parabolic_arch_enhanced, extract_swing_pivots, validate_parabolic_cascade_structure, detect_parabolic_multi_swings) supporting ATR volatility scaling (2-5 bars), symbol overrides, BOS integrity, and terminal base absorption."
       vix_guard.py: "India VIX Macro Regime Gate (60s TTL RAM cache) evaluating normal (<=20.0), elevated (20-25), and extreme (>25.0) market volatility states"
       portfolio_risk.py: "Cross-engine portfolio risk governor enforcing max concurrent positions (6), max daily drawdown limit (-3.0%), and sector caps (max 2 per sector across 235 stocks in registries.py)"
