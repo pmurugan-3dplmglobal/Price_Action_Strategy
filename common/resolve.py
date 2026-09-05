@@ -17,7 +17,12 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import pandas as pd
 import paths
 
-from swing_detection import detect_parabolic_multi_swings
+from swing_detection import (
+    detect_parabolic_multi_swings,
+    calculate_option_vwap,
+    calculate_twap_c_stability,
+    calculate_vcp_metrics
+)
 from session import safe_kite_call, ensure_kite_session, load_kite_session
 from timeframe_utils import (
     fetch_and_resample_candles,
@@ -62,6 +67,31 @@ from patterns_bear import (
 import pattern_funnel
 from vix_guard import evaluate_vix_regime
 from portfolio_risk import check_portfolio_risk_caps
+
+def get_mapped_spot_timeframe(entry_tf):
+    """
+    Spot-Relative Confluence Mapping (Resolves 'Option Chart Illusion'):
+    Maps entry timeframe to higher-timeframe spot anchor context:
+      - 3m option -> 15m spot (5x)
+      - 5m option -> 15m spot (3x)
+      - 15m option -> 60m spot (4x)
+      - 30m option -> Day spot (7.5x)
+      - Default -> Day spot
+    """
+    tf_clean = str(entry_tf).lower().strip()
+    mapping = {
+        "3m": "15m",
+        "3minute": "15m",
+        "5m": "15m",
+        "5minute": "15m",
+        "15m": "60m",
+        "15minute": "60m",
+        "30m": "day",
+        "30minute": "day",
+        "60m": "day",
+        "day": "day"
+    }
+    return mapping.get(tf_clean, "day")
 
 def _match_registry_symbol(registry, tradingsymbol):
     """Return the registry key that best matches a tradingsymbol, longest-match first.
@@ -634,7 +664,14 @@ def write_scan_display_data(staged, active, display_file, engine_name=None):
                 "vcp_badge": t.get("vcp_badge", ""),
                 "spot_token": t.get("spot_token") or t.get("index_token"),
                 "spot_sl": t.get("spot_sl"),
-                "spot_entry": t.get("spot_entry")
+                "spot_entry": t.get("spot_entry"),
+                "vwap": t.get("vwap", 0.0),
+                "vwap_stretch": t.get("vwap_stretch", 0.0),
+                "vwap_status": t.get("vwap_status", "FAIR"),
+                "spot_confluence": bool(t.get("spot_confluence", False)),
+                "twap_c_stable": bool(t.get("twap_c_stable", False)),
+                "twap_c_score": float(t.get("twap_c_score", 0.0)),
+                "twap_c_std": float(t.get("twap_c_std", 0.0))
             }
         new_staged = [build_trade(t, t.get("pattern", "BE_ABCD"), t.get("entry_time", now_str), None, is_staged=True) for t in (staged or [])]
         carry_fwd = []
@@ -1168,6 +1205,23 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
     except Exception as e:
         logging.debug(f"Spot EMA calculation error for {symbol}: {e}")
 
+    # Spot-Relative Confluence Mapping (Resolves 'Option Chart Illusion')
+    mapped_spot_tf = get_mapped_spot_timeframe(timeframe_entry)
+    spot_confluence_bull = False
+    spot_confluence_bear = False
+    try:
+        df_spot_mapped = safe_kite_call(fetch_and_resample_candles, kite, config["token"], from_anchor, to_anchor, mapped_spot_tf)
+        if df_spot_mapped is not None and len(df_spot_mapped) >= 13:
+            ema_mapped = float(df_spot_mapped['close'].ewm(span=13, adjust=False).mean().iloc[-1])
+            last_mapped_close = float(df_spot_mapped.iloc[-1]['close'])
+            if last_mapped_close >= ema_mapped:
+                spot_confluence_bull = True
+            if last_mapped_close <= ema_mapped:
+                spot_confluence_bear = True
+            logging.debug(f"[SPOT_CONFLUENCE] {symbol}: Spot {mapped_spot_tf} Close={last_mapped_close:.2f} vs EMA13={ema_mapped:.2f} (Bull={spot_confluence_bull}, Bear={spot_confluence_bear})")
+    except Exception as e:
+        logging.debug(f"Spot mapped confluence error for {symbol}: {e}")
+
     # Layer 3: Mutual Exclusivity Guard — Check existing active position on this symbol
     existing_active_side = None
     with position_lock:
@@ -1265,6 +1319,16 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
         if df_ce_e.empty and df_pe_e.empty:
             continue
 
+        vwap_ce_info = calculate_option_vwap(df_ce_e)
+        vwap_ce = vwap_ce_info.get("vwap", 0.0)
+        vwap_stretch_ce = vwap_ce_info.get("stretch_pct", 0.0)
+        vwap_status_ce = vwap_ce_info.get("vwap_status", "FAIR")
+
+        vwap_pe_info = calculate_option_vwap(df_pe_e)
+        vwap_pe = vwap_pe_info.get("vwap", 0.0)
+        vwap_stretch_pe = vwap_pe_info.get("stretch_pct", 0.0)
+        vwap_status_pe = vwap_pe_info.get("vwap_status", "FAIR")
+
         for name, scanner in entry_scanners:
             if not df_ce_e.empty:
                 # Layer 3 Check: Skip CE if an active PE position already exists
@@ -1285,7 +1349,7 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                         if result_ce["Close"] < 300 and result_ce["T1"] > result_ce["Close"] * 5:
                             log_fn(ce['tradingsymbol'], result_ce["Pattern"], timeframe_entry,
                                    "SCAN_MATCH", "NO_TARGETS", "Stale ITM regime targets",
-                                   entry=result_ce["Close"], sl=result_ce["SL"],
+                                    entry=result_ce["Close"], sl=result_ce["SL"],
                                    target=0, rr=0, event_time=candle_time)
                             continue
 
@@ -1324,7 +1388,14 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                             "atr_ratio": result_ce.get("atr_ratio", 1.0),
                             "is_squeeze": result_ce.get("is_squeeze", False),
                             "vcp_tier": result_ce.get("vcp_tier", "NORMAL"),
-                            "vcp_badge": result_ce.get("vcp_badge", "")
+                            "vcp_badge": result_ce.get("vcp_badge", ""),
+                            "vwap": vwap_ce,
+                            "vwap_stretch": vwap_stretch_ce,
+                            "vwap_status": vwap_status_ce,
+                            "spot_confluence": spot_confluence_bull,
+                            "twap_c_stable": result_ce.get("twap_c_stable", False),
+                            "twap_c_score": result_ce.get("twap_c_score", 0.0),
+                            "twap_c_std": result_ce.get("twap_c_std", 0.0)
                         }
                         symbol_candidates.append(trade_data)
                         pattern_funnel.evict_item(engine_name, ce['tradingsymbol'])
@@ -1351,6 +1422,13 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                                     "is_squeeze": stage_ce.get("is_squeeze", False),
                                     "vcp_tier": stage_ce.get("vcp_tier", "NORMAL"),
                                     "vcp_badge": stage_ce.get("vcp_badge", ""),
+                                    "vwap": vwap_ce,
+                                    "vwap_stretch": vwap_stretch_ce,
+                                    "vwap_status": vwap_status_ce,
+                                    "spot_confluence": spot_confluence_bull,
+                                    "twap_c_stable": stage_ce.get("twap_c_stable", False),
+                                    "twap_c_score": stage_ce.get("twap_c_score", 0.0),
+                                    "twap_c_std": stage_ce.get("twap_c_std", 0.0),
                                     "stage": f_stage
                                 }
                                 pattern_funnel.promote_item(engine_name, funnel_item, f_stage)
@@ -1415,7 +1493,14 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                             "atr_ratio": result_pe.get("atr_ratio", 1.0),
                             "is_squeeze": result_pe.get("is_squeeze", False),
                             "vcp_tier": result_pe.get("vcp_tier", "NORMAL"),
-                            "vcp_badge": result_pe.get("vcp_badge", "")
+                            "vcp_badge": result_pe.get("vcp_badge", ""),
+                            "vwap": vwap_pe,
+                            "vwap_stretch": vwap_stretch_pe,
+                            "vwap_status": vwap_status_pe,
+                            "spot_confluence": spot_confluence_bear,
+                            "twap_c_stable": result_pe.get("twap_c_stable", False),
+                            "twap_c_score": result_pe.get("twap_c_score", 0.0),
+                            "twap_c_std": result_pe.get("twap_c_std", 0.0)
                         }
                         symbol_candidates.append(trade_data)
                         pattern_funnel.evict_item(engine_name, pe['tradingsymbol'])
@@ -1442,6 +1527,13 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                                     "is_squeeze": stage_pe.get("is_squeeze", False),
                                     "vcp_tier": stage_pe.get("vcp_tier", "NORMAL"),
                                     "vcp_badge": stage_pe.get("vcp_badge", ""),
+                                    "vwap": vwap_pe,
+                                    "vwap_stretch": vwap_stretch_pe,
+                                    "vwap_status": vwap_status_pe,
+                                    "spot_confluence": spot_confluence_bear,
+                                    "twap_c_stable": stage_pe.get("twap_c_stable", False),
+                                    "twap_c_score": stage_pe.get("twap_c_score", 0.0),
+                                    "twap_c_std": stage_pe.get("twap_c_std", 0.0),
                                     "stage": f_stage
                                 }
                                 pattern_funnel.promote_item(engine_name, funnel_item, f_stage)
@@ -1553,8 +1645,24 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
             net_profit = max(0.0, t1 - ep)
             strike_val = float(c.get("strike", 0))
             strike_dist = abs(strike_val - current_spot)
-            # Priority: 1. Moneyness (ATM/1-ITM first) -> 2. Tier (Gold/Core) -> 3. Profit -> 4. RR -> 5. Distance
-            return (m_rank, tier_val, -net_profit, -rr_val, strike_dist)
+
+            # Institutional Soft Quality Adjustment (Zero-Trade-Starvation):
+            # 1. Option VWAP: FAIR (+2 bonus), EXPANDED (0 neutral), STRETCHED (-2 penalty)
+            # 2. Spot Confluence: True (+1 bonus)
+            # 3. Point C TWAP Stability: True (+1 bonus)
+            quality_score = 0.0
+            vwap_st = str(c.get("vwap_status", "FAIR")).upper()
+            if vwap_st == "FAIR":
+                quality_score += 2.0
+            elif vwap_st == "STRETCHED":
+                quality_score -= 2.0
+            if c.get("spot_confluence", False):
+                quality_score += 1.0
+            if c.get("twap_c_stable", False):
+                quality_score += 1.0
+
+            # Priority: 1. Moneyness (ATM/1-ITM first) -> 2. Tier (Gold/Core) -> 3. Quality Score (bonus first) -> 4. Profit -> 5. RR -> 6. Distance
+            return (m_rank, tier_val, -quality_score, -net_profit, -rr_val, strike_dist)
 
         pool.sort(key=_candidate_rank)
         best_trade = pool[0]

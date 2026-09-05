@@ -465,7 +465,7 @@ def execute_highest_rr_trade(kite, staged):
             from liquidity_guard import check_bid_ask_spread_liquidity
             cfg_liq = cfg_eng.get("liquidity_gate", {})
             max_spread = float(cfg_liq.get("max_spread_pct", 0.02))
-            liq_ok, spread_val, liq_msg, _ = check_bid_ask_spread_liquidity(
+            liq_ok, spread_val, liq_msg, depth_details = check_bid_ask_spread_liquidity(
                 kite=kite,
                 exchange=kite.EXCHANGE_NFO,
                 contract=contract,
@@ -477,6 +477,16 @@ def execute_highest_rr_trade(kite, staged):
                                liq_msg, entry=limit_price, sl=best["current_sl"], target=best["t1"],
                                event_time=best.get("entry_time"))
                 continue
+
+            # Stage 1: Smart Pegged Limit Order Routing (Passive Mid-Price Peg)
+            # If spread >= 0.8%, peg limit order at Mid price between Best Bid and Best Ask to capture spread savings
+            best_bid = float(depth_details.get("best_bid", 0.0))
+            best_ask = float(depth_details.get("best_ask", 0.0))
+            if best_bid > 0 and best_ask > 0 and depth_details.get("spread_pct", 0.0) >= 0.8:
+                mid_price = round((best_bid + best_ask) / 2.0, 1)
+                if mid_price > 0 and mid_price < limit_price:
+                    logging.info(f"[PEGGED_LIMIT_ROUTING] {contract}: Pegging limit at Mid-Price {mid_price:.2f} (Bid={best_bid:.2f}, Ask={best_ask:.2f}, Spread={depth_details.get('spread_pct'):.2f}%) instead of marketable {limit_price:.2f}")
+                    limit_price = mid_price
 
             with position_lock:
                 if sym in ACTIVE_POSITIONS:

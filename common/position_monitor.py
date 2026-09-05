@@ -977,10 +977,11 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                     # CVE-3 FIX: Morning Catastrophic Circuit Breaker active 09:15-09:45 AM.
                     # Protects against catastrophic opening gap-downs (>= 25% for options, >= 12% for stocks).
                     if entry_s > 0 and live_ltp > 0 and not is_outlier_entry:
-                        if not is_stock and live_ltp <= (entry_s * 0.75):
+                        opt_loss_cap = float(cfg.get("max_option_loss_pct", 15)) / 100.0 if not is_stock else 0.08
+                        if not is_stock and live_ltp <= (entry_s * (1.0 - opt_loss_cap)):
                             sl_hit = True
                             drop_pct = (entry_s - live_ltp) / entry_s * 100.0
-                            sl_reason = f"MORNING_CATASTROPHIC_CIRCUIT_25PCT (Option LTP {live_ltp:.2f} down {drop_pct:.1f}% from entry {entry_s:.2f})"
+                            sl_reason = f"MORNING_CATASTROPHIC_CIRCUIT_{int(opt_loss_cap*100)}PCT (Option LTP {live_ltp:.2f} down {drop_pct:.1f}% from entry {entry_s:.2f})"
                             cp = live_ltp
                             event_time = last.get('date')
                         elif is_stock and live_ltp <= (entry_s * 0.88):
@@ -1062,8 +1063,9 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
             enable_spot_guard = cfg.get("enable_spot_sl_guard", True) if isinstance(cfg, dict) else True
             trailing_stg = int(pos.get("trailing_stage") or 0)
             is_trailed_stop = (trailing_stg >= 1) or (entry_s > 0 and current_sl >= (entry_s * 0.99))
+            is_hard_max_sl = "HARD_MAX_" in sl_reason or "CATASTROPHIC" in sl_reason
 
-            if sl_hit and not is_stock and enable_spot_guard and not is_trailed_stop and kite:
+            if sl_hit and not is_hard_max_sl and not is_stock and enable_spot_guard and not is_trailed_stop and kite:
                 spot_tok = pos.get("spot_token") or pos.get("index_token") or pos.get("underlying_token")
                 if not spot_tok:
                     from registries import STOCK_REGISTRY, INDEX_REGISTRY
@@ -1095,8 +1097,8 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                         live_spot = float(list(sq.values())[0]["last_price"]) if sq else 0.0
                         side_str = str(pos.get("side", "CE")).upper()
                         is_bull = side_str in ["CE", "BUY", "BULL"]
-                        # Catastrophic option emergency cap: If option drops >35% from entry, exit regardless of spot
-                        is_catastrophic_opt = (entry_s > 0 and live_ltp > 0 and live_ltp < (entry_s * 0.65))
+                        # Catastrophic option emergency cap: If option drops beyond max_loss_pct (15%), exit regardless of spot
+                        is_catastrophic_opt = (entry_s > 0 and live_ltp > 0 and live_ltp <= (entry_s * (1.0 - max_loss_pct)))
 
                         if is_bull and live_spot > spot_sl and not is_catastrophic_opt:
                             logging.info(f"[SPOT_SL_GUARD] Suppressed premature option SL exit for {sym} ({pos.get('contract')}): Option LTP {live_ltp:.2f} tripped SL, but Underlying Spot ({live_spot:.2f}) is strictly holding above support ({spot_sl:.2f}).")

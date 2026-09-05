@@ -184,7 +184,8 @@ from resolve import (
     simulate_trade_outcome,
     calculate_position_size,
     is_setup_already_completed,
-    load_program_config_for_engine
+    load_program_config_for_engine,
+    get_mapped_spot_timeframe
 )
 
 # ── swing_detection ──
@@ -192,7 +193,10 @@ from swing_detection import (
     detect_parabolic_multi_swings,
     extract_swing_pivots,
     validate_parabolic_cascade_structure,
-    is_parabolic_arch_enhanced
+    is_parabolic_arch_enhanced,
+    calculate_option_vwap,
+    calculate_twap_c_stability,
+    calculate_vcp_metrics
 )
 
 # ── trade_db ──

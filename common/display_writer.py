@@ -126,7 +126,14 @@ def write_scan_display_data(staged, active, display_file, engine_name=None):
                 "atr_ratio": t.get("atr_ratio", 1.0),
                 "is_squeeze": t.get("is_squeeze", False),
                 "vcp_tier": t.get("vcp_tier", "NORMAL"),
-                "vcp_badge": t.get("vcp_badge", "")
+                "vcp_badge": t.get("vcp_badge", ""),
+                "vwap": t.get("vwap", 0.0),
+                "vwap_stretch": t.get("vwap_stretch", 0.0),
+                "vwap_status": t.get("vwap_status", "FAIR"),
+                "spot_confluence": bool(t.get("spot_confluence", False)),
+                "twap_c_stable": bool(t.get("twap_c_stable", False)),
+                "twap_c_score": float(t.get("twap_c_score", 0.0)),
+                "twap_c_std": float(t.get("twap_c_std", 0.0))
             }
         new_staged = [build_trade(t, t.get("pattern", "BE_ABCD"), t.get("entry_time", now_str), None, is_staged=True) for t in (staged or [])]
         carry_fwd = []

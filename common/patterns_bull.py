@@ -22,7 +22,9 @@ from swing_detection import (
     is_parabolic_arch_enhanced,
     extract_swing_pivots,
     validate_parabolic_cascade_structure,
-    detect_parabolic_multi_swings
+    detect_parabolic_multi_swings,
+    calculate_twap_c_stability,
+    calculate_vcp_metrics
 )
 
 def clean_timestamp(ts):
@@ -546,6 +548,8 @@ def scan_anchor_bcd_breakout(df_entry, df_anchor, anchor_tf="", entry_tf="", ena
             except Exception:
                 pass
 
+        twap_c_info = calculate_twap_c_stability(df_entry.iloc[c_idx:d_idx + 1], risk_dist=max(0.50, benchmark - a_low))
+
         valid_matches.append({
             "Pattern": pattern_label,
             "SL": sl_val,
@@ -566,7 +570,10 @@ def scan_anchor_bcd_breakout(df_entry, df_anchor, anchor_tf="", entry_tf="", ena
             "vol_c_ratio": vol_c_ratio,
             "vol_d_ratio": vol_d_ratio,
             "vol_confirmed": vol_confirmed,
-            "vol_score": vol_profile_score
+            "vol_score": vol_profile_score,
+            "twap_c_stable": twap_c_info.get("twap_stable", False),
+            "twap_c_score": twap_c_info.get("twap_score", 0.0),
+            "twap_c_std": twap_c_info.get("twap_std", 0.0)
         })
 
     if not valid_matches:
@@ -598,18 +605,19 @@ def scan_anchor_bcd_breakout(df_entry, df_anchor, anchor_tf="", entry_tf="", ena
     # True 5-Anchor Reversal Classifiers: Engulfing, LL Sweep, Hammer Baby, Harami, Two Higher Highs
     is_true_anchor = any(k in p_name for k in ["BE_ABCD", "LL_ABCD", "HAMMER_ABCD", "HARAMI_ABCD", "HH_ABCD"]) and "BASE_ABCD" not in p_name
     is_higher_timeframe = str(anchor_tf).lower() in ["day", "week", "1d", "1w", "daily", "weekly", "d", "w"]
+    twap_c_stable = bool(best_latest.get("twap_c_stable", False))
 
     # Option A Balanced Tiering (T1 Gold 1:2 / 2.0, T2 Core 1:1.5 / 1.5):
     # Tier 1 (Gold): 
-    #   - Intraday Options: Strictly 5 True Anchors + (>=3 Waves or Tier 1 Multi-Swing Arch) + R:R >= 2.0
+    #   - Intraday Options: Strictly 5 True Anchors + (>=3 Waves or Tier 1 Multi-Swing Arch or Stable TWAP C Base) + R:R >= 2.0
     #   - Daily/Weekly Equities: True Anchor / Institutional Liquidity Base + R:R >= 2.0
-    # Tier 2 (Core): 5 True Anchors (>=2 Waves / R:R >= 1.5) OR strong BASE_ABCD with (>=3 Waves and R:R >= 2.0) OR Higher TF with R:R >= 1.5
+    # Tier 2 (Core): 5 True Anchors (>=2 Waves / R:R >= 1.5) OR strong BASE_ABCD with (>=3 Waves and R:R >= 2.0) OR Higher TF with R:R >= 1.5 OR TWAP C Stable (R:R >= 1.5)
     # Tier 3 (Momentum): Standard/early BASE_ABCD and trend continuations (R:R >= 1.5)
-    if (is_true_anchor or is_higher_timeframe) and rr_val >= 2.0 and (sw_waves >= 2 or is_higher_timeframe or swing_meta.get("tier") == 1):
+    if (is_true_anchor or is_higher_timeframe or twap_c_stable) and rr_val >= 2.0 and (sw_waves >= 2 or is_higher_timeframe or swing_meta.get("tier") == 1 or twap_c_stable):
         tier = 1
         tier_label = "TIER_1_GOLD"
         tier_badge = "🥇 T1"
-    elif (is_true_anchor and (sw_waves >= 2 or p_rank >= 3 or rr_val >= 1.5)) or ((sw_waves >= 3 or swing_meta.get("tier") == 1) and rr_val >= 2.0) or (is_higher_timeframe and rr_val >= 1.5):
+    elif (is_true_anchor and (sw_waves >= 2 or p_rank >= 3 or rr_val >= 1.5)) or ((sw_waves >= 3 or swing_meta.get("tier") == 1) and rr_val >= 2.0) or (is_higher_timeframe and rr_val >= 1.5) or (twap_c_stable and rr_val >= 1.5):
         tier = 2
         tier_label = "TIER_2_CORE"
         tier_badge = "🥈 T2"
@@ -623,6 +631,9 @@ def scan_anchor_bcd_breakout(df_entry, df_anchor, anchor_tf="", entry_tf="", ena
     best_latest["tier_badge"] = tier_badge
     best_latest["swing_waves"] = sw_waves
     best_latest["terminal_base"] = term_base
+    best_latest["twap_c_stable"] = twap_c_stable
+    best_latest["twap_c_score"] = best_latest.get("twap_c_score", 0.0)
+    best_latest["twap_c_std"] = best_latest.get("twap_c_std", 0.0)
     try:
         from swing_detection import calculate_vcp_metrics
     except ImportError:
@@ -673,7 +684,10 @@ def scan_pattern_lifecycle_stage(df_entry, df_anchor, anchor_tf="", entry_tf="",
             "atr_ratio": full_setup.get("atr_ratio", 1.0),
             "is_squeeze": full_setup.get("is_squeeze", False),
             "vcp_tier": full_setup.get("vcp_tier", "NORMAL"),
-            "vcp_badge": full_setup.get("vcp_badge", "")
+            "vcp_badge": full_setup.get("vcp_badge", ""),
+            "twap_c_stable": full_setup.get("twap_c_stable", False),
+            "twap_c_score": full_setup.get("twap_c_score", 0.0),
+            "twap_c_std": full_setup.get("twap_c_std", 0.0)
         }
 
     # Step 2: Evaluate Institutional Parabolic Multi-Swing context on Anchor TF
@@ -797,7 +811,9 @@ def scan_pattern_lifecycle_stage(df_entry, df_anchor, anchor_tf="", entry_tf="",
                 # Stage A / A+: Both B and C are formed! Price is currently coiling for D breakout
                 b_row = df_entry.iloc[b_idx]
                 c_row = df_entry.iloc[c_idx]
-                has_parabolic = bool(swing_meta.get("swing_waves", 0) >= 2 and swing_meta.get("terminal_base", False))
+                twap_c_info = calculate_twap_c_stability(df_entry.iloc[c_idx:], risk_dist=risk_dist)
+                twap_c_stable = bool(twap_c_info.get("twap_stable", False))
+                has_parabolic = bool((swing_meta.get("swing_waves", 0) >= 2 and swing_meta.get("terminal_base", False)) or twap_c_stable)
                 stage_name = "STAGE_A_PLUS_READY" if has_parabolic else "STAGE_A_READY"
                 tier_val = 1 if has_parabolic else 2
                 tier_lbl = "TIER_1_GOLD" if has_parabolic else "TIER_2_CORE"
@@ -827,7 +843,10 @@ def scan_pattern_lifecycle_stage(df_entry, df_anchor, anchor_tf="", entry_tf="",
                     "atr_ratio": vcp_metrics.get("atr_ratio", 1.0),
                     "is_squeeze": vcp_metrics.get("is_squeeze", False),
                     "vcp_tier": vcp_metrics.get("vcp_tier", "NORMAL"),
-                    "vcp_badge": vcp_metrics.get("vcp_badge", "")
+                    "vcp_badge": vcp_metrics.get("vcp_badge", ""),
+                    "twap_c_stable": twap_c_stable,
+                    "twap_c_score": twap_c_info.get("twap_score", 0.0),
+                    "twap_c_std": twap_c_info.get("twap_std", 0.0)
                 }
 
         # Stage B: Valid Anchor A formed, waiting for B / C
@@ -852,7 +871,10 @@ def scan_pattern_lifecycle_stage(df_entry, df_anchor, anchor_tf="", entry_tf="",
             "atr_ratio": vcp_metrics.get("atr_ratio", 1.0),
             "is_squeeze": vcp_metrics.get("is_squeeze", False),
             "vcp_tier": vcp_metrics.get("vcp_tier", "NORMAL"),
-            "vcp_badge": vcp_metrics.get("vcp_badge", "")
+            "vcp_badge": vcp_metrics.get("vcp_badge", ""),
+            "twap_c_stable": False,
+            "twap_c_score": 0.0,
+            "twap_c_std": 0.0
         }
 
     return None

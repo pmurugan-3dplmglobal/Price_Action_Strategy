@@ -427,17 +427,25 @@ system_integrity_safeguards:
   utc_cloud_ist_clock_normalization: "UTC Cloud IST Clock Normalization: All time-of-day conditionals, opening volatility guards (09:45 AM failsafe), EOD squareoffs, and export schedules use get_ist_now() to guarantee flawless execution regardless of whether the host OS runs in UTC, GMT, or IST."
   timeframe_adaptive_liquidity_shield: "is_liquid_cash_stock(df, timeframe) scales 20-period volume by candles_per_day, enabling liquid midcaps (DIXON, POLYCAB, BHARATFORG) to pass across intraday timeframes (15m, 30m, 1hr) while filtering illiquid penny trap stocks."
   point_d_entry_time_alignment: "Separates Point D Breakout entry_time from Point A Anchor candle_a_time in stock and option scanners, presenting clean calendar dates for Daily/Weekly candles without artificial 09:15 overrides."
+  option_vwap_guard: "Intraday Option Contract VWAP: calculate_option_vwap() computes fair value benchmark from traded option premium; grants candidate ranking bonus (+2) for fair pricing (<=8% stretch) and applies penalty (-2) for overstretched contracts (>15%) without hard rejection."
+  twap_c_absorption_stability: "Point C TWAP Stability: calculate_twap_c_stability() quantifies absorption base tightness during flag consolidation (std <= 0.25 * risk); elevates pristine accumulation bases to Tier 1 Gold / STAGE_A_PLUS_READY."
+  spot_confluence_mapping: "Spot-Relative Confluence Mapping: get_mapped_spot_timeframe() links option entry timeframes to higher-timeframe spot market structure (3m/5m -> 15m, 15m -> 60m, 30m -> daily); 13 EMA alignment grants rank bonus."
+  continuous_15pct_loss_shield: "Continuous 15% Greek Loss Shield: Exempts HARD_MAX_15PCT_SL and morning catastrophic circuits from Spot SL Guard suppression, aligning emergency cutoff strictly to max_loss_pct (15%)."
 
 verification_and_quality_assurance:
-  master_regression_suite: "scratch/run_full_regression_test.py — 17/17 Test Suites Passing (100% Success Rate)"
-  unit_verification_suite: "scratch/test_vix_portfolio_volume.py — 47/47 Unit Tests Passing (100% Success Rate)"
-  ast_syntax_integrity: "138/138 Python files parsed with zero syntax errors"
+  master_regression_suite: "scratch/run_full_regression_test.py — 20/20 Test Suites Passing (100% Success Rate)"
+  unit_verification_suite: "scratch/test_institutional_enhancements.py — 5/5 Unit Tests Passing (100% Success Rate)"
+  ast_syntax_integrity: "100% Python files parsed with zero syntax errors"
   recent_major_issues_resolved:
+    - id: "ISSUE-056"
+      title: "Institutional Zero-Trade-Starvation Architecture (Option VWAP, Point C TWAP, Spot Confluence, 15% Loss Shield, Pegged Limit Routing)"
+      status: "RESOLVED"
     - id: "ISSUE-080"
       title: "Comprehensive Expert Codebase Audit & Execution Pipeline Bug Fixes (P0-P3)"
       status: "RESOLVED"
     - id: "ISSUE-081"
       title: "Fix Scan Tab Trade Scarcity, Token Resolution, and Timeframe Candle Time Alignment"
       status: "RESOLVED"
+
 
 

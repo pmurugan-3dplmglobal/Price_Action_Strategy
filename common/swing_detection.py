@@ -490,3 +490,98 @@ def calculate_vcp_metrics(df: Optional[pd.DataFrame]) -> Dict[str, Any]:
         }
     except Exception:
         return default_res
+
+
+def calculate_option_vwap(df_opt: Optional[pd.DataFrame]) -> Dict[str, Any]:
+    """
+    Calculates intraday Volume Weighted Average Price (VWAP) for an option contract.
+    Returns:
+      vwap: float (intraday VWAP)
+      stretch_pct: float (percentage stretch of latest close above/below VWAP)
+      is_overstretched: bool (True if stretch_pct > 15%)
+      vwap_status: 'FAIR' (<=8%), 'EXPANDED' (8-15%), 'STRETCHED' (>15%)
+    """
+    default_res = {
+        "vwap": 0.0,
+        "stretch_pct": 0.0,
+        "is_overstretched": False,
+        "vwap_status": "FAIR"
+    }
+    if df_opt is None or df_opt.empty or 'volume' not in df_opt.columns or 'close' not in df_opt.columns:
+        return default_res
+    try:
+        last_date = str(df_opt.iloc[-1]['date'])[:10]
+        # Intraday filter: only today's session candles
+        df_today = df_opt[df_opt['date'].astype(str).str.startswith(last_date)]
+        if df_today.empty or len(df_today) < 1:
+            df_today = df_opt
+
+        vol = df_today['volume'].values.astype(float)
+        close = df_today['close'].values.astype(float)
+        high = df_today['high'].values.astype(float) if 'high' in df_today.columns else close
+        low = df_today['low'].values.astype(float) if 'low' in df_today.columns else close
+        typical_price = (high + low + close) / 3.0
+
+        sum_vol = np.sum(vol)
+        if sum_vol <= 0:
+            ltp = float(close[-1])
+            return {"vwap": ltp, "stretch_pct": 0.0, "is_overstretched": False, "vwap_status": "FAIR"}
+
+        vwap = float(np.sum(typical_price * vol) / sum_vol)
+        ltp = float(close[-1])
+        stretch_pct = round(((ltp - vwap) / vwap) * 100.0, 2) if vwap > 0 else 0.0
+
+        if stretch_pct <= 8.0:
+            status = "FAIR"
+            is_over = False
+        elif stretch_pct <= 15.0:
+            status = "EXPANDED"
+            is_over = False
+        else:
+            status = "STRETCHED"
+            is_over = True
+
+        return {
+            "vwap": round(vwap, 2),
+            "stretch_pct": stretch_pct,
+            "is_overstretched": is_over,
+            "vwap_status": status
+        }
+    except Exception:
+        return default_res
+
+
+def calculate_twap_c_stability(c_window: Optional[pd.DataFrame], risk_dist: float = 1.0) -> Dict[str, Any]:
+    """
+    Evaluates Point C absorption base stability via Time-Weighted Average Price (TWAP) standard deviation.
+    When an institution quietly accumulates using TWAP, price stabilizes with minimal standard deviation.
+    Returns:
+      twap: float
+      twap_std: float
+      twap_stable: bool (True if twap_std <= 0.25 * risk_dist)
+      twap_score: float (0.0 to 1.0)
+    """
+    default_res = {
+        "twap": 0.0,
+        "twap_std": 0.0,
+        "twap_stable": False,
+        "twap_score": 0.0
+    }
+    if c_window is None or len(c_window) < 2 or 'close' not in c_window.columns:
+        return default_res
+    try:
+        c_closes = c_window['close'].values.astype(float)
+        twap_val = float(np.mean(c_closes))
+        twap_std = float(np.std(c_closes))
+        effective_risk = max(0.50, float(risk_dist))
+        twap_c_ratio = twap_std / effective_risk
+        twap_stable = bool(twap_c_ratio <= 0.25)
+        twap_score = round(max(0.0, 1.0 - min(1.0, twap_c_ratio)), 2)
+        return {
+            "twap": round(twap_val, 2),
+            "twap_std": round(twap_std, 2),
+            "twap_stable": twap_stable,
+            "twap_score": twap_score
+        }
+    except Exception:
+        return default_res
