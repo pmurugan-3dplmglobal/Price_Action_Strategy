@@ -494,15 +494,24 @@ def calculate_vcp_metrics(df: Optional[pd.DataFrame]) -> Dict[str, Any]:
 
 def calculate_option_vwap(df_opt: Optional[pd.DataFrame]) -> Dict[str, Any]:
     """
-    Calculates intraday Volume Weighted Average Price (VWAP) for an option contract.
+    Calculates intraday Volume Weighted Average Price (VWAP) and Volume-Weighted
+    Standard Deviation (+2σ bands) for an option contract.
     Returns:
       vwap: float (intraday VWAP)
+      vwap_std: float (volume-weighted standard deviation)
+      vwap_zscore: float (number of standard deviations from VWAP)
+      vwap_upper_2sigma: float (VWAP + 2*sigma threshold)
+      vwap_lower_2sigma: float (VWAP - 2*sigma threshold)
       stretch_pct: float (percentage stretch of latest close above/below VWAP)
-      is_overstretched: bool (True if stretch_pct > 15%)
-      vwap_status: 'FAIR' (<=8%), 'EXPANDED' (8-15%), 'STRETCHED' (>15%)
+      is_overstretched: bool (True if z_score > 2.0 or stretch_pct > 15%)
+      vwap_status: 'FAIR' (<= +1.0σ and <=8%), 'EXPANDED' (+1.0σ to +2.0σ or 8-15%), 'STRETCHED' (> +2.0σ or >15%)
     """
     default_res = {
         "vwap": 0.0,
+        "vwap_std": 0.0,
+        "vwap_zscore": 0.0,
+        "vwap_upper_2sigma": 0.0,
+        "vwap_lower_2sigma": 0.0,
         "stretch_pct": 0.0,
         "is_overstretched": False,
         "vwap_status": "FAIR"
@@ -523,26 +532,44 @@ def calculate_option_vwap(df_opt: Optional[pd.DataFrame]) -> Dict[str, Any]:
         typical_price = (high + low + close) / 3.0
 
         sum_vol = np.sum(vol)
+        ltp = float(close[-1])
         if sum_vol <= 0:
-            ltp = float(close[-1])
-            return {"vwap": ltp, "stretch_pct": 0.0, "is_overstretched": False, "vwap_status": "FAIR"}
+            return {
+                "vwap": ltp,
+                "vwap_std": 0.0,
+                "vwap_zscore": 0.0,
+                "vwap_upper_2sigma": ltp,
+                "vwap_lower_2sigma": ltp,
+                "stretch_pct": 0.0,
+                "is_overstretched": False,
+                "vwap_status": "FAIR"
+            }
 
         vwap = float(np.sum(typical_price * vol) / sum_vol)
-        ltp = float(close[-1])
-        stretch_pct = round(((ltp - vwap) / vwap) * 100.0, 2) if vwap > 0 else 0.0
+        vw_variance = float(np.sum(vol * ((typical_price - vwap) ** 2)) / sum_vol)
+        vwap_std = float(np.sqrt(max(0.0, vw_variance)))
+        vwap_upper_2sigma = round(vwap + (2.0 * vwap_std), 2)
+        vwap_lower_2sigma = round(max(0.0, vwap - (2.0 * vwap_std)), 2)
 
-        if stretch_pct <= 8.0:
-            status = "FAIR"
-            is_over = False
-        elif stretch_pct <= 15.0:
-            status = "EXPANDED"
-            is_over = False
-        else:
+        stretch_pct = round(((ltp - vwap) / vwap) * 100.0, 2) if vwap > 0 else 0.0
+        z_score = round((ltp - vwap) / vwap_std, 2) if vwap_std > 0.01 else 0.0
+
+        if z_score > 2.0 or stretch_pct > 15.0:
             status = "STRETCHED"
             is_over = True
+        elif z_score <= 1.0 and stretch_pct <= 8.0:
+            status = "FAIR"
+            is_over = False
+        else:
+            status = "EXPANDED"
+            is_over = False
 
         return {
             "vwap": round(vwap, 2),
+            "vwap_std": round(vwap_std, 2),
+            "vwap_zscore": z_score,
+            "vwap_upper_2sigma": vwap_upper_2sigma,
+            "vwap_lower_2sigma": vwap_lower_2sigma,
             "stretch_pct": stretch_pct,
             "is_overstretched": is_over,
             "vwap_status": status

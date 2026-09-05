@@ -185,7 +185,8 @@ from resolve import (
     calculate_position_size,
     is_setup_already_completed,
     load_program_config_for_engine,
-    get_mapped_spot_timeframe
+    get_mapped_spot_timeframe,
+    evaluate_spot_confluence
 )
 
 # ── swing_detection ──

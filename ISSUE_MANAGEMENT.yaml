@@ -5,6 +5,30 @@ meta:
   purpose: Document operational failures, root causes, regression fixes, and system enhancements for v2.1.0-stable.
   historical_archive: archive/ISSUE_HISTORY_ARCHIVE.yaml (Preserves 84 resolved legacy issues prior to 2026-08-25)
 issues:
+- id: FEATURE-038
+  title: Option Contract VWAP +2σ Overpay Guard & D1/D2 Regime-Aware Spot Confluence
+  severity: ENHANCEMENT
+  category: Quantitative Price Action, Strike Selection & Spot Relative Confluence
+  family: OPTION_VWAP_SPOT_CONFLUENCE
+  date_reported: '2026-09-05'
+  symptom: '1. Trading engine lacked statistical overpay protection on option contracts, risking execution on strikes where retail FOMO or MM bid-ask spread gouging inflated premiums excessively above intraday volume-weighted average price.
+    2. Enforcing higher-timeframe EMA alignment (EMA13/44) penalized pristine D1 bottom reversals (e.g. Bullish Engulfing, Hammer Baby, LL Sweep) where spot price naturally trades below lagging moving averages, demoting Gold Tier (🥇 T1) setups to T2/T3.'
+  root_cause: 'Fixed-percentage VWAP bands failed across diverse premium levels, and uniform EMA checks caused Option Chart Illusion by failing to distinguish D1 base reversals from D2 trend continuation re-entries.'
+  affected_files:
+  - common/swing_detection.py
+  - common/resolve.py
+  - common/display_writer.py
+  - common/trading_core.py
+  - scratch/test_institutional_enhancements.py
+  resolution: '1. Upgraded calculate_option_vwap in common/swing_detection.py to compute Volume-Weighted Variance, Standard Deviation (vwap_std), Z-score (vwap_zscore), and upper/lower +2σ bands (vwap_upper_2sigma, vwap_lower_2sigma).
+    2. Implemented evaluate_spot_confluence in common/resolve.py and re-exported in trading_core.py:
+       - For D1 Reversals: Validates Spot Intraday VWAP reclaim (current_spot >= spot_vwap for CE / <= spot_vwap for PE) or structural support floor/resistance ceiling hold (spot_sl_ce / spot_sl_pe), rewarding pristine bottom reversals.
+       - For D2 Continuations: Enforces higher-timeframe trend momentum alignment (spot_ema_bull / spot_ema_bear) and VWAP consistency.
+    3. Added D1 Reversal Gold Tier Promotion: Promotes D1 setups with confirmed spot confluence and R:R >= 2.0 to 🥇 T1 Gold Tier.
+    4. Integrated soft quality scoring in candidate arbitrage ranking (_candidate_rank) penalizing STRETCHED contracts (-2.0) and rewarding FAIR (+2.0), SPOT_CONFLUENCE (+1.0), and TWAP_C_STABLE (+1.0) without starving trades.
+    5. Updated build_trade serializers in common/resolve.py and common/display_writer.py.
+    6. Verified 100% pass across dedicated unit test suite and 20/20 regression test suite.'
+  status: RESOLVED
 - id: ISSUE-087
   title: Long Option Buyer Invariant Inversion in PE Option Lifecycle Evaluation & Radar Eviction
   severity: CRITICAL

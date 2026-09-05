@@ -93,6 +93,52 @@ def get_mapped_spot_timeframe(entry_tf):
     }
     return mapping.get(tf_clean, "day")
 
+def evaluate_spot_confluence(side: str, is_d2: bool, current_spot: float, spot_vwap: float, spot_sl: float, spot_ema_trend: bool):
+    """
+    Evaluates spot confluence dynamically differentiating D1 (reversals) vs D2 (trend continuations).
+    Resolves 'Option Chart Illusion' without penalizing bottom/top reversals.
+
+    Returns:
+        (has_confluence: bool, confluence_type: str)
+    """
+    if current_spot <= 0:
+        return False, "NONE"
+
+    if side == "CE":
+        if is_d2:
+            # D2 Trend Continuation: Requires established trend momentum (Spot >= EMA13/44) and Spot holding VWAP if available
+            if spot_ema_trend and (spot_vwap <= 0 or current_spot >= spot_vwap):
+                return True, "TREND_MOMENTUM_ALIGNMENT"
+            return False, "NONE"
+        else:
+            # D1 Reversal: Bottom reversal is naturally below lagging EMAs.
+            # Institutional confluence is confirmed when Spot reclaims/holds intraday VWAP,
+            # holds the structural support floor, or shows early EMA recovery.
+            if spot_vwap > 0 and current_spot >= spot_vwap:
+                return True, "SPOT_VWAP_RECLAIM"
+            elif spot_sl > 0 and current_spot >= spot_sl:
+                return True, "SPOT_SUPPORT_HOLD"
+            elif spot_ema_trend:
+                return True, "SPOT_EMA_TREND"
+            return False, "NONE"
+    else:  # PE
+        if is_d2:
+            # D2 Trend Continuation: Requires established downward trend momentum (Spot <= EMA13/44) and Spot below VWAP if available
+            if spot_ema_trend and (spot_vwap <= 0 or current_spot <= spot_vwap):
+                return True, "TREND_MOMENTUM_ALIGNMENT"
+            return False, "NONE"
+        else:
+            # D1 Reversal: Top reversal is naturally above lagging EMAs.
+            # Institutional confluence confirmed when Spot rejects below intraday VWAP,
+            # holds below resistance ceiling, or shows EMA breakdown.
+            if spot_vwap > 0 and current_spot <= spot_vwap:
+                return True, "SPOT_VWAP_REJECT"
+            elif spot_sl > 0 and current_spot <= spot_sl:
+                return True, "SPOT_RESISTANCE_HOLD"
+            elif spot_ema_trend:
+                return True, "SPOT_EMA_TREND"
+            return False, "NONE"
+
 def _match_registry_symbol(registry, tradingsymbol):
     """Return the registry key that best matches a tradingsymbol, longest-match first.
 
@@ -665,10 +711,14 @@ def write_scan_display_data(staged, active, display_file, engine_name=None):
                 "spot_token": t.get("spot_token") or t.get("index_token"),
                 "spot_sl": t.get("spot_sl"),
                 "spot_entry": t.get("spot_entry"),
+                "spot_vwap": float(t.get("spot_vwap", 0.0)),
                 "vwap": t.get("vwap", 0.0),
                 "vwap_stretch": t.get("vwap_stretch", 0.0),
                 "vwap_status": t.get("vwap_status", "FAIR"),
+                "vwap_zscore": float(t.get("vwap_zscore", 0.0)),
+                "vwap_upper_2sigma": float(t.get("vwap_upper_2sigma", 0.0)),
                 "spot_confluence": bool(t.get("spot_confluence", False)),
+                "spot_confluence_type": str(t.get("spot_confluence_type", "NONE")),
                 "twap_c_stable": bool(t.get("twap_c_stable", False)),
                 "twap_c_score": float(t.get("twap_c_score", 0.0)),
                 "twap_c_std": float(t.get("twap_c_std", 0.0))
@@ -1205,20 +1255,39 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
     except Exception as e:
         logging.debug(f"Spot EMA calculation error for {symbol}: {e}")
 
+    # Calculate Spot Intraday VWAP (Volume-Weighted Average Price)
+    spot_vwap = 0.0
+    if df_spot is not None and not df_spot.empty and 'volume' in df_spot.columns:
+        try:
+            last_sp_date = str(df_spot.iloc[-1]['date'])[:10]
+            df_sp_today = df_spot[df_spot['date'].astype(str).str.startswith(last_sp_date)]
+            if df_sp_today.empty or len(df_sp_today) < 1:
+                df_sp_today = df_spot
+            sp_vol = df_sp_today['volume'].values.astype(float)
+            sp_close = df_sp_today['close'].values.astype(float)
+            sp_high = df_sp_today['high'].values.astype(float) if 'high' in df_sp_today.columns else sp_close
+            sp_low = df_sp_today['low'].values.astype(float) if 'low' in df_sp_today.columns else sp_close
+            sp_typ = (sp_high + sp_low + sp_close) / 3.0
+            sp_sum_vol = np.sum(sp_vol)
+            if sp_sum_vol > 0:
+                spot_vwap = round(float(np.sum(sp_typ * sp_vol) / sp_sum_vol), 2)
+        except Exception as v_err:
+            logging.debug(f"Spot VWAP calculation error for {symbol}: {v_err}")
+
     # Spot-Relative Confluence Mapping (Resolves 'Option Chart Illusion')
     mapped_spot_tf = get_mapped_spot_timeframe(timeframe_entry)
-    spot_confluence_bull = False
-    spot_confluence_bear = False
+    spot_ema_bull = False
+    spot_ema_bear = False
     try:
         df_spot_mapped = safe_kite_call(fetch_and_resample_candles, kite, config["token"], from_anchor, to_anchor, mapped_spot_tf)
         if df_spot_mapped is not None and len(df_spot_mapped) >= 13:
             ema_mapped = float(df_spot_mapped['close'].ewm(span=13, adjust=False).mean().iloc[-1])
             last_mapped_close = float(df_spot_mapped.iloc[-1]['close'])
             if last_mapped_close >= ema_mapped:
-                spot_confluence_bull = True
+                spot_ema_bull = True
             if last_mapped_close <= ema_mapped:
-                spot_confluence_bear = True
-            logging.debug(f"[SPOT_CONFLUENCE] {symbol}: Spot {mapped_spot_tf} Close={last_mapped_close:.2f} vs EMA13={ema_mapped:.2f} (Bull={spot_confluence_bull}, Bear={spot_confluence_bear})")
+                spot_ema_bear = True
+            logging.debug(f"[SPOT_CONFLUENCE] {symbol}: Spot {mapped_spot_tf} Close={last_mapped_close:.2f} vs EMA13={ema_mapped:.2f} (Bull={spot_ema_bull}, Bear={spot_ema_bear}) | Spot VWAP={spot_vwap:.2f}")
     except Exception as e:
         logging.debug(f"Spot mapped confluence error for {symbol}: {e}")
 
@@ -1323,11 +1392,15 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
         vwap_ce = vwap_ce_info.get("vwap", 0.0)
         vwap_stretch_ce = vwap_ce_info.get("stretch_pct", 0.0)
         vwap_status_ce = vwap_ce_info.get("vwap_status", "FAIR")
+        vwap_z_ce = vwap_ce_info.get("vwap_zscore", 0.0)
+        vwap_u2s_ce = vwap_ce_info.get("vwap_upper_2sigma", 0.0)
 
         vwap_pe_info = calculate_option_vwap(df_pe_e)
         vwap_pe = vwap_pe_info.get("vwap", 0.0)
         vwap_stretch_pe = vwap_pe_info.get("stretch_pct", 0.0)
         vwap_status_pe = vwap_pe_info.get("vwap_status", "FAIR")
+        vwap_z_pe = vwap_pe_info.get("vwap_zscore", 0.0)
+        vwap_u2s_pe = vwap_pe_info.get("vwap_upper_2sigma", 0.0)
 
         for name, scanner in entry_scanners:
             if not df_ce_e.empty:
@@ -1368,6 +1441,18 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                             lot_size=ce_lot,
                             is_option=True
                         )
+
+                        is_d2_ce = ("Setup_2" in name) or any(k in str(result_ce.get("Pattern", "")).upper() for k in ["CONT", "REENTRY", "D2"])
+                        spot_conf_ce, spot_conf_type_ce = evaluate_spot_confluence("CE", is_d2_ce, current_spot, spot_vwap, spot_sl_ce, spot_ema_bull)
+
+                        tier_ce = int(result_ce.get("tier", 2))
+                        tier_label_ce = result_ce.get("tier_label", "TIER_2_CORE")
+                        tier_badge_ce = result_ce.get("tier_badge", "🥈 T2")
+                        if not is_d2_ce and tier_ce == 2 and spot_conf_ce and float(result_ce.get("RR") or 0.0) >= 2.0:
+                            tier_ce = 1
+                            tier_label_ce = "TIER_1_GOLD"
+                            tier_badge_ce = "🥇 T1"
+
                         trade_data = {
                             "symbol": symbol, "contract": ce['tradingsymbol'], "option_token": ce['token'],
                             "index_token": config["token"], "spot_token": config["token"], "spot_entry": current_spot,
@@ -1382,9 +1467,9 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                             "direction": result_ce.get("Direction", "BULL"),
                             "swing_waves": swing_meta_ce["swing_waves"],
                             "terminal_base": swing_meta_ce["terminal_base"],
-                            "tier": result_ce.get("tier", 2),
-                            "tier_label": result_ce.get("tier_label", "TIER_2_CORE"),
-                            "tier_badge": result_ce.get("tier_badge", "🥈 T2"),
+                            "tier": tier_ce,
+                            "tier_label": tier_label_ce,
+                            "tier_badge": tier_badge_ce,
                             "atr_ratio": result_ce.get("atr_ratio", 1.0),
                             "is_squeeze": result_ce.get("is_squeeze", False),
                             "vcp_tier": result_ce.get("vcp_tier", "NORMAL"),
@@ -1392,7 +1477,11 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                             "vwap": vwap_ce,
                             "vwap_stretch": vwap_stretch_ce,
                             "vwap_status": vwap_status_ce,
-                            "spot_confluence": spot_confluence_bull,
+                            "vwap_zscore": vwap_z_ce,
+                            "vwap_upper_2sigma": vwap_u2s_ce,
+                            "spot_vwap": spot_vwap,
+                            "spot_confluence": spot_conf_ce,
+                            "spot_confluence_type": spot_conf_type_ce,
                             "twap_c_stable": result_ce.get("twap_c_stable", False),
                             "twap_c_score": result_ce.get("twap_c_score", 0.0),
                             "twap_c_std": result_ce.get("twap_c_std", 0.0)
@@ -1404,6 +1493,14 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                             stage_ce = scan_pattern_lifecycle_stage(df_ce_e, df_ce_a, anchor_tf=timeframe_anchor, entry_tf=timeframe_entry)
                             if stage_ce and stage_ce.get("stage") in ["STAGE_A_PLUS_READY", "STAGE_A_READY", "STAGE_B_ANCHOR"]:
                                 f_stage = pattern_funnel.STAGE_A_PLUS if stage_ce["stage"] == "STAGE_A_PLUS_READY" else (pattern_funnel.STAGE_A if stage_ce["stage"] == "STAGE_A_READY" else pattern_funnel.STAGE_B)
+                                spot_conf_ce_f, spot_conf_type_ce_f = evaluate_spot_confluence("CE", False, current_spot, spot_vwap, spot_sl_ce, spot_ema_bull)
+                                f_tier_ce = int(stage_ce.get("tier", 2))
+                                f_label_ce = stage_ce.get("tier_label", "TIER_2_CORE")
+                                f_badge_ce = stage_ce.get("tier_badge", "🥈 T2")
+                                if f_tier_ce == 2 and spot_conf_ce_f and float(stage_ce.get("rr") or 0.0) >= 2.0:
+                                    f_tier_ce = 1
+                                    f_label_ce = "TIER_1_GOLD"
+                                    f_badge_ce = "🥇 T1"
                                 funnel_item = {
                                     "symbol": symbol, "contract": ce['tradingsymbol'], "option_token": ce['token'],
                                     "spot_token": config["token"], "spot_entry": current_spot, "strike": strike,
@@ -1416,8 +1513,8 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                                     "candle_a_time": stage_ce.get("candle_a_time", ""),
                                     "candle_b_time": stage_ce.get("candle_b_time", ""),
                                     "candle_c_time": stage_ce.get("candle_c_time", ""),
-                                    "tier": stage_ce.get("tier", 2), "tier_label": stage_ce.get("tier_label", "TIER_2_CORE"),
-                                    "tier_badge": stage_ce.get("tier_badge", "🥈 T2"),
+                                    "tier": f_tier_ce, "tier_label": f_label_ce,
+                                    "tier_badge": f_badge_ce,
                                     "atr_ratio": stage_ce.get("atr_ratio", 1.0),
                                     "is_squeeze": stage_ce.get("is_squeeze", False),
                                     "vcp_tier": stage_ce.get("vcp_tier", "NORMAL"),
@@ -1425,7 +1522,11 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                                     "vwap": vwap_ce,
                                     "vwap_stretch": vwap_stretch_ce,
                                     "vwap_status": vwap_status_ce,
-                                    "spot_confluence": spot_confluence_bull,
+                                    "vwap_zscore": vwap_z_ce,
+                                    "vwap_upper_2sigma": vwap_u2s_ce,
+                                    "spot_vwap": spot_vwap,
+                                    "spot_confluence": spot_conf_ce_f,
+                                    "spot_confluence_type": spot_conf_type_ce_f,
                                     "twap_c_stable": stage_ce.get("twap_c_stable", False),
                                     "twap_c_score": stage_ce.get("twap_c_score", 0.0),
                                     "twap_c_std": stage_ce.get("twap_c_std", 0.0),
@@ -1454,7 +1555,7 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                         if result_pe["Close"] < 300 and result_pe["T1"] > result_pe["Close"] * 5:
                             log_fn(pe['tradingsymbol'], result_pe["Pattern"], timeframe_entry,
                                    "SCAN_MATCH", "NO_TARGETS", "Stale ITM regime targets",
-                                   entry=result_pe["Close"], sl=result_pe["SL"],
+                                    entry=result_pe["Close"], sl=result_pe["SL"],
                                    target=0, rr=0, event_time=candle_time)
                             continue
 
@@ -1473,6 +1574,18 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                             lot_size=pe_lot,
                             is_option=True
                         )
+
+                        is_d2_pe = ("Setup_2" in name) or any(k in str(result_pe.get("Pattern", "")).upper() for k in ["CONT", "REENTRY", "D2"])
+                        spot_conf_pe, spot_conf_type_pe = evaluate_spot_confluence("PE", is_d2_pe, current_spot, spot_vwap, spot_sl_pe, spot_ema_bear)
+
+                        tier_pe = int(result_pe.get("tier", 2))
+                        tier_label_pe = result_pe.get("tier_label", "TIER_2_CORE")
+                        tier_badge_pe = result_pe.get("tier_badge", "🥈 T2")
+                        if not is_d2_pe and tier_pe == 2 and spot_conf_pe and float(result_pe.get("RR") or 0.0) >= 2.0:
+                            tier_pe = 1
+                            tier_label_pe = "TIER_1_GOLD"
+                            tier_badge_pe = "🥇 T1"
+
                         trade_data = {
                             "symbol": symbol, "contract": pe['tradingsymbol'], "option_token": pe['token'],
                             "index_token": config["token"], "spot_token": config["token"], "spot_entry": current_spot,
@@ -1487,9 +1600,9 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                             "direction": result_pe.get("Direction", "BULL"),
                             "swing_waves": swing_meta_pe["swing_waves"],
                             "terminal_base": swing_meta_pe["terminal_base"],
-                            "tier": result_pe.get("tier", 2),
-                            "tier_label": result_pe.get("tier_label", "TIER_2_CORE"),
-                            "tier_badge": result_pe.get("tier_badge", "🥈 T2"),
+                            "tier": tier_pe,
+                            "tier_label": tier_label_pe,
+                            "tier_badge": tier_badge_pe,
                             "atr_ratio": result_pe.get("atr_ratio", 1.0),
                             "is_squeeze": result_pe.get("is_squeeze", False),
                             "vcp_tier": result_pe.get("vcp_tier", "NORMAL"),
@@ -1497,7 +1610,11 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                             "vwap": vwap_pe,
                             "vwap_stretch": vwap_stretch_pe,
                             "vwap_status": vwap_status_pe,
-                            "spot_confluence": spot_confluence_bear,
+                            "vwap_zscore": vwap_z_pe,
+                            "vwap_upper_2sigma": vwap_u2s_pe,
+                            "spot_vwap": spot_vwap,
+                            "spot_confluence": spot_conf_pe,
+                            "spot_confluence_type": spot_conf_type_pe,
                             "twap_c_stable": result_pe.get("twap_c_stable", False),
                             "twap_c_score": result_pe.get("twap_c_score", 0.0),
                             "twap_c_std": result_pe.get("twap_c_std", 0.0)
@@ -1509,6 +1626,14 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                             stage_pe = scan_pattern_lifecycle_stage(df_pe_e, df_pe_a, anchor_tf=timeframe_anchor, entry_tf=timeframe_entry)
                             if stage_pe and stage_pe.get("stage") in ["STAGE_A_PLUS_READY", "STAGE_A_READY", "STAGE_B_ANCHOR"]:
                                 f_stage = pattern_funnel.STAGE_A_PLUS if stage_pe["stage"] == "STAGE_A_PLUS_READY" else (pattern_funnel.STAGE_A if stage_pe["stage"] == "STAGE_A_READY" else pattern_funnel.STAGE_B)
+                                spot_conf_pe_f, spot_conf_type_pe_f = evaluate_spot_confluence("PE", False, current_spot, spot_vwap, spot_sl_pe, spot_ema_bear)
+                                f_tier_pe = int(stage_pe.get("tier", 2))
+                                f_label_pe = stage_pe.get("tier_label", "TIER_2_CORE")
+                                f_badge_pe = stage_pe.get("tier_badge", "🥈 T2")
+                                if f_tier_pe == 2 and spot_conf_pe_f and float(stage_pe.get("rr") or 0.0) >= 2.0:
+                                    f_tier_pe = 1
+                                    f_label_pe = "TIER_1_GOLD"
+                                    f_badge_pe = "🥇 T1"
                                 funnel_item = {
                                     "symbol": symbol, "contract": pe['tradingsymbol'], "option_token": pe['token'],
                                     "spot_token": config["token"], "spot_entry": current_spot, "strike": strike,
@@ -1521,8 +1646,8 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                                     "candle_a_time": stage_pe.get("candle_a_time", ""),
                                     "candle_b_time": stage_pe.get("candle_b_time", ""),
                                     "candle_c_time": stage_pe.get("candle_c_time", ""),
-                                    "tier": stage_pe.get("tier", 2), "tier_label": stage_pe.get("tier_label", "TIER_2_CORE"),
-                                    "tier_badge": stage_pe.get("tier_badge", "🥈 T2"),
+                                    "tier": f_tier_pe, "tier_label": f_label_pe,
+                                    "tier_badge": f_badge_pe,
                                     "atr_ratio": stage_pe.get("atr_ratio", 1.0),
                                     "is_squeeze": stage_pe.get("is_squeeze", False),
                                     "vcp_tier": stage_pe.get("vcp_tier", "NORMAL"),
@@ -1530,7 +1655,11 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                                     "vwap": vwap_pe,
                                     "vwap_stretch": vwap_stretch_pe,
                                     "vwap_status": vwap_status_pe,
-                                    "spot_confluence": spot_confluence_bear,
+                                    "vwap_zscore": vwap_z_pe,
+                                    "vwap_upper_2sigma": vwap_u2s_pe,
+                                    "spot_vwap": spot_vwap,
+                                    "spot_confluence": spot_conf_pe_f,
+                                    "spot_confluence_type": spot_conf_type_pe_f,
                                     "twap_c_stable": stage_pe.get("twap_c_stable", False),
                                     "twap_c_score": stage_pe.get("twap_c_score", 0.0),
                                     "twap_c_std": stage_pe.get("twap_c_std", 0.0),
