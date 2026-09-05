@@ -1,7 +1,8 @@
 import os, json, csv, time, threading, subprocess, sys, signal, logging
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 COMMON_DIR = os.path.join(BASE_DIR, "common")
-for p in [BASE_DIR, COMMON_DIR]:
+TRADE_STOCK_DIR = os.path.dirname(os.path.abspath(__file__))
+for p in [BASE_DIR, COMMON_DIR, TRADE_STOCK_DIR]:
     if p not in sys.path:
         sys.path.insert(0, p)
 import paths

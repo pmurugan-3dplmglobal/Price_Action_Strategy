@@ -19,14 +19,17 @@ class TestStockOptionsParity(unittest.TestCase):
     def test_01_api_analyze_trade_entry_price(self):
         """Verify api_analyze_trade extracts entry_price / entry_spot without crashing."""
         from Trade_Stock.app_Stock_Trade import app
-        client = app.test_client()
-        # Post payload with entry_price
-        resp = client.post('/api/analyze-trade', json={
-            "symbol": "RELIANCE",
-            "entry_price": 2800.0,
-            "engine": "daily"
-        })
-        self.assertIn(resp.status_code, [200, 400])
+        with app.test_client() as client:
+            with client.session_transaction() as sess:
+                sess["user"] = "test_admin"
+                sess["role"] = "admin"
+            # Post payload with entry_price
+            resp = client.post('/api/analyze-trade', json={
+                "symbol": "RELIANCE",
+                "entry_price": 2800.0,
+                "engine": "daily"
+            })
+            self.assertIn(resp.status_code, [200, 400])
         data = resp.get_json()
         if resp.status_code == 200:
             self.assertTrue(data.get("ok"))
@@ -103,23 +106,26 @@ class TestStockOptionsParity(unittest.TestCase):
     def test_04_buy_scanned_trade_bearish_guard(self):
         """Verify /api/buy-scanned-trade accepts side='SELL' and uses PRODUCT_MIS."""
         from Trade_Stock.app_Stock_Trade import app
-        client = app.test_client()
-        # Post payload with side: SELL
-        resp = client.post('/api/buy-scanned-trade', json={
-            "symbol": "INFY",
-            "contract": "INFY",
-            "side": "SELL",
-            "direction": "BEAR",
-            "entry_spot": 1800.0,
-            "current_sl": 1850.0,
-            "t1": 1700.0,
-            "t2": 1650.0,
-            "t3": 1600.0,
-            "engine": "daily",
-            "force": False
-        })
-        # If market closed or offline, it might return 400 Kite order failure or 200 recorded
-        self.assertIn(resp.status_code, [200, 400])
+        with app.test_client() as client:
+            with client.session_transaction() as sess:
+                sess["user"] = "test_admin"
+                sess["role"] = "admin"
+            # Post payload with side: SELL
+            resp = client.post('/api/buy-scanned-trade', json={
+                "symbol": "INFY",
+                "contract": "INFY",
+                "side": "SELL",
+                "direction": "BEAR",
+                "entry_spot": 1800.0,
+                "current_sl": 1850.0,
+                "t1": 1700.0,
+                "t2": 1650.0,
+                "t3": 1600.0,
+                "engine": "daily",
+                "force": False
+            })
+            # If market closed or offline, it might return 400 Kite order failure or 200 recorded
+            self.assertIn(resp.status_code, [200, 400])
 
 if __name__ == "__main__":
     unittest.main()

@@ -3,9 +3,37 @@ meta:
   version: v2.1.0-stable
   last_updated: '2026-09-05'
   purpose: Active operational tracker for v2.1.0-stable failures, root causes, regressions, and enhancements.
-  historical_archive: archive/ISSUE_HISTORY_ARCHIVE.yaml (Preserves 106 resolved legacy issues prior to 2026-09-03)
-  total_active_issues: 23
+  historical_archive: archive/ISSUE_HISTORY_ARCHIVE.yaml (Preserves 119 resolved legacy issues prior to 2026-09-05)
+  total_active_issues: 11
+  archived_issues_summary:
+    total_archived: 119
+    recent_archived_batch: [FEATURE-031, FEATURE-030, FEATURE-029, ISSUE-084, ISSUE-083, ISSUE-082, ISSUE-081, ISSUE-080, FEATURE-036, FEATURE-035, FEATURE-034, FEATURE-033, ISSUE-054]
+    key_archived_families: [ALGO_AUDIT_CVE, QUANT_ENHANCEMENTS, RADAR_LIFECYCLE, VCP_METRICS, SCANNER_DISCOVERY, SECURITY_CONFIG, ZERO_REGRESSION_AUDIT]
 issues:
+- id: ISSUE-089
+  title: Trade_Stock Root Import Blueprint Resolution & Institutional Test Suite Realization
+  severity: MEDIUM
+  category: Architecture, Test Verification & Module Resolution
+  family: IMPORT_MODULE_RESOLUTION
+  date_reported: '2026-09-05'
+  symptom: '1. Importing Trade_Stock.app_Stock_Trade from repository root failed with ModuleNotFoundError: No module named "blueprints", breaking the AGENTS.md verification smoke test and scratch/test_parity_alignment.py.
+    2. MASTER_DOCUMENTATION.yaml referenced scratch/test_institutional_enhancements.py as passing 5/5 unit tests, but the physical file was absent from the repository.
+    3. scratch/test_parity_alignment.py test_client lacked authenticated session context, triggering 401 status failures.'
+  root_cause: '1. Trade_Stock/app_Stock_Trade.py added BASE_DIR and COMMON_DIR to sys.path but omitted TRADE_STOCK_DIR (its own directory), causing blueprint package imports to fail when executed from project root.
+    2. Documentation referenced a planned institutional test suite that had not been materialized on disk.
+    3. Missing test session credentials in unit test harness.'
+  affected_files:
+  - Trade_Stock/app_Stock_Trade.py
+  - scratch/test_institutional_enhancements.py
+  - scratch/test_parity_alignment.py
+  - MASTER_DOCUMENTATION.yaml
+  - ISSUE_MANAGEMENT.yaml
+  resolution: '1. Added TRADE_STOCK_DIR = os.path.dirname(os.path.abspath(__file__)) to sys.path in Trade_Stock/app_Stock_Trade.py, aligning with Trade_Option/app_option_Trade.py and resolving root-level imports cleanly.
+    2. Created scratch/test_institutional_enhancements.py implementing 5 dedicated unit tests for calculate_option_vwap (+2σ bands), calculate_twap_c_stability, evaluate_spot_confluence (D1 vs D2 mapping), continuous 15% Greek loss ceiling, and pegged limit order / liquidity gate routing.
+    3. Authenticated test_client sessions in scratch/test_parity_alignment.py.
+    4. Verified all unit tests (5/5 institutional, 4/4 parity, 4/4 VCP, 7/7 liquidity, 5/5 CVE, 47/47 VIX/portfolio) and 21/21 regression test suites pass with 100% success.'
+  status: RESOLVED
+
 - id: ISSUE-088
   title: Option vs Stock Cash Equity Parity Alignment (Short Selling MIS Order Execution, SL/Target Derivation, Monitor Risk PnL & Direction Serialization)
   severity: HIGH
@@ -240,323 +268,4 @@ issues:
     1. Stop-Loss as Capital Shield (Outcome Bias Immunity): A triggered stop-loss (e.g. ABCAPITAL 410 CE @ 5.75 protecting against a plunge to 5.05) is an absolute victory of risk discipline; never judge an exit by subsequent market drift.
     2. SL Exits Risk, Not Symbol: Hitting an SL never disqualifies a ticker permanently. When a ticker establishes a fresh institutional sweep base (e.g. Hammer / LL Sweep at key support) and gives a confirmed D2 breakout, re-entry must be executed objectively without ego or hesitation.
     3. Moneyness & Theta Preservation: Prioritize At-The-Money (ATM) or In-The-Money (ITM) strikes on secondary multi-day recovery entries to eliminate accumulated Theta drag and capture full spot delta velocity.'
-  status: RESOLVED
-
-- id: FEATURE-031
-  title: Volatility Contraction Pattern (VCP) Metrics, ATR Compression Ratio & TTM Squeeze Integration
-  severity: ENHANCEMENT
-  category: Quantitative Price Action, Volatility Analysis & Candidate Prioritization
-  family: VCP_METRICS
-  date_reported: '2026-09-04'
-  symptom: 'Trading engine lacked quantitative measurement of volatility compression before breakout, treating wide high-volatility bases and ultra-tight coiled structures identically in trade execution prioritization.'
-  root_cause: 'Missing mathematical quantification of volatility contraction (ATR3 / ATR14) and Bollinger/Keltner channel squeeze in pattern lifecycle and candidate ranking algorithms.'
-  affected_files:
-  - common/swing_detection.py
-  - common/patterns_bull.py
-  - common/patterns_bear.py
-  - common/resolve.py
-  - common/display_writer.py
-  - Trade_Option/stock_options_trade_engine.py
-  - Trade_Option/templates/index.html
-  - Trade_Stock/templates/index.html
-  resolution: '1. Implemented calculate_vcp_metrics in common/swing_detection.py computing True Range, ATR(14), ATR(3), Bollinger Bands (20, 2.0 std), and Keltner Channels (20, 1.5 ATR) to derive Contraction Ratio (ATR3/ATR14) and TTM Squeeze state.
-    2. Enriched pattern lifecycle detectors in common/patterns_bull.py and common/patterns_bear.py with atr_ratio, is_squeeze, vcp_tier, and vcp_badge across Full ABCD, Stage A+, Stage A, and Stage B.
-    3. Updated common/resolve.py and display_writer.py to propagate VCP metrics into trade_data, funnel_items, and dashboard serializations.
-    4. Enhanced candidate prioritization (_avg_target_rank) in stock_options_trade_engine.py with ranking bonuses for active TTM squeeze (+0.50) and heavy ATR compression (+0.30).
-    5. Added dynamic visual badges (🔥 ULTRA SQZ, ⚡ VCP) and VCP metrics column to Pattern Radar and Scans tabs in Options and Stock dashboards.
-    6. Verified 100% pass across dedicated VCP unit tests and full 20-test regression suite.'
-  status: RESOLVED
-
-- id: FEATURE-030
-  title: Price Action Surveillance Radar (Categories A+, A, B), Sub-15s Fast Execution Loop & Candidate Non-Blocking
-  severity: ENHANCEMENT
-  category: Architecture, Engine Latency & Execution Speed
-  family: RADAR_LIFECYCLE
-  date_reported: '2026-09-04'
-  symptom: '1. Scanned trades staged on Scan Tab during live market did not execute on Zerodha Kite because full universe scans (213 F&O symbols) took hours, delaying order firing until after market close.
-    2. execute_highest_rr_trade picked single max() candidate with flat return on rejection or duplication, starving all other high-conviction candidates.
-    3. app_option_Trade called kite.positions() every 3 seconds, triggering HTTP 429 rate limit / Cloudflare 502 bad gateway on Zerodha Kite API.
-    4. Incubating patterns were discarded until full D-trigger breakout, lacking forward surveillance visibility.'
-  root_cause: 'Monolithic scan-and-execute loop with head-of-line blocking, lack of staged pattern lifecycle persistence, and over-aggressive broker position polling.'
-  affected_files:
-  - common/paths.py
-  - common/pattern_funnel.py
-  - common/patterns_bull.py
-  - common/patterns_bear.py
-  - common/trading_core.py
-  - common/resolve.py
-  - Trade_Option/index_options_trade_engine.py
-  - Trade_Option/stock_options_trade_engine.py
-  - Trade_Option/app_option_Trade.py
-  - Trade_Option/templates/index.html
-  - scratch/run_full_regression_test.py
-  resolution: '1. Implemented Pattern Funnel Manager (common/pattern_funnel.py) managing Category A+ (Imminent Velocity), Category A (Ready), and Category B (Incubator) with atomic persistence and exclusivity enforcement.
-    2. Implemented scan_pattern_lifecycle_stage in common/patterns_bull.py and patterns_bear.py.
-    3. Created high-frequency Fast Surveillance Radar thread (fast_radar_loop) in stock_options_trade_engine.py running every 15s to fire orders instantly upon D-trigger cross without waiting for 213-symbol background cycle.
-    4. Eliminated Head-of-Line blocking in execute_highest_rr_trade across stock and index engines using sorted candidate loop with fallback evaluation.
-    5. Throttled broker position fetching in app_option_Trade.py from 3s to 15s.
-    6. Added /api/pattern-funnel endpoint and dedicated Pattern Surveillance Radar tab in templates/index.html.
-    7. Verified with 100% pass across all 20 regression tests.'
-  status: RESOLVED
-
-- id: FEATURE-029
-  title: Comprehensive Algo Audit & CVE Hardening - Execution Failsafe, Morning Circuit Breaker, Retest Spacing, Post-Market Filter & Feature 5 (+BE Entry + 2%)
-  severity: HIGH
-  category: Risk Management & Pattern Execution Hardening
-  family: ALGO_AUDIT_CVE
-  date_reported: '2026-09-04'
-  symptom: '1) When exit orders encountered REJECTED_ERROR, retry tracking was not persisted, risking rapid spam and premature memory eviction.
-    2) Positions open during volatile 09:15-09:45 AM opening lacked a catastrophic safety floor against gap-down crashes.
-    3) If candle fetch API experienced intermittent downtime or returned empty data, live tick LTP was bypassed instead of checking SL.
-    4) Feature 5: TRAIL-1 (+10% Gain Lock) set SL to exact entry (BE), which after slippage and broker STT/charges produced a net negative return.
-    5) Retest Point C in patterns_bear.py did not require a green retest candle, and Hammer Baby / Shooting Star Baby lacked mother candle containment checks.
-    6) Phantom trade in MIDCPNIFTY26SEP14750CE formed because post-market synthetic auction ticks (15:33:00) generated Anchor A, and a 70-candle runaway drop (> 40 pts) was falsely matched as Point C retest due to unbounded B-to-C distance.'
-  root_cause: 'Unbounded retry loops on order reject, absence of opening circuit breaker, coupling of tick monitoring to historical candle fetch, flat entry breakeven without profit buffer, asymmetric bear retest rules, floating baby candles, and unstripped post-15:30 auction bars with unbounded B-to-C retest search.'
-  affected_files:
-  - common/position_monitor.py
-  - common/patterns_bull.py
-  - common/patterns_bear.py
-  - common/timeframe_utils.py
-  - Notes_Inputs.txt
-  - scratch/test_cve_fixes.py
-  - scratch/run_full_regression_test.py
-  - ISSUE_MANAGEMENT.yaml
-  resolution: '1. CVE-1 & CVE-2: Updated position_monitor.py save_executed_exit to increment retry_count on REJECTED_ERROR with 15s backoff; memory eviction and trade_db updates made strictly conditional on verified broker fill (exit_ok).
-    2. CVE-3: Implemented Morning Catastrophic Circuit Breaker active during 09:15-09:45 AM (-25% for options, -12% for stocks) to prevent deep drawdowns on catastrophic opening shocks.
-    3. CVE-4: Decoupled live tick quote lookup from historical candle REST API outages in position_monitor.py.
-    4. Feature 5: Updated TRAIL-1 (+10% Gain Lock) to lock Positive Breakeven at +BE: Entry + 2% for Bull (Entry - 2% for Bear), snapped to nearest 0.05 tick.
-    5. Pattern Parity & Geometry: Enforced green retest candle for Bear Point C in patterns_bear.py; added mother candle base containment for Hammer Baby (patterns_bull.py) and peak containment for Shooting Star Baby (patterns_bear.py).
-    6. Post-Market Filter: Stripped synthetic auction candles (>= 15:30:00 IST) in timeframe_utils.py fetch_and_resample_candles for intraday timeframes.
-    7. Retest B-to-C Spacing & Runaway Excursion Guards: Restricted Point C retest search to <= 25 bars after Point B, and invalidated patterns if price rallies/drops > 1.5x risk (or reaches T1) before Point C.
-    8. Regression Test Suite: Expanded to 19 test suites in run_full_regression_test.py and 5 targeted unit tests in test_cve_fixes.py, with 100% pass across all tests.'
-  status: RESOLVED
-
-- id: ISSUE-084
-  title: Quant Enhancements - Debit Spreads, Liquidity Gate & 09:16 AM Pre-Flight Reconciler
-  severity: HIGH
-  category: Execution Architecture, Market Microstructure & Pre-Flight Auditing
-  family: QUANT_ENHANCEMENTS
-  date_reported: '2026-09-03'
-  symptom: '1) Naked option buying suffered severe theta decay during intraday consolidation on 15m/30m setups. 2) Orders risked slippage on illiquid contracts with wide bid-ask spreads. 3) Overnight price gaps and out-of-band broker executions were not audited promptly at market open.'
-  root_cause: 'Lack of multi-leg spread resolution, absence of pre-trade market depth/spread liquidity checks, and absence of an automated 09:16 AM pre-flight market open state reconciliation task.'
-  affected_files:
-  - common/liquidity_guard.py
-  - common/morning_reconciler.py
-  - common/resolve.py
-  - common/position_monitor.py
-  - common/trading_core.py
-  - Trade_Option/stock_options_trade_engine.py
-  - Trade_Option/index_options_trade_engine.py
-  - Trade_Option/run_export_scheduler_daemon.py
-  - Trade_Option/app_option_Trade.py
-  - Trade_Stock/app_Stock_Trade.py
-  - input/program_config.json
-  resolution: '1. Phase 1 (Debit Spreads): Implemented resolve_option_spread() in resolve.py supporting 2-leg Bull Call Spreads (Buy ATM CE + Sell OTM CE at T1) and Bear Put Spreads (Buy ATM PE + Sell OTM PE at T1). Updated stock_options_trade_engine.py and position_monitor.py close_position() to place and close both legs concurrently.
-    2. Phase 2 (Liquidity Gate): Created liquidity_guard.py with check_bid_ask_spread_liquidity() enforcing (Ask - Bid) / LTP <= 0.02 and book depth validation before order placement across engines and 1-Click Buy.
-    3. Phase 3 (Morning Reconciler): Created morning_reconciler.py and scheduled 09:16 AM pre-flight audit in run_export_scheduler_daemon.py to reconcile broker net positions with SQLite trade_db, audit opening gaps against SL/T1, and verify account margin health.
-    4. Unit test coverage expanded to 54 tests (100% pass) and master regression suite expanded to 18 suites (100% pass).'
-  status: RESOLVED
-
-- id: ISSUE-083
-  title: VM Credential Isolation & EnvironmentFile Systemd Integration
-  severity: HIGH
-  category: Security, Configuration & Deployment Hardening
-  family: SECURITY_CONFIG
-  date_reported: '2026-09-03'
-  symptom: 'API key and secret credentials risked cross-pollination or git exposure when synchronized via file payloads across multi-cloud VM environments (Bhavni and Poovendan VMs).'
-  root_cause: 'Kite API credentials were read from files (program_config.json) that could be overwritten by automated deployments across different cloud instances.'
-  affected_files:
-  - oracle/setup_systemd_vm.sh
-  - oracle/sync_to_oracle_cloud.py
-  - Trade_Option/app_option_Trade.py
-  - Trade_Stock/app_Stock_Trade.py
-  resolution: '1. Decoupled Kite API credentials into dedicated /etc/trading.env files on each VM (chmod 600) containing machine-specific KITE_API_KEY and KITE_API_SECRET.
-    2. Configured systemd service definitions (trading-options, trading-stock, trading-export) with EnvironmentFile=-/etc/trading.env to inject credentials directly into process runtime environment.
-    3. Stripped API credentials from sync_to_oracle_cloud.py and setup_systemd_vm.sh commandlines.
-    4. Enhanced package_codebase to sanitize program_config.json by automatically stripping api_key and api_secret before archiving.
-    5. Verified live process environments on both Bhavni and Poovendan VMs confirm 100% credential isolation with zero credentials in git.'
-  status: RESOLVED
-
-- id: ISSUE-082
-  title: Max Daily Loss Limit % UI Parameter & Configuration Precedence
-  severity: MEDIUM
-  category: Risk Management & Dashboard UI
-  family: RISK_MANAGEMENT
-  date_reported: '2026-09-03'
-  symptom: 'Portfolio Risk Guard daily drawdown limit was fixed at 3.0% in backend code/config without an interactive UI parameter in dashboard program cards. When a loss occurred (e.g. FINNIFTY SL hit), users had to manually edit JSON files to adjust or raise the daily circuit breaker threshold.'
-  root_cause: 'PROGRAMS config_fields dictionary in app_option_Trade.py and app_Stock_Trade.py did not expose max_daily_loss_pct as an editable number input row, and save_config did not synchronize program-level edits back into the global portfolio_risk section of program_config.json.'
-  affected_files:
-  - common/portfolio_risk.py
-  - common/resolve.py
-  - Trade_Option/app_option_Trade.py
-  - Trade_Stock/app_Stock_Trade.py
-  - input/program_config.json
-  resolution: '1. Added "max_daily_loss_pct" (Daily Loss Limit %) number input with default 3.0 to config_fields for all trading engines in app_option_Trade.py and app_Stock_Trade.py.
-    2. Enhanced save_config in both dashboard backends to synchronize max_daily_loss_pct directly to cfg["portfolio_risk"]["max_daily_loss_pct"] in program_config.json.
-    3. Enhanced /api/data and /api/status endpoints to pre-fill max_daily_loss_pct from cfg["portfolio_risk"] across all program cards on page load/refresh.
-    4. Enhanced _load_portfolio_risk_config in portfolio_risk.py to resolve max_daily_loss_pct with full fallback hierarchy (p_cfg -> config -> cfg_all["portfolio_risk"] -> default 3.0).
-    5. Verified bidirectional save roundtrip, 47/47 unit tests passing, and master regression suite passing.'
-  status: RESOLVED
-
-- id: ISSUE-081
-  title: Fix Scan Tab Trade Scarcity, Token Resolution, and Timeframe Candle Time Alignment
-  severity: HIGH
-  category: Scanner Discovery, Registry Resolution & UI Data Presentation
-  family: SCANNER_DISCOVERY
-  date_reported: '2026-09-03'
-  symptom: '1. Scan Tab displayed very few or zero trades when running stock reversal scans.
-    2. Scanner crashed mid-scan with TypeError: ''>'' not supported between instances of ''NoneType'' and ''int'' when evaluating check_portfolio_risk_caps on existing trades with lot_size=None.
-    3. Option contract tokens from NFO cache polluted STOCK_REGISTRY for non-Nifty50 symbols (Midcap/Smallcap), causing cash equity scanners to fetch option candles with distorted prices and low option volumes.
-    4. is_liquid_cash_stock rejected 100% of stocks on intraday timeframes (15m, 30m, 1hr) and high-value equities (DIXON, OFSS) on daily charts due to unscaled volume and turnover thresholds.
-    5. Raw string comparison between candle_a_time and swing_meta["terminal_date"] erroneously discarded valid Anchor A setups that formed on the exact same date as the terminal swing base.
-    6. stock_reversal_scanner.py assigned Anchor A time to both entry_time and candle_a_time, discarding actual Point D entry breakout times.
-    7. formatTimestamp in UI dashboards forcibly returned "09:15" for daily/weekly candles (00:00:00) instead of displaying the actual date/candle time of the timeframe set while scanning.'
-  root_cause: 'Token pollution in _populate_stock_registry_from_cache, static daily volume filters applied to intraday bars, un-normalized string date comparisons in terminal swing filters, variable mixup between Point A and Point D in scanner display formatting, and hardcoded 09:15 override in UI formatTimestamp.'
-  affected_files:
-  - common/portfolio_risk.py
-  - common/registries.py
-  - common/equity_universe.py
-  - common/patterns_bull.py
-  - common/patterns_bear.py
-  - common/resolve.py
-  - Trade_Stock/stock_reversal_scanner.py
-  - Trade_Stock/templates/index.html
-  - Trade_Option/templates/index.html
-  - scratch/test_vix_portfolio_volume.py
-  resolution: '1. Handled None lot_size in check_portfolio_risk_caps in portfolio_risk.py, resolving TypeError.
-    2. Initialized non-Nifty50 tokens to 0 in _populate_stock_registry_from_cache so equity scanners resolve valid NSE cash tokens from instrument master rather than NFO option contracts.
-    3. Made is_liquid_cash_stock timeframe-aware: dynamically scales 20-period volume by candles_per_day and uses realistic 2.0 Cr turnover / 100k volume bounds.
-    4. Normalized timestamps with clean_timestamp()[:10] in stock_reversal_scanner.py and resolve.py so same-day terminal base setups are retained.
-    5. Mapped entry_time to CandleTime/D_time and candle_a_time to CandleATime/A_time in stock_reversal_scanner.py.
-    6. Added CandleTime and CandleATime aliases to scan_trend_continuation_reentry in patterns_bull.py and patterns_bear.py.
-    7. Updated formatTimestamp in Option and Stock UI templates to display proper date without forcing 09:15 for Daily/Weekly candles, while retaining exact candle timestamps for intraday timeframes.
-    8. Unit test suite expanded to 47 tests (100% pass) and master regression test suite verified passed.'
-  status: RESOLVED
-
-- id: ISSUE-080
-  title: Comprehensive Expert Codebase Audit & Execution Pipeline Bug Fixes (P0-P3)
-  severity: HIGH
-  category: Execution Pipeline, Risk Management & Code Integrity
-  family: ZERO_REGRESSION_AUDIT
-  date_reported: '2026-09-03'
-  symptom: '1. Live auto-execution in stock_options_trade_engine.py and index_options_trade_engine.py threw NameError: name ''load_config'' is not defined on valid setup triggers.
-    2. Orphaned position recovery in stock_options_trade_engine.py crashed on missing calculate_sl_buffer import.
-    3. Bear scanner fallback crashed on missing a_idx variable when date column was absent.
-    4. Stock reversal scanner evaluated VIX and portfolio risk checks with tier defaulting to 2 before swing metadata was merged.
-    5. Portfolio risk daily drawdown check only aggregated closed trades, ignoring floating unrealized losses on open positions, and used underlying spot price instead of option premium for option PnL.
-    6. Cash equity position sizing was uncapped by account capital, allowing micro-tight stop losses to calculate runaway leverage exposure.
-    7. Dead duplicate bullish function in patterns_bear.py with broken import.
-    8. ANCHOR_SCAN_REQUEST_FILE used local CWD-relative path in option engines instead of canonical paths.monitor_file.'
-  root_cause: 'Accumulated drift across decompressed modules and missing imports in auto-execution and risk evaluation pipelines.'
-  affected_files:
-  - Trade_Option/stock_options_trade_engine.py
-  - Trade_Option/index_options_trade_engine.py
-  - Trade_Stock/stock_reversal_scanner.py
-  - common/patterns_bear.py
-  - common/portfolio_risk.py
-  - common/targets.py
-  - common/vix_guard.py
-  - scratch/test_vix_portfolio_volume.py
-  resolution: '1. Replaced load_config() with canonical load_program_config_for_engine in both options engines.
-    2. Added calculate_sl_buffer to stock_options_trade_engine.py imports.
-    3. Fixed a_idx -> anchor_idx in patterns_bear.py.
-    4. Resolved effective_tier from swing_meta before VIX/portfolio risk checks in stock_reversal_scanner.py.
-    5. Enhanced check_portfolio_risk_caps to compute realized + active unrealized floating drawdown and use option premium basis for option trades.
-    6. Added account capital ceiling to cash equities in calculate_position_size (max 100% capital).
-    7. Removed dead duplicate function from patterns_bear.py and aligned bear breakout SL with calculate_sl_buffer.
-    8. Switched ANCHOR_SCAN_REQUEST_FILE to canonical paths.monitor_file and wired on-demand scan flag handling into index options engine.'
-  status: RESOLVED
-
-- id: FEATURE-036
-  title: Decoupled Scan Discovery from Portfolio Risk & VIX Execution Guards
-  severity: ENHANCEMENT
-  category: Architecture & Strategy Discovery
-  family: SCAN_AND_EXECUTION_SEPARATION
-  date_reported: '2026-09-03'
-  symptom: 'When user had 5-6 open active positions, scanners suppressed staging and did not load discovered setups into the Scan Tab UI, hiding all market discovery when position limits were reached.'
-  root_cause: 'scan_symbol in common/resolve.py and run_scan in stock_reversal_scanner.py returned empty lists or broke early upon check_portfolio_risk_caps returning False, mixing visual discovery with execution gating.'
-  affected_files:
-  - common/resolve.py
-  - Trade_Stock/stock_reversal_scanner.py
-  - Trade_Option/stock_options_trade_engine.py
-  - Trade_Option/index_options_trade_engine.py
-  - Trade_Option/app_option_Trade.py
-  - Trade_Stock/app_Stock_Trade.py
-  resolution: '1. Decoupled visual setup discovery from execution gating: scanners now always stage and load all valid price action patterns into scan_display.json and the Scan Tab with attached risk metadata (portfolio_risk_allowed, vix_allowed).
-    2. Moved strict Portfolio Risk and VIX regime enforcement to automated order execution (execute_highest_rr_trade in stock/index option engines) and manual 1-Click Buy API endpoints (/api/buy-scanned-trade in Option and Stock apps).
-    3. If 5-6 positions are already active, setups remain visible in the Scan Tab for monitoring, while Auto-Trade and 1-Click Buy safely block order placement with clear user feedback.
-    4. Verified across regression tests.'
-  status: RESOLVED
-
-- id: FEATURE-035
-  title: 100% Dynamic ATR Volatility Scaling for Swing Leg Geometry (Equities & F&O)
-  severity: ENHANCEMENT
-  category: Strategy & Geometry Engine
-  family: SWING_DETECTION
-  date_reported: '2026-09-03'
-  symptom: 'Hardcoded stock overrides (TATAMOTORS, ADANIENT, RELIANCE, HDFCBANK) created static bias in dynamic market conditions, missing tight base breakouts during low-volatility compressions and requiring manual override maintenance.'
-  root_cause: 'swing_leg_config in input/program_config.json maintained static stock overrides instead of relying on the built-in Tier 2 14-period ATR% dynamic volatility adapter.'
-  affected_files:
-  - input/program_config.json
-  - Trade_Stock/input/program_config.json
-  - Trade_Option/input/program_config.json
-  resolution: '1. Removed hardcoded equity overrides (TATAMOTORS, ADANIENT, RELIANCE, HDFCBANK) from swing_leg_config across all config files.
-    2. Retained index-only overrides (NIFTY: 2, BANKNIFTY: 2) for rapid 3m/15m index option execution.
-    3. All 200+ F&O equities now dynamically adjust leg lengths (2 to 5 candles) based on real-time 14-period ATR% without manual configuration.
-    4. Verified across regression tests.'
-  status: RESOLVED
-
-- id: FEATURE-034
-  title: Standalone 24/7 Position Monitor Daemon & Decoupled Session Guardian
-  severity: ENHANCEMENT
-  category: Architecture & Position Monitoring
-  family: EXECUTION_GUARD
-  date_reported: '2026-09-03'
-  symptom: 'Active positions were only monitored when individual scanners/engines were actively running in loop; if engines were stopped or scanners throttled, overnight/live positions remained unmonitored.'
-  root_cause: 'monitor_active_positions was coupled inside engine scan cycles rather than running as an autonomous background daemon.'
-  affected_files:
-  - common/position_monitor.py
-  - Trade_Option/app_option_Trade.py
-  - Trade_Stock/app_Stock_Trade.py
-  resolution: '1. Created monitor_all_active_positions(kite, live=True) in common/position_monitor.py to monitor all active trades across all engines (index, nifty50, daily, bear_trade, ema_engine) in a unified call.
-    2. Added standalone_position_monitor_daemon background thread in Trade_Option/app_option_Trade.py (Port 5050) and Trade_Stock/app_Stock_Trade.py (Port 5051) running on a continuous 2-second high-frequency loop.
-    3. Integrated automatic Kite token hot-reloading so positions are actively guarded immediately upon dashboard startup or token refresh, completely independent of scanner start/stop state.
-    4. Verified across regression tests with 100% pass rate.'
-  status: RESOLVED
-
-- id: FEATURE-033
-  title: Dynamic Capital-Scaled Portfolio Risk Limits (Concurrent Positions & Sector Caps)
-  severity: ENHANCEMENT
-  category: Risk Management & Portfolio Governance
-  family: RISK_MANAGEMENT
-  date_reported: '2026-09-03'
-  symptom: 'Max concurrent positions cap was statically fixed at 6 positions regardless of user capital setting on UI (e.g. 50k, 200k, 500k), causing under-allocation on larger accounts and over-allocation on smaller accounts.'
-  root_cause: '_load_portfolio_risk_config in common/portfolio_risk.py read a static max_concurrent_positions: 6 integer without factoring the engine-specific capital passed from UI settings.'
-  affected_files:
-  - common/portfolio_risk.py
-  - common/resolve.py
-  resolution: '1. Implemented dynamic capital scaling in portfolio_risk.py: scales concurrent positions proportionally with capital (6 positions per Rs 100k capital, e.g. 3 for 50k, 12 for 200k, 30 for 500k, min 2).
-    2. Scaled sector exposure caps proportionally with capital (2 positions per sector per 100k capital).
-    3. Verified 100% test pass rate.'
-  status: RESOLVED
-
-- id: ISSUE-054
-  title: UTC Cloud System Clock Mismatch Suppressing Stop Loss Evaluations on Remote VMs
-  severity: CRITICAL
-  category: Timezone & Position Monitoring
-  family: EXECUTION_GUARD
-  date_reported: '2026-09-03'
-  symptom: 'Active positions on Oracle Cloud VM (e.g. FINNIFTY, BANKBARODA, SENSEX) that breached their Stop Loss levels failed to execute automated stop-loss exits during morning and afternoon trading sessions.'
-  root_cause: 'On cloud Linux VMs configured with UTC system timezone, dt.now().strftime("%H:%M") and dt.now().time() evaluated to UTC time (e.g., 04:25 UTC when IST is 09:55 AM). Because the morning volatility guard checked now_time_str < "09:45", the condition evaluated to True throughout the entire Indian market trading hours (03:45 UTC to 09:45 UTC / 09:15 to 15:15 IST), causing the system to bypass Candle Close SL, Emergency Hard SL, Tick LTP SL, and Hard Max Loss checks until market close.'
-  affected_files:
-  - common/position_monitor.py
-  - Trade_Option/app_option_Trade.py
-  - Trade_Stock/app_Stock_Trade.py
-  - common/websocket_monitor.py
-  - Trade_Option/automated_strategy_exporter.py
-  - MASTER_DOCUMENTATION.yaml
-  - ISSUE_MANAGEMENT.yaml
-  resolution: '1. Replaced all system-local dt.now().strftime("%H:%M") and dt.now().time() calls in SL evaluations and failsafe monitors with IST-normalized get_ist_now().strftime("%H:%M") and get_ist_now().time().
-    2. Verified on Poovendan Oracle Cloud VM (140.245.197.71) that SL evaluations correctly trigger at 09:45 AM IST.
-    3. Deployed and verified 100% test pass on regression suite.'
   status: RESOLVED

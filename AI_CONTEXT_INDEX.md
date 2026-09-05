@@ -52,11 +52,8 @@ when a task explicitly needs them**.
   - Datta & Minervini Law: SL as capital shield (outcome bias immunity); hitting SL exits immediate risk, not the symbol; objective D2 re-entry.
   - entry_time = true execution time (never candle time); canonical paths from `common/paths.py` only (PATH_SPLIT family).
   - trade_db rejects duplicate ACTIVE contracts & expired contracts; new features strictly isolated with zero regression.
-- **Known failure families (see ISSUE_MANAGEMENT.yaml)**: PATH_SPLIT (fixed by `common/paths.py`), DATA_INTEGRITY (duplicate/expired/ghost DB rows), UI_SYNTAX (JS brace errors in templates), STOCK_OPTION_PARITY (short selling MIS order routing and PnL formulas), WINDOWS_FILE_LOCK (retry backoff and tmp isolation). Always record fixes in ISSUE_MANAGEMENT.yaml with a `family:` marker.
-- **Verification**: `scratch/run_full_regression_test.py` = 21 test suites passing 100% (imports, Kite auth,
-  scanners, display serializers, chart API, trade_db, canonical paths, DB invariants, engine path alignment,
-  candle filters, trailed SL floor, JS V8 AST, parabolic math, auth, VIX macro gate, option sizing, harami ratio,
-  debit spreads/liquidity/09:16 reconciler, CVE-1..4/+BE/excursion, pattern funnel, stock vs option parity). Syntax: `ast.parse(...)` for .py, `node --check` for JS blocks.
+- **Known failure families (see ISSUE_MANAGEMENT.yaml)**: PATH_SPLIT (fixed by `common/paths.py`), DATA_INTEGRITY (duplicate/expired/ghost DB rows), UI_SYNTAX (JS brace errors in templates), STOCK_OPTION_PARITY (short selling MIS order routing and PnL formulas), WINDOWS_FILE_LOCK (retry backoff and tmp isolation), IMPORT_MODULE_RESOLUTION (sys.path alignment for root imports). Always record fixes in ISSUE_MANAGEMENT.yaml with a `family:` marker.
+- **Verification**: `scratch/run_full_regression_test.py` = 21 test suites passing 100%. Targeted unit suites: `scratch/test_institutional_enhancements.py` (5/5), `scratch/test_parity_alignment.py` (4/4), `scratch/test_vcp_metrics.py` (4/4), `scratch/test_spread_liquidity_reconciler.py` (7/7), `scratch/test_cve_fixes.py` (5/5), `scratch/test_vix_portfolio_volume.py` (47/47). Syntax: `ast.parse(...)` for .py, `node --check` for JS blocks.
 - **Deploy**: Oracle Cloud Always Free (4 ARM cores/24GB RAM/Ubuntu 24.04), dashboards on
   5050/5051. Isolated credentials via `/etc/trading.env`. Token regenerated daily via root `Kite_Access_Token_gen.py`.
 

@@ -82,8 +82,11 @@ architecture:
     scratch:
       run_full_regression_test.py: "21-test Master Strategy Regression Test Suite (Imports, Auth, Scanners, Serializers, Chart API, DB Invariants, Paths, Trailed-SL Floor, JS V8, Parabolic Math, Auth, VIX Gate, Option Sizing, Harami Ratio, Debit Spreads, Liquidity Gate, 09:16 AM Reconciler, CVE-1..4 Hardening, Feature 5 Positive Breakeven, Funnel Stages, Option vs Stock Parity)."
       test_institutional_enhancements.py: "5-test Institutional Unit Verification Suite (Option VWAP +2σ bands, Point C TWAP stability, Spot Confluence mapping, Continuous 15% Greek loss shield, Pegged limit routing)."
+      test_parity_alignment.py: "4-test Stock vs Option Parity Alignment Suite (api_analyze_trade entry price, tier resolution, D2 VCP enrichment, bearish MIS routing)."
+      test_vcp_metrics.py: "4-test Volatility Contraction Pattern (VCP) & TTM Squeeze Metrics Unit Suite."
+      test_spread_liquidity_reconciler.py: "7-test Spreads, Liquidity Gate & 09:16 AM Pre-Flight Reconciler Suite."
       test_vix_portfolio_volume.py: "47-test Unit Verification Suite (VIX Regimes, Portfolio Caps, Sector Map, BCD Volume Profile, EMA Rollover, IST Timing)."
-      test_cve_fixes.py: "6-test Targeted CVE & Feature Verification Suite."
+      test_cve_fixes.py: "5-test Targeted CVE & Feature Verification Suite."
 
 config_precedence:
   priority_1: "Manual UI User Edits (overrides in sl_target_overrides.json & active_positions_db.json)"
@@ -437,8 +440,16 @@ system_integrity_safeguards:
 verification_and_quality_assurance:
   master_regression_suite: "scratch/run_full_regression_test.py — 21/21 Test Suites Passing (100% Success Rate)"
   unit_verification_suite: "scratch/test_institutional_enhancements.py — 5/5 Unit Tests Passing (100% Success Rate)"
+  parity_alignment_suite: "scratch/test_parity_alignment.py — 4/4 Unit Tests Passing (100% Success Rate)"
+  vcp_metrics_suite: "scratch/test_vcp_metrics.py — 4/4 Unit Tests Passing (100% Success Rate)"
+  spread_liquidity_reconciler_suite: "scratch/test_spread_liquidity_reconciler.py — 7/7 Unit Tests Passing (100% Success Rate)"
+  cve_fixes_suite: "scratch/test_cve_fixes.py — 5/5 Unit Tests Passing (100% Success Rate)"
+  vix_portfolio_suite: "scratch/test_vix_portfolio_volume.py — 47/47 Unit Tests Passing (100% Success Rate)"
   ast_syntax_integrity: "100% Python files parsed with zero syntax errors"
   recent_major_issues_resolved:
+    - id: "ISSUE-089"
+      title: "Trade_Stock Root Import Blueprint Resolution & Institutional Test Suite Realization"
+      status: "RESOLVED"
     - id: "ISSUE-088"
       title: "Option vs Stock Cash Equity Parity Alignment (Short Selling MIS Order Execution, SL/Target Derivation, Monitor Risk PnL & Direction Serialization)"
       status: "RESOLVED"

@@ -73,4 +73,5 @@ AGY operates with three integrated identities across all tasks:
 
 - **AST Syntax Check**: `python -c "import ast; ast.parse(open('FILE', encoding='utf-8').read())"`
 - **Import Smoke Test**: `python -c "import Trade_Option.app_option_Trade, Trade_Stock.app_Stock_Trade, Trade_Option.index_options_trade_engine, Trade_Option.stock_options_trade_engine, common.trading_core"`
+- **Unit Verification Suites**: `python scratch/test_institutional_enhancements.py` (5/5), `python scratch/test_parity_alignment.py` (4/4), `python scratch/test_vcp_metrics.py` (4/4), `python scratch/test_spread_liquidity_reconciler.py` (7/7), `python scratch/test_cve_fixes.py` (5/5), `python scratch/test_vix_portfolio_volume.py` (47/47).
 - **Regression Suite**: `python scratch/run_full_regression_test.py` (Validates all 21 test suites: imports, Kite session, scanner configs, serializers, trade DB invariants, paths, and parity).
