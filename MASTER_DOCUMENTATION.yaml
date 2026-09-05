@@ -437,6 +437,9 @@ verification_and_quality_assurance:
   unit_verification_suite: "scratch/test_institutional_enhancements.py — 5/5 Unit Tests Passing (100% Success Rate)"
   ast_syntax_integrity: "100% Python files parsed with zero syntax errors"
   recent_major_issues_resolved:
+    - id: "ISSUE-057"
+      title: "Stock vs Options Engine Parity Alignment (entry_price fix, Tier Demotion Bug, Bearish 1-Click SHORT MIS, Scanner Display VCP Serialization & D2 VCP Metrics)"
+      status: "RESOLVED"
     - id: "ISSUE-056"
       title: "Institutional Zero-Trade-Starvation Architecture (Option VWAP, Point C TWAP, Spot Confluence, 15% Loss Shield, Pegged Limit Routing)"
       status: "RESOLVED"

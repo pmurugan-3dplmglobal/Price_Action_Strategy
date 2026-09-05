@@ -873,6 +873,12 @@ def scan_trend_continuation_reentry_bearish(df_entry, df_anchor):
     if risk <= 0 or risk < entry_price * 0.002 or ((entry_price - t1) / risk) < 1.5:
         return None
 
+    try:
+        from swing_detection import calculate_vcp_metrics
+    except ImportError:
+        from common.swing_detection import calculate_vcp_metrics
+    vcp_m = calculate_vcp_metrics(df_entry)
+
     rr = (entry_price - t1) / risk
     return {
         "Pattern": "TREND_CONT_BEAR",
@@ -892,7 +898,12 @@ def scan_trend_continuation_reentry_bearish(df_entry, df_anchor):
         "tier_label": "TIER_3_MOMENTUM",
         "tier_badge": "🥉 T3",
         "swing_waves": 1,
-        "terminal_base": False
+        "terminal_base": False,
+        "direction": "BEAR",
+        "atr_ratio": vcp_m.get("atr_ratio", 1.0),
+        "is_squeeze": vcp_m.get("is_squeeze", False),
+        "vcp_tier": vcp_m.get("vcp_tier", "NORMAL"),
+        "vcp_badge": vcp_m.get("vcp_badge", "")
     }
 
 def scan_anchor_bcd_breakout_generic(df_entry, df_anchor, side="BULL", anchor_tf="", entry_tf=""):

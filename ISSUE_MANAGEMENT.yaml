@@ -1354,5 +1354,32 @@ issues:
     6. 2-Stage Pegged Limit Routing: In execute_highest_rr_trade, placed limit orders at mid-price when bid-ask spread >= 0.8%, preserving execution speed and saving slippage.
     7. Full regression test passed 20/20 with 100% success.'
   status: RESOLVED
+- id: ISSUE-057
+  family: STOCK_OPTIONS_PARITY_ALIGNMENT
+  date_reported: '2026-09-05'
+  title: Stock vs Options Engine Parity Alignment - Fixed Unbound entry_price, Tier Demotion Bug, Bearish 1-Click Short (MIS), Scanner Display VCP Serialization & D2 VCP Metrics
+  severity: HIGH
+  category: Alignment, Bug Fix & UI Parity
+  symptom: '1. /api/analyze-trade in Trade_Stock/app_Stock_Trade.py crashed with UnboundLocalError: local variable ''entry_price'' referenced before assignment because entry_price was not extracted from payload.
+    2. stock_reversal_scanner.py overwrote result["tier"] with swing_meta.get("tier"), causing pristine Daily/Weekly Tier 1 Gold setups to be demoted to Tier 2 Core (causing rejection under VIX 19-24) and over-promoting D2 Momentum setups to Tier 2 Core, while leaving tier labels unsynchronized.
+    3. Stock scan display formatted_all and formed_display omitted VCP and TWAP C metrics (atr_ratio, is_squeeze, vcp_tier, vcp_badge, twap_c_stable, twap_c_score, twap_c_std, benchmark, anchor_floor, direction, tier, tier_label, tier_badge), preventing the Stock Dashboard from displaying VCP/tier badges.
+    4. Bearish stock reversal setups displayed green "BUY" button and placed TRANSACTION_TYPE_BUY with PRODUCT_CNC orders in /api/buy-scanned-trade, which violates exchange rules for short selling.
+    5. D2 trend continuation re-entries in patterns_bull.py and patterns_bear.py did not calculate VCP volatility compression metrics.'
+  root_cause: 'Unbound local variable in app_Stock_Trade.py api_analyze_trade, destructive tier assignment from swing_meta without pattern tier consideration, incomplete dictionary serialization in stock_reversal_scanner.py, omission of side check in 1-Click execution routing, and missing calculate_vcp_metrics call in D2 continuation scanners.'
+  affected_files:
+  - Trade_Stock/app_Stock_Trade.py
+  - Trade_Stock/blueprints/routes_charts.py
+  - Trade_Stock/stock_reversal_scanner.py
+  - Trade_Stock/templates/index.html
+  - common/patterns_bull.py
+  - common/patterns_bear.py
+  - ISSUE_MANAGEMENT.yaml
+  resolution: '1. Extracted entry_price = float(data.get("entry_price") or data.get("entry_spot") or 0.0) in Trade_Stock/app_Stock_Trade.py (and blueprints/routes_charts.py).
+    2. Fixed tier resolution in stock_reversal_scanner.py to respect pattern_tier (keeping Tier 3 intact, taking min(pattern_tier, swing_tier) for Tier 1 & 2), and synchronized tier_label and tier_badge.
+    3. Serialized atr_ratio, is_squeeze, vcp_tier, vcp_badge, twap_c_stable, twap_c_score, twap_c_std, benchmark, anchor_floor, direction, tier, tier_label, tier_badge in formatted_all and formed_display.
+    4. Updated Trade_Stock/templates/index.html to display red/amber "SHORT (MIS)" button for SELL/BEAR trades, and updated /api/buy-scanned-trade to place TRANSACTION_TYPE_SELL with PRODUCT_MIS for cash equities.
+    5. Added calculate_vcp_metrics call to scan_trend_continuation_reentry in patterns_bull.py and scan_trend_continuation_reentry_bearish in patterns_bear.py.
+    6. Passed 20/20 regression tests and deployed to VMs.'
+  status: RESOLVED
 
 

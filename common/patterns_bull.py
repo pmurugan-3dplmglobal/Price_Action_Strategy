@@ -937,6 +937,12 @@ def scan_trend_continuation_reentry(df_entry, df_anchor):
     if risk <= 0 or risk < entry_price * 0.002 or ((t1 - entry_price) / risk) < 1.5:
         return None
 
+    try:
+        from swing_detection import calculate_vcp_metrics
+    except ImportError:
+        from common.swing_detection import calculate_vcp_metrics
+    vcp_m = calculate_vcp_metrics(df_entry)
+
     rr = (t1 - entry_price) / risk
     return {
         "Pattern": "TREND_CONT_BULL",
@@ -956,5 +962,10 @@ def scan_trend_continuation_reentry(df_entry, df_anchor):
         "tier_label": "TIER_3_MOMENTUM",
         "tier_badge": "🥉 T3",
         "swing_waves": 1,
-        "terminal_base": False
+        "terminal_base": False,
+        "direction": "BULL",
+        "atr_ratio": vcp_m.get("atr_ratio", 1.0),
+        "is_squeeze": vcp_m.get("is_squeeze", False),
+        "vcp_tier": vcp_m.get("vcp_tier", "NORMAL"),
+        "vcp_badge": vcp_m.get("vcp_badge", "")
     }

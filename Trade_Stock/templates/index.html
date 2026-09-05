@@ -332,10 +332,14 @@
 
         async function buyScannedTrade(btnEl, symbol, contract, side, entry, sl, t1, t2, t3, engine, timeframe, candle_a_time, entry_time, benchmark, anchor_floor, direction) {
             const dispName = contract || symbol;
-            if (!confirm(`Confirm 1-Click BUY for ${dispName}?`)) return;
+            const isSell = (String(side || '').toUpperCase() === 'SELL' || String(side || '').toUpperCase() === 'PE' || String(direction || '').toUpperCase() === 'BEAR');
+            const actWord = isSell ? 'SHORT (MIS)' : 'BUY';
+            const actProgress = isSell ? 'SHORTING...' : 'BUYING...';
+            const actColor = isSell ? '#da3633' : '#2ea043';
+            if (!confirm(`Confirm 1-Click ${actWord} for ${dispName}?`)) return;
             if (btnEl) {
                 btnEl.disabled = true;
-                btnEl.textContent = 'BUYING...';
+                btnEl.textContent = actProgress;
                 btnEl.style.background = '#8b949e';
             }
             try {
@@ -346,22 +350,22 @@
                 });
                 const d = await r.json();
                 if (d.ok) {
-                    showToast(d.message || `BUY order placed for ${dispName}`, 'success');
+                    showToast(d.message || `${actWord} order placed for ${dispName}`, 'success');
                     setTimeout(refreshData, 500);
                 } else {
                     showToast(`Failed: ${d.error || 'unknown error'}`, 'error');
                     if (btnEl) {
                         btnEl.disabled = false;
-                        btnEl.textContent = 'BUY';
-                        btnEl.style.background = '#2ea043';
+                        btnEl.textContent = actWord;
+                        btnEl.style.background = actColor;
                     }
                 }
             } catch(e) {
                 showToast(`Network error: ${e.message}`, 'error');
                 if (btnEl) {
                     btnEl.disabled = false;
-                    btnEl.textContent = 'BUY';
-                    btnEl.style.background = '#2ea043';
+                    btnEl.textContent = actWord;
+                    btnEl.style.background = actColor;
                 }
             }
         }
@@ -701,12 +705,15 @@
 
                 const chartCell = `<td style="text-align:center"><button class="btn-chart" onclick="openChartModal('${t.contract||t.symbol||''}','${t.symbol||''}','${t.side||'CE'}',${t.entry_spot||t.entry||0},${t.current_sl||t.sl||0},${t.t1||0},${t.t2||0},${t.t3||0},'${res}','${t.candle_a_time||''}','${t.entry_time||''}',${t.benchmark||0},${t.anchor_floor||0},'${t.direction||'BULL'}','${t.timeframe||''}')" style="background:#1f6feb;color:#ffffff;border:none;padding:4px 8px;border-radius:4px;font-weight:bold;cursor:pointer;font-size:11px;">📈 Chart</button></td>`;
                 let actCell = '';
+                const isSellTrade = (String(t.side || '').toUpperCase() === 'SELL' || String(t.side || '').toUpperCase() === 'PE' || String(t.direction || '').toUpperCase() === 'BEAR');
                 if (isExpired || isExitDone) {
                     actCell = '<td style="text-align:center"><button disabled class="btn-expired" style="background:' + (isExpired ? '#8957e5' : '#d29922') + ';color:#ffffff;border:none;padding:4px 10px;border-radius:4px;font-weight:bold;cursor:not-allowed;font-size:11px">' + (isExpired ? 'EXPIRED' : 'EXITED') + '</button></td>';
                 } else if (isBought) {
-                    actCell = '<td style="text-align:center"><button disabled class="btn-bought" style="background:#238636;color:#ffffff;border:none;padding:4px 10px;border-radius:4px;font-weight:bold;cursor:not-allowed;font-size:11px">BOUGHT</button></td>';
+                    actCell = '<td style="text-align:center"><button disabled class="btn-bought" style="background:' + (isSellTrade ? '#da3633' : '#238636') + ';color:#ffffff;border:none;padding:4px 10px;border-radius:4px;font-weight:bold;cursor:not-allowed;font-size:11px">' + (isSellTrade ? 'SHORTED' : 'BOUGHT') + '</button></td>';
                 } else {
-                    actCell = `<td style="text-align:center"><button class="btn-buy" onclick="buyScannedTrade(this, '${t.symbol||''}', '${t.contract||''}', '${t.side||'CE'}', ${t.entry_spot||0}, ${t.current_sl||t.sl||0}, ${t.t1||0}, ${t.t2||0}, ${t.t3||0}, '${eng}', '${t.timeframe||''}', '${(t.candle_a_time||'').replace(/'/g,"")}', '${(t.entry_time||'').replace(/'/g,"")}', ${t.benchmark||0}, ${t.anchor_floor||0}, '${t.direction||'BULL'}')" style="background:#2ea043;color:#ffffff;border:none;padding:4px 12px;border-radius:4px;font-weight:bold;cursor:pointer;font-size:11px">BUY</button></td>`;
+                    const btnLabel = isSellTrade ? 'SHORT (MIS)' : 'BUY';
+                    const btnColor = isSellTrade ? '#da3633' : '#2ea043';
+                    actCell = `<td style="text-align:center"><button class="btn-buy" onclick="buyScannedTrade(this, '${t.symbol||''}', '${t.contract||''}', '${t.side||(isSellTrade?'SELL':'BUY')}', ${t.entry_spot||0}, ${t.current_sl||t.sl||0}, ${t.t1||0}, ${t.t2||0}, ${t.t3||0}, '${eng}', '${t.timeframe||''}', '${(t.candle_a_time||'').replace(/'/g,"")}', '${(t.entry_time||'').replace(/'/g,"")}', ${t.benchmark||0}, ${t.anchor_floor||0}, '${t.direction||(isSellTrade?'BEAR':'BULL')}')" style="background:${btnColor};color:#ffffff;border:none;padding:4px 12px;border-radius:4px;font-weight:bold;cursor:pointer;font-size:11px">${btnLabel}</button></td>`;
                 }
 
                 let tierBadge = '';
@@ -1384,7 +1391,10 @@
                 const pat = t.pattern || 'BULL_EMA_CROSS';
                 
                 const chartCell = `<td style="text-align:center"><button class="btn-chart" onclick="openChartModal('${cnt}','${sym}','${side}',${t.entry_spot||0},${t.sl||0},${t.t1||0},${t.t2||0},${t.t3||0},'${pat}','${t.candle_a_time||''}','${t.entry_time||''}',${t.benchmark||0},${t.anchor_floor||0},'${t.direction||'BULL'}','${t.timeframe||''}')" style="background:#1f6feb;color:#ffffff;border:none;padding:4px 8px;border-radius:4px;font-weight:bold;cursor:pointer;font-size:11px;">📈 Chart</button></td>`;
-                const actCell = `<td style="text-align:center"><button class="btn-buy" onclick="buyScannedTrade(this, '${sym}', '${cnt}', '${side}', ${spot}, ${sl}, ${t1}, ${t2}, ${t3}, 'ema_engine', '${t.timeframe||'1d'}', '${(t.candle_a_time||'').replace(/'/g,"")}', '${(t.entry_time||'').replace(/'/g,"")}', ${t.benchmark||0}, ${t.anchor_floor||0}, '${t.direction||'BULL'}')" style="background:#2ea043;color:#ffffff;border:none;padding:4px 12px;border-radius:4px;font-weight:bold;cursor:pointer;font-size:11px">BUY</button></td>`;
+                const isSellEma = (String(side).toUpperCase() === 'SELL' || String(side).toUpperCase() === 'PE');
+                const btnEmaLabel = isSellEma ? 'SHORT (MIS)' : 'BUY';
+                const btnEmaColor = isSellEma ? '#da3633' : '#2ea043';
+                const actCell = `<td style="text-align:center"><button class="btn-buy" onclick="buyScannedTrade(this, '${sym}', '${cnt}', '${side}', ${spot}, ${sl}, ${t1}, ${t2}, ${t3}, 'ema_engine', '${t.timeframe||'1d'}', '${(t.candle_a_time||'').replace(/'/g,"")}', '${(t.entry_time||'').replace(/'/g,"")}', ${t.benchmark||0}, ${t.anchor_floor||0}, '${t.direction||(isSellEma?'BEAR':'BULL')}')" style="background:${btnEmaColor};color:#ffffff;border:none;padding:4px 12px;border-radius:4px;font-weight:bold;cursor:pointer;font-size:11px">${btnEmaLabel}</button></td>`;
                 html += `<tr><td>${sym}</td><td style="font-size:11px">${cnt}</td><td>${side}</td><td>${spot}</td><td>${sl}</td><td>${t1}</td><td>${t2}</td><td>${t3}</td><td style="font-size:11px">${timeStr}</td><td><span class="badge badge-bull">${pat}</span></td>${chartCell}${actCell}</tr>`;
             });
 

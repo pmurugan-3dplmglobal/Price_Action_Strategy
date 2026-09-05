@@ -271,9 +271,26 @@ def run_scan(kite):
                             logging.info(f"Skipping {symbol} - Anchor A ({a_dt_str}) preceded terminal swing base ({term_dt_str})")
                             continue
 
-                    # ── Resolve effective tier from swing metadata (populated before scanner call) ──
-                    effective_tier = swing_meta.get("tier", result.get("tier", 2))
+                    # ── Resolve effective tier from pattern & swing metadata ──
+                    pattern_tier = int(result.get("tier", 2))
+                    if pattern_tier == 3:
+                        effective_tier = 3
+                    elif swing_meta and swing_meta.get("tier"):
+                        effective_tier = min(pattern_tier, int(swing_meta.get("tier", pattern_tier)))
+                    else:
+                        effective_tier = pattern_tier
+
                     result["tier"] = effective_tier
+                    if effective_tier == 1:
+                        result["tier_label"] = "TIER_1_GOLD"
+                        result["tier_badge"] = "🥇 T1"
+                    elif effective_tier == 2:
+                        result["tier_label"] = "TIER_2_CORE"
+                        result["tier_badge"] = "🥈 T2"
+                    else:
+                        result["tier"] = 3
+                        result["tier_label"] = "TIER_3_MOMENTUM"
+                        result["tier_badge"] = "🥉 T3"
 
                     # ── VIX Regime Gate Check ──
                     vix_allowed, vix_reason, _ = evaluate_vix_regime(kite, tier_val=effective_tier)
@@ -322,6 +339,7 @@ def run_scan(kite):
                             "symbol": r.get("Symbol") or r.get("symbol", ""),
                             "contract": r.get("Symbol") or r.get("symbol", ""),
                             "entry_spot": r.get("Close") or r.get("Entry"),
+                            "entry_price": r.get("Close") or r.get("Entry"),
                             "current_sl": r.get("SL"),
                             "t1": r.get("T1"),
                             "t2": r.get("T2"),
@@ -335,7 +353,20 @@ def run_scan(kite):
                             "entry_time": clean_timestamp(r.get("CandleTime") or r.get("D_time") or ""),
                             "candle_a_time": clean_timestamp(r.get("CandleATime") or r.get("A_time") or ""),
                             "swing_waves": r.get("swing_waves", 0),
-                            "terminal_base": r.get("terminal_base", False)
+                            "terminal_base": r.get("terminal_base", False),
+                            "benchmark": r.get("Benchmark") or r.get("benchmark"),
+                            "anchor_floor": r.get("AnchorFloor") or r.get("anchor_floor"),
+                            "direction": r.get("direction", PROFILE["display_side"]),
+                            "tier": r.get("tier", 2),
+                            "tier_label": r.get("tier_label", "TIER_2_CORE"),
+                            "tier_badge": r.get("tier_badge", "🥈 T2"),
+                            "atr_ratio": r.get("atr_ratio", 1.0),
+                            "is_squeeze": r.get("is_squeeze", False),
+                            "vcp_tier": r.get("vcp_tier", "NORMAL"),
+                            "vcp_badge": r.get("vcp_badge", ""),
+                            "twap_c_stable": r.get("twap_c_stable", False),
+                            "twap_c_score": r.get("twap_c_score", 0.0),
+                            "twap_c_std": r.get("twap_c_std", 0.0)
                         } for r in all_disp if r.get("Symbol") or r.get("symbol")]
                         shared_write_display(formatted_all, dict(ACTIVE_POSITIONS), PROFILE["display_file"], PROFILE["config_section"])
                     matched = True
@@ -365,9 +396,19 @@ def run_scan(kite):
                 "candle_a_time": clean_timestamp(r.get("CandleATime") or r.get("A_time") or ""),
                 "swing_waves": r.get("swing_waves", 0),
                 "terminal_base": r.get("terminal_base", False),
+                "benchmark": r.get("Benchmark") or r.get("benchmark"),
+                "anchor_floor": r.get("AnchorFloor") or r.get("anchor_floor"),
+                "direction": r.get("direction", PROFILE["display_side"]),
                 "tier": r.get("tier", 2),
                 "tier_label": r.get("tier_label", "TIER_2_CORE"),
-                "tier_badge": r.get("tier_badge", "🥈 T2")
+                "tier_badge": r.get("tier_badge", "🥈 T2"),
+                "atr_ratio": r.get("atr_ratio", 1.0),
+                "is_squeeze": r.get("is_squeeze", False),
+                "vcp_tier": r.get("vcp_tier", "NORMAL"),
+                "vcp_badge": r.get("vcp_badge", ""),
+                "twap_c_stable": r.get("twap_c_stable", False),
+                "twap_c_score": r.get("twap_c_score", 0.0),
+                "twap_c_std": r.get("twap_c_std", 0.0)
             })
     if formed_display:
         with position_lock:

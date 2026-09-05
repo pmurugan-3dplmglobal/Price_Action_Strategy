@@ -24,7 +24,7 @@ def api_analyze_trade():
 
         data = request.json or {}
         symbol = str(data.get("symbol", "")).strip().upper()
-        entry_price = float(data.get("entry_price", 0)) if data.get("entry_price") else 0.0
+        entry_price = float(data.get("entry_price") or data.get("entry_spot") or 0.0)
         engine = str(data.get("engine", "daily")).strip()
         _app = _get_app()
         cfg = _app.load_config() if hasattr(_app, "load_config") else {}
