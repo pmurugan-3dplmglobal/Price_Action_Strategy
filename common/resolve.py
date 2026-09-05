@@ -1498,110 +1498,113 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
             # Mode 1 (Default): Soft Conflict Arbiter — Prefer aligned candidates, fallback if only one side formed
             pool = preferred_candidates if preferred_candidates else symbol_candidates
 
-        if pool:
-            # Step 2: Moneyness Classification & Far OTM Filtering
-            # Moneyness classification:
-            #   0: 1-Step ITM or ATM (Highest Priority: resilient Delta ~0.50-0.60, narrowest spread)
-            #   1: 1-Step OTM (Permissible for high-velocity momentum)
-            #   2: Deep ITM
-            #   3: Far OTM (Distance > 1.25 * strike_step -> Strictly Rejected by Moneyness Guard)
-            def _calc_moneyness_rank(c):
-                strike_val = float(c.get("strike", 0))
-                side_val = str(c.get("side", "CE")).upper()
-                step_val = float(c.get("strike_step") or 50.0)
-                dist = abs(strike_val - current_spot)
-                # True ATM (closest strike within half step) always qualifies as Rank 0
-                is_atm = dist <= (step_val * 0.55)
-                if side_val == "CE":
-                    if is_atm or (strike_val < current_spot and (current_spot - strike_val) <= (step_val * 1.25)):
-                        return 0  # ATM or 1-Step ITM
-                    elif strike_val > current_spot and (strike_val - current_spot) <= (step_val * 1.25):
-                        return 1  # 1-Step OTM
-                    elif strike_val < current_spot:
-                        return 2  # Deep ITM
-                    else:
-                        return 3  # Far OTM (> 1.25 steps away)
-                else: # PE
-                    if is_atm or (strike_val > current_spot and (strike_val - current_spot) <= (step_val * 1.25)):
-                        return 0  # ATM or 1-Step ITM
-                    elif strike_val < current_spot and (current_spot - strike_val) <= (step_val * 1.25):
-                        return 1  # 1-Step OTM
-                    elif strike_val > current_spot:
-                        return 2  # Deep ITM
-                    else:
-                        return 3  # Far OTM (> 1.25 steps away)
+        if not pool:
+            return trades
 
-            # Hard Moneyness Guard: Strictly reject Far OTM strikes (Rank 3) to protect against Delta collapse & Theta decay
-            non_far_otm = [c for c in pool if _calc_moneyness_rank(c) < 3]
-            if non_far_otm:
-                pool = non_far_otm
-            else:
-                logging.info(f"[MONEYNESS_GUARD] Suppressed {symbol} options: All candidates are far OTM (> 1 strike step from spot {current_spot:.2f}).")
-                pool = []
+        # Step 2: Moneyness Classification & Far OTM Filtering
+        # Moneyness classification:
+        #   0: 1-Step ITM or ATM (Highest Priority: resilient Delta ~0.50-0.60, narrowest spread)
+        #   1: 1-Step OTM (Permissible for high-velocity momentum)
+        #   2: Deep ITM
+        #   3: Far OTM (Distance > 1.25 * strike_step -> Strictly Rejected by Moneyness Guard)
+        def _calc_moneyness_rank(c):
+            strike_val = float(c.get("strike", 0))
+            side_val = str(c.get("side", "CE")).upper()
+            step_val = float(c.get("strike_step") or 50.0)
+            dist = abs(strike_val - current_spot)
+            # True ATM (closest strike within half step) always qualifies as Rank 0
+            is_atm = dist <= (step_val * 0.55)
+            if side_val == "CE":
+                if is_atm or (strike_val < current_spot and (current_spot - strike_val) <= (step_val * 1.25)):
+                    return 0  # ATM or 1-Step ITM
+                elif strike_val > current_spot and (strike_val - current_spot) <= (step_val * 1.25):
+                    return 1  # 1-Step OTM
+                elif strike_val < current_spot:
+                    return 2  # Deep ITM
+                else:
+                    return 3  # Far OTM (> 1.25 steps away)
+            else: # PE
+                if is_atm or (strike_val > current_spot and (strike_val - current_spot) <= (step_val * 1.25)):
+                    return 0  # ATM or 1-Step ITM
+                elif strike_val < current_spot and (current_spot - strike_val) <= (step_val * 1.25):
+                    return 1  # 1-Step OTM
+                elif strike_val > current_spot:
+                    return 2  # Deep ITM
+                else:
+                    return 3  # Far OTM (> 1.25 steps away)
 
-            if pool:
-                def _candidate_rank(c):
-                    m_rank = _calc_moneyness_rank(c)
-                    tier_val = int(c.get("tier", 2))
-                    rr_val = float(c.get("rr") or 0.0)
-                    ep = float(c.get("entry_spot") or 0.0)
-                    t1 = float(c.get("t1") or 0.0)
-                    net_profit = max(0.0, t1 - ep)
-                    strike_val = float(c.get("strike", 0))
-                    strike_dist = abs(strike_val - current_spot)
-                    # Priority: 1. Moneyness (ATM/1-ITM first) -> 2. Tier (Gold/Core) -> 3. Profit -> 4. RR -> 5. Distance
-                    return (m_rank, tier_val, -net_profit, -rr_val, strike_dist)
+        # Hard Moneyness Guard: Strictly reject Far OTM strikes (Rank 3) to protect against Delta collapse & Theta decay
+        non_far_otm = [c for c in pool if _calc_moneyness_rank(c) < 3]
+        if non_far_otm:
+            pool = non_far_otm
+        else:
+            logging.info(f"[MONEYNESS_GUARD] Suppressed {symbol} options: All candidates are far OTM (> 1 strike step from spot {current_spot:.2f}).")
+            pool = []
 
-                pool.sort(key=_candidate_rank)
-                best_trade = pool[0]
+        if not pool:
+            return trades
 
-            logging.info(f"[ARBITRAGE WINNER] {symbol}: Selected {best_trade['contract']} ({best_trade['side']} | Strike {best_trade.get('strike')}) | Tier: {best_trade.get('tier_label')} | Profit: {float(best_trade.get('t1',0))-float(best_trade.get('entry_spot',0)):.2f} pts | RR: {best_trade.get('rr')} | MacroBias: {macro_bias} | StrictGate: {strict_gate}")
+        def _candidate_rank(c):
+            m_rank = _calc_moneyness_rank(c)
+            tier_val = int(c.get("tier", 2))
+            rr_val = float(c.get("rr") or 0.0)
+            ep = float(c.get("entry_spot") or 0.0)
+            t1 = float(c.get("t1") or 0.0)
+            net_profit = max(0.0, t1 - ep)
+            strike_val = float(c.get("strike", 0))
+            strike_dist = abs(strike_val - current_spot)
+            # Priority: 1. Moneyness (ATM/1-ITM first) -> 2. Tier (Gold/Core) -> 3. Profit -> 4. RR -> 5. Distance
+            return (m_rank, tier_val, -net_profit, -rr_val, strike_dist)
 
-            # ── VIX Regime Gate Check ──
-            vix_allowed, vix_reason, vix_val = evaluate_vix_regime(kite, tier_val=best_trade.get("tier", 2))
-            best_trade["vix_allowed"] = vix_allowed
-            best_trade["vix_reason"] = vix_reason
-            best_trade["vix_val"] = vix_val
-            if not vix_allowed:
-                logging.info(f"[VIX_REGIME_GATE] Execution capped for {symbol} ({best_trade['contract']}): {vix_reason} (loaded for scan display)")
+        pool.sort(key=_candidate_rank)
+        best_trade = pool[0]
+        logging.info(f"[ARBITRAGE WINNER] {symbol}: Selected {best_trade['contract']} ({best_trade['side']} | Strike {best_trade.get('strike')}) | Tier: {best_trade.get('tier_label')} | Profit: {float(best_trade.get('t1',0))-float(best_trade.get('entry_spot',0)):.2f} pts | RR: {best_trade.get('rr')} | MacroBias: {macro_bias} | StrictGate: {strict_gate}")
 
-            # ── Portfolio Risk & Sector Caps Check ──
-            cap_amount = float(cfg_engine.get("capital") or 100000.0)
-            p_allowed, p_reason, p_details = check_portfolio_risk_caps(
-                engine=engine_name,
-                symbol=symbol,
-                candidate_tier=best_trade.get("tier", 2),
-                capital=cap_amount,
-                live_positions=active_positions
-            )
-            best_trade["portfolio_risk_allowed"] = p_allowed
-            best_trade["portfolio_risk_reason"] = p_reason
-            if not p_allowed:
-                logging.info(f"[PORTFOLIO_RISK_CAP] Execution capped for {symbol} ({best_trade['contract']}): {p_reason} (loaded for scan display)")
-            
-            live_flag = paths.INDEX_LIVE_FLAG if engine_name == "index" else paths.NIFTY50_LIVE_FLAG
+        # ── VIX Regime Gate Check ──
+        vix_allowed, vix_reason, vix_val = evaluate_vix_regime(kite, tier_val=best_trade.get("tier", 2))
+        best_trade["vix_allowed"] = vix_allowed
+        best_trade["vix_reason"] = vix_reason
+        best_trade["vix_val"] = vix_val
+        if not vix_allowed:
+            logging.info(f"[VIX_REGIME_GATE] Execution capped for {symbol} ({best_trade['contract']}): {vix_reason} (loaded for scan display)")
+
+        # ── Portfolio Risk & Sector Caps Check ──
+        cap_amount = float(cfg_engine.get("capital") or 100000.0)
+        p_allowed, p_reason, p_details = check_portfolio_risk_caps(
+            engine=engine_name,
+            symbol=symbol,
+            candidate_tier=best_trade.get("tier", 2),
+            capital=cap_amount,
+            live_positions=active_positions
+        )
+        best_trade["portfolio_risk_allowed"] = p_allowed
+        best_trade["portfolio_risk_reason"] = p_reason
+        if not p_allowed:
+            logging.info(f"[PORTFOLIO_RISK_CAP] Execution capped for {symbol} ({best_trade['contract']}): {p_reason} (loaded for scan display)")
+        
+        live_flag = paths.INDEX_LIVE_FLAG if engine_name == "index" else paths.NIFTY50_LIVE_FLAG
+        is_live = False
+        try:
+            if os.path.exists(live_flag):
+                with open(live_flag, "r") as f:
+                    is_live = (f.read().strip() == "1")
+        except Exception:
             is_live = False
-            try:
-                if os.path.exists(live_flag):
-                    with open(live_flag, "r") as f:
-                        is_live = (f.read().strip() == "1")
-            except Exception:
-                is_live = False
 
-            now_dt = get_ist_now()
-            now_t = now_dt.time()
-            is_weekday = now_dt.weekday() < 5
-            if is_live and is_weekday and datetime_time(15, 20) < now_t <= datetime_time(15, 30):
-                logging.info(f"[MARKET_CLOSE_LOCK] New trade staging suppressed for {symbol} ({best_trade['contract']}): Live execution is ON and current time {now_t.strftime('%H:%M:%S')} is past 15:20 IST entry cutoff.")
-            else:
-                trade_db.stage_cycle_trade(engine_name, best_trade)
-                trades.append(best_trade)
-                log_fn(best_trade['contract'], best_trade['pattern'], timeframe_entry,
-                       "SCAN_MATCH", "STAGED",
-                       f"Side={best_trade.get('side')} Strike={best_trade.get('strike')} RR={best_trade.get('rr','')} Tier={best_trade.get('tier_label','')} MacroBias={macro_bias}",
-                       entry=best_trade['entry_spot'], sl=best_trade['current_sl'],
-                       target=best_trade.get('t3',''), rr=best_trade.get('rr',''),
-                       event_time=best_trade.get('entry_time',''))
+        now_dt = get_ist_now()
+        now_t = now_dt.time()
+        is_weekday = now_dt.weekday() < 5
+        if is_live and is_weekday and datetime_time(15, 20) < now_t <= datetime_time(15, 30):
+            logging.info(f"[MARKET_CLOSE_LOCK] New trade staging suppressed for {symbol} ({best_trade['contract']}): Live execution is ON and current time {now_t.strftime('%H:%M:%S')} is past 15:20 IST entry cutoff.")
+        else:
+            trade_db.stage_cycle_trade(engine_name, best_trade)
+            trades.append(best_trade)
+            log_fn(best_trade['contract'], best_trade['pattern'], timeframe_entry,
+                   "SCAN_MATCH", "STAGED",
+                   f"Side={best_trade.get('side')} Strike={best_trade.get('strike')} RR={best_trade.get('rr','')} Tier={best_trade.get('tier_label','')} MacroBias={macro_bias}",
+                   entry=best_trade['entry_spot'], sl=best_trade['current_sl'],
+                   target=best_trade.get('t3',''), rr=best_trade.get('rr',''),
+                   event_time=best_trade.get('entry_time',''))
 
     return trades
 

@@ -960,13 +960,22 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
             is_before_0945 = now_time_str < "09:45"
             is_start_0945 = "09:45" <= now_time_str <= "09:47"
 
+            # ── STALE / OUTLIER ENTRY PRICE GUARD ──
+            # Prevent false emergency SL triggers when entry_spot or current_sl has an extreme data mismatch vs live LTP
+            # (e.g. BSE entry 12.0 with SL 1.0 when live option market is trading at 0.60).
+            is_outlier_entry = False
+            entry_s = float(pos.get("entry_spot") or pos.get("entry_price") or 0.0)
+            if entry_s > 0 and live_ltp > 0:
+                if (entry_s / live_ltp > 3.0 or live_ltp / entry_s > 3.0) and pos.get("user_edited"):
+                    is_outlier_entry = True
+                    logging.warning(f"[STALE OUTLIER GUARD] {sym} entry {entry_s:.2f} diverges >300% from live LTP {live_ltp:.2f}. Skipping false emergency SL trigger.")
+
             if current_sl > 0:
                 sl_floor = get_sl_floor_time(pos)
                 if is_before_0945:
                     # Target monitoring runs from 09:15 AM, structural candle SL is skipped until 09:45 AM.
                     # CVE-3 FIX: Morning Catastrophic Circuit Breaker active 09:15-09:45 AM.
                     # Protects against catastrophic opening gap-downs (>= 25% for options, >= 12% for stocks).
-                    entry_s = float(pos.get("entry_spot") or pos.get("entry_price") or 0.0)
                     if entry_s > 0 and live_ltp > 0 and not is_outlier_entry:
                         if not is_stock and live_ltp <= (entry_s * 0.75):
                             sl_hit = True
@@ -1023,16 +1032,6 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                             logging.info(f"[RECLAIM_GUARD] Suppressed retroactive {sl_reason} for {sym} ({pos.get('contract')}): Trade has reclaimed above Entry ({live_ltp:.2f} >= {entry_s:.2f}) and latest completed bar closed at {latest_completed_close:.2f} > SL ({current_sl:.2f}). Trade remains active.")
                             sl_hit = False
                             sl_reason = ""
-
-            # ── STALE / OUTLIER ENTRY PRICE GUARD ──
-            # Prevent false emergency SL triggers when entry_spot or current_sl has an extreme data mismatch vs live LTP
-            # (e.g. BSE entry 12.0 with SL 1.0 when live option market is trading at 0.60).
-            is_outlier_entry = False
-            entry_s = float(pos.get("entry_spot") or pos.get("entry_price") or 0.0)
-            if entry_s > 0 and live_ltp > 0:
-                if (entry_s / live_ltp > 3.0 or live_ltp / entry_s > 3.0) and pos.get("user_edited"):
-                    is_outlier_entry = True
-                    logging.warning(f"[STALE OUTLIER GUARD] {sym} entry {entry_s:.2f} diverges >300% from live LTP {live_ltp:.2f}. Skipping false emergency SL trigger.")
 
             # 2) Emergency Hard Stop / Direct LTP evaluation (Active after 09:45 AM)
             if not sl_hit and current_sl > 0 and live_ltp > 0 and not is_before_0945 and not is_outlier_entry:

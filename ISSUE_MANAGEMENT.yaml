@@ -3719,4 +3719,22 @@ issues:
     2. SL Exits Risk, Not Symbol: Hitting an SL never disqualifies a ticker permanently. When a ticker establishes a fresh institutional sweep base (e.g. Hammer / LL Sweep at key support) and gives a confirmed D2 breakout, re-entry must be executed objectively without ego or hesitation.
     3. Moneyness & Theta Preservation: Prioritize At-The-Money (ATM) or In-The-Money (ITM) strikes on secondary multi-day recovery entries to eliminate accumulated Theta drag and capture full spot delta velocity.'
   status: RESOLVED
+- id: ISSUE-055
+  family: RUNTIME_STABILITY
+  date_reported: '2026-09-05'
+  title: Morning Circuit Breaker is_outlier_entry Unbound Scope & Resolve best_trade Empty Pool Guard
+  severity: HIGH
+  category: Runtime Error & Position Surveillance
+  symptom: '1) Active position monitor repeatedly crashed every second during 09:15-09:45 AM window with "Risk error: local variable is_outlier_entry referenced before assignment", preventing position SL & target surveillance for active positions.
+    2) Scan symbol evaluation raised "Error processing NMDC: cannot access local variable best_trade where it is not associated with a value" when all strikes were filtered out by Moneyness Guard.'
+  root_cause: '1) In position_monitor.py, is_outlier_entry was used in the morning circuit breaker check (line 970) before being computed at line 1030.
+    2) In resolve.py, when pool became empty after Far OTM Moneyness Guard filtering or Strict Macro Gate suppression, execution proceeded to log and stage best_trade without checking if pool was non-empty.'
+  affected_files:
+  - common/position_monitor.py
+  - common/resolve.py
+  - ISSUE_MANAGEMENT.yaml
+  resolution: '1. In position_monitor.py, hoisted is_outlier_entry and entry_s computation above the if current_sl > 0 block, ensuring valid initialization before morning catastrophic circuit breaker evaluation.
+    2. In resolve.py, added early return trades checks when pool is empty following Strict Macro Gate or Moneyness Guard filtering, preventing UnboundLocalError on best_trade.'
+  status: RESOLVED
+
 
