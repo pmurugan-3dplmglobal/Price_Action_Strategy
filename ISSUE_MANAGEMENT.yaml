@@ -5,6 +5,35 @@ meta:
   purpose: Document operational failures, root causes, regression fixes, and system enhancements for v2.1.0-stable.
   historical_archive: archive/ISSUE_HISTORY_ARCHIVE.yaml (Preserves 84 resolved legacy issues prior to 2026-08-25)
 issues:
+- id: ISSUE-088
+  title: Option vs Stock Cash Equity Parity Alignment (Short Selling MIS Order Execution, SL/Target Derivation, Monitor Risk PnL & Direction Serialization)
+  severity: HIGH
+  category: Strategy Execution, Stock vs Option Domain Parity & Risk Management
+  family: STOCK_OPTION_PARITY
+  date_reported: '2026-09-05'
+  symptom: '1. In Stock Engine (/api/buy-scanned-trade), short selling equity placed SELL CNC orders rather than PRODUCT_MIS, and did not store timeframe, quantity, position_size, or lot_size in trade_data.
+    2. Manual exits (/api/exit-position) called close_position (which sends SELL) rather than close_stock_position (which buys to cover shorts with PRODUCT_MIS).
+    3. Monitor risk loop (position_monitor) evaluated targets and breakeven trailing for shorts using long formulas (hp >= t1 instead of lp <= t1), and calculated inverted SL PnL.
+    4. derive_sl_targets_for_contract had no side awareness for equity, computing bullish SL below entry and targets above entry for bearish short setups.
+    5. Scanner results with Direction: "BEAR" were serialized as direction: "SELL", causing chart anchor markers and levels to fail in index.html.'
+  root_cause: 'Asymmetry between Option Long Buyer invariant (where CE and PE contracts are both bought and rise in profit) and Cash Equity mechanics (where bearish trades short cash equities via PRODUCT_MIS, profit when price falls, require BUY orders to exit, and have targets below entry and SL above entry).'
+  affected_files:
+  - common/position_monitor.py
+  - common/resolve.py
+  - Trade_Stock/app_Stock_Trade.py
+  - Trade_Stock/blueprints/routes_charts.py
+  - Trade_Stock/blueprints/routes_positions.py
+  - Trade_Stock/stock_reversal_scanner.py
+  - Trade_Stock/templates/index.html
+  - scratch/run_full_regression_test.py
+  resolution: '1. Implemented complete short stock support in close_stock_position: identifies Zerodha negative net positions (live_held < 0), routes TRANSACTION_TYPE_BUY with PRODUCT_MIS at ask * 1.005, and accepts live and product_type aliases.
+    2. Updated monitor_active_positions target exits and trailing for is_short_stock: evaluates lp <= (t_val + buf), +BE trailing down to entry * 0.98, and computes correct short PnL ((entry - exit) / entry * 100).
+    3. Updated derive_sl_targets_for_contract with side="BULL"|"BEAR": routes bearish equities to scan_anchor_bcd_breakout_bearish and find_profit_targets_bearish with SL above entry and targets below entry.
+    4. Updated /api/buy-scanned-trade and /api/exit-position in app_Stock_Trade.py and blueprints/routes_positions.py: records timeframe, position_size, lot_size, calls close_stock_position on NSE, and purges all stock and bear display paths.
+    5. Fixed direction serialization in stock_reversal_scanner.py (r.get("Direction") or r.get("direction") or PROFILE["side"]).
+    6. Updated Trade_Stock/templates/index.html: dynamic side/direction in chart buttons, short position P&L ((entry - ltp) * qty), and direction-aware chart markers (arrowDown / belowBar for bearish breakout D).
+    7. Added TEST 21 to scratch/run_full_regression_test.py validating all stock vs option parity invariants with 100% pass rate.'
+  status: RESOLVED
 - id: FEATURE-038
   title: Option Contract VWAP +2σ Overpay Guard & D1/D2 Regime-Aware Spot Confluence
   severity: ENHANCEMENT

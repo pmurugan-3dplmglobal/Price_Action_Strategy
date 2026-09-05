@@ -51,24 +51,36 @@ def api_analyze_trade():
             timeframe_entry = "15minute" if timeframe in ["15minute", "75min", "60minute"] else timeframe
             timeframe_anchor = "75min" if timeframe in ["15minute", "75min"] else ("60minute" if timeframe == "60minute" else timeframe)
 
-        analysis = derive_sl_targets_for_contract(kite, symbol, entry_price, timeframe_entry, timeframe_anchor)
+        side = str(data.get("side") or data.get("direction") or "BULL").strip().upper()
+        is_bear = side in ["BEAR", "SELL", "PE"] or str(data.get("direction", "")).upper() == "BEAR" or engine in ["bear_trade", "daily_bear", "weekly_bear"]
+        side_param = "BEAR" if is_bear else "BULL"
+
+        analysis = derive_sl_targets_for_contract(kite, symbol, entry_price, timeframe_entry, timeframe_anchor, side=side_param)
         if not analysis:
-            sl_val = round(entry_price * 0.90, 2) if entry_price > 0 else 0.0
+            if is_bear:
+                sl_val = round(entry_price * 1.10, 2) if entry_price > 0 else 0.0
+            else:
+                sl_val = round(entry_price * 0.90, 2) if entry_price > 0 else 0.0
             analysis = {
                 "entry_price": entry_price,
                 "current_sl": sl_val,
                 "t1": None, "t2": None, "t3": None,
-                "pattern": "NEGATION_ESTIMATED"
+                "pattern": "NEGATION_ESTIMATED_BEAR" if is_bear else "NEGATION_ESTIMATED"
             }
 
         resolved_entry = float(analysis.get("entry_price") or entry_price or 0.0)
-        sl_val = analysis.get("current_sl", round(resolved_entry * 0.90, 2) if resolved_entry > 0 else 0.0)
+        default_sl = round(resolved_entry * 1.10, 2) if is_bear else round(resolved_entry * 0.90, 2)
+        sl_val = analysis.get("current_sl", default_sl if resolved_entry > 0 else 0.0)
         t1_val = analysis.get("t1")
         t2_val = analysis.get("t2")
         t3_val = analysis.get("t3")
 
-        risk = (resolved_entry - sl_val) if (resolved_entry > 0 and sl_val < resolved_entry) else 0
-        rr = round((t1_val - resolved_entry) / risk, 2) if (t1_val and risk > 0) else 0.0
+        if is_bear:
+            risk = (sl_val - resolved_entry) if (resolved_entry > 0 and sl_val > resolved_entry) else 0
+            rr = round((resolved_entry - t1_val) / risk, 2) if (t1_val and risk > 0) else 0.0
+        else:
+            risk = (resolved_entry - sl_val) if (resolved_entry > 0 and sl_val < resolved_entry) else 0
+            rr = round((t1_val - resolved_entry) / risk, 2) if (t1_val and risk > 0) else 0.0
 
         return jsonify({
             "ok": True,
@@ -80,6 +92,8 @@ def api_analyze_trade():
             "t2": t2_val if t2_val else "N/A",
             "t3": t3_val if t3_val else "N/A",
             "rr": rr,
+            "direction": "BEAR" if is_bear else "BULL",
+            "side": "BEAR" if is_bear else "BULL",
             "pattern": analysis.get("pattern", "NEGATION_DERIVED"),
             "engine": engine
         })

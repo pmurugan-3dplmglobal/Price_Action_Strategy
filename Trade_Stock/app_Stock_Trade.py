@@ -1796,6 +1796,8 @@ def api_buy_scanned_trade():
                 logging.info(f"[PRICE ALIGN] Overriding divergent entry_spot {entry_spot} with live option LTP {ltp} for {contract}")
                 entry_spot = ltp
 
+        tf_val = data.get("timeframe") or data.get("tf") or "30minute"
+        qty_val = int(data.get("quantity") or data.get("position_size") or lot_size or 1)
         trade_data = {
             "contract": contract,
             "entry_spot": entry_spot,
@@ -1804,9 +1806,14 @@ def api_buy_scanned_trade():
             "t2": t2,
             "t3": t3,
             "side": side,
+            "direction": direction or ("BEAR" if is_sell else "BULL"),
             "pattern": "1CLICK_SHORT" if is_sell else "1CLICK_BUY",
             "position_type": "stock" if exch == "NSE" else "option",
             "product": prod if _kite_session else ("MIS" if is_sell else "CNC"),
+            "timeframe": tf_val,
+            "quantity": qty_val,
+            "position_size": qty_val,
+            "lot_size": lot_size,
             "user_edited": True,
             "entry_time": dt.now().isoformat()
         }
@@ -1887,12 +1894,24 @@ def api_exit_position():
                     "exchange": exch,
                     "quantity": data.get("quantity", 0)
                 }
-                from common.trading_core import close_position as shared_close
-                shared_close(_kite_session, pos_obj, True)
+                if exch == "NSE":
+                    from common.position_monitor import close_stock_position
+                    close_stock_position(_kite_session, pos_obj, True)
+                else:
+                    from common.trading_core import close_position as shared_close
+                    shared_close(_kite_session, pos_obj, True)
             except Exception as k_err:
                 logging.warning(f"Live exit execution warning for {contract}: {k_err}")
 
-        for disp_path in [SCAN_DISPLAY_FILE, SCAN_DISPLAY_INDEX_FILE]:
+        all_disp_paths = [
+            SCAN_DISPLAY_FILE,
+            SCAN_DISPLAY_INDEX_FILE,
+            paths.SCAN_DISPLAY_STOCK_FILE,
+            paths.SCAN_DISPLAY_BEAR_FILE,
+            paths.SCAN_DISPLAY_WEEKLY_FILE,
+            paths.SCAN_DISPLAY_WEEKLY_BEAR_FILE,
+        ]
+        for disp_path in all_disp_paths:
             if os.path.exists(disp_path):
                 try:
                     with open(disp_path, "r", encoding="utf-8") as f:
@@ -1926,7 +1945,15 @@ def api_exit_all_positions():
                 })
                 exited_count += 1
 
-        for disp_path in [SCAN_DISPLAY_FILE, SCAN_DISPLAY_INDEX_FILE]:
+        all_disp_paths = [
+            SCAN_DISPLAY_FILE,
+            SCAN_DISPLAY_INDEX_FILE,
+            paths.SCAN_DISPLAY_STOCK_FILE,
+            paths.SCAN_DISPLAY_BEAR_FILE,
+            paths.SCAN_DISPLAY_WEEKLY_FILE,
+            paths.SCAN_DISPLAY_WEEKLY_BEAR_FILE,
+        ]
+        for disp_path in all_disp_paths:
             if os.path.exists(disp_path):
                 try:
                     with open(disp_path, "r", encoding="utf-8") as f:
@@ -2158,24 +2185,36 @@ def api_analyze_trade():
             timeframe_entry = "15minute" if timeframe in ["15minute", "75min", "60minute"] else timeframe
             timeframe_anchor = "75min" if timeframe in ["15minute", "75min"] else ("60minute" if timeframe == "60minute" else timeframe)
 
-        analysis = derive_sl_targets_for_contract(kite, symbol, entry_price, timeframe_entry, timeframe_anchor)
+        side = str(data.get("side") or data.get("direction") or "BULL").strip().upper()
+        is_bear = side in ["BEAR", "SELL", "PE"] or str(data.get("direction", "")).upper() == "BEAR" or engine in ["bear_trade", "daily_bear", "weekly_bear"]
+        side_param = "BEAR" if is_bear else "BULL"
+
+        analysis = derive_sl_targets_for_contract(kite, symbol, entry_price, timeframe_entry, timeframe_anchor, side=side_param)
         if not analysis:
-            sl_val = round(entry_price * 0.90, 2) if entry_price > 0 else 0.0
+            if is_bear:
+                sl_val = round(entry_price * 1.10, 2) if entry_price > 0 else 0.0
+            else:
+                sl_val = round(entry_price * 0.90, 2) if entry_price > 0 else 0.0
             analysis = {
                 "entry_price": entry_price,
                 "current_sl": sl_val,
                 "t1": None, "t2": None, "t3": None,
-                "pattern": "NEGATION_ESTIMATED"
+                "pattern": "NEGATION_ESTIMATED_BEAR" if is_bear else "NEGATION_ESTIMATED"
             }
 
         resolved_entry = float(analysis.get("entry_price") or entry_price or 0.0)
-        sl_val = analysis.get("current_sl", round(resolved_entry * 0.90, 2) if resolved_entry > 0 else 0.0)
+        default_sl = round(resolved_entry * 1.10, 2) if is_bear else round(resolved_entry * 0.90, 2)
+        sl_val = analysis.get("current_sl", default_sl if resolved_entry > 0 else 0.0)
         t1_val = analysis.get("t1")
         t2_val = analysis.get("t2")
         t3_val = analysis.get("t3")
 
-        risk = (resolved_entry - sl_val) if (resolved_entry > 0 and sl_val < resolved_entry) else 0
-        rr = round((t1_val - resolved_entry) / risk, 2) if (t1_val and risk > 0) else 0.0
+        if is_bear:
+            risk = (sl_val - resolved_entry) if (resolved_entry > 0 and sl_val > resolved_entry) else 0
+            rr = round((resolved_entry - t1_val) / risk, 2) if (t1_val and risk > 0) else 0.0
+        else:
+            risk = (resolved_entry - sl_val) if (resolved_entry > 0 and sl_val < resolved_entry) else 0
+            rr = round((t1_val - resolved_entry) / risk, 2) if (t1_val and risk > 0) else 0.0
 
         return jsonify({
             "ok": True,
@@ -2187,6 +2226,8 @@ def api_analyze_trade():
             "t2": t2_val if t2_val else "N/A",
             "t3": t3_val if t3_val else "N/A",
             "rr": rr,
+            "direction": "BEAR" if is_bear else "BULL",
+            "side": "BEAR" if is_bear else "BULL",
             "pattern": analysis.get("pattern", "NEGATION_DERIVED"),
             "engine": engine
         })

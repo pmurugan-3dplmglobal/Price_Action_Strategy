@@ -56,8 +56,10 @@ architecture:
       automated_strategy_exporter.py: "Plan 1 Multi-Timeframe Automated Daily Exporter (Index: 3m/5m/15m, Stock Option: 15m/60m)"
       run_export_scheduler_daemon.py: "Background Scheduler Daemon for 10:30 AM, 1:00 PM, and 3:15 PM exports"
     Trade_Stock:
-      app_Stock_Trade.py: "Stock Trade Dashboard (port 5051) with 1-Click BUY button on Scan Tab (/api/buy-scanned-trade)"
+      app_Stock_Trade.py: "Stock Trade Dashboard (port 5051) with 1-Click BUY/SHORT (MIS) button on Scan Tab (/api/buy-scanned-trade), short stock P&L calculations, and interactive TV chart modal with direction-aware markers."
       stock_bullish_reversal_scanner.py: "Stock Bullish Reversal Scanner & Exporter"
+      stock_bearish_reversal_scanner.py: "Stock Bearish Reversal Scanner & Exporter"
+      stock_reversal_scanner.py: "Unified Stock Reversal Scanner engine with direction serialization and VIX/portfolio risk gates"
     docs:
       description: "Tactical Knowledge Base, Continuous Learning Playbook, and Architecture Specifications"
       LIVE_TRADING_EXPERIENCE_PLAYBOOK.md: "Continuous Live Trading Experience Playbook and Market Lessons Journal capturing day-by-day execution takeaways, failure root causes (e.g. Option Chart Illusion, Spot 44 EMA Breakdown), and tactical engine enhancements"

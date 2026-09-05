@@ -183,29 +183,77 @@ def api_buy_scanned_trade():
                 ltp = float(q.get(q_key, {}).get("last_price", 0))
                 depth = q.get(q_key, {}).get("depth", {}).get("sell", [])
                 bm = float(data.get("benchmark") or 0)
-                if bm > 0:
-                    price = round(bm * 1.005, 1)
+
+                direction_val = str(data.get("direction") or "").upper()
+                is_sell = str(side).upper() in ["SELL", "PE", "BEAR"] or direction_val == "BEAR"
+                txn_type = _app._kite_session.TRANSACTION_TYPE_SELL if is_sell else _app._kite_session.TRANSACTION_TYPE_BUY
+                if is_sell:
+                    prod = _app._kite_session.PRODUCT_MIS
                 else:
-                    ask = float(depth[0].get("price", 0)) if (depth and len(depth) > 0) else 0
-                    price = round((ask if ask > 0 else ltp) * 1.005, 1)
-                    if price <= 0:
-                        price = round(entry_spot * 1.005, 1)
+                    prod = _app._kite_session.PRODUCT_CNC if exch == "NSE" else _app._kite_session.PRODUCT_NRML
 
-                from common.trading_core import STOCK_REGISTRY
+                if is_sell:
+                    depth_buy = q.get(q_key, {}).get("depth", {}).get("buy", [])
+                    bid = float(depth_buy[0].get("price", 0)) if (depth_buy and len(depth_buy) > 0) else 0
+                    if bm > 0:
+                        price = round(bm * 0.995, 1)
+                    else:
+                        price = round((bid if bid > 0 else ltp) * 0.995, 1)
+                        if price <= 0:
+                            price = round(entry_spot * 0.995, 1)
+                else:
+                    if bm > 0:
+                        price = round(bm * 1.005, 1)
+                    else:
+                        ask = float(depth[0].get("price", 0)) if (depth and len(depth) > 0) else 0
+                        price = round((ask if ask > 0 else ltp) * 1.005, 1)
+                        if price <= 0:
+                            price = round(entry_spot * 1.005, 1)
+
+                from common.trading_core import STOCK_REGISTRY, is_market_open, check_bid_ask_spread_liquidity
                 lot_size = STOCK_REGISTRY.get(symbol, {}).get("lot_size", 1) if exch != "NSE" else 1
-                prod = _app._kite_session.PRODUCT_CNC if exch == "NSE" else _app._kite_session.PRODUCT_NRML
 
-                order_id = _app._kite_session.place_order(
-                    variety=_app._kite_session.VARIETY_REGULAR,
-                    tradingsymbol=contract,
-                    exchange=exch,
-                    transaction_type=_app._kite_session.TRANSACTION_TYPE_BUY,
-                    quantity=lot_size,
-                    order_type=_app._kite_session.ORDER_TYPE_LIMIT,
-                    price=price,
-                    product=prod
+                force_order = bool(data.get("force", False))
+                liq_ok, spread_val, liq_msg, _ = check_bid_ask_spread_liquidity(
+                    kite=_app._kite_session, exchange=exch, contract=contract, max_spread_pct=0.025
                 )
-                logging.info(f"[1-CLICK BUY] Placed buy order for {contract} on {exch} (Order ID: {order_id})")
+                action_tag = "SHORT" if is_sell else "BUY"
+                if not liq_ok and not force_order:
+                    logging.warning(f"[1-CLICK {action_tag} LIQUIDITY WARNING] {contract}: {liq_msg}")
+                    return jsonify({"ok": False, "error": f"Liquidity Trap Alert: {liq_msg}"}), 400
+
+                market_open = is_market_open()
+                order_variety = _app._kite_session.VARIETY_REGULAR if market_open else _app._kite_session.VARIETY_AMO
+
+                try:
+                    order_id = _app._kite_session.place_order(
+                        variety=order_variety,
+                        tradingsymbol=contract,
+                        exchange=exch,
+                        transaction_type=txn_type,
+                        quantity=lot_size,
+                        order_type=_app._kite_session.ORDER_TYPE_LIMIT,
+                        price=price,
+                        product=prod
+                    )
+                    v_label = "regular order" if order_variety == _app._kite_session.VARIETY_REGULAR else "After Market Order (AMO)"
+                    logging.info(f"[1-CLICK {action_tag}] Placed {v_label} for {contract} on {exch} (Order ID: {order_id})")
+                except Exception as first_err:
+                    if order_variety == _app._kite_session.VARIETY_REGULAR and "After Market Order" in str(first_err):
+                        logging.info(f"[1-CLICK {action_tag}] Regular order rejected; retrying with VARIETY_AMO for {contract}...")
+                        order_id = _app._kite_session.place_order(
+                            variety=_app._kite_session.VARIETY_AMO,
+                            tradingsymbol=contract,
+                            exchange=exch,
+                            transaction_type=txn_type,
+                            quantity=lot_size,
+                            order_type=_app._kite_session.ORDER_TYPE_LIMIT,
+                            price=price,
+                            product=prod
+                        )
+                        logging.info(f"[1-CLICK {action_tag}] Placed After Market Order (AMO) for {contract} on {exch} (Order ID: {order_id})")
+                    else:
+                        raise first_err
             except Exception as k_err:
                 logging.warning(f"[1-CLICK BUY KITE ORDER WARNING] {contract}: {k_err}")
                 return jsonify({"ok": False, "error": f"Kite Order Placement Failed: {k_err}"}), 400
@@ -245,6 +293,8 @@ def api_buy_scanned_trade():
                 logging.info(f"[PRICE ALIGN] Overriding divergent entry_spot {entry_spot} with live option LTP {ltp} for {contract}")
                 entry_spot = ltp
 
+        tf_val = data.get("timeframe") or data.get("tf") or "30minute"
+        qty_val = int(data.get("quantity") or data.get("position_size") or lot_size or 1)
         trade_data = {
             "contract": contract,
             "entry_spot": entry_spot,
@@ -253,8 +303,14 @@ def api_buy_scanned_trade():
             "t2": t2,
             "t3": t3,
             "side": side,
-            "pattern": "1CLICK_BUY",
+            "direction": direction or ("BEAR" if is_sell else "BULL"),
+            "pattern": "1CLICK_SHORT" if is_sell else "1CLICK_BUY",
             "position_type": "stock" if exch == "NSE" else "option",
+            "product": prod if _app._kite_session else ("MIS" if is_sell else "CNC"),
+            "timeframe": tf_val,
+            "quantity": qty_val,
+            "position_size": qty_val,
+            "lot_size": lot_size,
             "user_edited": True,
             "entry_time": dt.now().isoformat()
         }
@@ -277,9 +333,10 @@ def api_buy_scanned_trade():
         tid, _created = trade_db.create_trade(engine, symbol, trade_data)
         clear_executed_exit(contract)
 
+        action_name = "SHORT (MIS)" if is_sell else "BUY"
         return jsonify({
             "ok": True,
-            "message": f"Successfully placed 1-Click BUY for {contract}" + (f" (Order ID: {order_id})" if order_id else ""),
+            "message": f"Successfully placed 1-Click {action_name} for {contract}" + (f" (Order ID: {order_id})" if order_id else ""),
             "trade_id": tid
         })
     except Exception as e:
@@ -334,12 +391,24 @@ def api_exit_position():
                     "exchange": exch,
                     "quantity": data.get("quantity", 0)
                 }
-                from common.trading_core import close_position as shared_close
-                shared_close(_app._kite_session, pos_obj, True)
+                if exch == "NSE":
+                    from common.position_monitor import close_stock_position
+                    close_stock_position(_app._kite_session, pos_obj, True)
+                else:
+                    from common.trading_core import close_position as shared_close
+                    shared_close(_app._kite_session, pos_obj, True)
             except Exception as k_err:
                 logging.warning(f"Live exit execution warning for {contract}: {k_err}")
 
-        for disp_path in [_app.SCAN_DISPLAY_FILE, _app.SCAN_DISPLAY_INDEX_FILE]:
+        all_disp_paths = [
+            _app.SCAN_DISPLAY_FILE,
+            _app.SCAN_DISPLAY_INDEX_FILE,
+            paths.SCAN_DISPLAY_STOCK_FILE,
+            paths.SCAN_DISPLAY_BEAR_FILE,
+            paths.SCAN_DISPLAY_WEEKLY_FILE,
+            paths.SCAN_DISPLAY_WEEKLY_BEAR_FILE,
+        ]
+        for disp_path in all_disp_paths:
             if os.path.exists(disp_path):
                 try:
                     with open(disp_path, "r", encoding="utf-8") as f:
@@ -375,7 +444,15 @@ def api_exit_all_positions():
                 })
                 exited_count += 1
 
-        for disp_path in [_app.SCAN_DISPLAY_FILE, _app.SCAN_DISPLAY_INDEX_FILE]:
+        all_disp_paths = [
+            _app.SCAN_DISPLAY_FILE,
+            _app.SCAN_DISPLAY_INDEX_FILE,
+            paths.SCAN_DISPLAY_STOCK_FILE,
+            paths.SCAN_DISPLAY_BEAR_FILE,
+            paths.SCAN_DISPLAY_WEEKLY_FILE,
+            paths.SCAN_DISPLAY_WEEKLY_BEAR_FILE,
+        ]
+        for disp_path in all_disp_paths:
             if os.path.exists(disp_path):
                 try:
                     with open(disp_path, "r", encoding="utf-8") as f:

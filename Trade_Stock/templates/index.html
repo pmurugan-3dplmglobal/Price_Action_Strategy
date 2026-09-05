@@ -703,9 +703,11 @@
                 const isExpired = expiredSet.has(cleanContract) || (t.symbol && expiredSet.has(cleanSymbol));
                 const isExitDone = execExits[cleanContract] || (t.symbol && execExits[cleanSymbol]) || execExits[t.contract || ''] || false;
 
-                const chartCell = `<td style="text-align:center"><button class="btn-chart" onclick="openChartModal('${t.contract||t.symbol||''}','${t.symbol||''}','${t.side||'CE'}',${t.entry_spot||t.entry||0},${t.current_sl||t.sl||0},${t.t1||0},${t.t2||0},${t.t3||0},'${res}','${t.candle_a_time||''}','${t.entry_time||''}',${t.benchmark||0},${t.anchor_floor||0},'${t.direction||'BULL'}','${t.timeframe||''}')" style="background:#1f6feb;color:#ffffff;border:none;padding:4px 8px;border-radius:4px;font-weight:bold;cursor:pointer;font-size:11px;">📈 Chart</button></td>`;
-                let actCell = '';
                 const isSellTrade = (String(t.side || '').toUpperCase() === 'SELL' || String(t.side || '').toUpperCase() === 'PE' || String(t.direction || '').toUpperCase() === 'BEAR');
+                const sideStr = t.side || (isSellTrade ? 'SELL' : 'BUY');
+                const dirStr = t.direction || (isSellTrade ? 'BEAR' : 'BULL');
+                const chartCell = `<td style="text-align:center"><button class="btn-chart" onclick="openChartModal('${t.contract||t.symbol||''}','${t.symbol||''}','${sideStr}',${t.entry_spot||t.entry||0},${t.current_sl||t.sl||0},${t.t1||0},${t.t2||0},${t.t3||0},'${res}','${t.candle_a_time||''}','${t.entry_time||''}',${t.benchmark||0},${t.anchor_floor||0},'${dirStr}','${t.timeframe||''}')" style="background:#1f6feb;color:#ffffff;border:none;padding:4px 8px;border-radius:4px;font-weight:bold;cursor:pointer;font-size:11px;">📈 Chart</button></td>`;
+                let actCell = '';
                 if (isExpired || isExitDone) {
                     actCell = '<td style="text-align:center"><button disabled class="btn-expired" style="background:' + (isExpired ? '#8957e5' : '#d29922') + ';color:#ffffff;border:none;padding:4px 10px;border-radius:4px;font-weight:bold;cursor:not-allowed;font-size:11px">' + (isExpired ? 'EXPIRED' : 'EXITED') + '</button></td>';
                 } else if (isBought) {
@@ -1111,14 +1113,15 @@
                     const tokenKey = t.token || t.contract || t.symbol;
                     const fallbackLtp = tokenKey ? (ltpData[tokenKey] || ltpData[t.contract] || ltpData[t.symbol] || '') : '';
                     const displayLtp = (t.ltp !== undefined && t.ltp !== null && t.ltp > 0) ? t.ltp : fallbackLtp;
+                    const isSellPos = (t.side && ['SELL', 'PE', 'BEAR'].includes(String(t.side).toUpperCase())) || (t.direction && String(t.direction).toUpperCase() === 'BEAR');
                     let pnlStr = '';
                     if (t.pnl !== undefined && t.pnl !== null && t.quantity > 0) {
                         const rawPnl = parseFloat(t.pnl);
-                        const pctPnl = (t.entry_spot && t.entry_spot > 0) ? ((displayLtp - t.entry_spot) / t.entry_spot * 100).toFixed(2) : '0.00';
+                        const pctPnl = (t.entry_spot && t.entry_spot > 0) ? ((isSellPos ? (t.entry_spot - displayLtp) : (displayLtp - t.entry_spot)) / t.entry_spot * 100).toFixed(2) : '0.00';
                         pnlStr = `${rawPnl >= 0 ? '+' : ''}${rawPnl.toFixed(2)} (${pctPnl}%)`;
                     } else if (displayLtp && t.entry_spot && t.entry_spot > 0) {
-                        const rawPnl = (displayLtp - t.entry_spot) * (t.quantity || 1);
-                        const pctPnl = ((displayLtp - t.entry_spot) / t.entry_spot * 100).toFixed(2);
+                        const rawPnl = (isSellPos ? (t.entry_spot - displayLtp) : (displayLtp - t.entry_spot)) * (t.quantity || 1);
+                        const pctPnl = ((isSellPos ? (t.entry_spot - displayLtp) : (displayLtp - t.entry_spot)) / t.entry_spot * 100).toFixed(2);
                         pnlStr = `${rawPnl >= 0 ? '+' : ''}${rawPnl.toFixed(2)} (${pctPnl}%)`;
                     } else if (t.pnl_percent !== undefined && t.pnl_percent !== null) {
                         pnlStr = `${t.pnl_percent}%`;
@@ -1135,7 +1138,9 @@
                     const uid = 'pos_' + (t.symbol || 'no_sym') + '_' + (t.source || '');
                     const es = editStates[uid];
                     let slCell, t1Cell, t2Cell, t3Cell, entryCell, actCell;
-                    const chartCellPos = `<td style="text-align:center"><button class="btn-chart" onclick="openChartModal('${t.contract||t.symbol||''}','${t.symbol||''}','${t.side||'CE'}',${t.entry_spot||0},${t.current_sl||t.sl||0},${t.t1||0},${t.t2||0},${t.t3||0},'${t.pattern||''}','${t.candle_a_time||''}','${t.entry_time||''}',${t.benchmark||0},${t.anchor_floor||0},'${t.direction||'BULL'}','${t.timeframe||''}')" style="background:#1f6feb;color:#ffffff;border:none;padding:2px 6px;border-radius:4px;font-size:10px;cursor:pointer;font-weight:600;">📈 Chart</button></td>`;
+                    const sidePosStr = t.side || (isSellPos ? 'SELL' : 'BUY');
+                    const dirPosStr = t.direction || (isSellPos ? 'BEAR' : 'BULL');
+                    const chartCellPos = `<td style="text-align:center"><button class="btn-chart" onclick="openChartModal('${t.contract||t.symbol||''}','${t.symbol||''}','${sidePosStr}',${t.entry_spot||0},${t.current_sl||t.sl||0},${t.t1||0},${t.t2||0},${t.t3||0},'${t.pattern||''}','${t.candle_a_time||''}','${t.entry_time||''}',${t.benchmark||0},${t.anchor_floor||0},'${dirPosStr}','${t.timeframe||''}')" style="background:#1f6feb;color:#ffffff;border:none;padding:2px 6px;border-radius:4px;font-size:10px;cursor:pointer;font-weight:600;">📈 Chart</button></td>`;
                     if (es && es.active) {
                         const eng2 = t.engine === 'Index' ? 'index' : 'nifty50';
                         entryCell = `<td style="color:#8b949e;">${es.entry || '---'} 🔒</td>`;
@@ -2495,10 +2500,10 @@
                         for (let i = idxA + 1; i <= scanEnd; i++) { if (candles[i].close < aLow) { seqBreach = true; break; } }
                     }
 
-                    markers.push({ time: candles[idxA].time, position: 'belowBar', color: '#3fb950', shape: 'circle', text: 'A (Anchor)' });
-                    if (idxB !== -1) markers.push({ time: candles[idxB].time, position: 'aboveBar', color: '#58a6ff', shape: 'square', text: 'B (Breakout)' });
-                    if (idxC !== -1) markers.push({ time: candles[idxC].time, position: 'belowBar', color: '#d29922', shape: 'circle', text: 'C (Retest)' });
-                    if (idxD !== -1) markers.push({ time: candles[idxD].time, position: 'aboveBar', color: '#2ea043', shape: 'arrowUp', text: 'D (Confirm)' });
+                    markers.push({ time: candles[idxA].time, position: anchorDirection === 'BEAR' ? 'aboveBar' : 'belowBar', color: '#3fb950', shape: 'circle', text: 'A (Anchor)' });
+                    if (idxB !== -1) markers.push({ time: candles[idxB].time, position: anchorDirection === 'BEAR' ? 'belowBar' : 'aboveBar', color: '#58a6ff', shape: 'square', text: 'B (Breakout)' });
+                    if (idxC !== -1) markers.push({ time: candles[idxC].time, position: anchorDirection === 'BEAR' ? 'aboveBar' : 'belowBar', color: '#d29922', shape: 'circle', text: 'C (Retest)' });
+                    if (idxD !== -1) markers.push({ time: candles[idxD].time, position: anchorDirection === 'BEAR' ? 'belowBar' : 'aboveBar', color: anchorDirection === 'BEAR' ? '#f85149' : '#2ea043', shape: anchorDirection === 'BEAR' ? 'arrowDown' : 'arrowUp', text: 'D (Confirm)' });
                     if (seqBreach) {
                         markers.push({ time: candles[idxD !== -1 ? idxD : idxDcap].time, position: 'belowBar', color: '#f85149', shape: 'circle', text: '⚠ Seq broken' });
                     }

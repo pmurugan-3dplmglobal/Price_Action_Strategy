@@ -278,28 +278,36 @@ def sync_kite_positions(kite, registry, positions_dict, lock, engine, timeframe_
     except Exception as e:
         logging.warning(f"Kite position sync failed: {e}")
 
-def derive_sl_targets_for_contract(kite, contract, entry_price, timeframe_entry="30minute", timeframe_anchor="30minute"):
+def derive_sl_targets_for_contract(kite, contract, entry_price, timeframe_entry="30minute", timeframe_anchor="30minute", side="BULL"):
     """
-    Derive SL and Targets for a specific contract.
-    - Targets are derived strictly from Negation Theory (find_profit_targets non-negated swing high levels).
-    - SL Exception for Manual Entries: If pattern SL is looser than 10% or missing, SL is set to Entry_Price * 0.90 (10% max loss).
+    Derive SL and Targets for a specific contract or equity symbol.
+    - Options: Long option buyer invariant (both CE and PE rise in profit). Targets above entry, SL below entry.
+    - Stocks: Bullish buys equity (targets above, SL below). Bearish shorts equity (targets below, SL above).
+    - Targets derived strictly from Negation Theory (find_profit_targets or find_profit_targets_bearish).
+    - SL Exception for Manual Entries: If pattern SL is missing or looser than 10%, capped at 10% max loss.
     """
+    contract_str = str(contract).upper()
+    side_clean = str(side or "BULL").upper()
+    if "SENSEX" in contract_str or "BSE" in contract_str:
+        exch = "BFO"
+    elif "CE" in contract_str or "PE" in contract_str or "NIFTY" in contract_str or "BANK" in contract_str:
+        exch = "NFO"
+    else:
+        exch = "NSE"
+
+    is_bear_equity = (exch == "NSE" and side_clean in ["BEAR", "SELL", "PE"])
+
     try:
         ref_now = dt.now()
         from_d = (ref_now - timedelta(days=30)).strftime("%Y-%m-%d")
         to_d = ref_now.strftime("%Y-%m-%d")
-        
-        contract_str = str(contract).upper()
-        if "SENSEX" in contract_str or "BSE" in contract_str:
-            exch = "BFO"
-        elif "CE" in contract_str or "PE" in contract_str or "NIFTY" in contract_str or "BANK" in contract_str:
-            exch = "NFO"
-        else:
-            exch = "NSE"
-            
+
         quote_key = f"{exch}:{contract}"
         ep = float(entry_price) if (entry_price and float(entry_price) > 0) else 0.0
-        max_loss_sl = round(ep * 0.90, 2) if ep > 0 else 0.0
+        if is_bear_equity:
+            max_loss_sl = round(ep * 1.10, 2) if ep > 0 else 0.0
+        else:
+            max_loss_sl = round(ep * 0.90, 2) if ep > 0 else 0.0
 
         token = None
         if kite:
@@ -308,7 +316,7 @@ def derive_sl_targets_for_contract(kite, contract, entry_price, timeframe_entry=
                 token = q.get(quote_key, {}).get("instrument_token")
                 if not ep:
                     ep = float(q.get(quote_key, {}).get("last_price", 0))
-                    max_loss_sl = round(ep * 0.90, 2) if ep > 0 else 0.0
+                    max_loss_sl = round(ep * 1.10, 2) if is_bear_equity else round(ep * 0.90, 2)
             except Exception as q_err:
                 logging.warning(f"Kite quote error for {quote_key}: {q_err}")
 
@@ -322,44 +330,71 @@ def derive_sl_targets_for_contract(kite, contract, entry_price, timeframe_entry=
 
         sl_val = None
         t1, t2, t3 = None, None, None
-        pattern_name = "NEGATION_DERIVED_MANUAL"
+        pattern_name = "NEGATION_DERIVED_MANUAL_BEAR" if is_bear_equity else "NEGATION_DERIVED_MANUAL"
 
         if df_a is not None and len(df_a) >= 5:
-            res = scan_anchor_bcd_breakout(df_e if df_e is not None else df_a, df_a)
-            if res:
-                pattern_name = res.get("Pattern", "ABC_BREAKOUT")
-                pattern_sl = float(res["SL"])
-                if ep > 0:
-                    sl_val = max(pattern_sl, max_loss_sl) if pattern_sl < ep else max_loss_sl
+            if is_bear_equity:
+                res = scan_anchor_bcd_breakout_bearish(df_e if df_e is not None else df_a, df_a)
+                if res:
+                    pattern_name = res.get("Pattern", "ABC_BREAKOUT_BEARISH")
+                    pattern_sl = float(res["SL"])
+                    if ep > 0:
+                        sl_val = min(pattern_sl, max_loss_sl) if pattern_sl > ep else max_loss_sl
+                    else:
+                        sl_val = pattern_sl
                 else:
-                    sl_val = pattern_sl
-            else:
-                anchor_low = float(df_a.iloc[-10:]['low'].min())
-                swing_sl = round(anchor_low - max(0.50, anchor_low * 0.02), 2)
-                if ep > 0:
-                    sl_val = max(swing_sl, max_loss_sl) if (swing_sl > 0 and swing_sl < ep) else max_loss_sl
-                else:
-                    sl_val = swing_sl
-                pattern_name = "TIMEFRAME_SWING_MANUAL"
+                    anchor_high = float(df_a.iloc[-10:]['high'].max())
+                    swing_sl = round(anchor_high + max(0.50, anchor_high * 0.02), 2)
+                    if ep > 0:
+                        sl_val = min(swing_sl, max_loss_sl) if (swing_sl > 0 and swing_sl > ep) else max_loss_sl
+                    else:
+                        sl_val = swing_sl
+                    pattern_name = "TIMEFRAME_SWING_MANUAL_BEAR"
 
-            # Always derive Targets via Negation Theory on df_a!
-            t1, t2, t3 = find_profit_targets(df_a, ep if ep > 0 else float(df_a.iloc[-1]['close']), stop_loss=sl_val)
+                # Derive Targets via Negation Theory Bearish on df_a!
+                t1, t2, t3 = find_profit_targets_bearish(df_a, ep if ep > 0 else float(df_a.iloc[-1]['close']), stop_loss=sl_val)
+            else:
+                res = scan_anchor_bcd_breakout(df_e if df_e is not None else df_a, df_a)
+                if res:
+                    pattern_name = res.get("Pattern", "ABC_BREAKOUT")
+                    pattern_sl = float(res["SL"])
+                    if ep > 0:
+                        sl_val = max(pattern_sl, max_loss_sl) if pattern_sl < ep else max_loss_sl
+                    else:
+                        sl_val = pattern_sl
+                else:
+                    anchor_low = float(df_a.iloc[-10:]['low'].min())
+                    swing_sl = round(anchor_low - max(0.50, anchor_low * 0.02), 2)
+                    if ep > 0:
+                        sl_val = max(swing_sl, max_loss_sl) if (swing_sl > 0 and swing_sl < ep) else max_loss_sl
+                    else:
+                        sl_val = swing_sl
+                    pattern_name = "TIMEFRAME_SWING_MANUAL"
+
+                # Derive Targets via Negation Theory Bullish on df_a!
+                t1, t2, t3 = find_profit_targets(df_a, ep if ep > 0 else float(df_a.iloc[-1]['close']), stop_loss=sl_val)
 
         # Fallback for SL if missing
-        if sl_val is None or sl_val <= 0 or (ep > 0 and sl_val >= ep):
-            sl_val = max_loss_sl if max_loss_sl > 0 else (round(ep * 0.90, 2) if ep > 0 else 0.0)
-
-        # Fallback for T1 only if Negation Theory target is missing or below entry
-        if ep > 0 and sl_val > 0 and sl_val < ep:
-            risk = round(ep - sl_val, 2)
-            if t1 is None or t1 <= ep:
-                t1 = round(ep + (1.88 * risk), 2)
+        if is_bear_equity:
+            if sl_val is None or sl_val <= 0 or (ep > 0 and sl_val <= ep):
+                sl_val = max_loss_sl if max_loss_sl > 0 else (round(ep * 1.10, 2) if ep > 0 else 0.0)
+            if ep > 0 and sl_val > 0 and sl_val > ep:
+                risk = round(sl_val - ep, 2)
+                if t1 is None or t1 >= ep:
+                    t1 = round(ep - (1.88 * risk), 2)
+        else:
+            if sl_val is None or sl_val <= 0 or (ep > 0 and sl_val >= ep):
+                sl_val = max_loss_sl if max_loss_sl > 0 else (round(ep * 0.90, 2) if ep > 0 else 0.0)
+            if ep > 0 and sl_val > 0 and sl_val < ep:
+                risk = round(ep - sl_val, 2)
+                if t1 is None or t1 <= ep:
+                    t1 = round(ep + (1.88 * risk), 2)
 
         # Derive spot token & spot SL for Spot-Anchored SL Guard
         spot_tok = None
         spot_sl = None
         spot_entry = None
-        if kite and contract_str:
+        if kite and contract_str and not is_bear_equity:
             try:
                 import re
                 from registries import STOCK_REGISTRY, INDEX_REGISTRY
@@ -392,6 +427,8 @@ def derive_sl_targets_for_contract(kite, contract, entry_price, timeframe_entry=
             "t1": t1,
             "t2": t2,
             "t3": t3,
+            "direction": "BEAR" if is_bear_equity else "BULL",
+            "side": "BEAR" if is_bear_equity else "BULL",
             "pattern": pattern_name,
             "entry_time": now_iso,
             "spot_token": spot_tok,
@@ -402,18 +439,36 @@ def derive_sl_targets_for_contract(kite, contract, entry_price, timeframe_entry=
         logging.warning(f"Derive contract SL/Target failed for {contract}: {e}")
         if entry_price and float(entry_price) > 0:
             ep = float(entry_price)
-            sl_val = round(ep * 0.90, 2)
-            risk = round(ep - sl_val, 2)
-            now_iso = dt.now().isoformat()
-            return {
-                "entry_price": round(ep, 2),
-                "current_sl": sl_val,
-                "t1": round(ep + 1.88 * risk, 2),
-                "t2": round(ep + 2.50 * risk, 2),
-                "t3": round(ep + 3.50 * risk, 2),
-                "pattern": "FALLBACK_10PCT_MANUAL",
-                "entry_time": now_iso
-            }
+            if is_bear_equity:
+                sl_val = round(ep * 1.10, 2)
+                risk = round(sl_val - ep, 2)
+                now_iso = dt.now().isoformat()
+                return {
+                    "entry_price": round(ep, 2),
+                    "current_sl": sl_val,
+                    "t1": round(ep - 1.88 * risk, 2),
+                    "t2": round(ep - 2.50 * risk, 2),
+                    "t3": round(ep - 3.50 * risk, 2),
+                    "direction": "BEAR",
+                    "side": "BEAR",
+                    "pattern": "FALLBACK_10PCT_MANUAL_BEAR",
+                    "entry_time": now_iso
+                }
+            else:
+                sl_val = round(ep * 0.90, 2)
+                risk = round(ep - sl_val, 2)
+                now_iso = dt.now().isoformat()
+                return {
+                    "entry_price": round(ep, 2),
+                    "current_sl": sl_val,
+                    "t1": round(ep + 1.88 * risk, 2),
+                    "t2": round(ep + 2.50 * risk, 2),
+                    "t3": round(ep + 3.50 * risk, 2),
+                    "direction": "BULL",
+                    "side": "BULL",
+                    "pattern": "FALLBACK_10PCT_MANUAL",
+                    "entry_time": now_iso
+                }
         return None
 
 def get_override_paths():
@@ -523,7 +578,16 @@ def lookup_scan_sl_target(contract, symbol, engine, kite=None, entry_price=0, ti
     except Exception:
         pass
 
-    display_paths = {"index": paths.SCAN_DISPLAY_INDEX_FILE, "nifty50": paths.SCAN_DISPLAY_FILE}
+    display_paths = {
+        "index": paths.SCAN_DISPLAY_INDEX_FILE,
+        "nifty50": paths.SCAN_DISPLAY_FILE,
+        "stock": paths.SCAN_DISPLAY_STOCK_FILE,
+        "daily": paths.SCAN_DISPLAY_STOCK_FILE,
+        "bear_trade": paths.SCAN_DISPLAY_BEAR_FILE,
+        "daily_bear": paths.SCAN_DISPLAY_BEAR_FILE,
+        "weekly_bull": paths.SCAN_DISPLAY_WEEKLY_FILE,
+        "weekly_bear": paths.SCAN_DISPLAY_WEEKLY_BEAR_FILE,
+    }
     display_path = display_paths.get(engine)
     if display_path and os.path.exists(display_path):
         try:
@@ -606,7 +670,8 @@ def lookup_scan_sl_target(contract, symbol, engine, kite=None, entry_price=0, ti
             pass
 
     if kite and (contract or symbol) and entry_price > 0:
-        return derive_sl_targets_for_contract(kite, contract or symbol, entry_price, timeframe_entry, timeframe_anchor)
+        side_infer = "BEAR" if engine in ["bear_trade", "daily_bear", "weekly_bear"] else "BULL"
+        return derive_sl_targets_for_contract(kite, contract or symbol, entry_price, timeframe_entry, timeframe_anchor, side=side_infer)
 
     return None
 

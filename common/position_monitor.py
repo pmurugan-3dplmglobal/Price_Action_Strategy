@@ -127,7 +127,11 @@ def contract_is_expired(contract):
                         continue
     return False
 
-def close_stock_position(kite, pos, live_market=True, product=None, qty_override=None):
+def close_stock_position(kite, pos, live_market=True, product=None, qty_override=None, live=None, product_type=None):
+    if live is not None:
+        live_market = live
+    if product_type is not None and product is None:
+        product = product_type
     if not kite:
         logging.info(f"[BACKTEST EXIT] Closed stock {pos.get('contract','')}")
         return
@@ -139,20 +143,34 @@ def close_stock_position(kite, pos, live_market=True, product=None, qty_override
     qty = qty_override if qty_override is not None else pos.get("position_size", pos.get("quantity", 1))
 
     # Live position quantity verification & already-closed guard
+    side_str = str(pos.get("side") or "").upper()
+    dir_str = str(pos.get("direction") or "").upper()
+    is_short = side_str in ["SELL", "PE", "BEAR"] or dir_str == "BEAR" or (str(pos.get("product") or "").upper() == "MIS" and side_str in ["SELL", "BEAR"])
+    live_held = None
+
     if kite and live_market:
         try:
             net_positions = kite.positions().get("net", [])
             for p in net_positions:
                 if p.get("tradingsymbol") == contract:
                     live_held = int(p.get("quantity", 0))
-                    if live_held <= 0:
-                        logging.info(f"[ALREADY CLOSED] Stock {contract} has {live_held} quantity in Kite net positions. Skipping duplicate exit.")
-                        save_executed_exit(contract, "ALREADY_CLOSED", {"status": "ZERO_QTY"})
-                        return {"success": True, "order_id": "ALREADY_CLOSED", "status": "ZERO_QTY"}
-                    qty = min(qty, live_held)
+                    prod = p.get("product")
+                    if prod:
+                        product = prod
+                    if live_held < 0:
+                        is_short = True
+                    elif live_held > 0:
+                        is_short = False
                     break
         except Exception as p_err:
             logging.warning(f"Could not verify live net quantity for stock {contract}: {p_err}")
+
+    if live_held is not None:
+        if live_held == 0:
+            logging.info(f"[ALREADY CLOSED] Stock {contract} has 0 quantity in Kite net positions. Skipping duplicate exit.")
+            save_executed_exit(contract, "ALREADY_CLOSED", {"status": "ZERO_QTY"})
+            return {"success": True, "order_id": "ALREADY_CLOSED", "status": "ZERO_QTY"}
+        qty = min(qty, abs(live_held))
 
     # Automatic Open-Order Purge Guard: Cancel any existing OPEN / TRIGGER PENDING orders for this stock
     if kite and live_market:
@@ -255,63 +273,69 @@ def close_stock_position(kite, pos, live_market=True, product=None, qty_override
             logging.info(f"[EXIT GUARD BLOCK] Stock {contract} exit order already submitted (Order ID: {prev.get('order_id')}). Skipping duplicate exit call.")
             return {"success": False, "order_id": str(prev.get('order_id')), "status": "ALREADY_SUBMITTED"}
 
-    target_product = product
+    target_product = product or pos.get("product")
+    if is_short:
+        target_product = kite.PRODUCT_MIS
+    elif not target_product:
+        target_product = kite.PRODUCT_CNC
+
+    exit_txn = kite.TRANSACTION_TYPE_BUY if is_short else kite.TRANSACTION_TYPE_SELL
+    action_label = "cover (BUY)" if is_short else "sell (SELL)"
+
     try:
-        if kite:
-            net_positions = kite.positions().get("net", [])
-            for p in net_positions:
-                if p.get("tradingsymbol") == contract and int(p.get("quantity", 0)) > 0:
-                    prod = p.get("product")
-                    if prod:
-                        target_product = prod
-                        break
-    except Exception as e:
-        logging.warning(f"Could not fetch Kite stock position product for {contract}: {e}")
-    if not target_product:
-        target_product = pos.get("product") or kite.PRODUCT_CNC
-    try:
-        q = kite.quote(f"{kite.EXCHANGE_NSE}:{contract}")
-        ltp = q[f"{kite.EXCHANGE_NSE}:{contract}"]["last_price"]
-        bid = q[f"{kite.EXCHANGE_NSE}:{contract}"]["depth"]["buy"][0]["price"]
-        price = round((bid if bid > 0 else ltp) * 0.995, 1)
+        q_key = f"{kite.EXCHANGE_NSE}:{contract}"
+        q = kite.quote([q_key])
+        q_data = q.get(q_key, {}) if isinstance(q, dict) else {}
+        ltp = float(q_data.get("last_price", 0))
+        if is_short:
+            depth_sell = q_data.get("depth", {}).get("sell", [])
+            ask = float(depth_sell[0].get("price", 0)) if depth_sell else 0
+            price = round((ask if ask > 0 else ltp) * 1.005, 1)
+        else:
+            depth_buy = q_data.get("depth", {}).get("buy", [])
+            bid = float(depth_buy[0].get("price", 0)) if depth_buy else 0
+            price = round((bid if bid > 0 else ltp) * 0.995, 1)
+
         try:
             oid = kite.place_order(
                 variety=kite.VARIETY_REGULAR, tradingsymbol=contract,
-                exchange=kite.EXCHANGE_NSE, transaction_type=kite.TRANSACTION_TYPE_SELL,
+                exchange=kite.EXCHANGE_NSE, transaction_type=exit_txn,
                 quantity=qty, order_type=kite.ORDER_TYPE_LIMIT,
                 price=price, product=target_product
             )
-            save_executed_exit(contract, oid, {"type": "LIMIT", "price": price, "qty": qty})
-            logging.info(f"Closed stock {contract} with product {target_product} (Order ID: {oid})")
+            save_executed_exit(contract, oid, {"type": "LIMIT", "price": price, "qty": qty, "txn": exit_txn})
+            logging.info(f"Closed stock {contract} via {action_label} with product {target_product} (Order ID: {oid})")
             return {"success": True, "order_id": str(oid), "type": "LIMIT", "price": price, "qty": qty}
         except Exception as primary_err:
             logging.warning(f"Primary stock exit with {target_product} failed for {contract}: {primary_err}. Retrying with fallback...")
-            alt_product = kite.PRODUCT_MIS if target_product == kite.PRODUCT_CNC else kite.PRODUCT_CNC
-            try:
-                oid = kite.place_order(
-                    variety=kite.VARIETY_REGULAR, tradingsymbol=contract,
-                    exchange=kite.EXCHANGE_NSE, transaction_type=kite.TRANSACTION_TYPE_SELL,
-                    quantity=qty, order_type=kite.ORDER_TYPE_LIMIT,
-                    price=price, product=alt_product
-                )
-                save_executed_exit(contract, oid, {"type": "LIMIT_ALT", "price": price, "qty": qty})
-                logging.info(f"Fallback stock exit SUCCESS for {contract} with product {alt_product} (Order ID: {oid})")
-                return {"success": True, "order_id": str(oid), "type": "LIMIT_ALT", "price": price, "qty": qty}
-            except Exception as alt_err:
+            if not is_short:
+                alt_product = kite.PRODUCT_MIS if target_product == kite.PRODUCT_CNC else kite.PRODUCT_CNC
                 try:
                     oid = kite.place_order(
                         variety=kite.VARIETY_REGULAR, tradingsymbol=contract,
-                        exchange=kite.EXCHANGE_NSE, transaction_type=kite.TRANSACTION_TYPE_SELL,
-                        quantity=qty, order_type=kite.ORDER_TYPE_MARKET,
-                        product=target_product
+                        exchange=kite.EXCHANGE_NSE, transaction_type=exit_txn,
+                        quantity=qty, order_type=kite.ORDER_TYPE_LIMIT,
+                        price=price, product=alt_product
                     )
-                    save_executed_exit(contract, oid, {"type": "MARKET_EMERGENCY", "qty": qty})
-                    logging.info(f"Emergency MARKET stock exit SUCCESS for {contract} with product {target_product} (Order ID: {oid})")
-                    return {"success": True, "order_id": str(oid), "type": "MARKET_EMERGENCY", "qty": qty}
-                except Exception as m_final_err:
-                    save_executed_exit(contract, "REJECTED_ERROR", {"error": str(m_final_err)})
-                    logging.error(f"All stock exit attempts failed for {contract}: primary={primary_err}, alt={alt_err}, market={m_final_err}")
-                    return {"success": False, "order_id": "REJECTED_ERROR", "error": str(m_final_err)}
+                    save_executed_exit(contract, oid, {"type": "LIMIT_ALT", "price": price, "qty": qty, "txn": exit_txn})
+                    logging.info(f"Fallback stock exit SUCCESS for {contract} with product {alt_product} (Order ID: {oid})")
+                    return {"success": True, "order_id": str(oid), "type": "LIMIT_ALT", "price": price, "qty": qty}
+                except Exception as alt_err:
+                    pass
+            try:
+                oid = kite.place_order(
+                    variety=kite.VARIETY_REGULAR, tradingsymbol=contract,
+                    exchange=kite.EXCHANGE_NSE, transaction_type=exit_txn,
+                    quantity=qty, order_type=kite.ORDER_TYPE_MARKET,
+                    product=target_product
+                )
+                save_executed_exit(contract, oid, {"type": "MARKET_EMERGENCY", "qty": qty, "txn": exit_txn})
+                logging.info(f"Emergency MARKET stock exit SUCCESS for {contract} via {action_label} with product {target_product} (Order ID: {oid})")
+                return {"success": True, "order_id": str(oid), "type": "MARKET_EMERGENCY", "qty": qty}
+            except Exception as m_final_err:
+                save_executed_exit(contract, "REJECTED_ERROR", {"error": str(m_final_err)})
+                logging.error(f"All stock exit attempts failed for {contract}: primary={primary_err}, market={m_final_err}")
+                return {"success": False, "order_id": "REJECTED_ERROR", "error": str(m_final_err)}
     except Exception as e:
         save_executed_exit(contract, "REJECTED_ERROR", {"error": str(e)})
         logging.error(f"Stock exit failed for {contract}: {e}")
@@ -392,7 +416,11 @@ def is_new_entry_allowed(live_execution_active=True):
     t_now = now.time()
     return datetime_time(9, 15) <= t_now <= datetime_time(15, 20)
 
-def close_position(kite, pos, live_market=True, product=None, qty_override=None):
+def close_position(kite, pos, live_market=True, product=None, qty_override=None, live=None, product_type=None):
+    if live is not None:
+        live_market = live
+    if product_type is not None and product is None:
+        product = product_type
     contract = pos.get("contract") or pos.get("tradingsymbol")
     if not contract:
         return
@@ -826,15 +854,24 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
 
             pos_tf = pos.get("timeframe") or timeframe_entry
             df = fetch_and_resample_candles(kite, token, from_date, to_date, pos_tf)
+            is_stock = pos.get("position_type") == "stock"
+            side_val = str(pos.get("side", "")).upper()
+            dir_val = str(pos.get("direction", "")).upper()
+            is_short_stock = is_stock and (side_val in ["SELL", "PE", "BEAR"] or dir_val == "BEAR")
+
             if df.empty:
                 # CVE-4 FIX: Decouple emergency tick protection from candle REST API outages
                 entry_s = float(pos.get("entry_spot") or pos.get("entry_price") or 0.0)
                 current_sl = float(pos.get("current_sl", 0))
-                is_stock = pos.get("position_type") == "stock"
                 if live_ltp > 0 and entry_s > 0:
                     max_loss_pct = 0.15 if not is_stock else 0.08
-                    hard_max_sl = round(entry_s * (1.0 - max_loss_pct), 2)
-                    if live_ltp <= hard_max_sl or (current_sl > 0 and live_ltp <= current_sl * 0.95):
+                    if is_short_stock:
+                        hard_max_sl = round(entry_s * (1.0 + max_loss_pct), 2)
+                        is_breached = (live_ltp >= hard_max_sl) or (current_sl > 0 and live_ltp >= current_sl * 1.05)
+                    else:
+                        hard_max_sl = round(entry_s * (1.0 - max_loss_pct), 2)
+                        is_breached = (live_ltp <= hard_max_sl) or (current_sl > 0 and live_ltp <= current_sl * 0.95)
+                    if is_breached:
                         logging.critical(f"[CANDLE_API_OUTAGE_SHIELD] Candle fetch empty for {sym}, but live LTP {live_ltp:.2f} breached emergency threshold (Entry {entry_s:.2f}, SL {current_sl:.2f}). Executing emergency exit.")
                         if is_stock:
                             exit_res = close_stock_position(kite, pos, live, product_type)
@@ -847,18 +884,19 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
             last = df.iloc[-1]
             cp = float(last['close'])
             tid = pos.get("trade_id")
-            is_stock = pos.get("position_type") == "stock"
             current_sl = float(pos.get("current_sl", 0))
 
-            # Compute High (hp) strictly for candles AFTER trade entry_time + live_ltp
+            # Compute High (hp) and Low (lp) strictly for candles AFTER trade entry_time + live_ltp
             entry_time_str = sanitize_entry_time(pos)
             hp = live_ltp if live_ltp > 0 else cp
+            lp = live_ltp if live_ltp > 0 else cp
             for idx in range(len(df)):
                 c_row = df.iloc[idx]
                 c_date = str(c_row.get('date', ''))
                 if is_candle_before_entry(c_date, entry_time_str):
                     continue
                 hp = max(hp, float(c_row['high']))
+                lp = min(lp, float(c_row['low']))
 
             sl_hit = False
             sl_reason = ""
@@ -888,6 +926,36 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
             pos_tf_str = str(pos.get("timeframe") or timeframe_entry or "").lower()
             is_short_tf = any(tf in pos_tf_str for tf in ["3m", "3min", "3minute", "5m", "5min", "5minute"])
             is_index_contract = (engine_name == "index") or (pos.get("engine") == "index") or any(idx_sym in c_str for idx_sym in ["NIFTY", "BANKNIFTY", "SENSEX", "MIDCPNIFTY", "FINNIFTY", "BANKEX"])
+
+            # ── 15:15 EOD INTRADAY MIS AUTO-SQUAREOFF GUARD ──
+            is_mis_pos = (str(pos.get("product", "")).upper() == "MIS") or is_short_stock
+            if is_mis_pos and is_eod_time:
+                logging.info(f"[15:15 EOD MIS SQUAREOFF] Closing {sym} ({contract}) | Intraday MIS Auto-Squareoff")
+                if is_stock:
+                    exit_res = close_stock_position(kite, pos, live, "MIS")
+                else:
+                    exit_res = close_position(kite, pos, live, "MIS")
+                exit_ok = True
+                if live and kite:
+                    exit_ok = bool(exit_res and exit_res.get("success"))
+                if exit_ok:
+                    exit_price = live_ltp if live_ltp > 0 else (cp if cp > 0 else entry_s)
+                    pnl = ((entry_s - exit_price) / entry_s * 100) if is_short_stock else (((exit_price - entry_s) / entry_s * 100) if entry_s else 0)
+                    log_fn(sym, pos.get("pattern", ""), pos_tf, "EXIT_EOD_MIS", "CLOSED",
+                           f"15:15 EOD MIS Auto-Squareoff (Exit @ {exit_price:.2f})", pnl,
+                           entry=entry_s, sl=pos.get("current_sl", ""), target=pos.get("t1", ""),
+                           event_time=last.get('date'))
+                    if tid:
+                        trade_db.update_trade(tid, {
+                            "status": "COMPLETED",
+                            "exit_time": dt.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            "pnl_percent": round(pnl, 2),
+                            "details": f"15:15 EOD MIS Auto-Squareoff | Exit @ {exit_price:.2f}"
+                        })
+                    to_clear.append(sym)
+                else:
+                    logging.critical(f"[EOD_MIS_SQUAREOFF FAILED] MIS exit order for {sym} failed ({exit_res}). Retaining for retry.")
+                continue
 
             if (is_friday or is_thursday) and is_eod_time and not is_stock:
                 entry_s = float(pos.get("entry_spot") or pos.get("entry_price") or 0.0)
@@ -978,27 +1046,38 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                     # Protects against catastrophic opening gap-downs (>= 25% for options, >= 12% for stocks).
                     if entry_s > 0 and live_ltp > 0 and not is_outlier_entry:
                         opt_loss_cap = float(cfg.get("max_option_loss_pct", 15)) / 100.0 if not is_stock else 0.08
-                        if not is_stock and live_ltp <= (entry_s * (1.0 - opt_loss_cap)):
+                        if is_short_stock and live_ltp >= (entry_s * 1.12):
+                            sl_hit = True
+                            rise_pct = (live_ltp - entry_s) / entry_s * 100.0
+                            sl_reason = f"MORNING_CATASTROPHIC_CIRCUIT_12PCT (Short Stock LTP {live_ltp:.2f} up {rise_pct:.1f}% from entry {entry_s:.2f})"
+                            cp = live_ltp
+                            event_time = last.get('date')
+                        elif not is_short_stock and not is_stock and live_ltp <= (entry_s * (1.0 - opt_loss_cap)):
                             sl_hit = True
                             drop_pct = (entry_s - live_ltp) / entry_s * 100.0
                             sl_reason = f"MORNING_CATASTROPHIC_CIRCUIT_{int(opt_loss_cap*100)}PCT (Option LTP {live_ltp:.2f} down {drop_pct:.1f}% from entry {entry_s:.2f})"
                             cp = live_ltp
                             event_time = last.get('date')
-                        elif is_stock and live_ltp <= (entry_s * 0.88):
+                        elif not is_short_stock and is_stock and live_ltp <= (entry_s * 0.88):
                             sl_hit = True
                             drop_pct = (entry_s - live_ltp) / entry_s * 100.0
                             sl_reason = f"MORNING_CATASTROPHIC_CIRCUIT_12PCT (Stock LTP {live_ltp:.2f} down {drop_pct:.1f}% from entry {entry_s:.2f})"
                             cp = live_ltp
                             event_time = last.get('date')
                 elif is_start_0945:
-                    # 09:45 AM Failsafe Check: If trading below SL & prev candle closed below SL & current candle trading below SL
+                    # 09:45 AM Failsafe Check: If trading breached SL & prev candle closed breach & current candle trading breach
                     prev_date = str(df.iloc[-2]['date']) if len(df) >= 2 else ""
-                    prev_closed_below = (len(df) >= 2 and float(df.iloc[-2]['close']) <= current_sl
-                                         and not is_candle_before_entry(prev_date, sl_floor))
-                    curr_below = (live_ltp > 0 and live_ltp <= current_sl) or (float(df.iloc[-1]['close']) <= current_sl)
-                    if curr_below and prev_closed_below:
+                    if is_short_stock:
+                        prev_closed_breach = (len(df) >= 2 and float(df.iloc[-2]['close']) >= current_sl
+                                             and not is_candle_before_entry(prev_date, sl_floor))
+                        curr_breach = (live_ltp > 0 and live_ltp >= current_sl) or (float(df.iloc[-1]['close']) >= current_sl)
+                    else:
+                        prev_closed_breach = (len(df) >= 2 and float(df.iloc[-2]['close']) <= current_sl
+                                             and not is_candle_before_entry(prev_date, sl_floor))
+                        curr_breach = (live_ltp > 0 and live_ltp <= current_sl) or (float(df.iloc[-1]['close']) <= current_sl)
+                    if curr_breach and prev_closed_breach:
                         sl_hit = True
-                        sl_reason = f"SL_FAILSAFE_0945_TRIGGER (LTP {live_ltp:.2f} <= {current_sl:.2f} & Prev Bar Closed Below)"
+                        sl_reason = f"SL_FAILSAFE_0945_TRIGGER (LTP {live_ltp:.2f} {' >=' if is_short_stock else ' <='} {current_sl:.2f} & Prev Bar Closed Breach)"
                         cp = live_ltp if live_ltp > 0 else float(df.iloc[-1]['close'])
                         event_time = last.get('date')
                 else:
@@ -1015,10 +1094,17 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                             continue
                         if is_candle_before_entry(c_date, sl_floor):
                             continue
-                        if float(c_row['close']) <= current_sl:
+                        c_close_val = float(c_row['close'])
+                        if is_short_stock and c_close_val >= current_sl:
                             sl_hit = True
                             sl_reason = f"CANDLE_CLOSE_SL ({pos_tf} Bar @ {c_date})"
-                            cp = float(c_row['close'])
+                            cp = c_close_val
+                            event_time = c_row.get('date')
+                            break
+                        elif not is_short_stock and c_close_val <= current_sl:
+                            sl_hit = True
+                            sl_reason = f"CANDLE_CLOSE_SL ({pos_tf} Bar @ {c_date})"
+                            cp = c_close_val
                             event_time = c_row.get('date')
                             break
 
@@ -1029,32 +1115,58 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                     if sl_hit and "CANDLE_CLOSE_SL" in sl_reason:
                         entry_s = float(pos.get("entry_spot") or pos.get("entry_price") or 0.0)
                         latest_completed_close = float(df.iloc[-2]['close']) if len(df) >= 2 else 0.0
-                        if entry_s > 0 and live_ltp >= entry_s and latest_completed_close > current_sl:
-                            logging.info(f"[RECLAIM_GUARD] Suppressed retroactive {sl_reason} for {sym} ({pos.get('contract')}): Trade has reclaimed above Entry ({live_ltp:.2f} >= {entry_s:.2f}) and latest completed bar closed at {latest_completed_close:.2f} > SL ({current_sl:.2f}). Trade remains active.")
-                            sl_hit = False
-                            sl_reason = ""
+                        if is_short_stock:
+                            if entry_s > 0 and live_ltp <= entry_s and latest_completed_close < current_sl:
+                                logging.info(f"[RECLAIM_GUARD] Suppressed retroactive {sl_reason} for short {sym} ({pos.get('contract')}): Trade reclaimed below Entry ({live_ltp:.2f} <= {entry_s:.2f}) and latest completed bar closed at {latest_completed_close:.2f} < SL ({current_sl:.2f}). Trade remains active.")
+                                sl_hit = False
+                                sl_reason = ""
+                        else:
+                            if entry_s > 0 and live_ltp >= entry_s and latest_completed_close > current_sl:
+                                logging.info(f"[RECLAIM_GUARD] Suppressed retroactive {sl_reason} for {sym} ({pos.get('contract')}): Trade has reclaimed above Entry ({live_ltp:.2f} >= {entry_s:.2f}) and latest completed bar closed at {latest_completed_close:.2f} > SL ({current_sl:.2f}). Trade remains active.")
+                                sl_hit = False
+                                sl_reason = ""
 
             # 2) Emergency Hard Stop / Direct LTP evaluation (Active after 09:45 AM)
             if not sl_hit and current_sl > 0 and live_ltp > 0 and not is_before_0945 and not is_outlier_entry:
-                if sl_mode == "tick_ltp" and live_ltp <= current_sl:
-                    sl_hit = True
-                    sl_reason = f"TICK_LTP_SL ({live_ltp})"
-                    cp = live_ltp
-                elif sl_mode == "hybrid":
-                    emergency_cushion = max(0.30, current_sl * 0.05) if current_sl < 10 else max(1.00, current_sl * emergency_buffer_pct)
-                    emergency_threshold = round(current_sl - emergency_cushion, 2)
-                    if live_ltp <= emergency_threshold:
+                if is_short_stock:
+                    if sl_mode == "tick_ltp" and live_ltp >= current_sl:
                         sl_hit = True
-                        sl_reason = f"EMERGENCY_HARD_SL (LTP {live_ltp:.2f} <= {emergency_threshold:.2f})"
+                        sl_reason = f"TICK_LTP_SL ({live_ltp})"
                         cp = live_ltp
+                    elif sl_mode == "hybrid":
+                        emergency_cushion = max(0.30, current_sl * 0.05) if current_sl < 10 else max(1.00, current_sl * emergency_buffer_pct)
+                        emergency_threshold = round(current_sl + emergency_cushion, 2)
+                        if live_ltp >= emergency_threshold:
+                            sl_hit = True
+                            sl_reason = f"EMERGENCY_HARD_SL (LTP {live_ltp:.2f} >= {emergency_threshold:.2f})"
+                            cp = live_ltp
+                else:
+                    if sl_mode == "tick_ltp" and live_ltp <= current_sl:
+                        sl_hit = True
+                        sl_reason = f"TICK_LTP_SL ({live_ltp})"
+                        cp = live_ltp
+                    elif sl_mode == "hybrid":
+                        emergency_cushion = max(0.30, current_sl * 0.05) if current_sl < 10 else max(1.00, current_sl * emergency_buffer_pct)
+                        emergency_threshold = round(current_sl - emergency_cushion, 2)
+                        if live_ltp <= emergency_threshold:
+                            sl_hit = True
+                            sl_reason = f"EMERGENCY_HARD_SL (LTP {live_ltp:.2f} <= {emergency_threshold:.2f})"
+                            cp = live_ltp
 
             # 2b) Hard Max-Loss Circuit Shield (Default 15% Cap on Entry Price for Options, 8% for Stocks)
             max_loss_pct = float(cfg.get("max_option_loss_pct", 15)) / 100.0 if not is_stock else 0.08
-            hard_max_sl_threshold = round(entry_s * (1.0 - max_loss_pct), 2) if entry_s > 0 else 0.0
-            if not sl_hit and hard_max_sl_threshold > 0 and live_ltp > 0 and live_ltp <= hard_max_sl_threshold and not is_before_0945 and not is_outlier_entry:
-                sl_hit = True
-                sl_reason = f"HARD_MAX_{int(max_loss_pct*100)}PCT_SL (LTP {live_ltp:.2f} <= {hard_max_sl_threshold:.2f})"
-                cp = live_ltp
+            if is_short_stock:
+                hard_max_sl_threshold = round(entry_s * (1.0 + max_loss_pct), 2) if entry_s > 0 else 0.0
+                if not sl_hit and hard_max_sl_threshold > 0 and live_ltp > 0 and live_ltp >= hard_max_sl_threshold and not is_before_0945 and not is_outlier_entry:
+                    sl_hit = True
+                    sl_reason = f"HARD_MAX_{int(max_loss_pct*100)}PCT_SL (LTP {live_ltp:.2f} >= {hard_max_sl_threshold:.2f})"
+                    cp = live_ltp
+            else:
+                hard_max_sl_threshold = round(entry_s * (1.0 - max_loss_pct), 2) if entry_s > 0 else 0.0
+                if not sl_hit and hard_max_sl_threshold > 0 and live_ltp > 0 and live_ltp <= hard_max_sl_threshold and not is_before_0945 and not is_outlier_entry:
+                    sl_hit = True
+                    sl_reason = f"HARD_MAX_{int(max_loss_pct*100)}PCT_SL (LTP {live_ltp:.2f} <= {hard_max_sl_threshold:.2f})"
+                    cp = live_ltp
 
             # 2c) Spot-Anchored Structural SL Guard for Options
             # ONLY applies to INITIAL Stop Loss (trailing_stage == 0 and current_sl < entry_s).
@@ -1123,7 +1235,7 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                 if exit_ok:
                     entry_s = pos.get("entry_spot", 0)
                     exit_price = live_ltp if live_ltp > 0 else (cp if cp > 0 else current_sl)
-                    pnl = ((exit_price - entry_s) / entry_s * 100) if entry_s else 0
+                    pnl = ((entry_s - exit_price) / entry_s * 100) if is_short_stock else (((exit_price - entry_s) / entry_s * 100) if entry_s else 0)
                     log_fn(sym, pos.get("pattern", ""), pos_tf, "EXIT_SL", "CLOSED",
                            f"SL hit [{sl_reason}]: {exit_price:.2f}", pnl,
                            entry=entry_s, sl=current_sl, target=pos.get("t1", ""),
@@ -1159,25 +1271,33 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
 
             # 3) Target Exits & Trailing Evaluation
             entry_s = float(pos.get("entry_spot") or pos.get("entry_price") or 0.0)
-            gain_pct = ((hp - entry_s) / entry_s * 100) if entry_s > 0 else 0.0
+            if is_short_stock:
+                gain_pct = ((entry_s - lp) / entry_s * 100) if entry_s > 0 else 0.0
+            else:
+                gain_pct = ((hp - entry_s) / entry_s * 100) if entry_s > 0 else 0.0
 
-            # Feature 5: Positive Breakeven (+BE: Entry + 2%) Triggered when peak gain >= +10%
+            # Feature 5: Positive Breakeven (+BE: Entry + 2% for Long, Entry - 2% for Short) Triggered when peak gain >= +10%
             if pos.get("trailing_stage", 0) == 0 and gain_pct >= 10.0 and has_higher_targets:
                 curr_sl = float(pos.get("current_sl") or 0.0)
-                is_bull = str(pos.get("side","CE")).upper() in ["CE", "BUY", "BULL"]
-                if is_bull:
-                    be_target = round(round((entry_s * 1.02) / 0.05) * 0.05, 2)
-                    new_sl = max(curr_sl, be_target)
-                else:
+                if is_short_stock:
                     be_target = round(round((entry_s * 0.98) / 0.05) * 0.05, 2)
                     new_sl = min(curr_sl, be_target) if curr_sl > 0 else be_target
+                else:
+                    is_bull = str(pos.get("side","CE")).upper() in ["CE", "BUY", "BULL"]
+                    if is_bull:
+                        be_target = round(round((entry_s * 1.02) / 0.05) * 0.05, 2)
+                        new_sl = max(curr_sl, be_target)
+                    else:
+                        be_target = round(round((entry_s * 0.98) / 0.05) * 0.05, 2)
+                        new_sl = min(curr_sl, be_target) if curr_sl > 0 else be_target
                 sl_stamp = dt.now().isoformat()
                 with lock:
                     if sym in positions_dict:
                         positions_dict[sym]["current_sl"] = new_sl
                         positions_dict[sym]["trailing_stage"] = 1
                         positions_dict[sym]["sl_set_time"] = sl_stamp
-                logging.info(f"TRAIL-1 (+10% Gain Lock -> +2% BE) {sym}: High={hp:.2f} (+{gain_pct:.1f}%) -> SL=+BE ({new_sl:.2f})")
+                ext_metric = f"Low={lp:.2f}" if is_short_stock else f"High={hp:.2f}"
+                logging.info(f"TRAIL-1 (+10% Gain Lock -> +2% BE) {sym}: {ext_metric} (+{gain_pct:.1f}%) -> SL=+BE ({new_sl:.2f})")
                 log_fn(sym, pos.get("pattern", ""), timeframe_entry, "TRAIL_BE", "MUTATED",
                        f"SL=+BE {new_sl:.2f} (+{gain_pct:.1f}% gain locked)",
                        entry=entry_s, sl=new_sl, target=t1_val,
@@ -1185,10 +1305,12 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                 if tid:
                     trade_db.update_trade(tid, {"trailing_stage": 1, "current_sl": new_sl, "sl_set_time": sl_stamp})
 
-            if t1_val and hp >= (t1_val - buf_t1):
+            t1_hit = (lp <= (t1_val + buf_t1)) if is_short_stock else (hp >= (t1_val - buf_t1))
+            if t1_val and t1_hit:
                 # RULE: If T2 or T3 is NOT available, exit 100% at T1 (early exit threshold)!
                 if not has_higher_targets:
-                    logging.info(f"T1 FULL EXIT (No T2/T3): {sym} reached {hp:.2f} (Target: {t1_val:.2f}, Buffer: {buf_t1:.2f})")
+                    reached_val = lp if is_short_stock else hp
+                    logging.info(f"T1 FULL EXIT (No T2/T3): {sym} reached {reached_val:.2f} (Target: {t1_val:.2f}, Buffer: {buf_t1:.2f})")
                     if is_stock:
                         exit_res = close_stock_position(kite, pos, live, product_type)
                     else:
@@ -1200,17 +1322,18 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
 
                     if exit_ok:
                         exit_price = live_ltp if live_ltp > 0 else (cp if cp > 0 else t1_val)
-                        pnl = ((exit_price - entry_s) / entry_s * 100) if entry_s else 0
+                        pnl = ((entry_s - exit_price) / entry_s * 100) if is_short_stock else (((exit_price - entry_s) / entry_s * 100) if entry_s else 0)
                         log_fn(sym, pos.get("pattern", ""), pos_tf, "EXIT_T1", "CLOSED",
                                f"T1={t1_val:.2f} (Exit @ {exit_price:.2f})", pnl,
                                entry=entry_s, sl=pos.get("current_sl", ""), target=t1_val,
                                event_time=last.get('date'))
+                        det_str = f"T1 exit ({lp:.2f} <= {t1_val + buf_t1:.2f})" if is_short_stock else f"T1 exit ({hp:.2f} >= {t1_val - buf_t1:.2f})"
                         if tid:
                             trade_db.update_trade(tid, {
                                 "status": "TARGET_HIT",
                                 "exit_time": dt.now().strftime("%Y-%m-%d %H:%M:%S"),
                                 "pnl_percent": round(pnl, 2),
-                                "details": f"T1 exit ({hp:.2f} >= {t1_val - buf_t1:.2f})"
+                                "details": det_str
                             })
                         to_clear.append(sym)
                     else:
@@ -1235,8 +1358,13 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                             exit_ok = bool(exit_res and exit_res.get("success"))
 
                         if exit_ok:
-                            is_bull = str(pos.get("side","CE")).upper() in ["CE", "BUY", "BULL"]
-                            be_sl = round(round((entry_s * 1.02)/0.05)*0.05, 2) if is_bull else round(round((entry_s * 0.98)/0.05)*0.05, 2)
+                            if is_short_stock:
+                                be_sl = round(round((entry_s * 0.98)/0.05)*0.05, 2)
+                                partial_pnl = ((entry_s - t1_val) / entry_s * 100) if entry_s else 0
+                            else:
+                                is_bull = str(pos.get("side","CE")).upper() in ["CE", "BUY", "BULL"]
+                                be_sl = round(round((entry_s * 1.02)/0.05)*0.05, 2) if is_bull else round(round((entry_s * 0.98)/0.05)*0.05, 2)
+                                partial_pnl = ((t1_val - entry_s) / entry_s * 100) if entry_s else 0
                             with lock:
                                 if sym in positions_dict:
                                     positions_dict[sym]["position_size"] = pos_size - half_size
@@ -1245,7 +1373,7 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                                     positions_dict[sym]["sl_set_time"] = dt.now().isoformat()
                             log_fn(sym, pos.get("pattern", ""), pos_tf, "EXIT_T1_PARTIAL", "PARTIAL",
                                    f"T1 Banked 50% @ {t1_val:.2f} | Runner SL=+BE ({be_sl:.2f})",
-                                   ((t1_val - entry_s) / entry_s * 100) if entry_s else 0,
+                                   partial_pnl,
                                    entry=entry_s, sl=be_sl, target=t2_val or t3_val,
                                    event_time=last.get('date'))
                             if tid:
@@ -1261,9 +1389,13 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                     else:
                         # Single-lot trailing to Positive Breakeven (+2%)
                         curr_sl = float(pos.get("current_sl") or 0.0)
-                        is_bull = str(pos.get("side","CE")).upper() in ["CE", "BUY", "BULL"]
-                        be_sl = round(round((entry_s * 1.02)/0.05)*0.05, 2) if is_bull else round(round((entry_s * 0.98)/0.05)*0.05, 2)
-                        new_sl = max(curr_sl, be_sl) if is_bull else (min(curr_sl, be_sl) if curr_sl > 0 else be_sl)
+                        if is_short_stock:
+                            be_sl = round(round((entry_s * 0.98)/0.05)*0.05, 2)
+                            new_sl = min(curr_sl, be_sl) if curr_sl > 0 else be_sl
+                        else:
+                            is_bull = str(pos.get("side","CE")).upper() in ["CE", "BUY", "BULL"]
+                            be_sl = round(round((entry_s * 1.02)/0.05)*0.05, 2) if is_bull else round(round((entry_s * 0.98)/0.05)*0.05, 2)
+                            new_sl = max(curr_sl, be_sl) if is_bull else (min(curr_sl, be_sl) if curr_sl > 0 else be_sl)
                         sl_stamp = dt.now().isoformat()
                         with lock:
                             if sym in positions_dict:
@@ -1278,11 +1410,13 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                         if tid:
                             trade_db.update_trade(tid, {"trailing_stage": 1, "current_sl": new_sl, "sl_set_time": sl_stamp})
 
-            if pos.get("trailing_stage", 0) == 1 and t2_val and hp >= (t2_val - buf_t2):
+            t2_hit = (lp <= (t2_val + buf_t2)) if is_short_stock else (hp >= (t2_val - buf_t2))
+            if pos.get("trailing_stage", 0) == 1 and t2_val and t2_hit:
                 has_t3 = t3_val is not None and t3_val > 0
                 if not has_t3:
                     # RULE: If T3 is NOT available, T2 is final target -> FULL EXIT at T2!
-                    logging.info(f"T2 FULL EXIT (No T3): {sym} reached {hp:.2f} (Target: {t2_val:.2f}, Buffer: {buf_t2:.2f})")
+                    reached_val = lp if is_short_stock else hp
+                    logging.info(f"T2 FULL EXIT (No T3): {sym} reached {reached_val:.2f} (Target: {t2_val:.2f}, Buffer: {buf_t2:.2f})")
                     if is_stock:
                         exit_res = close_stock_position(kite, pos, live, product_type)
                     else:
@@ -1295,17 +1429,18 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                     if exit_ok:
                         entry_s = pos.get("entry_spot", 0)
                         exit_price = live_ltp if live_ltp > 0 else (cp if cp > 0 else t2_val)
-                        pnl = ((exit_price - entry_s) / entry_s * 100) if entry_s else 0
+                        pnl = ((entry_s - exit_price) / entry_s * 100) if is_short_stock else (((exit_price - entry_s) / entry_s * 100) if entry_s else 0)
                         log_fn(sym, pos.get("pattern", ""), pos_tf, "EXIT_T2", "CLOSED",
                                f"T2={t2_val:.2f} (Exit @ {exit_price:.2f})", pnl,
                                entry=entry_s, sl=pos.get("current_sl", ""), target=t2_val,
                                event_time=last.get('date'))
+                        det_str = f"T2 exit ({lp:.2f} <= {t2_val + buf_t2:.2f})" if is_short_stock else f"T2 exit ({hp:.2f} >= {t2_val - buf_t2:.2f})"
                         if tid:
                             trade_db.update_trade(tid, {
                                 "status": "TARGET_HIT",
                                 "exit_time": dt.now().strftime("%Y-%m-%d %H:%M:%S"),
                                 "pnl_percent": round(pnl, 2),
-                                "details": f"T2 exit ({hp:.2f} >= {t2_val - buf_t2:.2f})"
+                                "details": det_str
                             })
                         to_clear.append(sym)
                     else:
@@ -1314,7 +1449,10 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                 else:
                     curr_sl = float(pos.get("current_sl") or 0.0)
                     target_base = float(t1_val or pos.get("entry_spot") or 0.0)
-                    new_sl = max(curr_sl, target_base) if str(pos.get("side","CE")).upper() in ["CE", "BUY", "BULL"] else min(curr_sl, target_base) if curr_sl > 0 else target_base
+                    if is_short_stock:
+                        new_sl = min(curr_sl, target_base) if curr_sl > 0 else target_base
+                    else:
+                        new_sl = max(curr_sl, target_base) if str(pos.get("side","CE")).upper() in ["CE", "BUY", "BULL"] else (min(curr_sl, target_base) if curr_sl > 0 else target_base)
                     sl_stamp = dt.now().isoformat()
                     with lock:
                         if sym in positions_dict:
@@ -1329,9 +1467,11 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                     if tid:
                         trade_db.update_trade(tid, {"trailing_stage": 2, "current_sl": new_sl, "sl_set_time": sl_stamp})
 
-            if t3_val and hp >= (t3_val - buf_t3):
-                logging.info(f"T3 EXIT: {sym} reached {hp:.2f} (Target: {t3_val:.2f})")
-                if pos.get("position_type") == "stock":
+            t3_hit = (lp <= (t3_val + buf_t3)) if is_short_stock else (hp >= (t3_val - buf_t3))
+            if t3_val and t3_hit:
+                reached_val = lp if is_short_stock else hp
+                logging.info(f"T3 EXIT: {sym} reached {reached_val:.2f} (Target: {t3_val:.2f})")
+                if is_stock:
                     exit_res = close_stock_position(kite, pos, live, product_type)
                 else:
                     exit_res = close_position(kite, pos, live, product_type)
@@ -1343,7 +1483,7 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                 if exit_ok:
                     entry_s = pos.get("entry_spot", 0)
                     exit_price = live_ltp if live_ltp > 0 else (cp if cp > 0 else t3_val)
-                    pnl = ((exit_price - entry_s) / entry_s * 100) if entry_s else 0
+                    pnl = ((entry_s - exit_price) / entry_s * 100) if is_short_stock else (((exit_price - entry_s) / entry_s * 100) if entry_s else 0)
                     log_fn(sym, pos.get("pattern", ""), timeframe_entry, "EXIT_T3", "CLOSED",
                            f"T3={t3_val:.2f} (Exit @ {exit_price:.2f})", pnl,
                            entry=entry_s, sl=pos.get("current_sl", ""), target=t3_val,

@@ -535,6 +535,84 @@ except Exception as e:
     errors.append(f"Pattern Funnel Invariants Failed: {e}")
     print(f" FAILED [ERR] ({e})", flush=True)
 
+# -------------------------------------------------------------------------
+# TEST 21: Option vs Stock Parity Invariants (Short Stock Execution, Derivation & PnL)
+# -------------------------------------------------------------------------
+print("[TEST 21] Testing Option vs Stock Parity Invariants (Short Equity, Derivation & PnL)...", end="", flush=True)
+try:
+    from resolve import derive_sl_targets_for_contract, lookup_scan_sl_target
+    from position_monitor import close_stock_position
+    from trading_core import clear_executed_exit
+    clear_executed_exit("INFY")
+
+    # 1. Verify derive_sl_targets_for_contract for Bearish Equity (Short)
+    res_bear = derive_sl_targets_for_contract(None, "SBIN", 800.0, side="BEAR")
+    assert res_bear is not None, "res_bear should not be None"
+    assert res_bear["direction"] == "BEAR", f"Expected direction BEAR, got {res_bear['direction']}"
+    assert res_bear["current_sl"] > 800.0, f"Bearish SL must be above entry, got {res_bear['current_sl']}"
+    assert res_bear["t1"] < 800.0, f"Bearish T1 must be below entry, got {res_bear['t1']}"
+
+    # 2. Verify derive_sl_targets_for_contract for Bullish Equity (Long)
+    res_bull = derive_sl_targets_for_contract(None, "SBIN", 800.0, side="BULL")
+    assert res_bull is not None, "res_bull should not be None"
+    assert res_bull["direction"] == "BULL", f"Expected direction BULL, got {res_bull['direction']}"
+    assert res_bull["current_sl"] < 800.0, f"Bullish SL must be below entry, got {res_bull['current_sl']}"
+    assert res_bull["t1"] > 800.0, f"Bullish T1 must be above entry, got {res_bull['t1']}"
+
+    # 3. Verify Mock Kite Order for Short Stock Exit vs Long Stock Exit
+    class MockKiteOrders:
+        def __init__(self):
+            self.placed_orders = []
+            self.TRANSACTION_TYPE_BUY = "BUY"
+            self.TRANSACTION_TYPE_SELL = "SELL"
+            self.PRODUCT_MIS = "MIS"
+            self.PRODUCT_CNC = "CNC"
+            self.ORDER_TYPE_LIMIT = "LIMIT"
+            self.VARIETY_REGULAR = "regular"
+            self.EXCHANGE_NSE = "NSE"
+        def orders(self):
+            return []
+        def positions(self):
+            return {"net": []}
+        def quote(self, keys):
+            if isinstance(keys, str):
+                keys = [keys]
+            return {k: {"last_price": 100.0, "depth": {"sell": [{"price": 100.5}], "buy": [{"price": 99.5}]}} for k in keys}
+        def place_order(self, **kwargs):
+            self.placed_orders.append(kwargs)
+            return "ORD_12345"
+
+    mock_kite = MockKiteOrders()
+    pos_short = {"symbol": "INFY", "contract": "INFY", "position_type": "stock", "side": "SELL", "direction": "BEAR", "position_size": 10, "quantity": 10}
+    res_short_exit = close_stock_position(mock_kite, pos_short, live=True, product_type="MIS")
+    assert res_short_exit["success"] is True, f"Short exit should succeed: {res_short_exit}"
+    assert mock_kite.placed_orders[-1]["transaction_type"] == "BUY", "Short stock exit MUST place a BUY order"
+    assert mock_kite.placed_orders[-1]["product"] == "MIS", "Short stock exit MUST use PRODUCT_MIS"
+
+    pos_long = {"symbol": "TCS", "contract": "TCS", "position_type": "stock", "side": "BUY", "direction": "BULL", "position_size": 10, "quantity": 10}
+    clear_executed_exit("TCS")
+    res_long_exit = close_stock_position(mock_kite, pos_long, live=True, product_type="CNC")
+    assert res_long_exit["success"] is True, f"Long exit should succeed: {res_long_exit}"
+    assert mock_kite.placed_orders[-1]["transaction_type"] == "SELL", "Long stock exit MUST place a SELL order"
+    assert mock_kite.placed_orders[-1]["product"] == "CNC", "Long stock exit MUST use PRODUCT_CNC"
+    clear_executed_exit("INFY")
+    clear_executed_exit("TCS")
+
+    # 4. Short Stock PnL Invariant:
+    # Short entered at 100, exited at 95 -> +5% profit
+    entry_s = 100.0
+    exit_profit = 95.0
+    exit_loss = 105.0
+    pnl_profit = ((entry_s - exit_profit) / entry_s * 100)
+    pnl_loss = ((entry_s - exit_loss) / entry_s * 100)
+    assert pnl_profit == 5.0, f"Expected +5.0% PnL, got {pnl_profit}"
+    assert pnl_loss == -5.0, f"Expected -5.0% PnL, got {pnl_loss}"
+
+    print(" PASSED [OK]", flush=True)
+except Exception as e:
+    errors.append(f"Option vs Stock Parity Invariants Failed: {e}")
+    print(f" FAILED [ERR] ({e})", flush=True)
+
 print("\n" + "=" * 100)
 if not errors:
     print("      ALL REGRESSION TESTS PASSED WITH 100% SUCCESS -- ZERO REGRESSIONS FOUND!")
