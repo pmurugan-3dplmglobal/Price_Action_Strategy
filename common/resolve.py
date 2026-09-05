@@ -1380,8 +1380,8 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                                    target=0, rr=0, event_time=candle_time)
                             continue
 
-                        if not is_anchor_valid_and_active(df_pe_a, candle_a_time or candle_time, result_pe.get("SL"), result_pe.get("T1"), t2_target=result_pe.get("T2"), entry_price=result_pe.get("Close"), side="BEAR"):
-                            invalid_reason = get_anchor_invalidation_reason(df_pe_a, candle_a_time or candle_time, result_pe.get("SL"), result_pe.get("T1"), t2_target=result_pe.get("T2"), entry_price=result_pe.get("Close"), side="BEAR")
+                        if not is_anchor_valid_and_active(df_pe_a, candle_a_time or candle_time, result_pe.get("SL"), result_pe.get("T1"), t2_target=result_pe.get("T2"), entry_price=result_pe.get("Close"), side="BULL"):
+                            invalid_reason = get_anchor_invalidation_reason(df_pe_a, candle_a_time or candle_time, result_pe.get("SL"), result_pe.get("T1"), t2_target=result_pe.get("T2"), entry_price=result_pe.get("Close"), side="BULL")
                             skip_reason = f"already completed {invalid_reason} (skip)" if invalid_reason else "already completed (skip)"
                             logging.info(f"PE MATCH {skip_reason}: {pe['tradingsymbol']} | {result_pe['Pattern']}")
                             continue
@@ -1421,14 +1421,14 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                         pattern_funnel.evict_item(engine_name, pe['tradingsymbol'])
                     elif name == "Setup_1_Anchor_BCD":
                         try:
-                            stage_pe = scan_pattern_lifecycle_stage_bearish(df_pe_e, df_pe_a, anchor_tf=timeframe_anchor, entry_tf=timeframe_entry)
+                            stage_pe = scan_pattern_lifecycle_stage(df_pe_e, df_pe_a, anchor_tf=timeframe_anchor, entry_tf=timeframe_entry)
                             if stage_pe and stage_pe.get("stage") in ["STAGE_A_PLUS_READY", "STAGE_A_READY", "STAGE_B_ANCHOR"]:
                                 f_stage = pattern_funnel.STAGE_A_PLUS if stage_pe["stage"] == "STAGE_A_PLUS_READY" else (pattern_funnel.STAGE_A if stage_pe["stage"] == "STAGE_A_READY" else pattern_funnel.STAGE_B)
                                 funnel_item = {
                                     "symbol": symbol, "contract": pe['tradingsymbol'], "option_token": pe['token'],
                                     "spot_token": config["token"], "spot_entry": current_spot, "strike": strike,
                                     "entry_spot": stage_pe.get("close", 0.0), "current_sl": stage_pe.get("sl", 0.0),
-                                    "benchmark": stage_pe.get("benchmark", 0.0), "c_high": stage_pe.get("c_high"),
+                                    "benchmark": stage_pe.get("benchmark", 0.0), "c_low": stage_pe.get("c_low"),
                                     "dist_to_trigger_pct": stage_pe.get("dist_to_trigger_pct", 0.0),
                                     "t1": stage_pe.get("t1"), "t2": stage_pe.get("t2"), "t3": stage_pe.get("t3"),
                                     "rr": stage_pe.get("rr", 0.0), "pattern": stage_pe.get("pattern", "BASE_ABCD"),
@@ -1472,7 +1472,7 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                     "symbol": symbol, "contract": pe['tradingsymbol'], "option_token": pe['token'],
                     "spot_token": config["token"], "spot_entry": current_spot, "strike": strike,
                     "entry_spot": res_pe["Close"], "current_sl": res_pe["SL"],
-                    "benchmark": res_pe.get("AnchorLow", res_pe["Close"]),
+                    "benchmark": res_pe.get("AnchorHigh", res_pe["Close"]),
                     "t1": None, "t2": None, "t3": None, "rr": 0.0,
                     "pattern": res_pe["Pattern"], "side": "PE",
                     "timeframe": timeframe_anchor, "candle_a_time": str(res_pe.get("CandleATime", "")),

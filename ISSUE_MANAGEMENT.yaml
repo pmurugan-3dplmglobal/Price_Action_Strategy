@@ -5,6 +5,21 @@ meta:
   purpose: Document operational failures, root causes, regression fixes, and system enhancements for v2.1.0-stable.
   historical_archive: archive/ISSUE_HISTORY_ARCHIVE.yaml (Preserves 84 resolved legacy issues prior to 2026-08-25)
 issues:
+- id: ISSUE-087
+  title: Long Option Buyer Invariant Inversion in PE Option Lifecycle Evaluation & Radar Eviction
+  severity: CRITICAL
+  category: Strategy Execution, Option Domain Rules & Lifecycle Management
+  family: OPTION_BUYER_INVARIANT
+  date_reported: '2026-09-05'
+  symptom: 'PE options (e.g. FORTIS26SEP910PE) in the Fast Surveillance Radar were assigned SL floors above current price (SL=23.71 > Price=22.20) and prematurely evicted with log: [RADAR EVICT] FORTIS breached SL floor (22.2 <= 23.71).'
+  root_cause: 'In common/resolve.py, PE option contracts were erroneously passed to scan_pattern_lifecycle_stage_bearish with side=BEAR instead of evaluating them as Long Option Buyers (bullish price expansion on the option chart itself). This inverted the Stop Loss floor into the Anchor High (resistance), causing buyer breakout radar checks (c_now <= sl) to misinterpret premium drift as a breakdown.'
+  affected_files:
+  - common/resolve.py
+  resolution: '1. Replaced scan_pattern_lifecycle_stage_bearish with scan_pattern_lifecycle_stage(side=BULL) for PE option contracts in common/resolve.py.
+    2. Updated is_anchor_valid_and_active and get_anchor_invalidation_reason for PE options to evaluate side=BULL.
+    3. Corrected Stage B anchor benchmark to AnchorHigh for PE options, aligning with buyer breakout execution.
+    4. Verified 100% pass across all 20 regression tests in scratch/run_full_regression_test.py.'
+  status: RESOLVED
 - id: ISSUE-086
   title: Windows File-Lock Concurrency & Access Denied Error in Pattern Funnel Atomic Persistence
   severity: HIGH
