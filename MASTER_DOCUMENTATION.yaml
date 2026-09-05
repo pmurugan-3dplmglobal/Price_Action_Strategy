@@ -63,6 +63,7 @@ architecture:
       LIVE_TRADING_EXPERIENCE_PLAYBOOK.md: "Continuous Live Trading Experience Playbook and Market Lessons Journal capturing day-by-day execution takeaways, failure root causes (e.g. Option Chart Illusion, Spot 44 EMA Breakdown), and tactical engine enhancements"
       STAGE_0_PARABOLIC_CASCADE_REFERENCE.md: "Mathematical and Price Action specification for Stage 0 Parabolic Decay & Soft Scoring"
       DATTA_27_GROUND_TRUTH_VALIDATION_REPORT.md: "27 Ground Truth Chart Pattern Validation against Datta Rulebook"
+      FNO_Scanning_Workflow_Spec.md: "FnO Option Contract Scanning, SL/Target Pre-Computation & Forward-Validation Workflow Specification"
     backtest:
       description: "Official Historical Validation Suite for multi-day option strike backtests, Yahoo/Kite historical candle runners, and simulation engines"
       run_official_option_strike_backtest.py: "Official Multi-day Option Strike & Spot Backtest Runner"

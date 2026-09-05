@@ -1,61 +1,5 @@
-Rule 0: STRICT CLOUD VM DEPLOYMENT PIPELINE (Immutable Ground Rule)
-- NEVER edit or modify code directly on remote cloud VMs (Oracle Cloud / AWS).
-- Standard Workflow: 1. Local Development -> 2. Local Regression Testing (100% Pass) -> 3. Git Push (origin master) -> 4. Git Pull on VM & Restart Services.
-- Machine-specific credentials (tokens, config) remain isolated per machine and are never cross-pollinated.
-
-Don't make any change directly lets discuss (add any point/idea ) finally we can implement
-Read :DOCUMENTATION.yaml/DOCUMENTATION_STOCK.yaml for understanding 
-Update :ISSUE_MANAGEMENT.yaml whenever you fix any bug or add feature 
-commit :to git with propre notes  
-
-Rule : Skip completed for coding purpose , read rest and mark  as completed if implemented .
-
-Bug:1  : Comlpleted 
-i have an active position  BAJAJFINSV26AUG1920PE	kite	USER_OVERRIDE	50	53.02	70.4			22.9	300	ACTIVE	-8130.00 (-54.20%)	Edit , why SL is not triggered yet ,though stock is trading below SL now 
-
-Will do following change after 4.00 pM toady
-Feature:1  : Completed
-1) separate SL monitor ;Skip the SL  till 9:45 then after that actively monitor (at start lets say 9.45, if it trading below SL & previous candle closed blow SL  & current candle trading below SL > then immediate Exit else monitor )
-2) separate Target monitor ; Exit at T1- buffer(1/2 point based strike value) on market opening ; so we might exit on good profit in flexuation 
-
-
-Feature:2  : Completed 
-
-
- #### Feature 2: Scan Export Spot Trend & Target Annotator (Separate Utility)
-
-  • Concept: A non-intrusive background/CLI helper script (e.g., annotate_scan_export_with_spot.py) that enriches the daily CSV export without affecting the core trading engines.
-  • How it works:
-      1. export from scan tap to & Reads the exported CSV file from output/exports/.
-      2. For each staged trade row, extracts the underlying stock symbol (e.g., BAJAJFINSV from BAJAJFINSV26AUG1920PE).
-      3. Fetches the underlying spot candles and evaluates:
-          • New Column A (Spot_Trend): BULL or BEAR (based on spot candle structure & ABC pattern).
-          • New Column B (Spot_T1_Target): The calculated spot T1 target derived from Negation Theory.
-      4. Saves an enriched version of the CSV (e.g., scan_export_enriched_DD_MM_YY.csv).
-
-Feature:3  : Completed 
-
-
-I want to have the icon/command next to staged stock (on each row) to view the chart 
-also mark the SL & T's on the chart is it possible with Kite ?
-
- How We Can Implement This (Recommended Approaches):
-
-    #### Approach 1 (Recommended): Built-in Interactive Modal with TradingView Lightweight Charts
-
-    • Dashboard Chart Icon: Add a 📈 Chart Icon in every row of the Staged Trade table (in app_option_Trade.py & app_Sock_Trade.py).
-    • Direct Kite Link: Provide a dual option:
-        1. Quick View (Interactive Modal): Clicking the icon opens a pop-up chart directly on the dashboard powered by TradingView Lightweight Charts (or Plotly). It fetches real-time historical candles from
-        Zerodha via a clean API endpoint (/api/get-chart-data) and automatically renders labeled horizontal lines:
-            • 🔴 Stop Loss (SL) (Red dashed line with price label)
-            • 🔵 Entry Price (Blue line)
-            • 🟢 Target 1 (T1), Target 2 (T2), Target 3 (T3) (Green lines with risk/reward badges)
-        2. External Zerodha Kite Link: A button inside the modal or directly next to the icon to open the native chart in kite.zerodha.com in a new browser tab.
-
-  > Approach 1 (Recommended): Built-in Interactive Modal with TradingView Lightweight Charts  proceed this & . Chart Scope: Should the chart view support both
-
-Bug : In progress
-can you check if the candle marking on Chart is correct ? while changing TF its should adapt the chart 
+# Notes_Inputs.txt — Active Ideas & Pending Tasks Scratchpad
+# Note: Completed notes are archived in archive/Notes_Inputs_Completed_Archive.txt
 
 --------------------------------------------------------------------------------
 Feature:4 : Pending / Future Idea
@@ -78,13 +22,3 @@ Move API credentials to .env file (Local & Cloud VM)
     2. Systemd services (`trading-options.service`, `trading-stock.service`, `trading-export.service`): add `EnvironmentFile=$APP_DIR/.env`.
     3. `sync_to_oracle_cloud.py`: Ensure `.env` is skipped from tar package to preserve VM credentials.
 --------------------------------------------------------------------------------
-Feature:5 : Completed
-Positive Breakeven (+BE: Entry + 2% / +2 Ticks) Gain Lock on +10% Spikes
-
-• Concept: When an option contract moves into substantial profit (High >= Entry + 10%), trail Stop-Loss to `Entry + 2%` or `Entry + 2 Ticks` (e.g. ₹5.85 on ₹5.75 entry) instead of flat Breakeven (₹5.75).
-• Problem it Solves:
-    In fast-reversing contracts (like KOTAKBANK 420 PE which spiked +13.9% to ₹6.55 before crashing), trailing to exact entry (₹5.75) resulted in a -₹900 loss after spread slippage when exiting at ₹5.35.
-• Architecture & Files to Touch:
-    1. `common/position_monitor.py`: Update `TRAIL-1 (+10% Gain Lock)` logic to set `new_sl = round(entry_s * 1.02, 2)` or `entry_s + max(0.10, tick_size * 2)` to guarantee green trade closure on reversal.
-    2. `input/program_config.json`: Add `"trail_be_buffer_pct": 2.0` setting.
---------------------------------------------------------------------------------

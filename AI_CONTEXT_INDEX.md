@@ -67,7 +67,7 @@ when a task explicitly needs them**.
 | `Trade_Option/` | Options Dashboard engine (port 5050). `app_option_Trade.py`, `stock_options_trade_engine.py`, `index_options_trade_engine.py`, UI in `templates/index.html` | Options dashboard / option engines / UI on port 5050 |
 | `Trade_Stock/` | Stock Trade Dashboard + scanners (port 5051). `app_Stock_Trade.py`, `stock_reversal_scanner.py` (single real impl, PROFILE-driven), wrappers `stock_bullish_reversal_scanner.py` / `stock_bearish_reversal_scanner.py`, UI in `templates/index.html` | Stock dashboard / scanners / UI on port 5051 |
 | `AGENTS.md` | Technical code map (also loaded automatically as session instructions) | Always own the content; keep in sync when arch/ports change |
-| `ISSUE_MANAGEMENT.yaml` | Bug/feature tracker — RECORD every fix here | After each fix/feature |
+| `ISSUE_MANAGEMENT.yaml` | Bug/feature tracker (active v2.1.0+; historical issues in `archive/ISSUE_HISTORY_ARCHIVE.yaml`) | After each fix/feature |
 | `MASTER_DOCUMENTATION.yaml` | Master system doc — keep accurate | When behavior changes |
 | `paths.py` | Canonical file paths | Any file-path reference — never hardcode paths |
 | `Kite_Access_Token_gen.py` | Root-level token generator (single canonical copy) | Only when touching token flow |
@@ -80,9 +80,9 @@ name/content explicitly mentions them.
 | Path | What it is | When to use |
 |---|---|---|
 | `docs/` | System reports, strategy references, and `docs/LIVE_TRADING_EXPERIENCE_PLAYBOOK.md` (Daily live trade lessons & tactical knowledge base) | Post-trade reviews, live lessons, or deep strategy specs |
-| `scratch/` | Diagnostic/regression one-off scripts (33 scripts). `run_full_regression_test.py` (10-test regression suite) is the one go-to. Others are throwaway analysis/debug scripts | Explicitly asked about a past debug/analysis; or to run regression |
+| `scratch/` | Diagnostic/regression one-off scripts. `run_full_regression_test.py` (regression suite) is the one go-to. | Explicitly asked about a past debug/analysis; or to run regression |
 | `backtest/` | Backtest scripts + `master_backtest_results.json` | Backtest work / results review only |
-| `archive/` (incl. `legacy_backup/`) | Decommissioned code — do not read, do not resurrect | Never (moved out of production) |
+| `archive/` (incl. `ISSUE_HISTORY_ARCHIVE.yaml`, `Notes_Inputs_Completed_Archive.txt`) | Historical archives (issues & notes) — preserved for record | Only when investigating past versions |
 | `Reference/` | Reference screenshots (JPEGs) | Only when user points at a specific image |
 | `__pycache__/` | Compiled bytecode — ignore completely | Never |
 
