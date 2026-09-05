@@ -8,14 +8,15 @@ meta:
   architecture: Centralized Shared Core (common/) + Dual Workspaces (Trade_Option & Trade_Stock)
   strategy: Unified ABC Bullish & Bearish Reversal Pattern Engine + Multi-Tiered Market Structure (T1/T2/T3)
   coverage:
-    - Index Options (NIFTY, BANKNIFTY, SENSEX)
+    - Index Options (NIFTY, BANKNIFTY, SENSEX via BFO/NFO)
     - Stock Options (210+ NSE F&O Constituent Equities dynamically discovered)
-    - Stock Spot Bullish Reversals (stock_bullish_reversal_scanner.py)
-    - Stock Spot Bearish Reversals (stock_bearish_reversal_scanner.py)
-    - Multi-Tier Soft Scoring (Tier 1 Gold, Tier 2 Core, Tier 3 Momentum)
-    - Timeframe-Aware Institutional Accumulation & Distribution Scoring (Daily/Weekly Base Recognition)
-    - EARLY_D_ENTRY (80% Candle Completion with Proportional Volume Validation)
-    - Unified Hybrid Dynamic Legs (ATR Volatility Adaptive Scaling + Symbol Overrides)
+    - Stock Spot Cash Equity Bullish (Long CNC/MIS) & Bearish (Short MIS)
+    - Option Contract VWAP +2σ Overpay Guard (calculate_option_vwap)
+    - D1/D2 Regime-Aware Spot Confluence (evaluate_spot_confluence)
+    - Volatility Contraction Pattern (VCP) Metrics ATR3/ATR14 & TTM Squeeze (calculate_vcp_metrics)
+    - Point C TWAP Absorption Stability (calculate_twap_c_stability)
+    - Option vs Stock Parity Alignment (Short Cash Equity execution, PnL & SL Invariant)
+    - Robust Option Contract Identification (is_option_contract)
     - Datta & Minervini Law (Risk Discipline, Outcome Bias Immunity, & Objective D2 Re-Entry Mandate)
 
 architecture:
@@ -31,73 +32,70 @@ architecture:
                   ▼
           Centralized Shared Core (common/)
             ├── trading_core.py (Canonical Re-export Hub)
-            ├── swing_detection.py (Unified Hybrid Dynamic Legs & Parabolic Multi-Swing Curve Math)
-            ├── trade_db.py (Thread-safe JSON persistence & staging)
+            ├── swing_detection.py (Unified Hybrid Dynamic Legs, VCP Metrics, Option VWAP, TWAP C)
+            ├── resolve.py (Dynamic Strike Selection, Spot Confluence, Contract Invariants)
+            ├── position_monitor.py (Risk Loop, Trailing, Spot SL Guard, Short Equity Exit)
+            ├── pattern_funnel.py (Surveillance Radar Lifecycle: A+, A, B)
+            ├── trade_db.py (ACID SQLite WAL database trades.sqlite3)
             └── dashboard_sl_overrides.py (Shared SL/T1/T2/T3 override read/write)
 
   directory:
     common:
       paths.py: "Single source of truth for canonical system file paths across engines and dashboards (TRADES_DB, ACTIVE_POSITIONS_DB, SCAN_DISPLAY_*, TOKEN_FILE, etc.)"
-      pattern_funnel.py: "Price Action Surveillance Radar & Funnel Manager maintaining 3-tier lifecycle stages (Category A+ Imminent Velocity, Category A Breakout Ready, Category B Anchor Incubator) with sub-15s execution dispatch and thread-safe persistence."
-      swing_detection.py: "Institutional-grade Phase 0 Parabolic Multi-Swing Cascade Filter with Unified Hybrid Dynamic Legs (get_adaptive_leg_length, is_parabolic_arch_enhanced, extract_swing_pivots, validate_parabolic_cascade_structure, detect_parabolic_multi_swings) supporting ATR volatility scaling (2-5 bars), symbol overrides, BOS integrity, and terminal base absorption."
-      vix_guard.py: "India VIX Macro Regime Gate (60s TTL RAM cache) evaluating normal (<=20.0), elevated (20-25), and extreme (>25.0) market volatility states"
-      portfolio_risk.py: "Cross-engine portfolio risk governor enforcing max concurrent positions (6), max daily drawdown limit (-3.0%), and sector caps (max 2 per sector across 235 stocks in registries.py)"
-      ema_engine.py: "13 EMA & 44 EMA crossover scanner and display output builder with 6-day monthly option contract rollover rule"
+      pattern_funnel.py: "Price Action Surveillance Radar & Funnel Manager maintaining 3-tier lifecycle stages (Category A+ Imminent Velocity, Category A Breakout Ready, Category B Anchor Incubator) with sub-15s execution dispatch."
+      swing_detection.py: "Phase 0 Parabolic Multi-Swing Cascade Filter with Unified Hybrid Dynamic Legs, ATR Volatility Adaptive Scaling (2-5 bars), BOS integrity, calculate_vcp_metrics (ATR3/ATR14, TTM Squeeze), calculate_option_vwap (+2σ bands), and calculate_twap_c_stability."
+      resolve.py: "Dynamic strike resolution, Option vs Stock domain parity, evaluate_spot_confluence (D1 Reversal vs D2 Continuation), candidate arbitrage scoring, and robust is_option_contract detection."
+      position_monitor.py: "Autonomous position surveillance, Spot-Anchored SL Guard, +BE Positive Breakeven lock, 3-tier exit execution, and short cash equity cover execution (BUY MIS at ask * 1.005)."
+      vix_guard.py: "India VIX Macro Regime Gate (60s TTL RAM cache) evaluating normal (<=20.0), elevated (20-25), and extreme (>25.0) market volatility states."
+      portfolio_risk.py: "Cross-engine portfolio risk governor enforcing dynamic capital-scaled concurrent positions (6 per 100k), max daily drawdown limit (-3.0%), and sector caps (max 2 per sector)."
+      ema_engine.py: "13 EMA & 44 EMA crossover scanner and display output builder with 6-day monthly option contract rollover rule."
       trading_core.py: "Canonical re-export hub for backward compatibility across all modules."
-      trade_db.py: "ACID SQLite WAL database (trades.sqlite3) with JSON backward compatibility, cycle staging, and ghost exit cleanup"
-      dashboard_auth.py: "User authentication & access control module (PBKDF2 password hashing, admin/user role hierarchy, approval workflow)"
-      daily_trade_journal.py: "Daily trade journal sync & statistical analytics engine (get_trade_journal_analytics: Win Rate %, Profit Factor, PnL by Pattern, Timeframe, Engine, and Outcome)"
-      dashboard_sl_overrides.py: "Shared read/write of user-edited SL/T1/T2/T3 overrides (sl_target_overrides.json) used by both dashboards"
-    Kite_Access_Token_gen.py: "Zerodha Kite OAuth access token generator CLI (single canonical root-level copy)"
+      trade_db.py: "ACID SQLite WAL database (trades.sqlite3) with JSON backward compatibility, cycle staging, and ghost exit cleanup."
+      dashboard_auth.py: "User authentication & access control module (PBKDF2 password hashing, admin/user role hierarchy, approval workflow)."
+      daily_trade_journal.py: "Daily trade journal sync & statistical analytics engine (Win Rate %, Profit Factor, PnL by Pattern, Timeframe, Engine)."
+      dashboard_sl_overrides.py: "Shared read/write of user-edited SL/T1/T2/T3 overrides (sl_target_overrides.json) used by both dashboards."
+    Kite_Access_Token_gen.py: "Zerodha Kite OAuth access token generator CLI (single canonical root-level copy)."
     Trade_Option:
-      app_option_Trade.py: "Options Dashboard (port 5050) with 1-Click BUY button on Scan Tab (/api/buy-scanned-trade). Chart modal (/api/get-chart-data) renders direction-aware A-B-C-D markers + benchmark Entry line (A.high/A.low) + benchmark-based SL%/RR."
-      index_options_trade_engine.py: "Intraday index options engine (NIFTY, BANKNIFTY, SENSEX with BFO exchange routing)"
-      stock_options_trade_engine.py: "Nifty 50 stock options scanner & executor"
-      automated_strategy_exporter.py: "Plan 1 Multi-Timeframe Automated Daily Exporter (Index: 3m/5m/15m, Stock Option: 15m/60m)"
-      run_export_scheduler_daemon.py: "Background Scheduler Daemon for 10:30 AM, 1:00 PM, and 3:15 PM exports"
+      app_option_Trade.py: "Options Dashboard (port 5050) with 1-Click BUY button on Scan Tab (/api/buy-scanned-trade), 24/7 position monitor daemon, and TradingView chart modal."
+      index_options_trade_engine.py: "Intraday index options engine (NIFTY, BANKNIFTY, SENSEX with BFO exchange routing)."
+      stock_options_trade_engine.py: "Full NSE F&O universe options scanner & executor with Fast Surveillance Radar loop."
+      automated_strategy_exporter.py: "Plan 1 Multi-Timeframe Automated Daily Exporter (Index: 3m/5m/15m, Stock Option: 15m/60m)."
+      run_export_scheduler_daemon.py: "Background Scheduler Daemon for 09:16 AM, 10:30 AM, 1:00 PM, and 3:15 PM exports."
     Trade_Stock:
-      app_Stock_Trade.py: "Stock Trade Dashboard (port 5051) with 1-Click BUY/SHORT (MIS) button on Scan Tab (/api/buy-scanned-trade), short stock P&L calculations, and interactive TV chart modal with direction-aware markers."
-      stock_bullish_reversal_scanner.py: "Stock Bullish Reversal Scanner & Exporter"
-      stock_bearish_reversal_scanner.py: "Stock Bearish Reversal Scanner & Exporter"
-      stock_reversal_scanner.py: "Unified Stock Reversal Scanner engine with direction serialization and VIX/portfolio risk gates"
+      app_Stock_Trade.py: "Stock Trade Dashboard (port 5051) with 1-Click BUY/SHORT (MIS) button on Scan Tab (/api/buy-scanned-trade), short stock P&L calculations, and interactive TV chart modal."
+      stock_bullish_reversal_scanner.py: "Stock Bullish Reversal Scanner & Exporter."
+      stock_bearish_reversal_scanner.py: "Stock Bearish Reversal Scanner & Exporter."
+      stock_reversal_scanner.py: "Unified Stock Reversal Scanner engine with direction serialization, VIX/portfolio risk gates, and VCP metrics."
     docs:
-      description: "Tactical Knowledge Base, Continuous Learning Playbook, and Architecture Specifications"
-      LIVE_TRADING_EXPERIENCE_PLAYBOOK.md: "Continuous Live Trading Experience Playbook and Market Lessons Journal capturing day-by-day execution takeaways, failure root causes (e.g. Option Chart Illusion, Spot 44 EMA Breakdown), and tactical engine enhancements"
-      STAGE_0_PARABOLIC_CASCADE_REFERENCE.md: "Mathematical and Price Action specification for Stage 0 Parabolic Decay & Soft Scoring"
-      DATTA_27_GROUND_TRUTH_VALIDATION_REPORT.md: "27 Ground Truth Chart Pattern Validation against Datta Rulebook"
-      FNO_Scanning_Workflow_Spec.md: "FnO Option Contract Scanning, SL/Target Pre-Computation & Forward-Validation Workflow Specification"
+      description: "Tactical Knowledge Base, Continuous Learning Playbook, and Architecture Specifications."
+      LIVE_TRADING_EXPERIENCE_PLAYBOOK.md: "Live Trading Lessons Journal capturing day-by-day execution takeaways, failure root causes, and tactical enhancements."
+      STAGE_0_PARABOLIC_CASCADE_REFERENCE.md: "Mathematical and Price Action specification for Stage 0 Parabolic Decay & Soft Scoring."
+      DATTA_27_GROUND_TRUTH_VALIDATION_REPORT.md: "27 Ground Truth Chart Pattern Validation against Datta Rulebook."
+      FNO_Scanning_Workflow_Spec.md: "FnO Option Contract Scanning, SL/Target Pre-Computation & Forward-Validation Workflow Specification."
     backtest:
-      description: "Official Historical Validation Suite for multi-day option strike backtests, Yahoo/Kite historical candle runners, and simulation engines"
-      run_official_option_strike_backtest.py: "Official Multi-day Option Strike & Spot Backtest Runner"
-      run_kite_master_backtest.py: "Kite Connect API Historical Multi-day Backtest Suite"
-      run_master_backtest.py: "Yahoo Finance / Historical Data Master Backtest Engine"
-      backtest_simulation.py: "Parallelized Stock Options & Spot Simulation Engine"
-      master_backtest_results.json: "JSON Export of latest master backtest run results"
-      test_fetch.py: "Quick Yahoo Finance API candle fetch test script"
-      test_option_strike_fetch.py: "Zerodha NFO Option Strike token & candle fetch test script"
-      test_spot_scan.py: "Spot & Option pattern scanner verification test script"
+      description: "Official Historical Validation Suite for multi-day option strike backtests, Yahoo/Kite historical runners, and simulation engines."
+      run_official_option_strike_backtest.py: "Official Multi-day Option Strike & Spot Backtest Runner."
+      run_kite_master_backtest.py: "Kite Connect API Historical Multi-day Backtest Suite."
+      run_master_backtest.py: "Yahoo Finance / Historical Data Master Backtest Engine."
+      backtest_simulation.py: "Parallelized Stock Options & Spot Simulation Engine."
+      master_backtest_results.json: "JSON Export of latest master backtest run results."
     scratch:
-      run_full_regression_test.py: "19-test Master Strategy Regression Test Suite (Imports, Auth, Invalidation, Serializers, Chart API, DB Invariants, Paths, Trailed-SL Floor, JS V8, Parabolic Math, Auth, VIX Gate, Option Sizing, Harami Ratio, Debit Spreads, Liquidity Gate, 09:16 AM Reconciler, CVE-1..4 Hardening, Feature 5 Positive Breakeven, B-C Excursion Guards)"
-      test_vix_portfolio_volume.py: "47-test Unit Verification Suite (VIX Regimes, Portfolio Caps, 235-Stock Sector Map, BCD Volume Profile, EMA Rollover, IST Timing, Harami Ratios, Bear Date Mapping, Capital Ceilings, Liquidity Shield)"
-      test_cve_fixes.py: "6-test Targeted CVE & Feature Verification Suite (CVE-1..4, Feature 5 Positive Breakeven, Hammer/Shooting Star Containment, B-C Excursion Guard)"
-      analyze_all_active.py: "Active position metrics analysis utility"
-      apply_30m_targets_to_all_active.py: "Batch target updater for active trades"
-      audit_targets.py: "Target calculation auditor script"
-      check_procs.py: "Python background process checker"
-      export_and_exit_all.py: "Bulk trade exit & export helper script"
-      read_active_pos.py: "Active position JSON state inspector"
+      run_full_regression_test.py: "21-test Master Strategy Regression Test Suite (Imports, Auth, Scanners, Serializers, Chart API, DB Invariants, Paths, Trailed-SL Floor, JS V8, Parabolic Math, Auth, VIX Gate, Option Sizing, Harami Ratio, Debit Spreads, Liquidity Gate, 09:16 AM Reconciler, CVE-1..4 Hardening, Feature 5 Positive Breakeven, Funnel Stages, Option vs Stock Parity)."
+      test_institutional_enhancements.py: "5-test Institutional Unit Verification Suite (Option VWAP +2σ bands, Point C TWAP stability, Spot Confluence mapping, Continuous 15% Greek loss shield, Pegged limit routing)."
+      test_vix_portfolio_volume.py: "47-test Unit Verification Suite (VIX Regimes, Portfolio Caps, Sector Map, BCD Volume Profile, EMA Rollover, IST Timing)."
+      test_cve_fixes.py: "6-test Targeted CVE & Feature Verification Suite."
 
 config_precedence:
   priority_1: "Manual UI User Edits (overrides in sl_target_overrides.json & active_positions_db.json)"
-  priority_2: "Persistent Config / Stored DB (input/program_config.json, trades_db.json)"
+  priority_2: "Persistent Config / Stored DB (input/program_config.json, trades.sqlite3)"
   priority_3: "Adaptive Defaults (calculated dynamically based on active timeframe & asset class)"
 
 timeframe_resampling:
   native_kite_tfs: ["minute", "3minute", "5minute", "10minute", "15minute", "30minute", "60minute", "day"]
   resampled_tfs:
-    "75min": "Resampled from 15minute candles into 75min bars (5 candles/day: 09:15-10:30, 10:30-11:45, 11:45-13:00, 13:00-14:15, 14:15-15:30) using Pandas resample('75min', offset='15min')"
-    "4hr": "Resampled from 60minute candles into 240min bars using Pandas resample('240min')"
-    "week": "Resampled from daily candles into Friday-ending weekly bars using Pandas resample('W-FRI')"
+    "75min": "Resampled from 15minute candles into 75min bars (5 candles/day: 09:15-10:30, 10:30-11:45, 11:45-13:00, 13:00-14:15, 14:15-15:30) via resample('75min', offset='15min')"
+    "4hr": "Resampled from 60minute candles into 240min bars via resample('240min')"
+    "week": "Resampled from daily candles into Friday-ending weekly bars via resample('W-FRI')"
   stock_trade_rule: "Trade_Stock scanners default strictly to 'day' candles unless configured via UI/program_config.json"
   supported_stock_tfs: ["day", "week", "4hr", "1hr", "75min", "30min", "15min"]
   adaptive_lookback:
@@ -113,7 +111,7 @@ engines:
     asset_class: "INDEX_OPTION"
     side: "BULL"
     instruments: ["NIFTY", "BANKNIFTY", "SENSEX"]
-    strike_range: "ATM ± X strikes (Default: 0, configurable in program_config.json / UI)"
+    strike_range: "ATM ± 1 strike step (Default: 1, configurable in program_config.json / UI)"
     defaults: {timeframe_entry: "3minute", timeframe_anchor: "15minute", risk_percent: 1.0, capital: 100000}
 
   case_b_stock_options:
@@ -122,8 +120,8 @@ engines:
     file: "Trade_Option/stock_options_trade_engine.py"
     asset_class: "STOCK_OPTION"
     side: "BULL / BEAR"
-    instruments: "Full NSE F&O Universe (~210+ Liquid Constituent Equities)"
-    strike_range: "ATM ± X strikes (Default: 0, configurable in program_config.json / UI)"
+    instruments: "Full NSE F&O Universe (~210+ Liquid Constituent Equities dynamically discovered)"
+    strike_range: "ATM ± 1 strike step (Default: 1, configurable in program_config.json / UI)"
     defaults: {target_universe: "FNO_ALL", timeframe_entry: "15minute", timeframe_anchor: "30minute", risk_percent: 10.0, capital: 100000}
 
   case_c_stock_spot_bull:
@@ -132,7 +130,8 @@ engines:
     file: "Trade_Stock/stock_bullish_reversal_scanner.py"
     asset_class: "STOCK_SPOT"
     side: "BULL"
-    instruments: "Nifty 50 Constituent Stocks (Spot)"
+    instruments: "NSE Liquid Equities (Spot)"
+    execution: "Long Cash Equity: BUY CNC/MIS at market/ask; exits via SELL CNC/MIS; SL below entry, targets above entry."
     defaults: {timeframe_entry: "day", timeframe_anchor: "day", lookback_days: 2000}
 
   case_d_stock_spot_bear:
@@ -141,7 +140,8 @@ engines:
     file: "Trade_Stock/stock_bearish_reversal_scanner.py"
     asset_class: "STOCK_SPOT"
     side: "BEAR"
-    instruments: "Nifty 50 Constituent Stocks (Spot)"
+    instruments: "NSE Liquid Equities (Spot)"
+    execution: "Short Cash Equity: SELL MIS at market/bid; exits via BUY MIS at ask * 1.005 to cover short; SL above entry, targets below entry; PnL = ((entry - exit) / entry * 100)."
     defaults: {timeframe_entry: "day", timeframe_anchor: "day", lookback_days: 2000}
 
   case_e_stock_ema:
@@ -170,25 +170,22 @@ backtest_suite:
 
   strategy_rules:
     core_architectural_thumb_rule:
-      rule_name: "Non-Negotiable Architecture Thumb Rule: Feature Isolation & Zero Regression"
-      fundamental_principle: "New features, modules, or tools (e.g. Negation Analyzer, Exporters) MUST be strictly isolated and MUST NEVER alter, degrade, or break existing working functionality."
+      rule_name: "Feature Isolation & Zero Regression Rule"
+      fundamental_principle: "New features or modules MUST be strictly isolated and MUST NEVER alter, degrade, or break existing working functionality."
       enforcement_guidelines:
-        - "Engine Separation: Index Options Engine (index_options_trade_engine.py / app_option_Trade.py) and Stock Options Engine (stock_options_trade_engine.py / app_Stock_Trade.py) must maintain clear workspace and display isolation."
-        - "Default View Integrity: Web UI dashboards must default their view filters to their corresponding core engine (Index Dashboard defaults to 'Index', Stock Dashboard defaults to 'Nifty 50')."
-        - "Independent Testing: Any new API endpoint or scanner tool must be tested in isolation to verify zero side-effects on active trade execution, position recovery, and display files."
+        - "Engine Separation: Index Options Engine (Trade_Option Port 5050) and Stock Trade Engine (Trade_Stock Port 5051) maintain strict workspace, display, and process isolation."
+        - "Default View Integrity: Web UI dashboards default view filters to their corresponding core engine."
+        - "Zero Side-Effects: New API endpoints or scanners are verified via regression test suite before release."
 
     canonical_path_integrity:
       rule_name: "Canonical Path Consolidation (common/paths.py)"
       fundamental_principle: "All modules MUST import file paths from common/paths.py to eliminate CWD-dependent file location splits."
-      enforcement_guidelines:
-        - "All engines, scanners, dashboards, and background processes must resolve output paths via common/paths.py."
-        - "Guarantees zero path split-brain bugs between root and workspace-relative directories."
 
     active_trade_guards:
       rule_name: "Active Trade Invariants & Data Safeguards"
       duplication_guard: "create_trade(..., allow_duplicate=False) rejects duplicate ACTIVE contracts per engine."
       expiry_purge: "purge_expired_positions() automatically clears expired option contracts."
-      entry_time_sanitization: "sanitize_entry_time() guarantees entry_time represents the true execution timestamp to prevent pre-buy candle evaluation errors."
+      entry_time_sanitization: "sanitize_entry_time() guarantees entry_time represents true execution timestamp."
       one_click_buy_preservation: "1-Click BUY captures and preserves candle_a_time, benchmark, anchor_floor, and direction while guarding against expired contract purchases."
 
     swing_filter_rule:
@@ -197,8 +194,8 @@ backtest_suite:
       timeframe_scope: "STRICTLY EVALUATED ON ANCHOR TIMEFRAME (df_anchor for options, stock chart for spot)."
       requirements:
         - "Polynomial Regression: Fits y = ax^2 + bx + c requiring concave down dome (a < 0) for Bullish and concave up cup (a > 0) for Bearish with R^2 >= 0.55."
-        - "Cascade Progression: Extrema of each wave must progressively decay (Lower Highs + Lower Lows for Bullish setups)."
-        - "Confirmed Break of Structure (BOS): Each subsequent wave leg down must have a confirmed candle close below the prior structural low (start_val)."
+        - "Cascade Progression: Extrema of each wave progressively decay (Lower Highs + Lower Lows for Bullish setups)."
+        - "Confirmed Break of Structure (BOS): Each subsequent wave leg down must have confirmed candle close below prior structural low (start_val)."
         - "Point 4 Terminal Base: Identifies flat consolidation / base absorption at Point 4 (pct_diff < 2%)."
         - "Recency Constraint (max_bars_after_terminal): Terminal swing base must be recent (<= 45 bars across Daily and Options charts)."
         - "Sequential Trigger: Anchor Candle A formed within terminal base window (Anchor_idx >= Terminal_idx - 5 bars lookback)."
@@ -210,12 +207,11 @@ backtest_suite:
       invalidation_conditions:
         - "SL Violation: Discard setup if any subsequent candle on df_anchor closed below SL (closing basis for Bull, above SL for Bear)."
         - "Target 1 (80%+ Exhaustion): Discard setup if any subsequent candle achieved >= 80% of move to T1 or touched 100% of T1."
-        - "T1 to T2 Gap Constraint: If 80%/100% T1 reached, setup is strictly discarded unless T2 is available with >= 10.0% expansion gap over T1."
+        - "T1 to T2 Gap Constraint: If 80%/100% T1 reached, setup is discarded unless T2 is available with >= 10.0% expansion gap over T1."
         - "Target 2 Pre-Hit: Discard setup if subsequent candles touched or exceeded T2."
-      generic_enforcement: "Applied universally across stock_options_trade_engine.py, index_options_trade_engine.py, scan_anchor_bcd_breakout(), scan_symbol(), patterns_bull.py, patterns_bear.py, and UI APIs."
 
     target_derivation_and_timeframes:
-      default_anchor_tf: "Nifty 50 Stock Options & Spot default strictly to 30minute (Same Entry & Anchor TF: timeframe_entry='30minute', timeframe_anchor='30minute'). Index Options default to 15minute."
+      default_anchor_tf: "Nifty 50 Stock Options & Spot default to 30minute (timeframe_entry='30minute', timeframe_anchor='30minute'). Index Options default to 15minute."
       derivation_method: "All profit targets (T1, T2, T3) are derived strictly from df_anchor candles using Negation Theory (find_profit_targets / find_profit_targets_bearish)."
       target_buffers:
         cheap_options: "Price <= 50: Early exit buffer = max(0.50, Target * 1.5%)"
@@ -227,26 +223,26 @@ backtest_suite:
       - "1. Bullish Engulfing / Bearish Engulfing (ABCD)"
       - "2. Lower Low (LL) Sweep / Higher High (HH) Sweep"
       - "3. Two Higher Highs / Two Lower Lows"
-      - "4. Baby Candle / Shooting Star"
+      - "4. Baby Candle / Shooting Star (Hammer)"
       - "5. Bullish Harami / Bearish Harami"
       - "Rule: First valid pattern matching R:R >= 1.88 triggers setup."
 
     risk_management:
-      check_interval: "Every 5 seconds / WebSocket heartbeat daemon"
+      check_interval: "Every 2-5 seconds / WebSocket heartbeat daemon"
       portfolio_risk_drawdown: "Max Daily Drawdown evaluates combined realized loss + active unrealized floating loss across all positions against -3.0% capital threshold."
       cash_equity_capital_cap: "Cash equity position sizing strictly caps units to 100% of available capital to eliminate excessive leverage exposure on micro stop losses."
-      vix_regime_governance: "India VIX regime gates entries: Normal (<=20.0) permits all tiers, Elevated (20-25) permits Tier 1 Gold only, Extreme (>25.0) halts all new entries. Supports configurable fail_open policy."
-      friday_eod_index_squareoff: "On Fridays (weekday == 4) at 15:15 IST, all short-timeframe (<= 5m) or Index option positions are automatically squared off (EXIT_EOD_FRIDAY) to eliminate 2-day weekend theta decay and Monday opening gap risk."
-      expiry_rollover_protection: "Stock options in monthly expiry week (days_rem <= 6) automatically roll over to the next monthly series (expiries[1]) to eliminate terminal gamma/theta risk. Index options preserve active weekly near-expiry."
-      stale_outlier_entry_guard: "Positions with >300% divergence between entry_spot and live LTP (or manual overrides) are protected from false immediate Emergency Hard SL triggers."
+      vix_regime_governance: "India VIX regime gates entries: Normal (<=20.0) permits all tiers, Elevated (20-25) permits Tier 1 Gold only, Extreme (>25.0) halts all new entries."
+      friday_eod_index_squareoff: "On Fridays at 15:15 IST, all short-timeframe (<= 5m) or Index option positions are automatically squared off (EXIT_EOD_FRIDAY) to eliminate weekend theta decay."
+      expiry_rollover_protection: "Stock options in monthly expiry week (days_rem <= 6) automatically roll over to next monthly series (expiries[1]). Index options preserve active weekly near-expiry."
+      stale_outlier_entry_guard: "Positions with >300% divergence between entry_spot and live LTP are protected from false immediate Emergency Hard SL triggers."
       stages:
         sl_hit: "Exit full position (EXIT_SL)"
-        t1_hit: "Move SL to Entry / Breakeven (TRAIL_BE), or FULL EXIT if T2/T3 are N/A"
+        t1_hit: "Move SL to Positive Breakeven (+BE: Entry + 2% Bull, Entry - 2% Bear), or FULL EXIT if T2/T3 are N/A"
         t2_hit: "Move SL to T1 level (TRAIL_T1)"
         t3_hit: "Exit full position (EXIT_T3)"
       setup_classification:
         fresh_entry: "HIGH_PRIORITY: Post-D candles have not hit T1 or SL yet. SL at original A.low buffer."
-        t2_continuation: "LOW_PRIORITY: Post-D candles ALREADY hit T1, but T2/T3 is still pending and unreached. SL trailed to T1 level."
+        t2_continuation: "LOW_PRIORITY: Post-D candles ALREADY hit T1, but T2/T3 is pending. SL trailed to T1 level."
         expired: "REJECTED: Post-D candles closed below SL OR completed all targets (T3)."
       exit_order_execution_tiers:
         tier_1: "Marketable LIMIT Order at 0.995 * Bid/LTP (rounded to 0.05 tick) for instant fills."
@@ -264,21 +260,21 @@ backtest_suite:
       targets: "Negation theory non-negated swing high resistance levels T1, T2, T3"
     - id: 2
       name: "Lower Low (LL) Sweep (ABCD)"
-      anchor: "Two-leg swing sweep: Low 1 base -> intermediate swing rally (>= 0.8x ATR or >= 1.5%) across >= 3 candles holding above Low 1 -> Low 2 sweep dips below Low 1 -> Bullish bounce candle recovers & closes above sweep high"
+      anchor: "Two-leg swing sweep: Low 1 base -> intermediate swing rally (>= 0.8x ATR or >= 1.5%) holding above Low 1 -> Low 2 sweep dips below Low 1 -> Bullish bounce candle recovers & closes above sweep high"
       breakout: "Close > B.high"
       sl: "Sweep Candle Low (Low 2) - buffer"
-      swing_rule: "Enforces distinct intermediate rally to eliminate 1-leg waterfall/flat chop traps (FEATURE-014)"
+      swing_rule: "Enforces distinct intermediate rally to eliminate 1-leg waterfall traps"
     - id: 3
       name: "Two Higher Highs"
       anchor: "Two successive higher-high bullish candles (A1, A2)"
       sl: "Min(A1.low, A2.low) - buffer"
     - id: 4
       name: "Baby Candle / Pinbar / Hammer"
-      anchor: "Small baby/hammer candle inside bearish mother body with lower wick"
+      anchor: "Small baby/hammer candle inside bearish mother body with lower wick and base containment"
       sl: "Baby Low - buffer"
     - id: 5
       name: "Bullish Harami (Inside Bar)"
-      anchor: "Bullish inside bar inside bearish mother candle body"
+      anchor: "Bullish inside bar inside bearish mother candle body (Inside Body <= 65% Mother Body)"
       sl: "Inside Low - buffer"
 
   bearish_patterns:
@@ -292,21 +288,21 @@ backtest_suite:
       targets: "Negation theory non-negated swing low support levels T1, T2, T3"
     - id: 2
       name: "Higher High (HH) Sweep (ABCD)"
-      anchor: "Two-leg swing sweep: High 1 base -> intermediate swing pullback (<= High 1 - 0.8x ATR or >= 1.5%) across >= 3 candles holding below High 1 -> High 2 sweep rallies above High 1 -> Bearish rejection candle closes back below sweep low"
+      anchor: "Two-leg swing sweep: High 1 base -> intermediate swing pullback (<= High 1 - 0.8x ATR or >= 1.5%) holding below High 1 -> High 2 sweep rallies above High 1 -> Bearish rejection candle closes back below sweep low"
       breakout: "Close < B.low"
       sl: "Sweep Candle High (High 2) + buffer"
-      swing_rule: "Enforces distinct intermediate pullback to eliminate 1-leg climax spike/flat chop traps (FEATURE-014)"
+      swing_rule: "Enforces distinct intermediate pullback to eliminate 1-leg climax traps"
     - id: 3
       name: "Two Lower Lows"
       anchor: "Two successive lower-low bearish candles (A1, A2)"
       sl: "Max(A1.high, A2.high) + buffer"
     - id: 4
       name: "Shooting Star / Bearish Baby Candle"
-      anchor: "Small shooting star/baby candle inside bullish mother body with upper wick"
+      anchor: "Small shooting star/baby candle inside bullish mother body with upper wick and peak containment"
       sl: "Baby High + buffer"
     - id: 5
       name: "Bearish Harami (Inside Bar)"
-      anchor: "Bearish inside bar inside bullish mother candle body"
+      anchor: "Bearish inside bar inside bullish mother candle body (Inside Body <= 65% Mother Body)"
       sl: "Inside High + buffer"
 
 registries:
@@ -315,12 +311,13 @@ registries:
     BANKNIFTY: {token: 260105, lot_size: 30, strike_step: 100, exchange: "NFO"}
     SENSEX: {token: 265, lot_size: 20, strike_step: 100, exchange: "BFO"}
   stocks:
-    count: 50
-    constituents: "All 50 Nifty 50 stocks with auto-sync from Zerodha NSE instrument master"
+    count: "210+ F&O Equities"
+    constituents: "Full active NSE F&O universe dynamically loaded from nfo_instruments_cache.csv"
 
 deployment:
   cloud_provider: "Oracle Cloud Always Free (4 ARM cores, 24GB RAM, Ubuntu 24.04 / Oracle Linux)"
   ssh_key: "G:\\Poovendan\\AI\\Trading\\Cloud\\Oracle_Cloud\\ssh-key-2026-08-05.key"
+  credential_isolation: "/etc/trading.env on remote VMs; EnvironmentFile=-/etc/trading.env systemd injection"
   nodes:
     bhavni:
       host: "opc@129.225.69.131"
@@ -353,43 +350,43 @@ pattern_shorthands:
     BEAR_ENG: "Bearish Engulfing Setup (find_anchor_bearish_engulfing)"
     BEAR_STAR: "Shooting Star / Bearish Baby Setup (find_anchor_shooting_star_baby)"
     BEAR_HAR: "Bearish Harami Setup (find_anchor_bearish_harami)"
-  csv_export_alignment: "CSV exports match UI display table 1-to-1 in column order, numeric rounding (2 decimal places), formatted DD-MM-YY HH:MM timestamps, Yes/No CarryForward, and explicit pattern shorthands"
+  csv_export_alignment: "CSV exports match UI display table 1-to-1 in column order, numeric rounding (2 decimal places), formatted DD-MM-YY HH:MM timestamps, Yes/No CarryForward, and explicit pattern shorthands."
 
 scan_display_anchor_fields:
   description: "Engine-persisted anchor fields on every staged trade / position so the chart modal mirrors the engine's confirmed setup exactly"
   benchmark: "Breakout threshold = A.high for CE/BULL, A.low for PE/BEAR. Chart Entry price line draws here (label 'Entry (A.high)' / 'Entry (A.low)')."
-  anchor_floor: "Sequence-integrity floor = A.low for BULL, A.high for BEAR. Breach triggers the chart 'Seq broken' marker."
-  direction: "\"BULL\" or \"BEAR\". Drives direction-aware A-B-C-D marker detection (BEAR is a mirrored mirror: B = Close < A.low, C = retest holding below A.high, D = red Close < A.low)."
-  flow: "scan_anchor_bcd_breakout / _bearish -> scan_symbol -> write_scan_display_data.build_trade -> staged JSON -> dashboard chart modal. Position dicts (incl. KITE_RECOVERED) persist them too."
-  chart_risk_math: "SL% / T1 RR / footer R:R computed against the benchmark (not the actual entry) for strategy-consistent risk math."
-  golden_rule: "UI MUST NOT re-derive A.high/A.low from candle_a_time (anchor detectors may return a different candle than the engine's a_idx benchmark). The engine's persisted benchmark is the single source of truth."
+  anchor_floor: "Sequence-integrity floor = A.low for BULL, A.high for BEAR. Breach triggers chart 'Seq broken' marker."
+  direction: "\"BULL\" or \"BEAR\". Drives direction-aware A-B-C-D marker detection (BEAR: B = Close < A.low, C = retest holding below A.high, D = red Close < A.low)."
+  flow: "scan_anchor_bcd_breakout / _bearish -> scan_symbol -> write_scan_display_data.build_trade -> staged JSON -> dashboard chart modal."
+  chart_risk_math: "SL% / T1 RR / footer R:R computed against the benchmark (not actual entry) for strategy-consistent risk math."
+  golden_rule: "UI MUST NOT re-derive A.high/A.low from candle_a_time. The engine's persisted benchmark is the single source of truth."
 
 sl_buffer_scaling:
   description: "Dynamic asset & price-tiered Stop Loss buffer (calculate_sl_buffer) providing robust breathing room across option and equity price tiers"
   tiers:
-    ultra_cheap_options: "Price < ₹10: max(0.40, Price * 10%)  (guarantees 0.40 - 0.90 pt buffer to absorb bid-ask spread and noise)"
+    ultra_cheap_options: "Price < ₹10: max(0.40, Price * 10%)  (0.40 - 0.90 pt buffer to absorb spread and noise)"
     cheap_options: "₹10 <= Price < ₹50: max(0.60, Price * 4%)  (0.60 - 2.00 pt buffer)"
     mid_options: "₹50 <= Price < ₹200: max(1.00, Price * 2%)"
     high_options_stock: "₹200 <= Price < ₹500: max(1.50, Price * 1.5%)"
     index_spot_high_stocks: "Price >= ₹500: max(2.50, Price * 0.5%)"
 
 multi_tiered_scoring:
-  description: "Stage 0 Soft Priority Multi-Tier Model (Proposal C) classifying trade conviction based on parabolic curve decay and price action"
+  description: "Stage 0 Soft Priority Multi-Tier Model (Proposal C) classifying trade conviction based on parabolic curve decay, volatility contraction, and price action"
   tiers:
     tier_1_gold:
       badge: "🥇 T1"
       label: "TIER_1_GOLD"
-      criteria: "5 True Anchors + (>= 3 Parabolic Waves or Tier 1 Arch) + Terminal Base Absorption + A-B-C-D Confirmation + R:R >= 2.00 (1:2)"
+      criteria: "5 True Anchors + (>= 3 Parabolic Waves or Tier 1 Arch) + Terminal Base Absorption + A-B-C-D Confirmation + R:R >= 2.00. Also awarded via D1 Reversal with confirmed Spot Confluence and R:R >= 2.0."
       sizing: "100% Standard Capital"
     tier_2_core:
       badge: "🥈 T2"
       label: "TIER_2_CORE"
-      criteria: "5 True Anchors (>= 2 Waves / R:R >= 1.50) OR High-Conviction BASE_ABCD (>= 3 Waves + R:R >= 2.00) (1:1.5)"
+      criteria: "5 True Anchors (>= 2 Waves / R:R >= 1.50) OR High-Conviction BASE_ABCD (>= 3 Waves + R:R >= 2.00)."
       sizing: "70% Standard Capital"
     tier_3_momentum:
       badge: "🥉 T3"
       label: "TIER_3_MOMENTUM"
-      criteria: "Standard BASE_ABCD / Page 16/17 Trend Continuation / Immediate Re-Entry / 1-Wave Pullback + R:R >= 1.50"
+      criteria: "Standard BASE_ABCD / Datta Page 16/17 D2 Trend Continuation Re-Entry / 1-Wave Pullback + R:R >= 1.50."
       sizing: "50% Standard Capital"
   reference_document: "docs/STAGE_0_PARABOLIC_CASCADE_REFERENCE.md"
 
@@ -398,59 +395,71 @@ directional_hegemony_and_arbitrage:
   layers:
     layer_1_spot_macro_trend:
       rule: "Underlying Spot 13 EMA Trend Filter"
-      mechanics: "Calculates 13 EMA on Spot candles. If Spot >= 13 EMA -> Macro Bias is BULL (Favor CE). If Spot < 13 EMA -> Macro Bias is BEAR (Favor PE)."
+      mechanics: "Spot >= 13 EMA -> Macro Bias BULL (Favor CE). Spot < 13 EMA -> Macro Bias BEAR (Favor PE)."
     layer_2_conviction_arbitrage:
       rule: "Single-Setup Dominant Conviction Arbitrage"
-      mechanics: "Collects all matching strike candidates for a symbol, filters by Spot Macro Bias, and ranks by Tier (🥇 T1 < 🥈 T2 < 🥉 T3), R:R ratio, and ATM strike proximity. Stages ONLY the single winning setup per symbol."
+      mechanics: "Ranks matching candidates by Moneyness, Tier (🥇 T1 < 🥈 T2 < 🥉 T3), R:R ratio, and ATM proximity. Stages ONLY the single winning setup per symbol."
     layer_3_mutual_exclusivity:
       rule: "Symbol & Portfolio Mutual Exclusivity Lock"
-      mechanics: "If an active CE position exists on a symbol (e.g. LT 4100 CE), opposing PE setups are automatically suppressed with audit logs until the active trade exits."
+      mechanics: "If an active position exists on a symbol, opposing setups are suppressed until active trade exits."
   modes:
-    mode_1_conflict_arbiter_default: "strict_macro_gate: false — Spot 13 EMA serves as a tie-breaker when dual CE/PE form. If only one side forms at a bottom/top reversal, it is permitted and scored by Tier & R:R."
-    mode_2_strict_hard_gate: "strict_macro_gate: true — Strictly rejects any setup that is counter to the Spot 13 EMA trend, even if no opposing trade exists."
+    mode_1_conflict_arbiter_default: "strict_macro_gate: false — Spot 13 EMA serves as tie-breaker when dual CE/PE form. If only one side forms, permitted and scored."
+    mode_2_strict_hard_gate: "strict_macro_gate: true — Strictly rejects any setup counter to Spot 13 EMA trend."
 
 system_integrity_safeguards:
-  broker_live_reconciliation: "reconcile_broker_live_positions(kite) continuously cross-verifies DB ACTIVE rows against Kite live net/day held positions. If net quantity <= 0, automatically completes and purges orphan trades."
-  rate_limit_protection: "TokenBucketRateLimiter(rate=2.8, capacity=3.0) gates all historical candle and quote requests across multi-threaded 208+ F&O universe scans, preventing HTTP 429 errors."
-  market_close_cutoff: "is_new_entry_allowed(live_execution_active) restricts new trade entries to 09:15–15:20 IST only when Live Trading is ON. When Live Trading is OFF (or post-market), scanning and trade staging remain active for research & study."
+  broker_live_reconciliation: "reconcile_broker_live_positions(kite) continuously cross-verifies DB ACTIVE rows against Kite live net held positions. If net quantity <= 0, automatically completes orphan trades."
+  rate_limit_protection: "TokenBucketRateLimiter(rate=2.8, capacity=3.0) gates all historical candle and quote requests across multi-threaded 210+ F&O universe scans, preventing HTTP 429 errors."
+  market_close_cutoff: "is_new_entry_allowed(live_execution_active) restricts new trade entries to 09:15–15:20 IST only when Live Trading is ON. Post-market scanning and trade staging remain active for research."
   trailing_sl_ratchet: "Monotonic side-aware SL ratchet: new_sl = max(curr_sl, target_base) for BULL and min(curr_sl, target_base) for BEAR, preventing backward SL regression."
-  websocket_live_ticks: "ActivePositionWebSocketMonitor provides real-time streaming tick LTP feeds with sub-millisecond latency for active position trailing and stop-loss triggers, with transparent fallback to REST quotes."
+  websocket_live_ticks: "ActivePositionWebSocketMonitor provides real-time streaming tick LTP feeds for active position trailing and stop-loss triggers, with transparent fallback to REST quotes."
   spot_token_auto_healing: "Automatic dynamic token auto-repair: queries NSE:<SYMBOL> live quote by symbol name if a token error occurs, self-healing STOCK_REGISTRY in memory on the fly."
-  fno_universe_auto_population: "_populate_stock_registry_from_cache() auto-populates all 209+ F&O equities into STOCK_REGISTRY on startup directly from nfo_instruments_cache.csv with exact lot sizes, strikes, and tokens, eliminating static 52-stock whitelist drops."
+  fno_universe_auto_population: "_populate_stock_registry_from_cache() auto-populates all 210+ F&O equities into STOCK_REGISTRY on startup directly from nfo_instruments_cache.csv with exact lot sizes, strikes, and tokens."
   dynamic_position_recovery: "stock_options_trade_engine.py and app_option_Trade.py resolve underlying symbols and lot sizes via extract_underlying_symbol() and get_option_lot_size(), ensuring 100% of live Zerodha F&O positions are recovered and monitored."
   direct_ltp_sl_fallback: "Emergency capital protection shield: If historical candle token resolution fails, app_option_Trade falls back immediately to DIRECT_LTP_SL_FALLBACK on buffer breach without waiting for candle confirmation."
-  breakeven_trailing_shield: "Stage 1 Breakeven Trailing Stop-Loss automatically moves SL to Entry price as soon as a trade achieves >= +10.0% peak gain or touches T1, preventing profitable momentum from turning into stop-loss hits."
+  breakeven_trailing_shield: "Positive Breakeven (+BE: Entry + 2% for Bull, Entry - 2% for Bear, snapped to 0.05 tick) locks profit upon reaching +10% peak gain or touching T1, preventing winning trades from slipping into losses."
   spot_anchored_sl_guard: "Spot-Anchored SL Guard (enable_spot_sl_guard: true): For option contracts, queries live Cash Spot price against the structural anchor support floor (spot_sl) before tripping stop-loss. Prevents IV crush and spread wick shakeouts while Spot is holding support, backed by a 35% catastrophic option circuit cap."
   two_tranche_profit_model: "2-Tranche Core + Runner Profit Booking (tranche_mode: true): Multi-lot positions (>= 2 lots) execute 50% partial cash exit at Target 1 (T1) and raise remaining runner SL to Breakeven. Single-lot positions (1 lot) ratchet SL to Breakeven at T1 to create a zero-risk runner riding to T2 and T3."
   datta_d2_reentry_engine: "Datta D2 Trend Continuation Re-Entry Engine (scan_trend_continuation_reentry): Wired into Stock and Index Option trade engines to scan post-Point-B flag pullbacks and automatically trigger secondary continuation breakouts."
-  broker_product_authority: "Live Broker Product Authority: close_position() queries live kite.positions() dynamically to match the exact open product type (NRML or MIS), completely eliminating Zerodha RMS naked writing margin rejections."
-  cross_strike_contract_isolation: "Strict Contract Isolation (_is_match): Dashboard /api/update-position endpoints strictly match by full contract identifier, preventing cross-strike SL override collisions across multi-strike option holdings."
-  cloud_vm_deployment_pipeline: "Strict Cloud Deployment Rule: NEVER modify code directly on remote VMs. Mandatory pipeline: 1. Local Development -> 2. 17-Test Regression Suite (100% Pass) -> 3. Git Push -> 4. VM Git Pull & Service Restart. Machine credentials remain isolated per environment."
-  utc_cloud_ist_clock_normalization: "UTC Cloud IST Clock Normalization: All time-of-day conditionals, opening volatility guards (09:45 AM failsafe), EOD squareoffs, and export schedules use get_ist_now() to guarantee flawless execution regardless of whether the host OS runs in UTC, GMT, or IST."
+  broker_product_authority: "Live Broker Product Authority: close_position() queries live kite.positions() dynamically to match the exact open product type (NRML or MIS), eliminating Zerodha RMS naked writing margin rejections."
+  cross_strike_contract_isolation: "Strict Contract Isolation (_is_match): Dashboard /api/update-position endpoints strictly match by full contract identifier, preventing cross-strike SL override collisions."
+  cloud_vm_deployment_pipeline: "Strict Cloud Deployment Rule: NEVER modify code directly on remote VMs. Mandatory pipeline: 1. Local Development -> 2. Regression Suite (100% Pass) -> 3. Git Push -> 4. VM Git Pull & Service Restart. Credentials isolated per environment."
+  utc_cloud_ist_clock_normalization: "UTC Cloud IST Clock Normalization: All time-of-day conditionals, opening volatility guards (09:45 AM failsafe), EOD squareoffs, and export schedules use get_ist_now() to guarantee flawless execution regardless of whether host OS runs in UTC, GMT, or IST."
   timeframe_adaptive_liquidity_shield: "is_liquid_cash_stock(df, timeframe) scales 20-period volume by candles_per_day, enabling liquid midcaps (DIXON, POLYCAB, BHARATFORG) to pass across intraday timeframes (15m, 30m, 1hr) while filtering illiquid penny trap stocks."
   point_d_entry_time_alignment: "Separates Point D Breakout entry_time from Point A Anchor candle_a_time in stock and option scanners, presenting clean calendar dates for Daily/Weekly candles without artificial 09:15 overrides."
-  option_vwap_guard: "Intraday Option Contract VWAP: calculate_option_vwap() computes fair value benchmark from traded option premium; grants candidate ranking bonus (+2) for fair pricing (<=8% stretch) and applies penalty (-2) for overstretched contracts (>15%) without hard rejection."
-  twap_c_absorption_stability: "Point C TWAP Stability: calculate_twap_c_stability() quantifies absorption base tightness during flag consolidation (std <= 0.25 * risk); elevates pristine accumulation bases to Tier 1 Gold / STAGE_A_PLUS_READY."
-  spot_confluence_mapping: "Spot-Relative Confluence Mapping: get_mapped_spot_timeframe() links option entry timeframes to higher-timeframe spot market structure (3m/5m -> 15m, 15m -> 60m, 30m -> daily); 13 EMA alignment grants rank bonus."
+  option_vwap_guard: "Option Contract VWAP +2σ Overpay Guard (calculate_option_vwap): Computes intraday Volume-Weighted Average Price and Volume-Weighted Standard Deviation bands: TypicalPrice = (H+L+C)/3, VWAP = sum(TP*V)/sum(V), vwap_std = sqrt(sum(V*(TP-VWAP)^2)/sum(V)), z_score = (LTP-VWAP)/vwap_std, upper_2sigma = VWAP + 2*vwap_std, stretch_pct = ((LTP-VWAP)/VWAP)*100. Classification: FAIR (z <= 1.0 and stretch <= 8.0%, +2 rank bonus), EXPANDED (z 1.0-2.0 or stretch 8-15%, 0 neutral), STRETCHED (z > 2.0 or stretch > 15.0%, -2 rank penalty). Guards against retail FOMO / market maker spread gouging without starving trades."
+  spot_confluence_mapping: "D1/D2 Regime-Aware Spot Confluence Mapping (evaluate_spot_confluence): Resolves 'Option Chart Illusion' by mapping option timeframe to higher-timeframe spot (3m/5m opt -> 15m spot, 15m opt -> 60m spot, 30m opt -> daily spot). D1 Reversals verify Spot Intraday VWAP reclaim (SPOT_VWAP_RECLAIM: spot >= vwap for CE, <= vwap for PE), structural anchor support/resistance hold (SPOT_SUPPORT_HOLD / SPOT_RESISTANCE_HOLD: spot >= sl for CE, <= sl for PE), or early EMA recovery (SPOT_EMA_TREND); confirmed D1 setups with R:R >= 2.0 receive D1 Gold Tier Promotion (🥇 T1 Gold). D2 Continuations require established trend momentum (TREND_MOMENTUM_ALIGNMENT: spot >= EMA13/44 for CE, <= EMA13/44 for PE) and Spot VWAP consistency. Confirmed confluence grants +1.0 rank bonus."
+  vcp_metrics_engine: "Volatility Contraction Pattern (VCP) Metrics (calculate_vcp_metrics): Quantifies volatility compression before breakout: Contraction Ratio = ATR(3) / ATR(14) (ratio <= 0.60 indicates >= 40% compression vs baseline); TTM Squeeze evaluates Bollinger Bands (20 period, 2.0 std dev) strictly inside Keltner Channels (20 period EMA + 1.5 ATR20). Classification: ULTRA_SQUEEZE (squeeze and ratio <= 0.60, 🔥 ULTRA SQZ {ratio}), SQUEEZE (squeeze, 🔥 SQZ {ratio}), VCP_COILED (ratio <= 0.60, ⚡ VCP {ratio}), NORMAL. Integrated into pattern detectors and grants ranking bonuses (+0.50 squeeze, +0.30 ATR compression)."
+  twap_c_absorption_stability: "Point C TWAP Stability (calculate_twap_c_stability): Evaluates Point C absorption base tightness during flag consolidation via Time-Weighted Average Price standard deviation: twap_std = std(c_closes), twap_c_ratio = twap_std / max(0.50, risk_dist). Stable if twap_c_ratio <= 0.25; twap_score = max(0.0, 1.0 - min(1.0, twap_c_ratio)). Pristine bases receive +1.0 ranking bonus and qualify setups for Tier 1 Gold / STAGE_A_PLUS_READY."
+  stock_options_parity: "Option vs Stock Domain Parity Alignment: Options operate under the Long Option Buyer invariant (both CE and PE contracts are bought long via TRANSACTION_TYPE_BUY, profit on premium rise, and exit via SELL). Cash Equities support Long Equity (BUY CNC/MIS, profit on rise, exit via SELL) and Short Cash Equity (SELL MIS, profit on price drop, exit via BUY MIS at ask * 1.005 to cover). Risk monitor evaluates short stock exits on lp <= (target + buf), trails +BE down to entry * 0.98, sets SL above entry, and computes short PnL = ((entry - exit) / entry * 100). derive_sl_targets_for_contract(symbol, entry, side) sets bearish SL above entry and targets below entry. UI displays red SHORT (MIS) button and arrowDown markers."
+  is_option_contract_resolution: "Robust Option Contract Identification: Evaluates (c.endswith('CE') or c.endswith('PE')) and any(ch.isdigit() for ch in c). Strictly separates true option contracts (e.g. NIFTY24SEP25000CE, INFY24SEP1500PE) from cash equities with substring or suffix collisions (e.g. PETRONET, PEL, PERSISTENT, CENTRALBK, HDFCBANK), preventing false NFO routing and inverted SL derivation."
   continuous_15pct_loss_shield: "Continuous 15% Greek Loss Shield: Exempts HARD_MAX_15PCT_SL and morning catastrophic circuits from Spot SL Guard suppression, aligning emergency cutoff strictly to max_loss_pct (15%)."
 
 verification_and_quality_assurance:
-  master_regression_suite: "scratch/run_full_regression_test.py — 20/20 Test Suites Passing (100% Success Rate)"
+  master_regression_suite: "scratch/run_full_regression_test.py — 21/21 Test Suites Passing (100% Success Rate)"
   unit_verification_suite: "scratch/test_institutional_enhancements.py — 5/5 Unit Tests Passing (100% Success Rate)"
   ast_syntax_integrity: "100% Python files parsed with zero syntax errors"
   recent_major_issues_resolved:
+    - id: "ISSUE-088"
+      title: "Option vs Stock Cash Equity Parity Alignment (Short Selling MIS Order Execution, SL/Target Derivation, Monitor Risk PnL & Direction Serialization)"
+      status: "RESOLVED"
+    - id: "FEATURE-038"
+      title: "Option Contract VWAP +2σ Overpay Guard & D1/D2 Regime-Aware Spot Confluence"
+      status: "RESOLVED"
+    - id: "ISSUE-087"
+      title: "Long Option Buyer Invariant Inversion in PE Option Lifecycle Evaluation & Radar Eviction"
+      status: "RESOLVED"
+    - id: "ISSUE-086"
+      title: "Windows File-Lock Concurrency & Access Denied Error in Pattern Funnel Atomic Persistence"
+      status: "RESOLVED"
+    - id: "FEATURE-037"
+      title: "Documentation Consolidation, Tiered Issue Archive, Per-Turn Token Optimization & Dead Backup Encapsulation"
+      status: "RESOLVED"
+    - id: "ISSUE-058"
+      title: "Stock vs Option Parity Hardening - Fixed Substring 'PE' Collision on Equities, Live Exit-All Order Placement, Short Stock Failsafe Target & SL Inversion"
+      status: "RESOLVED"
     - id: "ISSUE-057"
-      title: "Stock vs Options Engine Parity Alignment (entry_price fix, Tier Demotion Bug, Bearish 1-Click SHORT MIS, Scanner Display VCP Serialization & D2 VCP Metrics)"
+      title: "Stock vs Options Engine Parity Alignment (Fixed Unbound entry_price, Tier Demotion Bug, Bearish 1-Click Short MIS, Scanner Display VCP Serialization)"
       status: "RESOLVED"
     - id: "ISSUE-056"
-      title: "Institutional Zero-Trade-Starvation Architecture (Option VWAP, Point C TWAP, Spot Confluence, 15% Loss Shield, Pegged Limit Routing)"
+      title: "Institutional Zero-Trade-Starvation Architecture (Option VWAP Guard, Point C TWAP Base Stability, Spot Confluence Mapping & Continuous 15% Loss Shield)"
       status: "RESOLVED"
-    - id: "ISSUE-080"
-      title: "Comprehensive Expert Codebase Audit & Execution Pipeline Bug Fixes (P0-P3)"
-      status: "RESOLVED"
-    - id: "ISSUE-081"
-      title: "Fix Scan Tab Trade Scarcity, Token Resolution, and Timeframe Candle Time Alignment"
-      status: "RESOLVED"
-
-
-
