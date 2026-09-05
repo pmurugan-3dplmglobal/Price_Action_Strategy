@@ -26,6 +26,18 @@ position_lock = threading.Lock()
 def live_execution_enabled(flag_path):
     return os.path.exists(flag_path)
 
+def is_option_contract(contract_str):
+    """
+    Determine if a symbol/contract represents an Option contract (e.g. NIFTY24SEP25000CE, INFY24SEP1500PE).
+    Cash equities (e.g. PETRONET, PEL, PERSISTENT, HDFCBANK, CENTRALBK) return False.
+    """
+    if not contract_str:
+        return False
+    c = str(contract_str).strip().upper()
+    if ":" in c:
+        c = c.split(":")[-1]
+    return (c.endswith("CE") or c.endswith("PE")) and any(ch.isdigit() for ch in c)
+
 # ──────────────────────────────────────────────
 #  SHARED POSITION MANAGEMENT
 # ──────────────────────────────────────────────
@@ -140,7 +152,11 @@ def close_stock_position(kite, pos, live_market=True, product=None, qty_override
         logging.error("close_stock_position failed: missing contract/symbol name")
         return {"success": False, "reason": "NO_CONTRACT"}
 
-    qty = qty_override if qty_override is not None else pos.get("position_size", pos.get("quantity", 1))
+    raw_qty = qty_override if qty_override is not None else (pos.get("position_size") or pos.get("quantity") or 0)
+    try:
+        qty = abs(int(raw_qty))
+    except Exception:
+        qty = 0
 
     # Live position quantity verification & already-closed guard
     side_str = str(pos.get("side") or "").upper()
@@ -170,7 +186,11 @@ def close_stock_position(kite, pos, live_market=True, product=None, qty_override
             logging.info(f"[ALREADY CLOSED] Stock {contract} has 0 quantity in Kite net positions. Skipping duplicate exit.")
             save_executed_exit(contract, "ALREADY_CLOSED", {"status": "ZERO_QTY"})
             return {"success": True, "order_id": "ALREADY_CLOSED", "status": "ZERO_QTY"}
-        qty = min(qty, abs(live_held))
+        held_qty = abs(int(live_held))
+        qty = min(qty, held_qty) if qty > 0 else held_qty
+
+    if qty <= 0:
+        qty = 1
 
     # Automatic Open-Order Purge Guard: Cancel any existing OPEN / TRIGGER PENDING orders for this stock
     if kite and live_market:
@@ -439,9 +459,9 @@ def close_position(kite, pos, live_market=True, product=None, qty_override=None,
         target_product = product or (kite.PRODUCT_NRML if kite else "NRML")
 
     c_str = str(contract).upper()
-    is_option = "CE" in c_str or "PE" in c_str or "NIFTY" in c_str or "BANK" in c_str or "SENSEX" in c_str or "BSE" in c_str
-    if "SENSEX" in c_str or "BSE" in c_str:
-        target_exch = "BFO"
+    is_option = is_option_contract(c_str)
+    if "SENSEX" in c_str or "BSE" in c_str or "BANKEX" in c_str:
+        target_exch = "BFO" if is_option else "BSE"
     elif is_option:
         target_exch = "NFO"
     else:
@@ -1559,19 +1579,21 @@ def monitor_all_active_positions(kite, live=True):
             # If not in any active group, auto-stage into monitor dict
             if tsym not in index_positions and tsym not in stock_options_positions and tsym not in stock_cash_positions:
                 c_str = tsym.upper()
-                is_index = ("NIFTY" in c_str or "BANKNIFTY" in c_str or "SENSEX" in c_str or "FINNIFTY" in c_str or "MIDCPNIFTY" in c_str)
-                is_opt = ("CE" in c_str or "PE" in c_str)
-                eng_type = "index" if is_index else ("nifty50" if is_opt else "daily")
+                is_opt = is_option_contract(c_str)
+                is_index = is_opt and ("NIFTY" in c_str or "BANKNIFTY" in c_str or "SENSEX" in c_str or "FINNIFTY" in c_str or "MIDCPNIFTY" in c_str)
+                p_qty = int(p.get("quantity", 0))
+                is_short_eq = (not is_opt) and (p_qty < 0)
+                eng_type = "index" if is_index else ("nifty50" if is_opt else ("daily_bear" if is_short_eq else "daily"))
                 
                 # Auto-lookup scan SL/targets from trade history or chart
                 from resolve import lookup_scan_sl_target
-                sl_info = lookup_scan_sl_target(tsym, tsym, eng_type, kite=kite, entry_price=float(p.get("average_price", 0)))
+                sl_info = lookup_scan_sl_target(tsym, tsym, eng_type, kite=kite, entry_price=float(p.get("average_price", 0)), side="BEAR" if is_short_eq else "BULL")
                 
                 broker_pos_dict = {
                     "contract": tsym,
                     "symbol": tsym,
-                    "quantity": int(p.get("quantity", 0)),
-                    "position_size": int(p.get("quantity", 0)),
+                    "quantity": abs(p_qty),
+                    "position_size": abs(p_qty),
                     "entry_spot": float(p.get("average_price", 0)),
                     "entry_price": float(p.get("average_price", 0)),
                     "current_sl": float(sl_info.get("current_sl") or 0.0) if sl_info else 0.0,
@@ -1581,6 +1603,9 @@ def monitor_all_active_positions(kite, live=True):
                     "trailing_stage": int(sl_info.get("trailing_stage") or 0) if sl_info else 0,
                     "pattern": sl_info.get("pattern", "BROKER_RECOVERED") if sl_info else "BROKER_RECOVERED",
                     "position_type": "option" if is_opt else "stock",
+                    "side": "SELL" if is_short_eq else ("PE" if (is_opt and c_str.endswith("PE")) else ("CE" if is_opt else "BUY")),
+                    "direction": "BEAR" if (is_short_eq or (is_opt and c_str.endswith("PE"))) else "BULL",
+                    "product": p.get("product", "MIS" if is_short_eq else "CNC"),
                     "source": "kite"
                 }
                 if is_index and is_opt:

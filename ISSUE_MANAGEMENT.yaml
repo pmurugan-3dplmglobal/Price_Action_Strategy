@@ -1410,5 +1410,33 @@ issues:
     5. Added calculate_vcp_metrics call to scan_trend_continuation_reentry in patterns_bull.py and scan_trend_continuation_reentry_bearish in patterns_bear.py.
     6. Passed 20/20 regression tests and deployed to VMs.'
   status: RESOLVED
+- id: ISSUE-058
+  family: STOCK_OPTIONS_PARITY_AND_EQUITY_SHORT_HARDENING
+  date_reported: '2026-09-05'
+  title: Stock vs Option Parity Hardening - Fixed Substring "PE" Collision on Equities, Live Exit-All Order Placement, Short Stock Failsafe Target & SL Inversion, and Negative/Zero Quantity Sanitization
+  severity: HIGH
+  category: Alignment, Bug Fix & Execution Parity
+  symptom: '1. Equities containing "PE", "CE", or "BANK" (e.g. PETRONET, PEL, PERSISTENT, HDFCBANK) were erroneously classified as Options in resolve.py, position_monitor.py, and app_Stock_Trade.py, causing exchange to be set to NFO, derivation of inverted SL/targets, and failed manual exits.
+    2. Trade_Stock /api/exit-all-positions only updated SQLite trade records but placed zero live exit orders to Kite broker, leaving real stock positions open and unhedged.
+    3. Failsafe monitor loop in app_Stock_Trade.py filtered Kite net positions with int(p.get("quantity", 0)) > 0, dropping open short equity positions (which are negative integers in Kite API). Furthermore, target hits (ltp >= target) and SL checks (ltp <= sl) were inverted for short positions, causing winning shorts to be dumped prematurely on pullbacks.
+    4. close_stock_position in position_monitor.py passed raw negative or zero quantities directly to Kite API, causing broker order rejections.
+    5. UI Active Positions table in Trade_Stock/templates/index.html treated any position with side "PE" as a short sale (entry - ltp), breaking P&L display for retail option buyers holding Put options.'
+  root_cause: 'Naive substring matching ("PE" in contract, "CE" in contract, "BANK" in contract) instead of verifying option contract syntax (ends with CE/PE and contains digits); missing live broker iteration in stock exit-all endpoint; lack of short-awareness in failsafe risk monitoring conditions; lack of abs() sanitization and held_qty fallback in stock exit order construction; and treating option side "PE" identically to equity "SELL".'
+  affected_files:
+  - common/resolve.py
+  - common/position_monitor.py
+  - Trade_Stock/app_Stock_Trade.py
+  - Trade_Stock/blueprints/routes_positions.py
+  - Trade_Stock/templates/index.html
+  - scratch/run_full_regression_test.py
+  - ISSUE_MANAGEMENT.yaml
+  resolution: '1. Implemented robust is_option_contract() verifying (c.endswith("CE") or c.endswith("PE")) and any(ch.isdigit() for ch in c) across resolve.py, position_monitor.py, app_Stock_Trade.py, and templates/index.html, completely eliminating false option classification for PETRONET, HDFCBANK, etc.
+    2. Implemented live broker exit loops in /api/exit-all-positions in app_Stock_Trade.py and blueprints/routes_positions.py, correctly closing both short equities (BUY MIS), long equities (SELL CNC), and F&O contracts.
+    3. Corrected failsafe monitor loop in app_Stock_Trade.py to use int(p.get("quantity", 0)) != 0, retaining short positions with proper short-aware target logic (ltp <= target) and breach logic (ltp >= sl and 1.08*entry cap).
+    4. Hardened close_stock_position to sanitize quantity with abs(int(raw_qty)), falling back to held_qty when pos quantity is 0 or negative.
+    5. Updated index.html P&L calculation and kitePos parsing to ensure option contracts always calculate PnL as (ltp - entry), while short cash equities calculate PnL as (entry - ltp).
+    6. Added comprehensive assertions to TEST 21 in scratch/run_full_regression_test.py, achieving 21/21 (100%) test pass rate.'
+  status: RESOLVED
+
 
 

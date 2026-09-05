@@ -378,25 +378,44 @@ def api_exit_position():
         if _app._kite_session:
             try:
                 c_str = target_str
-                if "SENSEX" in c_str or "BSE" in c_str:
-                    exch = "BFO"
-                elif "CE" in c_str or "PE" in c_str or "NIFTY" in c_str or "BANK" in c_str:
-                    exch = "NFO"
+                data_exch = data.get("exchange")
+                is_opt_contract = (c_str.endswith("CE") or c_str.endswith("PE")) and any(ch.isdigit() for ch in c_str)
+                if data_exch and str(data_exch).upper() in ["NSE", "NFO", "BFO", "BSE"]:
+                    exch = str(data_exch).upper()
                 else:
-                    exch = "NSE"
+                    if is_opt_contract:
+                        exch = "BFO" if ("SENSEX" in c_str or "BANKEX" in c_str or "BSE" in c_str) else "NFO"
+                    else:
+                        exch = "BSE" if c_str in ("SENSEX", "BANKEX") else "NSE"
 
                 pos_obj = {
                     "contract": contract,
                     "symbol": symbol,
                     "exchange": exch,
-                    "quantity": data.get("quantity", 0)
+                    "quantity": abs(int(data.get("quantity") or 0)),
+                    "side": data.get("side"),
+                    "direction": data.get("direction"),
+                    "product": data.get("product")
                 }
-                if exch == "NSE":
+                for t in all_t:
+                    t_sym = str(t.get("symbol") or "").replace(" ", "").upper()
+                    t_cnt = str(t.get("contract") or "").replace(" ", "").upper()
+                    if target_str in (t_sym, t_cnt) or t_sym in target_str or t_cnt in target_str:
+                        if not pos_obj["quantity"] and (t.get("quantity") or t.get("position_size")):
+                            pos_obj["quantity"] = abs(int(t.get("quantity") or t.get("position_size") or 0))
+                        if not pos_obj.get("side") and t.get("side"):
+                            pos_obj["side"] = t.get("side")
+                        if not pos_obj.get("direction") and t.get("direction"):
+                            pos_obj["direction"] = t.get("direction")
+                        if not pos_obj.get("product") and t.get("product"):
+                            pos_obj["product"] = t.get("product")
+                        break
+                if exch in ("NSE", "BSE") and not is_opt_contract:
                     from common.position_monitor import close_stock_position
-                    close_stock_position(_app._kite_session, pos_obj, True)
+                    close_stock_position(_app._kite_session, pos_obj, True, product=pos_obj.get("product"))
                 else:
                     from common.trading_core import close_position as shared_close
-                    shared_close(_app._kite_session, pos_obj, True)
+                    shared_close(_app._kite_session, pos_obj, True, product=pos_obj.get("product"))
             except Exception as k_err:
                 logging.warning(f"Live exit execution warning for {contract}: {k_err}")
 
@@ -443,6 +462,33 @@ def api_exit_all_positions():
                     "updated_at": now_str
                 })
                 exited_count += 1
+
+        if _app._kite_session:
+            try:
+                kp = _app._kite_session.positions()
+                for p in kp.get("net", []):
+                    raw_qty = int(p.get("quantity", 0))
+                    if raw_qty != 0:
+                        contract = p.get("tradingsymbol")
+                        exch = p.get("exchange", "NSE")
+                        pos_obj = {
+                            "contract": contract,
+                            "symbol": contract,
+                            "exchange": exch,
+                            "quantity": abs(raw_qty),
+                            "side": "SELL" if raw_qty < 0 else "BUY",
+                            "direction": "BEAR" if raw_qty < 0 else "BULL",
+                            "product": p.get("product", "MIS" if raw_qty < 0 else "CNC")
+                        }
+                        is_opt_cnt = (contract.endswith("CE") or contract.endswith("PE")) and any(ch.isdigit() for ch in contract)
+                        if exch in ("NSE", "BSE") and not is_opt_cnt:
+                            from common.position_monitor import close_stock_position
+                            close_stock_position(_app._kite_session, pos_obj, True, product=pos_obj.get("product"))
+                        else:
+                            from common.trading_core import close_position as shared_close
+                            shared_close(_app._kite_session, pos_obj, True, product=pos_obj.get("product"))
+            except Exception as k_err:
+                logging.warning(f"Exit all live positions warning: {k_err}")
 
         all_disp_paths = [
             _app.SCAN_DISPLAY_FILE,

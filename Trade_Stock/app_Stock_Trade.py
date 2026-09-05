@@ -653,7 +653,7 @@ def refresh_data(single_run=False):
                 if _kite_session:
                     kite_positions = _kite_session.positions()
                     merged = []
-                    net_pos = [p for p in kite_positions.get("net", []) if p.get("tradingsymbol") and int(p.get("quantity", 0)) > 0]
+                    net_pos = [p for p in kite_positions.get("net", []) if p.get("tradingsymbol") and int(p.get("quantity", 0)) != 0]
                     q_keys = [f"{p.get('exchange', 'NSE')}:{p.get('tradingsymbol')}" for p in net_pos]
                     quotes_bulk = {}
                     if q_keys:
@@ -664,6 +664,8 @@ def refresh_data(single_run=False):
                     for p in net_pos:
                         sym = p.get("tradingsymbol", "")
                         qty = int(p.get("quantity", 0))
+                        is_short = (qty < 0)
+                        abs_qty = abs(qty)
                         entry_pr = float(p.get("average_price", 0))
                         exch = p.get("exchange", "NSE")
                         q_key = f"{exch}:{sym}"
@@ -689,22 +691,27 @@ def refresh_data(single_run=False):
                                     cached_data["ltp"][tok_id] = live_ltp
 
                         if live_ltp > 0 and entry_pr > 0:
-                            live_pnl = round((live_ltp - entry_pr) * qty, 2)
+                            live_pnl = round(((entry_pr - live_ltp) if is_short else (live_ltp - entry_pr)) * abs_qty, 2)
                             _pnl_memory[sym_str] = live_pnl
                         else:
                             live_pnl = _pnl_memory.get(sym_str, float(p.get("pnl", 0)))
 
-                        if exch not in ("NSE", "BSE") or sym.endswith("CE") or sym.endswith("PE"):
+                        is_opt_sym = (sym.endswith("CE") or sym.endswith("PE")) and any(c.isdigit() for c in sym)
+                        if exch not in ("NSE", "BSE") or is_opt_sym:
                             continue
 
                         # Fail-Safe Active Position Risk Monitor
                         try:
-                            scan_sl = lookup_scan_sl_target(sym, sym, "daily", _kite_session, entry_pr, is_stock=True)
+                            scan_sl = lookup_scan_sl_target(sym, sym, "daily_bear" if is_short else "daily", _kite_session, entry_pr, is_stock=True, side="BEAR" if is_short else "BULL")
                             
                             pos_item = {
                                 "contract": sym,
                                 "symbol": sym,
                                 "quantity": qty,
+                                "position_size": abs_qty,
+                                "side": "SELL" if is_short else "BUY",
+                                "direction": "BEAR" if is_short else "BULL",
+                                "product": p.get("product", "MIS" if is_short else "CNC"),
                                 "entry_price": entry_pr,
                                 "entry_spot": entry_pr,
                                 "ltp": live_ltp,
@@ -737,19 +744,27 @@ def refresh_data(single_run=False):
                                 except Exception:
                                     fs_start_t = datetime_time(9, 45)
 
-                                sl_buffered = round(sl_val * 0.995, 2)
-                                is_below_buffer = ltp_val <= sl_buffered
-                                is_deep_break = ltp_val <= round(sl_val * 0.985, 2)
+                                if is_short:
+                                    sl_buffered = round(sl_val * 1.005, 2)
+                                    is_breach_buffer = ltp_val >= sl_buffered
+                                    is_deep_break = ltp_val >= round(sl_val * 1.015, 2)
+                                else:
+                                    sl_buffered = round(sl_val * 0.995, 2)
+                                    is_breach_buffer = ltp_val <= sl_buffered
+                                    is_deep_break = ltp_val <= round(sl_val * 0.985, 2)
 
-                                prev_closed_below = False
+                                prev_closed_breach = False
                                 token_id = scan_sl.get("option_token") or scan_sl.get("index_token") or scan_sl.get("token")
                                 if token_id and _kite_session:
                                     try:
                                         df_hist = fetch_and_resample_candles(_kite_session, token_id, (dt.now() - timedelta(days=2)).strftime("%Y-%m-%d"), dt.now().strftime("%Y-%m-%d"), "15minute")
                                         if len(df_hist) >= 2:
                                             prev_close_val = float(df_hist.iloc[-2]["close"])
-                                            if prev_close_val > 0 and prev_close_val <= sl_val:
-                                                prev_closed_below = True
+                                            if prev_close_val > 0:
+                                                if is_short and prev_close_val >= sl_val:
+                                                    prev_closed_breach = True
+                                                elif not is_short and prev_close_val <= sl_val:
+                                                    prev_closed_breach = True
                                     except Exception:
                                         pass
 
@@ -759,6 +774,11 @@ def refresh_data(single_run=False):
                                     elif v <= 200: return max(1.00, round(v * 0.015, 2))
                                     else: return max(2.00, round(v * 0.010, 2))
 
+                                # Target Hit Conditions (Early buffer aware)
+                                t3_hit = (ltp_val <= t3_val) if is_short else (ltp_val >= t3_val)
+                                t2_hit = (ltp_val <= (t2_val + _t_early_buf(t2_val))) if is_short else (ltp_val >= (t2_val - _t_early_buf(t2_val)))
+                                t1_hit = (ltp_val <= (t1_val + _t_early_buf(t1_val))) if is_short else (ltp_val >= (t1_val - _t_early_buf(t1_val)))
+
                                 # TASK 1: Pause automated exit execution if user is actively editing this symbol on the UI
                                 if clean_sym in ACTIVE_EDIT_LOCKS:
                                     logging.info(f"[FAILSAFE PAUSED] {sym} is currently being edited on UI. Automated exit execution paused.")
@@ -766,29 +786,32 @@ def refresh_data(single_run=False):
                                 elif is_contract_exit_executed(sym):
                                     pass
                                 # 2. Check T3 Target Hit Exit (Active from 09:15 AM)
-                                elif ltp_val > 0 and t3_val > 0 and ltp_val >= t3_val:
-                                    logging.info(f"[FAILSAFE MONITOR EXIT T3] {sym} LTP={ltp_val} >= T3={t3_val}")
-                                    pos_obj = {"contract": sym, "position_size": qty, "quantity": qty, "symbol": sym}
+                                elif ltp_val > 0 and t3_val > 0 and t3_hit:
+                                    logging.info(f"[FAILSAFE MONITOR EXIT T3] {sym} LTP={ltp_val} (Target T3={t3_val})")
+                                    pos_obj = {"contract": sym, "position_size": abs_qty, "quantity": abs_qty, "symbol": sym, "side": "SELL" if is_short else "BUY", "direction": "BEAR" if is_short else "BULL"}
                                     shared_close_stock_position(_kite_session, pos_obj, True, p.get("product"))
                                 # 2b. Check T2 Target Exit (No T3 -> Full exit on T2 touch, Active from 09:15 AM)
-                                elif ltp_val > 0 and t2_val > 0 and (t3_val <= 0 or t3_val is None) and ltp_val >= (t2_val - _t_early_buf(t2_val)):
-                                    logging.warning(f"[FAILSAFE MONITOR EXIT T2 (no T3)] {sym} LTP={ltp_val} >= T2-buffer={t2_val - _t_early_buf(t2_val):.2f} (Target: {t2_val:.2f})")
-                                    pos_obj = {"contract": sym, "position_size": qty, "quantity": qty, "symbol": sym}
+                                elif ltp_val > 0 and t2_val > 0 and (t3_val <= 0 or t3_val is None) and t2_hit:
+                                    logging.warning(f"[FAILSAFE MONITOR EXIT T2 (no T3)] {sym} LTP={ltp_val} (Target T2: {t2_val:.2f})")
+                                    pos_obj = {"contract": sym, "position_size": abs_qty, "quantity": abs_qty, "symbol": sym, "side": "SELL" if is_short else "BUY", "direction": "BEAR" if is_short else "BULL"}
                                     shared_close_stock_position(_kite_session, pos_obj, True, p.get("product"))
                                 # 2c. Check T1 Target Exit (No T2/T3 -> Full exit on T1 touch, Active from 09:15 AM)
-                                elif ltp_val > 0 and t1_val > 0 and t2_val <= 0 and (t3_val <= 0 or t3_val is None) and ltp_val >= (t1_val - _t_early_buf(t1_val)):
-                                    logging.warning(f"[FAILSAFE MONITOR EXIT T1 (no T2/T3)] {sym} LTP={ltp_val} >= T1-buffer={t1_val - _t_early_buf(t1_val):.2f} (Target: {t1_val:.2f})")
-                                    pos_obj = {"contract": sym, "position_size": qty, "quantity": qty, "symbol": sym}
+                                elif ltp_val > 0 and t1_val > 0 and t2_val <= 0 and (t3_val <= 0 or t3_val is None) and t1_hit:
+                                    logging.warning(f"[FAILSAFE MONITOR EXIT T1 (no T2/T3)] {sym} LTP={ltp_val} (Target T1: {t1_val:.2f})")
+                                    pos_obj = {"contract": sym, "position_size": abs_qty, "quantity": abs_qty, "symbol": sym, "side": "SELL" if is_short else "BUY", "direction": "BEAR" if is_short else "BULL"}
                                     shared_close_stock_position(_kite_session, pos_obj, True, p.get("product"))
                                 effective_entry = entry_pr if entry_pr > 0 else float(scan_sl.get("entry_spot") or 0)
-                                hard_max_8pct_break = (ltp_val <= round(effective_entry * 0.92, 2)) if effective_entry > 0 else False
+                                if is_short:
+                                    hard_max_8pct_break = (ltp_val >= round(effective_entry * 1.08, 2)) if effective_entry > 0 else False
+                                else:
+                                    hard_max_8pct_break = (ltp_val <= round(effective_entry * 0.92, 2)) if effective_entry > 0 else False
 
-                                # TASK 2: Execute SL exit ONLY IF after 09:45 AM AND (candle closed below SL OR emergency deep break OR hard max 8% loss cap hit)
-                                if now_t >= fs_start_t and ltp_val > 0 and (sl_val > 0 or hard_max_8pct_break) and (is_below_buffer or hard_max_8pct_break) and (prev_closed_below or is_deep_break or hard_max_8pct_break):
-                                    logging.warning(f"[FAILSAFE MONITOR EXIT SL CONFIRMED] {sym} LTP={ltp_val} (Reason: {'HARD_MAX_8PCT_SL' if hard_max_8pct_break else ('CANDLE_CLOSE_SL' if prev_closed_below else 'EMERGENCY_HARD_SL')}, Entry={effective_entry}, SL={sl_val})")
-                                    pos_obj = {"contract": sym, "position_size": qty, "quantity": qty, "symbol": sym}
+                                # TASK 2: Execute SL exit ONLY IF after 09:45 AM AND (candle closed breach OR emergency deep break OR hard max 8% loss cap hit)
+                                if now_t >= fs_start_t and ltp_val > 0 and (sl_val > 0 or hard_max_8pct_break) and (is_breach_buffer or hard_max_8pct_break) and (prev_closed_breach or is_deep_break or hard_max_8pct_break):
+                                    logging.warning(f"[FAILSAFE MONITOR EXIT SL CONFIRMED] {sym} LTP={ltp_val} (Reason: {'HARD_MAX_8PCT_SL' if hard_max_8pct_break else ('CANDLE_CLOSE_SL' if prev_closed_breach else 'EMERGENCY_HARD_SL')}, Entry={effective_entry}, SL={sl_val})")
+                                    pos_obj = {"contract": sym, "position_size": abs_qty, "quantity": abs_qty, "symbol": sym, "side": "SELL" if is_short else "BUY", "direction": "BEAR" if is_short else "BULL"}
                                     shared_close_stock_position(_kite_session, pos_obj, True, p.get("product"))
-                                elif now_t < fs_start_t and ltp_val > 0 and sl_val > 0 and is_below_buffer:
+                                elif now_t < fs_start_t and ltp_val > 0 and sl_val > 0 and is_breach_buffer:
                                     logging.info(f"[FAILSAFE SL PAUSED BEFORE {fs_start_str} AM] {sym} SL check paused until {fs_start_str} AM (Current time: {now_t.strftime('%H:%M:%S')}).")
                         except Exception as fs_err:
                             logging.debug(f"Failsafe monitor error for {sym}: {fs_err}")
@@ -1881,25 +1904,44 @@ def api_exit_position():
         if _kite_session:
             try:
                 c_str = target_str
-                if "SENSEX" in c_str or "BSE" in c_str:
-                    exch = "BFO"
-                elif "CE" in c_str or "PE" in c_str or "NIFTY" in c_str or "BANK" in c_str:
-                    exch = "NFO"
+                data_exch = data.get("exchange")
+                is_opt_contract = (c_str.endswith("CE") or c_str.endswith("PE")) and any(ch.isdigit() for ch in c_str)
+                if data_exch and str(data_exch).upper() in ["NSE", "NFO", "BFO", "BSE"]:
+                    exch = str(data_exch).upper()
                 else:
-                    exch = "NSE"
+                    if is_opt_contract:
+                        exch = "BFO" if ("SENSEX" in c_str or "BANKEX" in c_str or "BSE" in c_str) else "NFO"
+                    else:
+                        exch = "BSE" if c_str in ("SENSEX", "BANKEX") else "NSE"
 
                 pos_obj = {
                     "contract": contract,
                     "symbol": symbol,
                     "exchange": exch,
-                    "quantity": data.get("quantity", 0)
+                    "quantity": abs(int(data.get("quantity") or 0)),
+                    "side": data.get("side"),
+                    "direction": data.get("direction"),
+                    "product": data.get("product")
                 }
-                if exch == "NSE":
+                for t in all_t:
+                    t_sym = str(t.get("symbol") or "").replace(" ", "").upper()
+                    t_cnt = str(t.get("contract") or "").replace(" ", "").upper()
+                    if target_str in (t_sym, t_cnt) or t_sym in target_str or t_cnt in target_str:
+                        if not pos_obj["quantity"] and (t.get("quantity") or t.get("position_size")):
+                            pos_obj["quantity"] = abs(int(t.get("quantity") or t.get("position_size") or 0))
+                        if not pos_obj.get("side") and t.get("side"):
+                            pos_obj["side"] = t.get("side")
+                        if not pos_obj.get("direction") and t.get("direction"):
+                            pos_obj["direction"] = t.get("direction")
+                        if not pos_obj.get("product") and t.get("product"):
+                            pos_obj["product"] = t.get("product")
+                        break
+                if exch in ("NSE", "BSE") and not is_opt_contract:
                     from common.position_monitor import close_stock_position
-                    close_stock_position(_kite_session, pos_obj, True)
+                    close_stock_position(_kite_session, pos_obj, True, product=pos_obj.get("product"))
                 else:
                     from common.trading_core import close_position as shared_close
-                    shared_close(_kite_session, pos_obj, True)
+                    shared_close(_kite_session, pos_obj, True, product=pos_obj.get("product"))
             except Exception as k_err:
                 logging.warning(f"Live exit execution warning for {contract}: {k_err}")
 
@@ -1944,6 +1986,34 @@ def api_exit_all_positions():
                     "updated_at": now_str
                 })
                 exited_count += 1
+
+        global _kite_session
+        if _kite_session:
+            try:
+                kp = _kite_session.positions()
+                for p in kp.get("net", []):
+                    raw_qty = int(p.get("quantity", 0))
+                    if raw_qty != 0:
+                        contract = p.get("tradingsymbol")
+                        exch = p.get("exchange", "NSE")
+                        pos_obj = {
+                            "contract": contract,
+                            "symbol": contract,
+                            "exchange": exch,
+                            "quantity": abs(raw_qty),
+                            "side": "SELL" if raw_qty < 0 else "BUY",
+                            "direction": "BEAR" if raw_qty < 0 else "BULL",
+                            "product": p.get("product", "MIS" if raw_qty < 0 else "CNC")
+                        }
+                        is_opt_cnt = (contract.endswith("CE") or contract.endswith("PE")) and any(ch.isdigit() for ch in contract)
+                        if exch in ("NSE", "BSE") and not is_opt_cnt:
+                            from common.position_monitor import close_stock_position
+                            close_stock_position(_kite_session, pos_obj, True, product=pos_obj.get("product"))
+                        else:
+                            from common.trading_core import close_position as shared_close
+                            shared_close(_kite_session, pos_obj, True, product=pos_obj.get("product"))
+            except Exception as k_err:
+                logging.warning(f"Exit all live positions warning: {k_err}")
 
         all_disp_paths = [
             SCAN_DISPLAY_FILE,

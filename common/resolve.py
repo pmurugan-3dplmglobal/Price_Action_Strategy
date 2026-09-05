@@ -17,6 +17,18 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import pandas as pd
 import paths
 
+def is_option_contract(contract_str):
+    """
+    Determine if a symbol/contract represents an Option contract (e.g. NIFTY24SEP25000CE, INFY24SEP1500PE).
+    Cash equities (e.g. PETRONET, PEL, PERSISTENT, HDFCBANK, CENTRALBK) return False.
+    """
+    if not contract_str:
+        return False
+    c = str(contract_str).strip().upper()
+    if ":" in c:
+        c = c.split(":")[-1]
+    return (c.endswith("CE") or c.endswith("PE")) and any(ch.isdigit() for ch in c)
+
 from swing_detection import (
     detect_parabolic_multi_swings,
     calculate_option_vwap,
@@ -216,17 +228,34 @@ def sync_kite_positions(kite, registry, positions_dict, lock, engine, timeframe_
             if not sym:
                 continue
             nq = int(p.get("quantity", 0))
-            if nq <= 0:
+            if nq == 0:
                 with lock:
                     if sym in positions_dict:
                         del positions_dict[sym]
                 continue
+            is_stock = p.get("exchange", "") == "NSE"
+            is_opt = is_option_contract(p.get("tradingsymbol", ""))
+            if nq < 0 and (not is_stock and is_opt):
+                # Option positions are long-only
+                with lock:
+                    if sym in positions_dict:
+                        del positions_dict[sym]
+                continue
+
             contract = p["tradingsymbol"]
             pos_key = contract
             entry = float(p.get("net_price") or p.get("buy_price") or p.get("average_price") or 0)
             import position_monitor
             lot_size = position_monitor.get_option_lot_size(contract) or registry.get(sym, {}).get("lot_size", 1)
-            is_stock = p.get("exchange", "") == "NSE"
+            is_short = (nq < 0) and is_stock
+            abs_nq = abs(nq)
+            if is_stock:
+                side_str = "SELL" if is_short else "BUY"
+                dir_str = "BEAR" if is_short else "BULL"
+            else:
+                is_pe = (contract.endswith("PE") or ("PE" in contract and any(c.isdigit() for c in contract)))
+                side_str = "PE" if is_pe else "CE"
+                dir_str = "BEAR" if is_pe else "BULL"
             
             position_monitor.clear_executed_exit(contract)
             with lock:
@@ -238,9 +267,9 @@ def sync_kite_positions(kite, registry, positions_dict, lock, engine, timeframe_
                     positions_dict[target_key]["contract"] = contract
                     
                     if not positions_dict[target_key].get("user_edited"):
-                        scan_sl = lookup_scan_sl_target(contract, sym, engine, kite, entry, timeframe_entry, timeframe_anchor)
+                        scan_sl = lookup_scan_sl_target(contract, sym, "daily_bear" if is_short else engine, kite, entry, timeframe_entry, timeframe_anchor, side=side_str)
                         if not scan_sl:
-                            scan_sl = derive_sl_targets_for_contract(kite, contract, entry, timeframe_entry, timeframe_anchor)
+                            scan_sl = derive_sl_targets_for_contract(kite, contract, entry, timeframe_entry, timeframe_anchor, side=side_str)
                         if scan_sl:
                             for k, v in scan_sl.items():
                                 positions_dict[target_key][k] = v
@@ -255,20 +284,23 @@ def sync_kite_positions(kite, registry, positions_dict, lock, engine, timeframe_
                     "entry_spot": entry,
                     "current_sl": 0, "t1": 0, "t2": 0, "t3": 0,
                     "trailing_stage": 0, "lot_size": lot_size if not is_stock else 1,
-                    "position_size": nq // lot_size if not is_stock else nq,
+                    "position_size": (abs_nq // lot_size) if not is_stock else abs_nq,
+                    "quantity": abs_nq,
                     "pattern": "MANUAL_ENTRY",
-                    "timeframe": timeframe_entry, "side": "PE" if "PE" in contract else "CE",
+                    "timeframe": timeframe_entry, "side": side_str,
+                    "direction": dir_str,
+                    "product": p.get("product", "MIS" if is_short else "CNC"),
                     "entry_time": dt.now().isoformat(),
                     "position_type": "stock" if is_stock else "option"
                 }
             import trade_db
-            tid, _created = trade_db.create_trade(engine, sym, {"contract": contract, "entry_spot": entry, "current_sl": 0, "t1": 0, "t2": 0, "t3": 0, "lot_size": lot_size, "pattern": "MANUAL_ENTRY", "entry_time": dt.now().isoformat()})
+            tid, _created = trade_db.create_trade(engine, sym, {"contract": contract, "entry_spot": entry, "current_sl": 0, "t1": 0, "t2": 0, "t3": 0, "lot_size": lot_size, "position_size": abs_nq, "quantity": abs_nq, "side": side_str, "direction": dir_str, "pattern": "MANUAL_ENTRY", "entry_time": dt.now().isoformat()})
             with lock:
                 positions_dict[pos_key]["trade_id"] = tid
             logging.info(f"[KITE_SYNC] New manual position: {contract} entry={entry}")
-            scan_sl = lookup_scan_sl_target(contract, sym, engine, kite, entry, timeframe_entry, timeframe_anchor)
+            scan_sl = lookup_scan_sl_target(contract, sym, "daily_bear" if is_short else engine, kite, entry, timeframe_entry, timeframe_anchor, side=side_str)
             if not scan_sl:
-                scan_sl = derive_sl_targets_for_contract(kite, contract, entry, timeframe_entry, timeframe_anchor)
+                scan_sl = derive_sl_targets_for_contract(kite, contract, entry, timeframe_entry, timeframe_anchor, side=side_str)
             if scan_sl:
                 with lock:
                     for k, v in scan_sl.items():
@@ -288,14 +320,13 @@ def derive_sl_targets_for_contract(kite, contract, entry_price, timeframe_entry=
     """
     contract_str = str(contract).upper()
     side_clean = str(side or "BULL").upper()
-    if "SENSEX" in contract_str or "BSE" in contract_str:
-        exch = "BFO"
-    elif "CE" in contract_str or "PE" in contract_str or "NIFTY" in contract_str or "BANK" in contract_str:
-        exch = "NFO"
+    is_opt = is_option_contract(contract_str)
+    if is_opt:
+        exch = "BFO" if ("SENSEX" in contract_str or "BANKEX" in contract_str or "BSE" in contract_str) else "NFO"
     else:
-        exch = "NSE"
+        exch = "BSE" if contract_str in ("SENSEX", "BANKEX") else "NSE"
 
-    is_bear_equity = (exch == "NSE" and side_clean in ["BEAR", "SELL", "PE"])
+    is_bear_equity = (not is_opt) and (side_clean in ["BEAR", "SELL"])
 
     try:
         ref_now = dt.now()
@@ -420,6 +451,14 @@ def derive_sl_targets_for_contract(kite, contract, entry_price, timeframe_entry=
             except Exception as s_derive_err:
                 logging.debug(f"Spot derivation error for {contract}: {s_derive_err}")
 
+        if is_opt:
+            is_pe = contract_str.endswith("PE") or ("PE" in contract_str and any(c.isdigit() for c in contract_str))
+            ret_side = "PE" if is_pe else "CE"
+            ret_dir = "BEAR" if is_pe else "BULL"
+        else:
+            ret_side = "BEAR" if is_bear_equity else "BULL"
+            ret_dir = "BEAR" if is_bear_equity else "BULL"
+
         now_iso = dt.now().isoformat()
         return {
             "entry_price": round(ep, 2) if ep else 0.0,
@@ -427,8 +466,8 @@ def derive_sl_targets_for_contract(kite, contract, entry_price, timeframe_entry=
             "t1": t1,
             "t2": t2,
             "t3": t3,
-            "direction": "BEAR" if is_bear_equity else "BULL",
-            "side": "BEAR" if is_bear_equity else "BULL",
+            "direction": ret_dir,
+            "side": ret_side,
             "pattern": pattern_name,
             "entry_time": now_iso,
             "spot_token": spot_tok,
@@ -455,6 +494,13 @@ def derive_sl_targets_for_contract(kite, contract, entry_price, timeframe_entry=
                     "entry_time": now_iso
                 }
             else:
+                if is_opt:
+                    is_pe = contract_str.endswith("PE") or ("PE" in contract_str and any(c.isdigit() for c in contract_str))
+                    ret_side = "PE" if is_pe else "CE"
+                    ret_dir = "BEAR" if is_pe else "BULL"
+                else:
+                    ret_side = "BEAR" if is_bear_equity else "BULL"
+                    ret_dir = "BEAR" if is_bear_equity else "BULL"
                 sl_val = round(ep * 0.90, 2)
                 risk = round(ep - sl_val, 2)
                 now_iso = dt.now().isoformat()
@@ -464,8 +510,8 @@ def derive_sl_targets_for_contract(kite, contract, entry_price, timeframe_entry=
                     "t1": round(ep + 1.88 * risk, 2),
                     "t2": round(ep + 2.50 * risk, 2),
                     "t3": round(ep + 3.50 * risk, 2),
-                    "direction": "BULL",
-                    "side": "BULL",
+                    "direction": ret_dir,
+                    "side": ret_side,
                     "pattern": "FALLBACK_10PCT_MANUAL",
                     "entry_time": now_iso
                 }
@@ -476,7 +522,7 @@ def get_override_paths():
     return [paths.SL_TARGET_OVERRIDES_FILE]
 
 
-def lookup_scan_sl_target(contract, symbol, engine, kite=None, entry_price=0, timeframe_entry="15minute", timeframe_anchor="15minute", entry_date=None, is_stock=False):
+def lookup_scan_sl_target(contract, symbol, engine, kite=None, entry_price=0, timeframe_entry="15minute", timeframe_anchor="15minute", entry_date=None, is_stock=False, side=None):
     """
     Search trade_db and scan display files using:
     - Options: contract name as primary key (e.g. NIFTY26JUL23850CE)
@@ -670,7 +716,10 @@ def lookup_scan_sl_target(contract, symbol, engine, kite=None, entry_price=0, ti
             pass
 
     if kite and (contract or symbol) and entry_price > 0:
-        side_infer = "BEAR" if engine in ["bear_trade", "daily_bear", "weekly_bear"] else "BULL"
+        if side:
+            side_infer = "BEAR" if str(side).upper() in ["BEAR", "SELL", "PE"] else "BULL"
+        else:
+            side_infer = "BEAR" if engine in ["bear_trade", "daily_bear", "weekly_bear"] else "BULL"
         return derive_sl_targets_for_contract(kite, contract or symbol, entry_price, timeframe_entry, timeframe_anchor, side=side_infer)
 
     return None

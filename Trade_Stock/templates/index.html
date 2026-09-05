@@ -370,7 +370,7 @@
             }
         }
 
-        window.manualExitPosition = async function(btnEl, contract, engine) {
+        window.manualExitPosition = async function(btnEl, contract, engine, qty, side, direction) {
             if (!confirm(`Confirm Manual EXIT for ${contract}?`)) return;
             if (btnEl) {
                 btnEl.disabled = true;
@@ -381,7 +381,7 @@
                 const r = await fetch('/api/exit-position', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({contract, symbol: contract, engine})
+                    body: JSON.stringify({contract, symbol: contract, engine, quantity: qty || 0, side: side || '', direction: direction || ''})
                 });
                 const d = await r.json();
                 if (d.ok) {
@@ -1041,14 +1041,19 @@
                         const kc = (c_name || '').replace(/\\s+/g, '').toUpperCase();
                         return (tc && (tc === kc || kc.includes(tc) || tc.includes(kc))) || (ts && (ts === kc || kc.includes(ts)));
                     });
+                    const rawQty = kp.quantity !== undefined ? kp.quantity : 0;
+                    const isOpt = (c_name.endsWith('CE') || c_name.endsWith('PE')) && /\d/.test(c_name);
+                    const isKiteShort = !isOpt && ((rawQty < 0) || (kp.side && ['SELL', 'BEAR'].includes(String(kp.side).toUpperCase())) || (kp.direction === 'BEAR'));
                     const item = {
                         symbol: c_name,
                         contract: c_name,
                         engine: kp.exchange === 'NFO' ? 'Index' : 'Nifty 50',
                         pattern: kp.pattern || (dbMatch && dbMatch.pattern ? dbMatch.pattern : 'KITE_OPEN'),
                         entry_spot: kp.entry_price,
-                        quantity: kp.quantity,
+                        quantity: rawQty,
                         pnl: kp.pnl,
+                        side: kp.side || (dbMatch && dbMatch.side) || (isOpt ? (c_name.endsWith('PE') ? 'PE' : 'CE') : (isKiteShort ? 'SELL' : 'BUY')),
+                        direction: kp.direction || (dbMatch && dbMatch.direction) || ((isKiteShort || (isOpt && c_name.endsWith('PE'))) ? 'BEAR' : 'BULL'),
                         current_sl: kp.current_sl !== undefined ? kp.current_sl : (dbMatch ? dbMatch.current_sl : ''),
                         t1: kp.t1 !== undefined ? kp.t1 : (dbMatch ? dbMatch.t1 : ''),
                         t2: kp.t2 !== undefined ? kp.t2 : (dbMatch ? dbMatch.t2 : ''),
@@ -1113,14 +1118,18 @@
                     const tokenKey = t.token || t.contract || t.symbol;
                     const fallbackLtp = tokenKey ? (ltpData[tokenKey] || ltpData[t.contract] || ltpData[t.symbol] || '') : '';
                     const displayLtp = (t.ltp !== undefined && t.ltp !== null && t.ltp > 0) ? t.ltp : fallbackLtp;
-                    const isSellPos = (t.side && ['SELL', 'PE', 'BEAR'].includes(String(t.side).toUpperCase())) || (t.direction && String(t.direction).toUpperCase() === 'BEAR');
+                    const rawQtyVal = t.quantity !== undefined ? t.quantity : 0;
+                    const symOrCnt = String(t.contract || t.symbol || '');
+                    const isOpt = (symOrCnt.endsWith('CE') || symOrCnt.endsWith('PE')) && /\d/.test(symOrCnt);
+                    const isSellPos = !isOpt && ((rawQtyVal < 0) || (t.side && ['SELL', 'BEAR'].includes(String(t.side).toUpperCase())) || (t.direction && String(t.direction).toUpperCase() === 'BEAR'));
+                    const absQty = Math.abs(rawQtyVal) || 1;
                     let pnlStr = '';
-                    if (t.pnl !== undefined && t.pnl !== null && t.quantity > 0) {
+                    if (t.pnl !== undefined && t.pnl !== null && rawQtyVal !== 0) {
                         const rawPnl = parseFloat(t.pnl);
                         const pctPnl = (t.entry_spot && t.entry_spot > 0) ? ((isSellPos ? (t.entry_spot - displayLtp) : (displayLtp - t.entry_spot)) / t.entry_spot * 100).toFixed(2) : '0.00';
                         pnlStr = `${rawPnl >= 0 ? '+' : ''}${rawPnl.toFixed(2)} (${pctPnl}%)`;
                     } else if (displayLtp && t.entry_spot && t.entry_spot > 0) {
-                        const rawPnl = (isSellPos ? (t.entry_spot - displayLtp) : (displayLtp - t.entry_spot)) * (t.quantity || 1);
+                        const rawPnl = (isSellPos ? (t.entry_spot - displayLtp) : (displayLtp - t.entry_spot)) * absQty;
                         const pctPnl = ((isSellPos ? (t.entry_spot - displayLtp) : (displayLtp - t.entry_spot)) / t.entry_spot * 100).toFixed(2);
                         pnlStr = `${rawPnl >= 0 ? '+' : ''}${rawPnl.toFixed(2)} (${pctPnl}%)`;
                     } else if (t.pnl_percent !== undefined && t.pnl_percent !== null) {
@@ -1129,7 +1138,7 @@
                         pnlStr = `${t.pnl >= 0 ? '+' : ''}${parseFloat(t.pnl).toFixed(2)}`;
                     }
                     const pnlBadge = pnlStr ? (pnlStr.includes('-') ? 'badge-loss' : 'badge-profit') : '';
-                    const qty = t.quantity || '';
+                    const qty = rawQtyVal < 0 ? `${absQty} (SHORT)` : (t.quantity || '');
                     const slVal = t.current_sl !== undefined && t.current_sl !== null ? t.current_sl : '';
                     const t1v = t.t1 !== undefined && t.t1 !== null ? t.t1 : '';
                     const t2v = t.t2 !== undefined && t.t2 !== null ? t.t2 : '';
@@ -1158,7 +1167,7 @@
                         const canEdit = st === 'active';
                         if (canEdit) {
                             const eng2 = t.engine === 'Index' ? 'index' : 'nifty50';
-                            actCell = `<td><button class="btn-edit" onclick="editRow('${uid}','${t.symbol||''}','${slVal}','${t1v}','${t2v}','${t3v}','${entryVal}')">Edit</button><button class="btn-exit" style="background:#da3633;color:#fff;border:none;padding:2px 8px;border-radius:4px;font-size:10px;cursor:pointer;margin-left:4px;font-weight:600;" onclick="manualExitPosition(this,'${t.symbol||''}','${eng2}')">EXIT</button></td>`;
+                            actCell = `<td><button class="btn-edit" onclick="editRow('${uid}','${t.symbol||''}','${slVal}','${t1v}','${t2v}','${t3v}','${entryVal}')">Edit</button><button class="btn-exit" style="background:#da3633;color:#fff;border:none;padding:2px 8px;border-radius:4px;font-size:10px;cursor:pointer;margin-left:4px;font-weight:600;" onclick="manualExitPosition(this,'${t.symbol||''}','${eng2}',${absQty},'${sidePosStr}','${dirPosStr}')">EXIT</button></td>`;
                         } else {
                             actCell = `<td></td>`;
                         }

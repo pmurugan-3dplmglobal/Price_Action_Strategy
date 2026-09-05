@@ -608,6 +608,59 @@ try:
     assert pnl_profit == 5.0, f"Expected +5.0% PnL, got {pnl_profit}"
     assert pnl_loss == -5.0, f"Expected -5.0% PnL, got {pnl_loss}"
 
+    # 5. Robust is_option_contract Invariant
+    from resolve import is_option_contract
+    assert is_option_contract("NIFTY24SEP25000CE") is True
+    assert is_option_contract("NIFTY2490524800PE") is True
+    assert is_option_contract("INFY24SEP1500PE") is True
+    assert is_option_contract("BANKNIFTY24OCT50000CE") is True
+    assert is_option_contract("SENSEX24SEP82000PE") is True
+    assert is_option_contract("PETRONET") is False
+    assert is_option_contract("PEL") is False
+    assert is_option_contract("PERSISTENT") is False
+    assert is_option_contract("HDFCBANK") is False
+    assert is_option_contract("CENTRALBK") is False
+    assert is_option_contract("NIFTY 50") is False
+
+    # 6. Stocks with 'PE' or 'BANK' in symbol MUST NOT be treated as Options
+    res_petronet_bull = derive_sl_targets_for_contract(None, "PETRONET", 300.0, side="BULL")
+    assert res_petronet_bull["side"] == "BULL" and res_petronet_bull["direction"] == "BULL", f"PETRONET BULL failed: {res_petronet_bull}"
+    assert res_petronet_bull["current_sl"] < 300.0 and res_petronet_bull["t1"] > 300.0, f"PETRONET BULL SL/T1 failed: {res_petronet_bull}"
+
+    res_petronet_bear = derive_sl_targets_for_contract(None, "PETRONET", 300.0, side="BEAR")
+    assert res_petronet_bear["side"] == "BEAR" and res_petronet_bear["direction"] == "BEAR", f"PETRONET BEAR failed: {res_petronet_bear}"
+    assert res_petronet_bear["current_sl"] > 300.0 and res_petronet_bear["t1"] < 300.0, f"PETRONET BEAR SL/T1 failed: {res_petronet_bear}"
+
+    # 7. Option PE vs CE Invariant (Long Buyer Invariant: SL below entry, Target above entry)
+    res_opt_pe = derive_sl_targets_for_contract(None, "NIFTY24SEP25000PE", 100.0, side="BEAR")
+    assert res_opt_pe["side"] == "PE" and res_opt_pe["direction"] == "BEAR", f"Option PE side/dir failed: {res_opt_pe}"
+    assert res_opt_pe["current_sl"] < 100.0 and res_opt_pe["t1"] > 100.0, f"Option PE buyer SL/T1 invariant failed: {res_opt_pe}"
+
+    res_opt_ce = derive_sl_targets_for_contract(None, "NIFTY24SEP25000CE", 100.0, side="BULL")
+    assert res_opt_ce["side"] == "CE" and res_opt_ce["direction"] == "BULL", f"Option CE side/dir failed: {res_opt_ce}"
+    assert res_opt_ce["current_sl"] < 100.0 and res_opt_ce["t1"] > 100.0, f"Option CE buyer SL/T1 invariant failed: {res_opt_ce}"
+
+    # 8. Zero & Negative Quantity Handling in close_stock_position
+    class MockKitePositions(MockKiteOrders):
+        def __init__(self, net_qty):
+            super().__init__()
+            self.net_qty = net_qty
+        def positions(self):
+            return {"net": [{"tradingsymbol": "INFY", "quantity": self.net_qty, "product": "MIS"}]}
+
+    # Case A: pos has quantity=0, live broker holds -25 short -> should exit with abs(held) = 25
+    mock_zero_qty = MockKitePositions(net_qty=-25)
+    clear_executed_exit("INFY")
+    res_zero = close_stock_position(mock_zero_qty, {"symbol": "INFY", "contract": "INFY", "side": "SELL", "quantity": 0}, live=True)
+    assert res_zero["success"] is True and mock_zero_qty.placed_orders[-1]["quantity"] == 25, f"Zero qty fallback failed: {mock_zero_qty.placed_orders}"
+
+    # Case B: pos has raw negative quantity=-15 -> should sanitize to abs(qty) = 15
+    mock_neg_qty = MockKitePositions(net_qty=-15)
+    clear_executed_exit("INFY")
+    res_neg = close_stock_position(mock_neg_qty, {"symbol": "INFY", "contract": "INFY", "side": "SELL", "quantity": -15}, live=True)
+    assert res_neg["success"] is True and mock_neg_qty.placed_orders[-1]["quantity"] == 15, f"Negative qty sanitize failed: {mock_neg_qty.placed_orders}"
+    clear_executed_exit("INFY")
+
     print(" PASSED [OK]", flush=True)
 except Exception as e:
     errors.append(f"Option vs Stock Parity Invariants Failed: {e}")
