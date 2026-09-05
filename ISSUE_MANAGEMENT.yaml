@@ -5,6 +5,22 @@ meta:
   purpose: Document operational failures, root causes, regression fixes, and system enhancements for v2.1.0-stable.
   historical_archive: archive/ISSUE_HISTORY_ARCHIVE.yaml (Preserves 84 resolved legacy issues prior to 2026-08-25)
 issues:
+- id: ISSUE-086
+  title: Windows File-Lock Concurrency & Access Denied Error in Pattern Funnel Atomic Persistence
+  severity: HIGH
+  category: File Persistence, Concurrency & Operating System I/O
+  family: WINDOWS_FILE_LOCK
+  date_reported: '2026-09-05'
+  symptom: 'save_funnel_state threw [WinError 5] Access is denied while replacing pattern_funnel.json.tmp into pattern_funnel.json during concurrent scan discovery and fast radar loop execution.'
+  root_cause: 'Static tmp file naming (pattern_funnel.json.tmp) caused write collisions between parallel scanner cycles and fast radar loops, combined with raw os.replace without Windows permission retry backoff or direct write fallback.'
+  affected_files:
+  - common/pattern_funnel.py
+  resolution: '1. Hardened save_funnel_state in common/pattern_funnel.py with dynamic per-process, per-thread temporary filenames (pattern_funnel.json.tmp.{pid}.{tid}).
+    2. Implemented a 5-attempt retry loop with exponential backoff (0.05s * attempt) catching PermissionError and OSError.
+    3. Added a direct-write fallback if atomic rename is blocked by external process readers.
+    4. Added a 3-attempt read retry loop in load_funnel_state to prevent collisions during concurrent writes.
+    5. Verified 100% pass across all 20 regression tests.'
+  status: RESOLVED
 - id: FEATURE-037
   title: Documentation Consolidation, Tiered Issue Archive, Per-Turn Token Optimization & Dead Backup Encapsulation
   severity: ENHANCEMENT

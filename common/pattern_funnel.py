@@ -18,6 +18,7 @@ import os
 import json
 import logging
 import threading
+import time
 from datetime import datetime as dt
 
 try:
@@ -46,24 +47,29 @@ def _get_key(item):
     return f"{sym}|{cntr}|{side}|{strike}"
 
 def load_funnel_state(engine_name=None):
-    """Load the full pattern funnel state from disk."""
+    """Load the full pattern funnel state from disk with retry on read lock."""
     global _mem_cache
     with _funnel_lock:
         fpath = paths.PATTERN_FUNNEL_FILE
         if os.path.exists(fpath):
-            try:
-                with open(fpath, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                    if isinstance(data, dict):
-                        _mem_cache = data
-            except Exception as e:
-                logger.warning(f"[FUNNEL] Failed to read {fpath}: {e}")
+            for attempt in range(3):
+                try:
+                    with open(fpath, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                        if isinstance(data, dict):
+                            _mem_cache = data
+                    break
+                except (PermissionError, OSError, json.JSONDecodeError) as e:
+                    time.sleep(0.05 * (attempt + 1))
+                except Exception as e:
+                    logger.warning(f"[FUNNEL] Failed to read {fpath}: {e}")
+                    break
         if engine_name:
             return _mem_cache.get(engine_name, {"category_a_plus": [], "category_a": [], "category_b": [], "updated_at": ""})
         return _mem_cache
 
 def save_funnel_state(engine_name, data):
-    """Atomically write funnel data for a given engine to disk."""
+    """Atomically write funnel data for a given engine to disk with Windows file-lock retry."""
     global _mem_cache
     with _funnel_lock:
         if not isinstance(_mem_cache, dict):
@@ -72,14 +78,29 @@ def save_funnel_state(engine_name, data):
         _mem_cache[engine_name]["updated_at"] = get_ist_now().strftime("%Y-%m-%d %H:%M:%S")
 
         fpath = paths.PATTERN_FUNNEL_FILE
-        tmp_path = f"{fpath}.tmp"
+        tmp_path = f"{fpath}.tmp.{os.getpid()}.{threading.get_ident()}"
+        written = False
         try:
             os.makedirs(os.path.dirname(fpath), exist_ok=True)
             with open(tmp_path, "w", encoding="utf-8") as f:
                 json.dump(_mem_cache, f, indent=2)
-            os.replace(tmp_path, fpath)
+            for attempt in range(5):
+                try:
+                    os.replace(tmp_path, fpath)
+                    written = True
+                    break
+                except (PermissionError, OSError):
+                    time.sleep(0.05 * (attempt + 1))
+            if not written:
+                with open(fpath, "w", encoding="utf-8") as f:
+                    json.dump(_mem_cache, f, indent=2)
         except Exception as e:
-            logger.error(f"[FUNNEL] Failed to save {fpath}: {e}")
+            try:
+                with open(fpath, "w", encoding="utf-8") as f:
+                    json.dump(_mem_cache, f, indent=2)
+            except Exception as direct_err:
+                logger.error(f"[FUNNEL] Failed to save {fpath}: {direct_err}")
+        finally:
             if os.path.exists(tmp_path):
                 try:
                     os.remove(tmp_path)
