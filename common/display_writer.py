@@ -244,8 +244,15 @@ def write_scan_display_data(staged, active, display_file, engine_name=None):
 
         deduped_staged = list(contract_map.values())
         
-        # For Index Options: Filter out redundant strikes for the same move; retain ONLY the single most profitable winner
-        if engine_name == "index":
+        # Best-Strike Deduplication: Filter out redundant strikes for the same stock/side; retain ONLY the single best strike per symbol & side
+        if engine_name in ["index", "nifty50", "stock_options"]:
+            def _strike_sort_key(t):
+                tier_v = int(t.get("tier", 2))
+                rr_v = float(t.get("rr", 0.0) or 0.0)
+                atr_v = float(t.get("atr_ratio", 1.0) or 1.0)
+                profit_v = float(t.get("t1") or 0.0) - float(t.get("entry_spot") or 0.0)
+                return (tier_v, -rr_v, atr_v, -profit_v)
+
             sym_side_map = {}
             for t in deduped_staged:
                 ss_key = f"{t.get('symbol','')}_{t.get('side','')}".replace(" ", "").upper()
@@ -253,15 +260,17 @@ def write_scan_display_data(staged, active, display_file, engine_name=None):
                     sym_side_map[ss_key] = t
                 else:
                     prev = sym_side_map[ss_key]
-                    prev_profit = float(prev.get("t1") or 0) - float(prev.get("entry_spot") or 0)
-                    curr_profit = float(t.get("t1") or 0) - float(t.get("entry_spot") or 0)
-                    prev_rr = float(prev.get("rr") or 0)
-                    curr_rr = float(t.get("rr") or 0)
-                    if (curr_profit > prev_profit) or (curr_profit == prev_profit and curr_rr > prev_rr):
+                    if _strike_sort_key(t) < _strike_sort_key(prev):
                         sym_side_map[ss_key] = t
             deduped_staged = list(sym_side_map.values())
 
-        deduped_staged.sort(key=lambda x: float(x.get("rr", 0)), reverse=True)
+        # Session Freshness Filter: Retain setups from the latest active trading session on the active radar
+        if deduped_staged:
+            latest_session = max((str(t.get("entry_time") or "")[:10] for t in deduped_staged if len(str(t.get("entry_time") or "")) >= 10), default=today)
+            deduped_staged = [t for t in deduped_staged if str(t.get("entry_time") or "")[:10] == latest_session]
+
+        # Sort by Tier Conviction (T1 Gold > T2 Core > T3 Momentum) and Highest R:R
+        deduped_staged.sort(key=lambda x: (int(x.get("tier", 2)), -float(x.get("rr", 0) or 0.0), float(x.get("atr_ratio", 1.0) or 1.0)))
 
         data = {
             "date": today,

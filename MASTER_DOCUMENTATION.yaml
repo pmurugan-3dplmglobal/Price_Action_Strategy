@@ -447,6 +447,12 @@ verification_and_quality_assurance:
   vix_portfolio_suite: "scratch/test_vix_portfolio_volume.py — 47/47 Unit Tests Passing (100% Success Rate)"
   ast_syntax_integrity: "100% Python files parsed with zero syntax errors"
   recent_major_issues_resolved:
+    - id: "ISSUE-091"
+      title: "T1 Gold Over-Classification Remediation — Strict True Anchor, Wyckoff Base & Spot VWAP Confluence"
+      status: "RESOLVED"
+    - id: "FEATURE-041"
+      title: "Single Best-Strike Deduplication per Symbol in Pattern Surveillance Radar & Header Glitch Cleanup"
+      status: "RESOLVED"
     - id: "FEATURE-039"
       title: "Conviction-Weighted Tier Sizing (100%/70%/50%), Morning Bearish Gap Audit & 0DTE Expiry Day Rollover"
       status: "RESOLVED"

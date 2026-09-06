@@ -126,13 +126,11 @@ def evaluate_spot_confluence(side: str, is_d2: bool, current_spot: float, spot_v
             return False, "NONE"
         else:
             # D1 Reversal: Bottom reversal is naturally below lagging EMAs.
-            # Institutional confluence is confirmed when Spot reclaims/holds intraday VWAP,
-            # holds the structural support floor, or shows early EMA recovery.
+            # Institutional confluence is confirmed when Spot reclaims/holds intraday VWAP
+            # or shows early EMA recovery when VWAP is unavailable.
             if spot_vwap > 0 and current_spot >= spot_vwap:
                 return True, "SPOT_VWAP_RECLAIM"
-            elif spot_sl > 0 and current_spot >= spot_sl:
-                return True, "SPOT_SUPPORT_HOLD"
-            elif spot_ema_trend:
+            elif spot_vwap <= 0 and spot_ema_trend:
                 return True, "SPOT_EMA_TREND"
             return False, "NONE"
     else:  # PE
@@ -143,13 +141,11 @@ def evaluate_spot_confluence(side: str, is_d2: bool, current_spot: float, spot_v
             return False, "NONE"
         else:
             # D1 Reversal: Top reversal is naturally above lagging EMAs.
-            # Institutional confluence confirmed when Spot rejects below intraday VWAP,
-            # holds below resistance ceiling, or shows EMA breakdown.
+            # Institutional confluence confirmed when Spot rejects below intraday VWAP
+            # or shows EMA breakdown when VWAP is unavailable.
             if spot_vwap > 0 and current_spot <= spot_vwap:
                 return True, "SPOT_VWAP_REJECT"
-            elif spot_sl > 0 and current_spot <= spot_sl:
-                return True, "SPOT_RESISTANCE_HOLD"
-            elif spot_ema_trend:
+            elif spot_vwap <= 0 and spot_ema_trend:
                 return True, "SPOT_EMA_TREND"
             return False, "NONE"
 
@@ -1554,10 +1550,14 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                         tier_ce = int(result_ce.get("tier", 2))
                         tier_label_ce = result_ce.get("tier_label", "TIER_2_CORE")
                         tier_badge_ce = result_ce.get("tier_badge", "🥈 T2")
+                        pat_ce = str(result_ce.get("Pattern", ""))
+                        is_true_anchor_ce = any(k in pat_ce for k in ["BE_ABCD", "LL_ABCD", "HAMMER_ABCD", "HARAMI_ABCD", "HH_ABCD", "STAR_ABCD"]) and "BASE_ABCD" not in pat_ce
+                        has_wyckoff_base_ce = bool(swing_meta_ce.get("terminal_base") or (swing_meta_ce.get("swing_waves", 0) >= 2))
                         if not is_d2_ce and tier_ce == 2 and spot_conf_ce and float(result_ce.get("RR") or 0.0) >= 2.0:
-                            tier_ce = 1
-                            tier_label_ce = "TIER_1_GOLD"
-                            tier_badge_ce = "🥇 T1"
+                            if is_true_anchor_ce and has_wyckoff_base_ce:
+                                tier_ce = 1
+                                tier_label_ce = "TIER_1_GOLD"
+                                tier_badge_ce = "🥇 T1"
 
                         ce_lot = int(ce.get("lot_size") or config.get("lot_size", 1))
                         pos_size = calculate_position_size(
@@ -1614,10 +1614,14 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                                 f_tier_ce = int(stage_ce.get("tier", 2))
                                 f_label_ce = stage_ce.get("tier_label", "TIER_2_CORE")
                                 f_badge_ce = stage_ce.get("tier_badge", "🥈 T2")
+                                pat_ce_f = str(stage_ce.get("pattern", ""))
+                                is_true_anchor_ce_f = any(k in pat_ce_f for k in ["BE_ABCD", "LL_ABCD", "HAMMER_ABCD", "HARAMI_ABCD", "HH_ABCD", "STAR_ABCD"]) and "BASE_ABCD" not in pat_ce_f
+                                has_wyckoff_base_ce_f = bool(stage_ce.get("terminal_base") or (stage_ce.get("swing_waves", 0) >= 2))
                                 if f_tier_ce == 2 and spot_conf_ce_f and float(stage_ce.get("rr") or 0.0) >= 2.0:
-                                    f_tier_ce = 1
-                                    f_label_ce = "TIER_1_GOLD"
-                                    f_badge_ce = "🥇 T1"
+                                    if is_true_anchor_ce_f and has_wyckoff_base_ce_f:
+                                        f_tier_ce = 1
+                                        f_label_ce = "TIER_1_GOLD"
+                                        f_badge_ce = "🥇 T1"
                                 funnel_item = {
                                     "symbol": symbol, "contract": ce['tradingsymbol'], "option_token": ce['token'],
                                     "spot_token": config["token"], "spot_entry": current_spot, "strike": strike,
@@ -1688,10 +1692,14 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                         tier_pe = int(result_pe.get("tier", 2))
                         tier_label_pe = result_pe.get("tier_label", "TIER_2_CORE")
                         tier_badge_pe = result_pe.get("tier_badge", "🥈 T2")
+                        pat_pe = str(result_pe.get("Pattern", ""))
+                        is_true_anchor_pe = any(k in pat_pe for k in ["BE_ABCD", "LL_ABCD", "HAMMER_ABCD", "HARAMI_ABCD", "HH_ABCD", "STAR_ABCD"]) and "BASE_ABCD" not in pat_pe
+                        has_wyckoff_base_pe = bool(swing_meta_pe.get("terminal_base") or (swing_meta_pe.get("swing_waves", 0) >= 2))
                         if not is_d2_pe and tier_pe == 2 and spot_conf_pe and float(result_pe.get("RR") or 0.0) >= 2.0:
-                            tier_pe = 1
-                            tier_label_pe = "TIER_1_GOLD"
-                            tier_badge_pe = "🥇 T1"
+                            if is_true_anchor_pe and has_wyckoff_base_pe:
+                                tier_pe = 1
+                                tier_label_pe = "TIER_1_GOLD"
+                                tier_badge_pe = "🥇 T1"
 
                         pe_lot = int(pe.get("lot_size") or config.get("lot_size", 1))
                         pos_size = calculate_position_size(
@@ -1748,10 +1756,14 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                                 f_tier_pe = int(stage_pe.get("tier", 2))
                                 f_label_pe = stage_pe.get("tier_label", "TIER_2_CORE")
                                 f_badge_pe = stage_pe.get("tier_badge", "🥈 T2")
+                                pat_pe_f = str(stage_pe.get("pattern", ""))
+                                is_true_anchor_pe_f = any(k in pat_pe_f for k in ["BE_ABCD", "LL_ABCD", "HAMMER_ABCD", "HARAMI_ABCD", "HH_ABCD", "STAR_ABCD"]) and "BASE_ABCD" not in pat_pe_f
+                                has_wyckoff_base_pe_f = bool(stage_pe.get("terminal_base") or (stage_pe.get("swing_waves", 0) >= 2))
                                 if f_tier_pe == 2 and spot_conf_pe_f and float(stage_pe.get("rr") or 0.0) >= 2.0:
-                                    f_tier_pe = 1
-                                    f_label_pe = "TIER_1_GOLD"
-                                    f_badge_pe = "🥇 T1"
+                                    if is_true_anchor_pe_f and has_wyckoff_base_pe_f:
+                                        f_tier_pe = 1
+                                        f_label_pe = "TIER_1_GOLD"
+                                        f_badge_pe = "🥇 T1"
                                 funnel_item = {
                                     "symbol": symbol, "contract": pe['tradingsymbol'], "option_token": pe['token'],
                                     "spot_token": config["token"], "spot_entry": current_spot, "strike": strike,

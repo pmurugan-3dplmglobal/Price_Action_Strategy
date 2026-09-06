@@ -559,7 +559,11 @@ def scan_anchor_bcd_breakout_bearish(df_entry, df_anchor, anchor_tf="", entry_tf
         #   - Daily/Weekly Equities: True Anchor / Institutional Distribution Top + R:R >= 2.0
         # Tier 2 (Core): 5 True Anchors (>=2 Waves / R:R >= 1.5) OR strong BASE_ABCD with (>=3 Waves and R:R >= 2.0) OR Higher TF with R:R >= 1.5 OR TWAP C Stable (R:R >= 1.5)
         # Tier 3 (Momentum): Standard/early BASE_ABCD and trend continuations (R:R >= 1.5)
-        if (is_true_anchor or is_higher_timeframe or twap_c_stable) and rr_val >= 2.0 and (sw_waves >= 2 or is_higher_timeframe or swing_meta.get("tier") == 1 or twap_c_stable):
+        if rr_val >= 2.0 and (
+            (is_true_anchor and (sw_waves >= 2 or is_higher_timeframe or swing_meta.get("tier") == 1 or (twap_c_stable and sw_waves >= 1)))
+            or (is_higher_timeframe and (is_true_anchor or term_base))
+            or (not is_true_anchor and sw_waves >= 3 and term_base)
+        ):
             tier = 1
             tier_label = "TIER_1_GOLD"
             tier_badge = "🥇 T1"
@@ -754,7 +758,10 @@ def scan_pattern_lifecycle_stage_bearish(df_entry, df_anchor, anchor_tf="", entr
                 c_row = df_entry.iloc[c_idx]
                 twap_c_info = calculate_twap_c_stability(df_entry.iloc[c_idx:], risk_dist=risk_dist)
                 twap_c_stable = bool(twap_c_info.get("twap_stable", False))
-                has_parabolic = bool((swing_meta.get("swing_waves", 0) >= 2 and swing_meta.get("terminal_base", False)) or twap_c_stable)
+                has_parabolic = bool(
+                    (swing_meta.get("swing_waves", 0) >= 2 and swing_meta.get("terminal_base", False))
+                    or (swing_meta.get("swing_waves", 0) >= 1 and twap_c_stable and swing_meta.get("terminal_base", False))
+                )
                 stage_name = "STAGE_A_PLUS_READY" if has_parabolic else "STAGE_A_READY"
                 tier_val = 1 if has_parabolic else 2
                 tier_lbl = "TIER_1_GOLD" if has_parabolic else "TIER_2_CORE"
