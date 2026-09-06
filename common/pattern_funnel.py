@@ -92,6 +92,21 @@ def _is_better_setup(new_item, old_item):
     except (ValueError, TypeError):
         pass
 
+    # 5. Moneyness: Closest to ATM beats further OTM
+    try:
+        spot_new = float(new_item.get("spot_entry") or new_item.get("entry_spot") or 0.0)
+        spot_old = float(old_item.get("spot_entry") or old_item.get("entry_spot") or 0.0)
+        strike_new = float(new_item.get("strike") or 0.0)
+        strike_old = float(old_item.get("strike") or 0.0)
+        ref_spot = spot_new if spot_new > 0 else spot_old
+        if ref_spot > 0 and strike_new > 0 and strike_old > 0:
+            dist_new = abs(strike_new - ref_spot)
+            dist_old = abs(strike_old - ref_spot)
+            if abs(dist_new - dist_old) > 0.01:
+                return dist_new < dist_old
+    except (ValueError, TypeError):
+        pass
+
     return True
 
 def load_funnel_state(engine_name=None):
