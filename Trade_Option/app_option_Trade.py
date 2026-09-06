@@ -1289,6 +1289,86 @@ def api_scan_ema_clear():
         }
     return jsonify({"ok": True})
 
+@app.route("/api/radar/clear", methods=["POST"])
+def api_radar_clear():
+    engine = request.args.get("engine") or (request.json.get("engine") if request.is_json else "nifty50") or "nifty50"
+    try:
+        pattern_funnel.clear_funnel(engine)
+        return jsonify({"ok": True, "message": f"Radar funnel cleared for {engine}"})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+@app.route("/api/radar/export", methods=["GET", "POST"])
+def api_radar_export():
+    try:
+        import io
+        engine = request.args.get("engine", "nifty50")
+        funnel = pattern_funnel.get_funnel_summary(engine)
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(["Category", "Symbol", "Contract", "Side", "Pattern", "VCP_Ratio", "Is_Squeeze",
+                         "D_Trigger_BM", "Current_SL", "T1", "T2", "T3", "RR", "Stage", "Timeframe"])
+        
+        for item in funnel.get("category_a_plus", []):
+            writer.writerow([
+                "Category A+ (Imminent)",
+                item.get("symbol", ""),
+                item.get("contract") or item.get("symbol", ""),
+                item.get("side", "CE"),
+                item.get("pattern", ""),
+                item.get("atr_ratio", ""),
+                "YES" if item.get("is_squeeze") else "NO",
+                item.get("benchmark", ""),
+                item.get("current_sl", ""),
+                item.get("t1", ""),
+                item.get("t2", ""),
+                item.get("t3", ""),
+                item.get("rr", ""),
+                "STAGE_A_PLUS_READY",
+                item.get("timeframe", "")
+            ])
+
+        for item in funnel.get("category_a", []):
+            writer.writerow([
+                "Category A (Ready)",
+                item.get("symbol", ""),
+                item.get("contract") or item.get("symbol", ""),
+                item.get("side", "CE"),
+                item.get("pattern", ""),
+                item.get("atr_ratio", ""),
+                "YES" if item.get("is_squeeze") else "NO",
+                item.get("benchmark", ""),
+                item.get("current_sl", ""),
+                item.get("t1", ""),
+                item.get("t2", ""),
+                item.get("t3", ""),
+                item.get("rr", ""),
+                "STAGE_A_READY",
+                item.get("timeframe", "")
+            ])
+
+        for item in funnel.get("category_b", []):
+            writer.writerow([
+                "Category B (Incubator)",
+                item.get("symbol", ""),
+                item.get("contract") or item.get("symbol", ""),
+                item.get("side", "CE"),
+                item.get("pattern", ""),
+                item.get("atr_ratio", ""),
+                "YES" if item.get("is_squeeze") else "NO",
+                item.get("anchor_high", ""),
+                item.get("anchor_low", ""),
+                "", "", "", "",
+                "STAGE_B_ANCHOR",
+                item.get("timeframe", "day")
+            ])
+
+        csv_bytes = output.getvalue().encode("utf-8-sig")
+        return Response(csv_bytes, mimetype="text/csv",
+                        headers={"Content-Disposition": f"attachment; filename=radar_export_{dt.now().strftime('%d_%m_%y_%H%M')}.csv"})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
 def _format_pattern_result(p):
     if not p: return '-'
     p_str = str(p)

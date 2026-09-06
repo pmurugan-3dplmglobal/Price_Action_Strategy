@@ -59,6 +59,7 @@ from registries import (
     STOCK_REGISTRY,
     INDEX_REGISTRY,
     SUPER_STOCKS,
+    STOCK_EXPIRY_ROLLOVER_DAYS,
     SECTOR_MAP,
     get_symbol_sector,
     sync_stock_tokens,

@@ -146,9 +146,13 @@ def find_profit_targets(df_hist, entry_close, stop_loss=None):
 
     return t1, t2, t3
 
-def calculate_position_size(spot_price, stop_loss, capital=100000.0, risk_percent=1.0, lot_size=1, is_option=False):
+def calculate_position_size(spot_price, stop_loss, capital=100000.0, risk_percent=1.0, lot_size=1, is_option=False, tier=1):
     """
-    Fixed-fractional position sizing:
+    Fixed-fractional position sizing with Conviction-Weighted Tier Scaling:
+    - Sizing scaled by Setup Tier (Conviction Weighting):
+        * Tier 1 (Gold): 100% Capital (multiplier 1.0)
+        * Tier 2 (Core): 70% Capital (multiplier 0.70)
+        * Tier 3 (Momentum): 50% Capital (multiplier 0.50)
     - For Cash Equities: units = max_risk_amount / abs(entry - sl)
     - For Options: lots = min(max_risk_amount / risk_per_lot, max_capital_lots)
       where max_capital_lots caps capital deployed in a single option to 25% of account.
@@ -159,7 +163,10 @@ def calculate_position_size(spot_price, stop_loss, capital=100000.0, risk_percen
         risk_per_unit = abs(sp - sl)
         if risk_per_unit <= 0:
             return 1
-        cap = float(capital or 100000.0)
+        cap_base = float(capital or 100000.0)
+        tier_val = int(tier or 1)
+        tier_multiplier = 1.0 if tier_val == 1 else (0.70 if tier_val == 2 else 0.50)
+        cap = cap_base * tier_multiplier
         risk_pct = float(risk_percent or 1.0)
         max_risk_amount = cap * (risk_pct / 100.0)
 
@@ -245,13 +252,13 @@ def check_circuit_and_spread_shield(kite, symbol, exchange="NSE", side="BUY"):
 def calc_rr(entry, sl, t1, t2):
     if entry is None or sl is None or t1 is None:
         return 0
-    risk = entry - sl
+    risk = abs(entry - sl)
     if risk <= 0:
         return 0
     targets = [t1]
     if t2 is not None:
         targets.append(t2)
-    return sum((t - entry) / risk for t in targets) / len(targets)
+    return sum(abs(t - entry) / risk for t in targets) / len(targets)
 
 
 def check_left_side_rule_bearish(df, anchor_high, setup_count=0, skip_adjacent=0, lookback_candles=100):

@@ -115,7 +115,9 @@ def run_preflight_reconciliation(kite=None, engines=("nifty50", "index", "daily"
             t1_val = float(trade.get("t1") or 0.0)
             entry_spot = float(trade.get("entry_spot") or trade.get("entry_price") or 0.0)
             side = str(trade.get("side", "BUY")).upper()
-            is_bull = side in ["BUY", "CE", "BULL"]
+            dir_val = str(trade.get("direction", "")).upper()
+            is_stock = (pos_type == "stock")
+            is_short_stock = is_stock and (side in ["SELL", "BEAR", "SHORT", "PE"] or dir_val == "BEAR")
 
             # Check A: Exists in DB but closed on Broker
             if contract not in kite_positions and is_market_open():
@@ -135,30 +137,53 @@ def run_preflight_reconciliation(kite=None, engines=("nifty50", "index", "daily"
                     ltp = float(q[q_key].get("last_price") or 0.0)
                     open_price = float(q[q_key].get("ohlc", {}).get("open") or ltp)
 
-                    # Gap-Down Breach: Market opened below SL
-                    if is_bull and sl_val > 0 and (ltp <= sl_val or open_price <= sl_val):
-                        gap_msg = f"[GAP DOWN BREACH] {contract} opened at {open_price} (LTP={ltp}) below SL {sl_val}."
-                        logging.warning(f"[09:16 PRE-FLIGHT] {gap_msg}")
-                        report["gap_events"].append(gap_msg)
-                        # Trigger controlled graceful exit
-                        if pos_type == "stock":
-                            close_stock_position(kite, trade, live_market=True)
-                        else:
-                            close_position(kite, trade, live_market=True)
-                        trade_db.update_trade_status(tid, "SL_HIT", exit_price=ltp, exit_reason="OPENING_GAP_DOWN_BREACH")
-
-                    # Gap-Up Windfall: Market opened past Target T1
-                    elif is_bull and t1_val > 0 and (ltp >= t1_val or open_price >= t1_val):
-                        if int(trade.get("trailing_stage") or 0) == 0:
-                            gap_msg = f"[GAP UP WINDFALL] {contract} opened at {open_price} past Target T1 {t1_val}. Ratcheting SL to BE."
-                            logging.info(f"[09:16 PRE-FLIGHT] {gap_msg}")
+                    if is_short_stock:
+                        # ── Bearish Short Stock: Inverted SL / Target Dynamics ──
+                        # Gap-Up Breach: Market opened above SL (loss for short position)
+                        if sl_val > 0 and (ltp >= sl_val or open_price >= sl_val):
+                            gap_msg = f"[GAP UP BREACH] Bearish short {contract} opened at {open_price} (LTP={ltp}) above SL {sl_val}."
+                            logging.warning(f"[09:16 PRE-FLIGHT] {gap_msg}")
                             report["gap_events"].append(gap_msg)
-                            new_sl = max(sl_val, entry_spot)
-                            trade_db.update_trade(tid, {
-                                "trailing_stage": 1,
-                                "current_sl": new_sl,
-                                "sl_set_time": now_str
-                            })
+                            close_stock_position(kite, trade, live_market=True)
+                            trade_db.update_trade_status(tid, "SL_HIT", exit_price=ltp, exit_reason="OPENING_GAP_UP_BREACH")
+
+                        # Gap-Down Windfall: Market opened below Target T1 (profit for short position)
+                        elif t1_val > 0 and (ltp <= t1_val or open_price <= t1_val):
+                            if int(trade.get("trailing_stage") or 0) == 0:
+                                gap_msg = f"[GAP DOWN WINDFALL] Bearish short {contract} opened at {open_price} past Target T1 {t1_val}. Ratcheting SL to BE."
+                                logging.info(f"[09:16 PRE-FLIGHT] {gap_msg}")
+                                report["gap_events"].append(gap_msg)
+                                new_sl = min(sl_val, entry_spot) if sl_val > 0 else entry_spot
+                                trade_db.update_trade(tid, {
+                                    "trailing_stage": 1,
+                                    "current_sl": new_sl,
+                                    "sl_set_time": now_str
+                                })
+                    else:
+                        # ── Long Option (CE / PE) or Long Stock: Standard Upward Profit Dynamics ──
+                        # Gap-Down Breach: Market opened below SL (loss for long holder)
+                        if sl_val > 0 and (ltp <= sl_val or open_price <= sl_val):
+                            gap_msg = f"[GAP DOWN BREACH] {contract} opened at {open_price} (LTP={ltp}) below SL {sl_val}."
+                            logging.warning(f"[09:16 PRE-FLIGHT] {gap_msg}")
+                            report["gap_events"].append(gap_msg)
+                            if pos_type == "stock":
+                                close_stock_position(kite, trade, live_market=True)
+                            else:
+                                close_position(kite, trade, live_market=True)
+                            trade_db.update_trade_status(tid, "SL_HIT", exit_price=ltp, exit_reason="OPENING_GAP_DOWN_BREACH")
+
+                        # Gap-Up Windfall: Market opened past Target T1 (profit for long holder)
+                        elif t1_val > 0 and (ltp >= t1_val or open_price >= t1_val):
+                            if int(trade.get("trailing_stage") or 0) == 0:
+                                gap_msg = f"[GAP UP WINDFALL] {contract} opened at {open_price} past Target T1 {t1_val}. Ratcheting SL to BE."
+                                logging.info(f"[09:16 PRE-FLIGHT] {gap_msg}")
+                                report["gap_events"].append(gap_msg)
+                                new_sl = max(sl_val, entry_spot)
+                                trade_db.update_trade(tid, {
+                                    "trailing_stage": 1,
+                                    "current_sl": new_sl,
+                                    "sl_set_time": now_str
+                                })
             except Exception as q_err:
                 logging.warning(f"[09:16 PRE-FLIGHT] Could not audit quote for {contract}: {q_err}")
 

@@ -8,7 +8,7 @@ COMMON_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "comm
 if COMMON_DIR not in sys.path:
     sys.path.insert(0, COMMON_DIR)
 import paths
-from datetime import datetime as dt, timedelta
+from datetime import datetime as dt, timedelta, time as datetime_time
 import pandas as pd
 
 from kiteconnect import KiteConnect
@@ -128,6 +128,18 @@ def resolve_option_contract(base_symbol, spot_price, step_size, option_type, exp
             return None
         expiries = df['expiry'].unique()
         selected_idx = min(expiry_offset, len(expiries) - 1)
+
+        # 0DTE Expiry Day Afternoon Protection:
+        # If today is expiry day (days_rem == 0) and time >= 13:30 IST,
+        # roll over to next weekly expiry series (expiries[1]) to eliminate severe 0DTE theta decay.
+        curr_exp = expiries[0]
+        today = get_ist_date()
+        days_rem = (curr_exp - today).days
+        now_ist = get_ist_now().time()
+        if days_rem == 0 and now_ist >= datetime_time(13, 30) and len(expiries) > 1:
+            selected_idx = min(selected_idx + 1, len(expiries) - 1)
+            logging.info(f"[EXPIRY_ROLLOVER] {base_symbol}: 0DTE afternoon (>=13:30 IST) -> rolling from {curr_exp} to next weekly expiry {expiries[selected_idx]}")
+
         target_expiry = expiries[selected_idx]
         sub = df[df['expiry'] == target_expiry]
         if not sub.empty:
@@ -223,6 +235,8 @@ def execute_index_entry(kite, pos):
         ltp = float(q.get(q_key, {}).get("last_price", 0))
         ask = 0
         depth = q.get(q_key, {}).get("depth", {}).get("sell", [])
+        if depth and len(depth) > 0 and depth[0].get("price", 0) > 0:
+            ask = float(depth[0]["price"])
         bm = float(pos.get("benchmark") or 0)
         if bm > 0:
             price = round(bm * 1.005, 1)
@@ -351,7 +365,7 @@ def execute_highest_rr_trade(kite, staged):
 
 def monitor_active_positions(kite):
     return shared_monitor_positions(kite, INDEX_REGISTRY, ACTIVE_POSITIONS, position_lock,
-                                     kite.PRODUCT_MIS, "index", TIMEFRAME_ENTRY,
+                                     kite.PRODUCT_NRML, "index", TIMEFRAME_ENTRY,
                                      trade_db, log_to_journal,
                                      live=LIVE_MARKET_DEPLOYMENT)
 

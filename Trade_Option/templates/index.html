@@ -282,25 +282,176 @@
             } catch(e) { console.log(e); }
         }
 
+        async function clearRadarData() {
+            if (!confirm("Are you sure you want to clear all Pattern Surveillance Radar setups?")) return;
+            try {
+                if (window._lastData && window._lastData.pattern_funnel) {
+                    window._lastData.pattern_funnel = {
+                        category_a_plus: [],
+                        category_a: [],
+                        category_b: [],
+                        counts: { a_plus: 0, a: 0, b: 0, total: 0 },
+                        updated_at: new Date().toLocaleTimeString()
+                    };
+                }
+                renderRadarTab(true);
+                await fetch('/api/radar/clear', { method: 'POST' });
+                await refreshData();
+                renderRadarTab(true);
+            } catch(e) {
+                console.error('Error clearing radar:', e);
+            }
+        }
+
+        async function radarExport() {
+            try {
+                const r = await fetch('/api/radar/export', { method: 'POST' });
+                if (r.ok) {
+                    const blob = await r.blob();
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    const now = new Date();
+                    const pad = n => String(n).padStart(2, '0');
+                    const dd = pad(now.getDate());
+                    const mm = pad(now.getMonth() + 1);
+                    const yy = String(now.getFullYear()).slice(-2);
+                    const hhmin = pad(now.getHours()) + pad(now.getMinutes());
+                    a.download = `radar_export_${dd}_${mm}_${yy}_${hhmin}.csv`;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
+                    return;
+                }
+            } catch (err) {
+                console.warn('Backend radar export fallback to client-side:', err);
+            }
+
+            try {
+                const funnel = window._lastData?.pattern_funnel || {};
+                const a_plus = funnel.category_a_plus || [];
+                const a_items = funnel.category_a || [];
+                const b_items = funnel.category_b || [];
+
+                const rows = [
+                    ["Category", "Symbol", "Contract", "Side", "Pattern", "VCP_Ratio", "Is_Squeeze", "D_Trigger_BM", "Current_SL", "T1", "T2", "T3", "RR", "Stage", "Timeframe"]
+                ];
+
+                a_plus.forEach(item => {
+                    rows.push([
+                        "Category A+ (Imminent)",
+                        item.symbol || '',
+                        item.contract || item.symbol || '',
+                        item.side || 'CE',
+                        item.pattern || '',
+                        item.atr_ratio !== undefined ? item.atr_ratio : '',
+                        item.is_squeeze ? 'YES' : 'NO',
+                        item.benchmark || '',
+                        item.current_sl || '',
+                        item.t1 || '',
+                        item.t2 || '',
+                        item.t3 || '',
+                        item.rr || '',
+                        "STAGE_A_PLUS_READY",
+                        item.timeframe || ''
+                    ]);
+                });
+
+                a_items.forEach(item => {
+                    rows.push([
+                        "Category A (Ready)",
+                        item.symbol || '',
+                        item.contract || item.symbol || '',
+                        item.side || 'CE',
+                        item.pattern || '',
+                        item.atr_ratio !== undefined ? item.atr_ratio : '',
+                        item.is_squeeze ? 'YES' : 'NO',
+                        item.benchmark || '',
+                        item.current_sl || '',
+                        item.t1 || '',
+                        item.t2 || '',
+                        item.t3 || '',
+                        item.rr || '',
+                        "STAGE_A_READY",
+                        item.timeframe || ''
+                    ]);
+                });
+
+                b_items.forEach(item => {
+                    rows.push([
+                        "Category B (Incubator)",
+                        item.symbol || '',
+                        item.contract || item.symbol || '',
+                        item.side || 'CE',
+                        item.pattern || '',
+                        item.atr_ratio !== undefined ? item.atr_ratio : '',
+                        item.is_squeeze ? 'YES' : 'NO',
+                        item.anchor_high || '',
+                        item.anchor_low || '',
+                        '', '', '', '',
+                        "STAGE_B_ANCHOR",
+                        item.timeframe || 'day'
+                    ]);
+                });
+
+                const csvContent = rows.map(r => r.map(val => `"${String(val).replace(/"/g, '""')}"`).join(',')).join('\r\n');
+                const blob = new Blob(["\uFEFF" + csvContent], { type: 'text/csv;charset=utf-8;' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                const now = new Date();
+                const pad = n => String(n).padStart(2, '0');
+                const dd = pad(now.getDate());
+                const mm = pad(now.getMonth() + 1);
+                const yy = String(now.getFullYear()).slice(-2);
+                const hhmin = pad(now.getHours()) + pad(now.getMinutes());
+                a.download = `radar_export_${dd}_${mm}_${yy}_${hhmin}.csv`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            } catch (clientErr) {
+                console.error('Client-side radar export error:', clientErr);
+            }
+        }
+
         let _sortPref = {};
 
         function sortTable(th, colIdx) {
             const table = th.closest('table');
-            const container = table.closest('[id]');
-            const key = container ? container.id : '_default';
+            if (!table) return;
+            const key = (table.id && table.id.length > 0) ? table.id : (table.closest('[id]') ? table.closest('[id]').id : '_default');
             const tbody = table.querySelector('tbody');
+            if (!tbody) return;
             const rows = Array.from(tbody.querySelectorAll('tr'));
-            const dir = th.getAttribute('data-dir') === 'asc' ? 'desc' : 'asc';
+            const currentDir = th.getAttribute('data-dir');
+            const dir = currentDir === 'asc' ? 'desc' : 'asc';
+
+            table.querySelectorAll('thead th').forEach(header => {
+                header.removeAttribute('data-dir');
+                const ind = header.querySelector('.sort-indicator');
+                if (ind) ind.textContent = ' ⬍';
+            });
+
             th.setAttribute('data-dir', dir);
+            const ind = th.querySelector('.sort-indicator');
+            if (ind) ind.textContent = dir === 'asc' ? ' ▲' : ' ▼';
+
             _sortPref[key] = { col: colIdx, dir: dir };
             rows.sort((a, b) => {
+                if (!a.cells[colIdx] || !b.cells[colIdx]) return 0;
                 let aVal = a.cells[colIdx].innerText.trim();
                 let bVal = b.cells[colIdx].innerText.trim();
-                let aNum = parseFloat(aVal.replace('%', '').replace(',', ''));
-                let bNum = parseFloat(bVal.replace('%', '').replace(',', ''));
-                if (!isNaN(aNum) && !isNaN(bNum)) {
+                let aNum = parseFloat(aVal.replace(/[%,\s]/g, ''));
+                let bNum = parseFloat(bVal.replace(/[%,\s]/g, ''));
+                let aIsNum = !isNaN(aNum) && aVal !== '---' && aVal !== '-';
+                let bIsNum = !isNaN(bNum) && bVal !== '---' && bVal !== '-';
+                if (aIsNum && bIsNum) {
                     return dir === 'asc' ? aNum - bNum : bNum - aNum;
                 }
+                if (aIsNum && !bIsNum) return dir === 'asc' ? -1 : 1;
+                if (!aIsNum && bIsNum) return dir === 'asc' ? 1 : -1;
                 return dir === 'asc' ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
             });
             rows.forEach(r => tbody.appendChild(r));
@@ -308,24 +459,37 @@
 
         function reapplySorts() {
             for (const [key, pref] of Object.entries(_sortPref)) {
-                const container = document.getElementById(key);
-                if (!container) continue;
-                container.querySelectorAll('table').forEach(table => {
-                    const ths = table.querySelectorAll('th');
+                let tables = [];
+                const el = document.getElementById(key);
+                if (!el) continue;
+                if (el.tagName === 'TABLE') {
+                    tables.push(el);
+                } else {
+                    tables = Array.from(el.querySelectorAll('table'));
+                }
+                tables.forEach(table => {
+                    const ths = table.querySelectorAll('thead th');
                     if (pref.col >= ths.length) return;
                     const th = ths[pref.col];
                     th.setAttribute('data-dir', pref.dir);
+                    const ind = th.querySelector('.sort-indicator');
+                    if (ind) ind.textContent = pref.dir === 'asc' ? ' ▲' : ' ▼';
                     const tbody = table.querySelector('tbody');
                     if (!tbody) return;
                     const rows = Array.from(tbody.querySelectorAll('tr'));
                     rows.sort((a, b) => {
+                        if (!a.cells[pref.col] || !b.cells[pref.col]) return 0;
                         let aVal = a.cells[pref.col].innerText.trim();
                         let bVal = b.cells[pref.col].innerText.trim();
-                        let aNum = parseFloat(aVal.replace('%', '').replace(',', ''));
-                        let bNum = parseFloat(bVal.replace('%', '').replace(',', ''));
-                        if (!isNaN(aNum) && !isNaN(bNum)) {
+                        let aNum = parseFloat(aVal.replace(/[%,\s]/g, ''));
+                        let bNum = parseFloat(bVal.replace(/[%,\s]/g, ''));
+                        let aIsNum = !isNaN(aNum) && aVal !== '---' && aVal !== '-';
+                        let bIsNum = !isNaN(bNum) && bVal !== '---' && bVal !== '-';
+                        if (aIsNum && bIsNum) {
                             return pref.dir === 'asc' ? aNum - bNum : bNum - aNum;
                         }
+                        if (aIsNum && !bIsNum) return pref.dir === 'asc' ? -1 : 1;
+                        if (!aIsNum && bIsNum) return pref.dir === 'asc' ? 1 : -1;
                         return pref.dir === 'asc' ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
                     });
                     rows.forEach(r => tbody.appendChild(r));
@@ -673,8 +837,20 @@
                 if (a_plus.length === 0) {
                     html += '<p class="empty-state" style="padding:10px">No Category A+ setups currently coiled. High-frequency radar monitoring active.</p>';
                 } else {
-                    html += '<div style="overflow-x:auto"><table><thead><tr>' +
-                        '<th>Symbol</th><th>Contract</th><th>Side</th><th>Pattern</th><th>VCP</th><th>D-Trigger (BM)</th><th>Current SL</th><th>T1</th><th>T2</th><th>T3</th><th>R:R</th><th>Stage</th><th>Surveillance</th>' +
+                    html += '<div style="overflow-x:auto"><table id="radar-table-aplus"><thead><tr>' +
+                        '<th onclick="sortTable(this,0)" style="cursor:pointer" title="Click to sort">Symbol <span class="sort-indicator">⬍</span></th>' +
+                        '<th onclick="sortTable(this,1)" style="cursor:pointer" title="Click to sort">Contract <span class="sort-indicator">⬍</span></th>' +
+                        '<th onclick="sortTable(this,2)" style="cursor:pointer" title="Click to sort">Side <span class="sort-indicator">⬍</span></th>' +
+                        '<th onclick="sortTable(this,3)" style="cursor:pointer" title="Click to sort">Pattern <span class="sort-indicator">⬍</span></th>' +
+                        '<th onclick="sortTable(this,4)" style="cursor:pointer" title="Click to sort">VCP <span class="sort-indicator">⬍</span></th>' +
+                        '<th onclick="sortTable(this,5)" style="cursor:pointer" title="Click to sort">D-Trigger (BM) <span class="sort-indicator">⬍</span></th>' +
+                        '<th onclick="sortTable(this,6)" style="cursor:pointer" title="Click to sort">Current SL <span class="sort-indicator">⬍</span></th>' +
+                        '<th onclick="sortTable(this,7)" style="cursor:pointer" title="Click to sort">T1 <span class="sort-indicator">⬍</span></th>' +
+                        '<th onclick="sortTable(this,8)" style="cursor:pointer" title="Click to sort">T2 <span class="sort-indicator">⬍</span></th>' +
+                        '<th onclick="sortTable(this,9)" style="cursor:pointer" title="Click to sort">T3 <span class="sort-indicator">⬍</span></th>' +
+                        '<th onclick="sortTable(this,10)" style="cursor:pointer" title="Click to sort">R:R <span class="sort-indicator">⬍</span></th>' +
+                        '<th onclick="sortTable(this,11)" style="cursor:pointer" title="Click to sort">Stage <span class="sort-indicator">⬍</span></th>' +
+                        '<th onclick="sortTable(this,12)" style="cursor:pointer" title="Click to sort">Surveillance <span class="sort-indicator">⬍</span></th>' +
                         '</tr></thead><tbody>';
                     a_plus.forEach(item => {
                         const sideColor = item.side === 'CE' ? '#3fb950' : '#f85149';
@@ -704,8 +880,20 @@
                 if (a.length === 0) {
                     html += '<p class="empty-state" style="padding:10px">No Category A setups waiting at D trigger.</p>';
                 } else {
-                    html += '<div style="overflow-x:auto"><table><thead><tr>' +
-                        '<th>Symbol</th><th>Contract</th><th>Side</th><th>Pattern</th><th>VCP</th><th>D-Trigger (BM)</th><th>Current SL</th><th>T1</th><th>T2</th><th>T3</th><th>R:R</th><th>Stage</th><th>Status</th>' +
+                    html += '<div style="overflow-x:auto"><table id="radar-table-a"><thead><tr>' +
+                        '<th onclick="sortTable(this,0)" style="cursor:pointer" title="Click to sort">Symbol <span class="sort-indicator">⬍</span></th>' +
+                        '<th onclick="sortTable(this,1)" style="cursor:pointer" title="Click to sort">Contract <span class="sort-indicator">⬍</span></th>' +
+                        '<th onclick="sortTable(this,2)" style="cursor:pointer" title="Click to sort">Side <span class="sort-indicator">⬍</span></th>' +
+                        '<th onclick="sortTable(this,3)" style="cursor:pointer" title="Click to sort">Pattern <span class="sort-indicator">⬍</span></th>' +
+                        '<th onclick="sortTable(this,4)" style="cursor:pointer" title="Click to sort">VCP <span class="sort-indicator">⬍</span></th>' +
+                        '<th onclick="sortTable(this,5)" style="cursor:pointer" title="Click to sort">D-Trigger (BM) <span class="sort-indicator">⬍</span></th>' +
+                        '<th onclick="sortTable(this,6)" style="cursor:pointer" title="Click to sort">Current SL <span class="sort-indicator">⬍</span></th>' +
+                        '<th onclick="sortTable(this,7)" style="cursor:pointer" title="Click to sort">T1 <span class="sort-indicator">⬍</span></th>' +
+                        '<th onclick="sortTable(this,8)" style="cursor:pointer" title="Click to sort">T2 <span class="sort-indicator">⬍</span></th>' +
+                        '<th onclick="sortTable(this,9)" style="cursor:pointer" title="Click to sort">T3 <span class="sort-indicator">⬍</span></th>' +
+                        '<th onclick="sortTable(this,10)" style="cursor:pointer" title="Click to sort">R:R <span class="sort-indicator">⬍</span></th>' +
+                        '<th onclick="sortTable(this,11)" style="cursor:pointer" title="Click to sort">Stage <span class="sort-indicator">⬍</span></th>' +
+                        '<th onclick="sortTable(this,12)" style="cursor:pointer" title="Click to sort">Status <span class="sort-indicator">⬍</span></th>' +
                         '</tr></thead><tbody>';
                     a.forEach(item => {
                         const sideColor = item.side === 'CE' ? '#3fb950' : '#f85149';
@@ -739,7 +927,15 @@
                     html += '<p class="empty-state" style="padding:10px">No incubating anchors. Run a scan cycle to discover new anchors across the universe.</p>';
                 } else {
                     html += '<div style="overflow-x:auto;max-height:600px"><table id="radar-table-b"><thead><tr>' +
-                        '<th>Symbol</th><th>Side</th><th>Anchor Pattern</th><th>VCP</th><th>Anchor High</th><th>Anchor Low</th><th>Timeframe</th><th>Stage</th><th>Incubation State</th>' +
+                        '<th onclick="sortTable(this,0)" style="cursor:pointer" title="Click to sort">Symbol <span class="sort-indicator">⬍</span></th>' +
+                        '<th onclick="sortTable(this,1)" style="cursor:pointer" title="Click to sort">Side <span class="sort-indicator">⬍</span></th>' +
+                        '<th onclick="sortTable(this,2)" style="cursor:pointer" title="Click to sort">Anchor Pattern <span class="sort-indicator">⬍</span></th>' +
+                        '<th onclick="sortTable(this,3)" style="cursor:pointer" title="Click to sort">VCP <span class="sort-indicator">⬍</span></th>' +
+                        '<th onclick="sortTable(this,4)" style="cursor:pointer" title="Click to sort">Anchor High <span class="sort-indicator">⬍</span></th>' +
+                        '<th onclick="sortTable(this,5)" style="cursor:pointer" title="Click to sort">Anchor Low <span class="sort-indicator">⬍</span></th>' +
+                        '<th onclick="sortTable(this,6)" style="cursor:pointer" title="Click to sort">Timeframe <span class="sort-indicator">⬍</span></th>' +
+                        '<th onclick="sortTable(this,7)" style="cursor:pointer" title="Click to sort">Stage <span class="sort-indicator">⬍</span></th>' +
+                        '<th onclick="sortTable(this,8)" style="cursor:pointer" title="Click to sort">Incubation State <span class="sort-indicator">⬍</span></th>' +
                         '</tr></thead><tbody id="radar-table-b-tbody">';
                     b.forEach(item => {
                         const sideColor = item.side === 'CE' ? '#3fb950' : '#f85149';
@@ -768,6 +964,7 @@
             }
 
             container.innerHTML = html;
+            reapplySorts();
         }
 
         let editStates = {};
@@ -2170,7 +2367,7 @@
         table { width: 100%; border-collapse: collapse; margin-bottom: 16px; background: #161b22; border-radius: 8px; overflow: hidden; }
         th { background: #21262d; color: #8b949e; font-size: 11px; text-transform: uppercase; padding: 8px 10px; text-align: left; border-bottom: 1px solid #30363d; cursor: pointer; user-select: none; }
         th:hover { color: #58a6ff; }
-        th::after { content: ' \\25B4\\25BE'; font-size: 8px; opacity: 0.3; }
+        th::after { content: ''; }
         td { padding: 7px 10px; border-bottom: 1px solid #21262d; font-size: 12px; }
         tr:hover td { background: #1c2128; }
 
@@ -2482,6 +2679,8 @@
                         <span>📡 Pattern Surveillance Radar (A+, A, B)</span>
                         <div style="display:flex;gap:8px;align-items:center">
                             <span style="font-size:11px;color:#8b949e">Priority Funnel: A+ (Coiled) → A (Ready) → B (Anchor)</span>
+                            <button class="btn-scan-clear" onclick="clearRadarData()" style="padding:2px 10px;background:inherit;border:1px solid #f85149;color:#f85149;border-radius:4px;font-size:10px;cursor:pointer" title="Clear Radar Setups">Clear</button>
+                            <button class="btn-scan-export" onclick="radarExport()" style="padding:2px 10px;background:inherit;border:1px solid #58a6ff;color:#58a6ff;border-radius:4px;font-size:10px;cursor:pointer" title="Export Radar to CSV">Export</button>
                         </div>
                     </div>
                     <div id="radar-funnel-body"><p class="empty-state">Loading pattern radar...</p></div>

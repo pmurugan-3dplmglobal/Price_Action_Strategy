@@ -56,7 +56,7 @@ architecture:
       dashboard_sl_overrides.py: "Shared read/write of user-edited SL/T1/T2/T3 overrides (sl_target_overrides.json) used by both dashboards."
     Kite_Access_Token_gen.py: "Zerodha Kite OAuth access token generator CLI (single canonical root-level copy)."
     Trade_Option:
-      app_option_Trade.py: "Options Dashboard (port 5050) with 1-Click BUY button on Scan Tab (/api/buy-scanned-trade), 24/7 position monitor daemon, and TradingView chart modal."
+      app_option_Trade.py: "Options Dashboard (port 5050) with 1-Click BUY button on Scan Tab (/api/buy-scanned-trade), 24/7 position monitor daemon, TradingView chart modal, Pattern Surveillance Radar Clear/Export (/api/radar/clear, /api/radar/export), and interactive sortable tables."
       index_options_trade_engine.py: "Intraday index options engine (NIFTY, BANKNIFTY, SENSEX with BFO exchange routing)."
       stock_options_trade_engine.py: "Full NSE F&O universe options scanner & executor with Fast Surveillance Radar loop."
       automated_strategy_exporter.py: "Plan 1 Multi-Timeframe Automated Daily Exporter (Index: 3m/5m/15m, Stock Option: 15m/60m)."
@@ -447,6 +447,12 @@ verification_and_quality_assurance:
   vix_portfolio_suite: "scratch/test_vix_portfolio_volume.py — 47/47 Unit Tests Passing (100% Success Rate)"
   ast_syntax_integrity: "100% Python files parsed with zero syntax errors"
   recent_major_issues_resolved:
+    - id: "FEATURE-039"
+      title: "Conviction-Weighted Tier Sizing (100%/70%/50%), Morning Bearish Gap Audit & 0DTE Expiry Day Rollover"
+      status: "RESOLVED"
+    - id: "ISSUE-090"
+      title: "Expert Code Audit — 5 Bug Fixes (Missing numpy in resolve.py, AnchorLow Overwrite, Bearish R:R, Index Engine Ask & Product MIS/NRML)"
+      status: "RESOLVED"
     - id: "ISSUE-089"
       title: "Trade_Stock Root Import Blueprint Resolution & Institutional Test Suite Realization"
       status: "RESOLVED"

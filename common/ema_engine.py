@@ -10,7 +10,8 @@ from kiteconnect import KiteConnect
 import paths
 
 from trading_core import (
-    STOCK_REGISTRY, INDEX_REGISTRY, load_kite_session, fetch_and_resample_candles, sync_stock_tokens
+    STOCK_REGISTRY, INDEX_REGISTRY, load_kite_session, fetch_and_resample_candles, sync_stock_tokens,
+    STOCK_EXPIRY_ROLLOVER_DAYS
 )
 from equity_universe import get_universe_symbols_and_tokens
 
@@ -108,8 +109,8 @@ def _get_monthly_expiry_month_str(now=None):
     today = now.date() if isinstance(now, datetime.datetime) else now
     days_to_expiry = (last_thursday - today).days
 
-    # 6-Day Monthly Rollover Rule: If <= 6 days to expiry, roll to next month
-    if days_to_expiry <= 6:
+    # 6-Day Monthly Rollover Rule: If <= STOCK_EXPIRY_ROLLOVER_DAYS to expiry, roll to next month
+    if days_to_expiry <= STOCK_EXPIRY_ROLLOVER_DAYS:
         next_month = month + 1 if month < 12 else 1
         next_year = year if month < 12 else year + 1
         next_dt = datetime.date(next_year, next_month, 1)

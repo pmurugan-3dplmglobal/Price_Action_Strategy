@@ -318,7 +318,6 @@ def scan_anchor_bcd_breakout(df_entry, df_anchor, anchor_tf="", entry_tf="", ena
         anchor_name = anchor_match["Pattern"] if anchor_match else "BULL_A_Base"
 
         # Left-Side Rule: no close below A.low in preceding 100 candles
-        a_low = float(a['low'])
         left_df = df_entry.iloc[max(0, a_idx - 100) : a_idx]
         if not left_df.empty and float(left_df['close'].min()) < a_low:
             continue

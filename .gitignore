@@ -28,5 +28,9 @@ venv/
 .vscode/
 .idea/
 
+# Subagent scratch/logs
+.agents/*
+!.agents/skills/
+
 # OS
 Thumbs.db

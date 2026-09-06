@@ -52,7 +52,8 @@ from trading_core import (
     match_registry_symbol,
     extract_underlying_symbol,
     get_option_lot_size,
-    calculate_sl_buffer
+    calculate_sl_buffer,
+    STOCK_EXPIRY_ROLLOVER_DAYS
 )
 
 LIVE_MARKET_DEPLOYMENT = True
@@ -192,8 +193,8 @@ def resolve_option_contract(symbol, spot, step, opt_type, target_strike=None):
                     expiries = future['expiry_dt'].unique()
                     curr_exp = expiries[0]
                     days_rem = (curr_exp - today).days
-                    # 85% Threshold Rule: If <= 4 days remaining to monthly expiry, select NEXT MONTH
-                    if days_rem <= 4 and len(expiries) > 1:
+                    # 85% Threshold Rule: If <= 6 days remaining to monthly expiry, select NEXT MONTH
+                    if days_rem <= STOCK_EXPIRY_ROLLOVER_DAYS and len(expiries) > 1:
                         target_exp = expiries[1]
                         logging.info(f"[STOCK EXPIRY ROLLOVER 85%] {symbol}: {days_rem}d to expiry ({curr_exp}) -> Selected NEXT MONTH ({target_exp})")
                         sel = future[future['expiry_dt'] == target_exp].iloc[0]
@@ -404,7 +405,16 @@ def execute_highest_rr_trade(kite, staged):
         cp = best["entry_spot"]
         avg_rr = best.get("rr", 0)
         strike_step = best.get("strike_step", 50)
-        pos_size = calculate_position_size(cp, best["current_sl"])
+        cap_val = float(cfg_eng.get("capital") or 100000.0)
+        pos_size = int(best.get("position_size") or calculate_position_size(
+            spot_price=cp,
+            stop_loss=best["current_sl"],
+            capital=cap_val,
+            risk_percent=float(cfg_eng.get("MAX_RISK_PERCENT") or 1.0),
+            lot_size=best.get("lot_size", 1),
+            is_option=True,
+            tier=best.get("tier", 1)
+        ))
         target_strike = strike if strike else int(round(cp / strike_step) * strike_step)
         opt_type = "CE" if side == "CE" else "PE"
 

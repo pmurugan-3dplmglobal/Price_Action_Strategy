@@ -19,6 +19,9 @@ SUPER_STOCKS = [
     "ITC", "SBIN", "BHARTIARTL", "LT", "WIPRO"
 ]
 
+# Monthly stock option expiry rollover threshold (days remaining to monthly expiry)
+STOCK_EXPIRY_ROLLOVER_DAYS = 6
+
 def extract_underlying_symbol(tradingsymbol):
     """Extract underlying symbol from a tradingsymbol (e.g. KAYNES26SEP3900PE -> KAYNES, NIFTY26AUG24000CE -> NIFTY)."""
     if not tradingsymbol:

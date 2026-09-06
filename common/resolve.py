@@ -14,6 +14,7 @@ import logging
 import time
 from datetime import datetime as dt, timedelta, time as datetime_time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import numpy as np
 import pandas as pd
 import paths
 
@@ -79,6 +80,7 @@ from patterns_bear import (
 import pattern_funnel
 from vix_guard import evaluate_vix_regime
 from portfolio_risk import check_portfolio_risk_caps
+from registries import STOCK_EXPIRY_ROLLOVER_DAYS
 
 def get_mapped_spot_timeframe(entry_tf):
     """
@@ -1546,16 +1548,6 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                             logging.info(f"CE MATCH {skip_reason}: {ce['tradingsymbol']} | {result_ce['Pattern']}")
                             continue
 
-                        ce_lot = int(ce.get("lot_size") or config.get("lot_size", 1))
-                        pos_size = calculate_position_size(
-                            spot_price=result_ce["Close"],
-                            stop_loss=result_ce["SL"],
-                            capital=float(cfg_engine.get("capital") or 100000.0),
-                            risk_percent=float(cfg_engine.get("MAX_RISK_PERCENT") or 1.0),
-                            lot_size=ce_lot,
-                            is_option=True
-                        )
-
                         is_d2_ce = ("Setup_2" in name) or any(k in str(result_ce.get("Pattern", "")).upper() for k in ["CONT", "REENTRY", "D2"])
                         spot_conf_ce, spot_conf_type_ce = evaluate_spot_confluence("CE", is_d2_ce, current_spot, spot_vwap, spot_sl_ce, spot_ema_bull)
 
@@ -1566,6 +1558,17 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                             tier_ce = 1
                             tier_label_ce = "TIER_1_GOLD"
                             tier_badge_ce = "🥇 T1"
+
+                        ce_lot = int(ce.get("lot_size") or config.get("lot_size", 1))
+                        pos_size = calculate_position_size(
+                            spot_price=result_ce["Close"],
+                            stop_loss=result_ce["SL"],
+                            capital=float(cfg_engine.get("capital") or 100000.0),
+                            risk_percent=float(cfg_engine.get("MAX_RISK_PERCENT") or 1.0),
+                            lot_size=ce_lot,
+                            is_option=True,
+                            tier=tier_ce
+                        )
 
                         trade_data = {
                             "symbol": symbol, "contract": ce['tradingsymbol'], "option_token": ce['token'],
@@ -1679,16 +1682,6 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                             logging.info(f"PE MATCH {skip_reason}: {pe['tradingsymbol']} | {result_pe['Pattern']}")
                             continue
 
-                        pe_lot = int(pe.get("lot_size") or config.get("lot_size", 1))
-                        pos_size = calculate_position_size(
-                            spot_price=result_pe["Close"],
-                            stop_loss=result_pe["SL"],
-                            capital=float(cfg_engine.get("capital") or 100000.0),
-                            risk_percent=float(cfg_engine.get("MAX_RISK_PERCENT") or 1.0),
-                            lot_size=pe_lot,
-                            is_option=True
-                        )
-
                         is_d2_pe = ("Setup_2" in name) or any(k in str(result_pe.get("Pattern", "")).upper() for k in ["CONT", "REENTRY", "D2"])
                         spot_conf_pe, spot_conf_type_pe = evaluate_spot_confluence("PE", is_d2_pe, current_spot, spot_vwap, spot_sl_pe, spot_ema_bear)
 
@@ -1699,6 +1692,17 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                             tier_pe = 1
                             tier_label_pe = "TIER_1_GOLD"
                             tier_badge_pe = "🥇 T1"
+
+                        pe_lot = int(pe.get("lot_size") or config.get("lot_size", 1))
+                        pos_size = calculate_position_size(
+                            spot_price=result_pe["Close"],
+                            stop_loss=result_pe["SL"],
+                            capital=float(cfg_engine.get("capital") or 100000.0),
+                            risk_percent=float(cfg_engine.get("MAX_RISK_PERCENT") or 1.0),
+                            lot_size=pe_lot,
+                            is_option=True,
+                            tier=tier_pe
+                        )
 
                         trade_data = {
                             "symbol": symbol, "contract": pe['tradingsymbol'], "option_token": pe['token'],
@@ -2079,14 +2083,14 @@ def resolve_option_strikes(nfo_instruments, base_symbol, spot_price, step_size, 
                 # 1) Stock Options: In monthly expiry week (days_rem <= 6), roll over to next month's series to prevent severe theta crush.
                 # 2) Index Options: Weekly expiries supported — provide current weekly expiry (or next week if expiring today late in session).
                 if not is_index_contract:
-                    if days_rem <= 6 and len(expiries) > 1:
+                    if days_rem <= STOCK_EXPIRY_ROLLOVER_DAYS and len(expiries) > 1:
                         target_exp = expiries[1]
                         sub = future[future['expiry_dt'] == target_exp]
                         c = sub.iloc[0] if not sub.empty else future.iloc[0]
                     else:
                         c = future.iloc[0]
                 else:
-                    if days_rem == 0 and get_ist_now().time() >= datetime_time(14, 0) and len(expiries) > 1:
+                    if days_rem == 0 and get_ist_now().time() >= datetime_time(13, 30) and len(expiries) > 1:
                         target_exp = expiries[1]
                         sub = future[future['expiry_dt'] == target_exp]
                         c = sub.iloc[0] if not sub.empty else future.iloc[0]

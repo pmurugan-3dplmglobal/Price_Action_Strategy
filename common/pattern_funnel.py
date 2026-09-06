@@ -40,11 +40,59 @@ STAGE_A = "A"
 STAGE_B = "B"
 
 def _get_key(item):
-    sym = item.get("symbol", "")
-    cntr = item.get("contract") or sym
-    side = item.get("side", "CE")
-    strike = item.get("strike", "")
-    return f"{sym}|{cntr}|{side}|{strike}"
+    """
+    Returns unique key per underlying asset and direction: {symbol}|{side}.
+    Guarantees Single Best-Strike Invariant: A symbol cannot occupy multiple slots
+    in the radar funnel with different strikes.
+    """
+    sym = str(item.get("symbol") or "").strip().upper()
+    side = str(item.get("side") or "CE").strip().upper()
+    return f"{sym}|{side}"
+
+def _is_better_setup(new_item, old_item):
+    """
+    Evaluates which contract is quantitatively superior for the same (symbol, side).
+    Priority:
+      1. Tier Conviction: Tier 1 (Gold) > Tier 2 (Core) > Tier 3 (Momentum)
+      2. Risk-to-Reward (R:R): Higher R:R is better
+      3. VCP Compression: Tighter ATR contraction ratio or active squeeze is better
+    """
+    if not old_item:
+        return True
+
+    # 1. Tier comparison (lower number = higher conviction: 1 < 2 < 3)
+    t_new = int(new_item.get("tier") or 2)
+    t_old = int(old_item.get("tier") or 2)
+    if t_new != t_old:
+        return t_new < t_old
+
+    # 2. R:R comparison
+    try:
+        rr_new = float(new_item.get("rr") or 0.0)
+        rr_old = float(old_item.get("rr") or 0.0)
+        if abs(rr_new - rr_old) >= 0.05:
+            return rr_new > rr_old
+    except (ValueError, TypeError):
+        pass
+
+    # 3. Squeeze comparison
+    sq_new = bool(new_item.get("is_squeeze", False))
+    sq_old = bool(old_item.get("is_squeeze", False))
+    if sq_new and not sq_old:
+        return True
+    if sq_old and not sq_new:
+        return False
+
+    # 4. VCP ATR contraction ratio (lower is tighter)
+    try:
+        atr_new = float(new_item.get("atr_ratio") or 1.0)
+        atr_old = float(old_item.get("atr_ratio") or 1.0)
+        if abs(atr_new - atr_old) >= 0.05:
+            return atr_new < atr_old
+    except (ValueError, TypeError):
+        pass
+
+    return True
 
 def load_funnel_state(engine_name=None):
     """Load the full pattern funnel state from disk with retry on read lock."""
@@ -108,14 +156,21 @@ def save_funnel_state(engine_name, data):
                     pass
 
 def update_funnel(engine_name, a_plus_items=None, a_items=None, b_items=None):
-    """Update or merge items into Category A+, Category A, and Category B for an engine."""
+    """Update or merge items into Category A+, Category A, and Category B for an engine with best-strike deduplication."""
     with _funnel_lock:
         current = load_funnel_state(engine_name)
-        
-        # Build maps for fast deduplication and stage migration
-        a_plus_map = {_get_key(x): x for x in (a_plus_items or current.get("category_a_plus", []))}
-        a_map = {_get_key(x): x for x in (a_items or current.get("category_a", []))}
-        b_map = {_get_key(x): x for x in (b_items or current.get("category_b", []))}
+
+        def _dedup_list(items):
+            best_map = {}
+            for x in items:
+                k = _get_key(x)
+                if k not in best_map or _is_better_setup(x, best_map[k]):
+                    best_map[k] = x
+            return best_map
+
+        a_plus_map = _dedup_list(a_plus_items or current.get("category_a_plus", []))
+        a_map = _dedup_list(a_items or current.get("category_a", []))
+        b_map = _dedup_list(b_items or current.get("category_b", []))
 
         # Enforce exclusivity: If an item is in A+, remove from A and B
         for k in a_plus_map:
@@ -139,11 +194,32 @@ def update_funnel(engine_name, a_plus_items=None, a_items=None, b_items=None):
         return updated
 
 def promote_item(engine_name, item, target_stage):
-    """Promote an item to a higher maturity category (e.g. B -> A or A -> A+)."""
+    """Promote an item to a higher maturity category (e.g. B -> A or A -> A+) with best-strike deduplication."""
     with _funnel_lock:
         current = load_funnel_state(engine_name)
         key = _get_key(item)
-        
+
+        # Check if an existing setup for this (symbol, side) already exists
+        existing = None
+        for pool in [current.get("category_a_plus", []), current.get("category_a", []), current.get("category_b", [])]:
+            for x in pool:
+                if _get_key(x) == key:
+                    existing = x
+                    break
+            if existing:
+                break
+
+        stage_rank = {STAGE_A_PLUS: 3, STAGE_A: 2, STAGE_B: 1}
+        if existing:
+            existing_rank = stage_rank.get(existing.get("stage", STAGE_B), 1)
+            target_rank = stage_rank.get(target_stage, 1)
+            # If existing setup is already at a more mature stage, keep existing
+            if existing_rank > target_rank:
+                return current
+            # If same maturity stage but existing setup has better conviction/RR, keep existing
+            if existing_rank == target_rank and not _is_better_setup(item, existing):
+                return current
+
         a_plus_list = [x for x in current.get("category_a_plus", []) if _get_key(x) != key]
         a_list = [x for x in current.get("category_a", []) if _get_key(x) != key]
         b_list = [x for x in current.get("category_b", []) if _get_key(x) != key]
