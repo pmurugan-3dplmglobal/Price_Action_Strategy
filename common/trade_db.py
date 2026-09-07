@@ -371,6 +371,15 @@ def get_completed_trades():
     return [_row_to_dict(r) for r in rows]
 
 
+def get_trade(trade_id):
+    """Return a single trade dict by ID, or None if not found."""
+    if not trade_id:
+        return None
+    with _get_connection() as conn:
+        row = conn.execute("SELECT * FROM trades WHERE id=?", (trade_id,)).fetchone()
+    return _row_to_dict(row) if row else None
+
+
 def remove_trades(trade_ids):
     """Hard-delete trades by ID list."""
     if not trade_ids:
@@ -515,11 +524,26 @@ def reconcile_broker_live_positions(kite):
         logging.warning(f"[trade_db] reconcile_broker_live_positions failed to fetch Kite positions: {e}")
         return 0
 
+    open_orders_contracts = set()
+    try:
+        orders_data = kite.orders()
+        open_orders_contracts = {
+            _normalize_contract(o.get("tradingsymbol"))
+            for o in orders_data
+            if o.get("status") in ["OPEN", "TRIGGER PENDING"] and o.get("tradingsymbol")
+        }
+    except Exception as e:
+        logging.debug(f"[trade_db] reconcile_broker_live_positions failed to fetch Kite orders: {e}")
+
     reconciled = 0
     now_str = get_ist_now().strftime("%Y-%m-%d %H:%M:%S")
     for t in get_active_trades():
         contract = _normalize_contract(t.get("contract") or t.get("symbol"))
         if not contract:
+            continue
+        if contract in open_orders_contracts:
+            # Contract has an active OPEN / TRIGGER PENDING order on Kite (e.g. pending limit entry).
+            # Do NOT treat as closed zero-qty position; StaleOrderManager will evaluate invalidation/TTL!
             continue
         p_info = net_pos.get(contract) or day_pos.get(contract)
         net_qty = int(p_info.get("quantity", 0)) if p_info else 0
@@ -695,6 +719,43 @@ def record_executed_pattern(engine, key, info=None):
         db.setdefault(engine, {})
         db[engine][key] = info or {"executed_at": time.strftime("%Y-%m-%d %H:%M:%S")}
         _write_json(EXECUTED_STORE_FILE, db)
+
+
+def clear_executed_pattern(engine, key):
+    """Clears an executed pattern lock so the setup can be re-evaluated (e.g. after order cancellation or exit)."""
+    with _executed_cache_lock:
+        db = _load_executed_cache()
+        if isinstance(db, dict) and engine in db and key in db[engine]:
+            db[engine].pop(key, None)
+            _write_json(EXECUTED_STORE_FILE, db)
+            return True
+    return False
+
+
+def mark_order_cancelled_by_contract_or_oid(contract, oid=None, reason_code="CANCELLED", details=None):
+    """Mark active trade as CANCELLED by tradingsymbol/contract or order_id."""
+    clean_c = _normalize_contract(contract)
+    now_str = time.strftime("%Y-%m-%d %H:%M:%S")
+    reconciled = 0
+    with _DB_LOCK:
+        with _get_connection() as conn:
+            rows = conn.execute("SELECT id, data_json FROM trades WHERE status='ACTIVE'").fetchall()
+            for r in rows:
+                t_data = json.loads(r["data_json"])
+                c_match = clean_c and _normalize_contract(t_data.get("contract") or t_data.get("symbol")) == clean_c
+                o_match = oid and str(t_data.get("order_id")) == str(oid)
+                if c_match or o_match:
+                    tid = r["id"]
+                    t_data["status"] = "CANCELLED"
+                    t_data["exit_reason"] = reason_code
+                    t_data["details"] = details or "Order cancelled before execution"
+                    t_data["exit_time"] = now_str
+                    conn.execute("UPDATE trades SET data_json=?, status='CANCELLED', updated_at=? WHERE id=?",
+                                 (json.dumps(t_data), now_str, tid))
+                    reconciled += 1
+    if reconciled > 0:
+        _sync_tab_databases()
+    return reconciled
 
 
 # ════════════════════════════════════════════════════════════

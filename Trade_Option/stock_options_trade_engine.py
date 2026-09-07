@@ -23,6 +23,7 @@ from trading_core import (
     fetch_and_resample_candles,
     log_to_journal,
     is_market_open,
+    is_new_entry_allowed,
     get_ist_date,
     get_ist_now,
     calculate_position_size,
@@ -362,7 +363,7 @@ def execute_highest_rr_trade(kite, staged):
     if not staged:
         return
 
-    live_ok = LIVE_MARKET_DEPLOYMENT and live_execution_enabled(LIVE_EXECUTION_FLAG) and is_market_open()
+    live_ok = LIVE_MARKET_DEPLOYMENT and live_execution_enabled(LIVE_EXECUTION_FLAG) and is_new_entry_allowed(live_execution_active=True, is_option=True)
 
     # Tier 1 Gold Candidates (Priority 1)
     t1_candidates = [
@@ -543,6 +544,13 @@ def execute_highest_rr_trade(kite, staged):
                     product=kite.PRODUCT_NRML
                 )
                 logging.info(f"🥇 T1 AUTO-EXECUTE BUY LIMIT: {contract} Qty={qty} @ Benchmark Limit Price={limit_price} (Order ID: {oid})")
+                with position_lock:
+                    if sym in ACTIVE_POSITIONS:
+                        ACTIVE_POSITIONS[sym]["order_id"] = str(oid)
+                        ACTIVE_POSITIONS[sym]["order_status"] = "OPEN"
+                if pos.get("trade_id"):
+                    trade_db.update_trade(pos["trade_id"], {"order_id": str(oid), "order_status": "OPEN"})
+                save_state()
 
                 if spread_info:
                     try:
@@ -597,6 +605,9 @@ def run_fast_radar_check(kite):
     Monitors Category A+ (Imminent Breakout) and Category A (Ready) setups in real-time.
     If latest price crosses or closes above Benchmark D trigger, immediately executes!
     """
+    if not is_new_entry_allowed(live_execution_active=True, is_option=True):
+        return []
+
     funnel_summary = pattern_funnel.get_funnel_summary("nifty50")
     radar_pool = funnel_summary.get("category_a_plus", []) + funnel_summary.get("category_a", [])
     if not radar_pool:
@@ -621,7 +632,19 @@ def run_fast_radar_check(kite):
                 item.get("timeframe", TIMEFRAME_ENTRY)
             )
             if df_latest is not None and not df_latest.empty:
-                c_now = float(df_latest.iloc[-1]['close'])
+                last_candle = df_latest.iloc[-1]
+                candle_date_str = str(last_candle.get('date', ''))
+                try:
+                    c_dt = pd.to_datetime(candle_date_str)
+                    if hasattr(c_dt, 'tz') and c_dt.tz is not None:
+                        c_dt = c_dt.tz_convert('Asia/Kolkata').tz_localize(None)
+                    if c_dt.date() < get_ist_now(naive=True).date():
+                        # Historical candle from prior session cannot trigger a breakout today
+                        continue
+                except Exception:
+                    pass
+
+                c_now = float(last_candle['close'])
                 bm = float(item.get("benchmark") or 0.0)
                 sl = float(item.get("current_sl") or 0.0)
                 if sl > 0 and c_now <= sl:
@@ -631,7 +654,7 @@ def run_fast_radar_check(kite):
                 if bm > 0 and c_now >= bm:
                     logging.info(f"⚡ [RADAR TRIGGER] {sym} ({item.get('contract')}) Close {c_now} >= Benchmark {bm}!")
                     item["entry_spot"] = c_now
-                    item["entry_time"] = str(df_latest.iloc[-1].get('date', dt.now().isoformat()))
+                    item["entry_time"] = str(last_candle.get('date', dt.now().isoformat()))
                     triggered.append(item)
                     pattern_funnel.evict_item("nifty50", item)
         except Exception as radar_err:

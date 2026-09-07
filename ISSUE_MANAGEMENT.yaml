@@ -4,14 +4,133 @@ meta:
   last_updated: '2026-09-06'
   purpose: Active operational tracker for v2.1.0-stable failures, root causes, regressions, and enhancements.
   historical_archive: archive/ISSUE_HISTORY_ARCHIVE.yaml (Preserves 119 resolved legacy issues prior to 2026-09-05)
-  total_active_issues: 15
+  total_active_issues: 16
   archived_issues_summary:
     total_archived: 119
     recent_archived_batch: [FEATURE-031, FEATURE-030, FEATURE-029, ISSUE-084, ISSUE-083, ISSUE-082, ISSUE-081, ISSUE-080, FEATURE-036, FEATURE-035, FEATURE-034, FEATURE-033, ISSUE-054]
     key_archived_families: [ALGO_AUDIT_CVE, QUANT_ENHANCEMENTS, RADAR_LIFECYCLE, VCP_METRICS, SCANNER_DISCOVERY, SECURITY_CONFIG, ZERO_REGRESSION_AUDIT]
 issues:
+- id: FEATURE-042
+  title: Automated Stale / Unfilled Limit Order Manager & TTL Invalidation Watcher
+  severity: HIGH
+  category: Order Management, Execution Safety, Limit Invalidation, Falling Knife Protection
+  family: QUANT_ENHANCEMENTS
+  date_reported: '2026-09-07'
+  symptom: |
+    1. During high-momentum morning breakouts, limit BUY orders placed at benchmark prices (e.g. SENSEX 76500 PE @ 283.30, NIFTY 23950 PE @ 75.80, POWERGRID 265 CE @ 5.80) remained unfilled as the market surged directly to targets (LTP reached 427.75 and 135.95).
+    2. These unfilled limit orders remained in OPEN / TRIGGER PENDING status indefinitely on Zerodha Kite.
+    3. If the market reversed later in the session and price collapsed back to the limit price, the stale order would fill on a crashing market (buying a falling knife after target edge was already exhausted).
+    4. In trade_db.reconcile_broker_live_positions, trades with pending entry orders on Kite were erroneously treated as zero-qty closed positions, abandoning monitoring of the open Kite orders.
+  root_cause: |
+    1. Neither the stock options trade engine nor the index options trade engine evaluated unfilled limit orders on Kite for setup expiration or target achievement.
+    2. position_monitor did not distinguish between an active filled position and a pending entry limit order, attempting to trail stop loss or trigger sell exits on zero held quantity.
+    3. No Time-To-Live (TTL) or Target Invalidation mechanism existed to cancel orders whose setup had already played out or expired.
+    4. trade_db.reconcile_broker_live_positions queried net held quantity without checking if the contract had active OPEN or TRIGGER PENDING orders on Kite.
+  affected_files:
+  - common/position_monitor.py
+  - common/trade_db.py
+  - common/trading_core.py
+  - Trade_Option/stock_options_trade_engine.py
+  - Trade_Option/index_options_trade_engine.py
+  - input/program_config.json
+  - scratch/test_stale_order_invalidation.py
+  fix_applied: |
+    1. input/program_config.json:
+       - Added order_management section with configurable enable_stale_order_cancellation (true), unfilled_order_ttl_minutes (15), target_reached_buffer_pct (0.02), cancel_on_target_reached (true), cancel_on_sl_breach (true), cancel_on_ttl_expired (true), and eod_cutoff_time (15:15).
+    2. common/position_monitor.py:
+       - Implemented reconcile_and_cancel_stale_orders(kite, positions_dict, position_lock, engine_name, live):
+         * Evaluates all OPEN and TRIGGER PENDING orders from kite.orders().
+         * Filters for entry orders (BUY for options/cash bull, SELL MIS for cash bear).
+         * Evaluates 4 invalidation triggers: Target T1 touched before fill, TTL expired (>15 min), SL breached before fill, and EOD cutoff (15:15).
+         * Calls kite.cancel_order(...) to kill stale limit orders immediately.
+         * Handles partial fills: cancels unfilled remainder, retains filled portion.
+         * Synchronizes order_status: transitions from OPEN to FILLED when filled on Kite, syncing actual average price.
+         * Removes cancelled orders from positions_dict, marks trade_db status = CANCELLED with explicit reason, and releases executed pattern locks.
+       - Wired reconcile_and_cancel_stale_orders into monitor_active_positions and monitor_all_active_positions.
+       - Guarded monitor_active_positions position loop: skips trailing and profit exits when order_status == 'OPEN'.
+    3. common/trade_db.py:
+       - In reconcile_broker_live_positions(kite): Added open_orders_contracts check. If an active trade has an open order on Kite, preserves its status so StaleOrderManager can manage it rather than prematurely closing it.
+       - Added clear_executed_pattern(engine, key) to release pattern locks upon order cancellation.
+       - Added mark_order_cancelled_by_contract_or_oid helper.
+       - Added get_trade(trade_id) helper.
+    4. Trade_Option/stock_options_trade_engine.py & index_options_trade_engine.py:
+       - Saved order_id and order_status = 'OPEN' in ACTIVE_POSITIONS and trade_db upon order placement.
+    5. common/trading_core.py:
+       - Re-exported reconcile_and_cancel_stale_orders and monitor_all_active_positions.
+  verification: |
+    1. Added scratch/test_stale_order_invalidation.py: 5/5 PASSED (100% SUCCESS) validating Target T1 invalidation, TTL expiration, SL breach invalidation, partial fill handling, and broker reconciler guard.
+    2. Full regression suite (scratch/run_full_regression_test.py): 21/21 suites PASSED with 100% success rate.
+    3. All targeted unit suites (test_institutional_enhancements.py, test_parity_alignment.py, test_vcp_metrics.py, test_spread_liquidity_reconciler.py, test_cve_fixes.py, test_vix_portfolio_volume.py): 100% PASS.
+  status: RESOLVED
+  resolution_date: '2026-09-07'
+- id: ISSUE-095
+  title: NoneType Target Arithmetic Error in Position Monitor — Unsupported Operand for Subtraction with None Targets
+  severity: MEDIUM
+  category: Position Monitor, Risk Surveillance, Exception Safety
+  family: ZERO_REGRESSION_AUDIT
+  date_reported: '2026-09-07'
+  symptom: |
+    Active position monitor logged repeated crashes:
+    `nifty50: Risk error ADANIENSOL: unsupported operand type(s) for -: 'NoneType' and 'float'`
+    and
+    `Risk error BAJAJ-AUTO: unsupported operand type(s) for -: 'NoneType' and 'float'`.
+    Surveillance for the affected position aborted on every cycle, preventing stop-loss, trailing, and target monitoring.
+  root_cause: |
+    In common/position_monitor.py:
+    1. Lines 1779 and 1836 evaluated target hit conditions unconditionally:
+       `t2_hit = (lp <= (t2_val + buf_t2)) if is_short_stock else (hp >= (t2_val - buf_t2))`
+       `t3_hit = (lp <= (t3_val + buf_t3)) if is_short_stock else (hp >= (t3_val - buf_t3))`
+    2. When a trade setup had fewer than 3 targets (e.g. ADANIENSOL has t1=140.6, t2=None, t3=None, or BAJAJ-AUTO has t1=256.25, t2=288.0, t3=None), `t2_val` or `t3_val` is `None`.
+    3. Python evaluated `t2_val - buf_t2` or `t3_val - buf_t3` before checking `if t2_val and t2_hit:`, raising `TypeError: unsupported operand type(s) for -: 'NoneType' and 'float'`.
+  affected_files:
+  - common/position_monitor.py
+  fix_applied: |
+    In common/position_monitor.py:
+    Guarded `t1_hit`, `t2_hit`, and `t3_hit` calculations with explicit `None` and positive target validation:
+    - `t1_hit = ((lp <= (t1_val + buf_t1)) if is_short_stock else (hp >= (t1_val - buf_t1))) if (t1_val is not None and t1_val > 0) else False`
+    - `t2_hit = ((lp <= (t2_val + buf_t2)) if is_short_stock else (hp >= (t2_val - buf_t2))) if (t2_val is not None and t2_val > 0) else False`
+    - `t3_hit = ((lp <= (t3_val + buf_t3)) if is_short_stock else (hp >= (t3_val - buf_t3))) if (t3_val is not None and t3_val > 0) else False`
+  verification: |
+    1. Unit tested `position_monitor.monitor_active_positions` with ADANIENSOL (t2=None, t3=None) and BAJAJ-AUTO (t3=None): 100% PASS without errors.
+    2. AST syntax check passed.
+    3. Full regression suite (scratch/run_full_regression_test.py): 21/21 suites PASSED with 100% success rate.
+  status: RESOLVED
+  resolution_date: '2026-09-07'
+- id: ISSUE-094
+  title: Cross-Instrument Override Collision — Option Premium SL (42.50) Clashing on Cash Stock (INFY 1100.0) Causing Instant 1-Second Cover Whipsaw
+  severity: HIGH
+  category: SL Derivation, Override Resolution, Equity Parity, Position Monitor
+  family: ZERO_REGRESSION_AUDIT
+  date_reported: '2026-09-07'
+  symptom: |
+    1. At 09:45:58, a short position was initiated on cash stock INFY (SELL 1 @ 1100.80 MIS).
+    2. Exactly 1 second later at 09:45:59, the position monitor fired a BUY cover order (BUY 1 @ 1101.30 MIS), immediately closing the short with message:
+       'SL [EMERGENCY_HARD_SL (LTP 1101.30 >= 48.88)]: INFY at 1101.3 (TF: day)'.
+  root_cause: |
+    1. In common/resolve.py:554, lookup_scan_sl_target searched sl_target_overrides.json with a broad substring match:
+       `partial = bool(clean_k and clean_k in clean_c) or bool(clean_c and clean_c in clean_k)`
+       For cash stock INFY, clean_c ('INFY') was found inside the option override key clean_k ('INFY26SEP1140CE'), which had current_sl = 42.50.
+    2. The resolution logic did not check if the override key was an option contract (is_option_contract), allowing an option premium SL (42.50) to contaminate a cash equity trading at 1100.00.
+    3. For a short position, SL triggers when price rises above SL. With current_sl = 42.50, emergency_threshold was set to 48.88. Since live LTP (1101.30) is way above 48.88, the monitor instantly panicked and covered the short 1s after entry.
+    4. In common/position_monitor.py:1087, STALE OUTLIER GUARD only evaluated entry_s vs live_ltp and ignored current_sl vs live_ltp divergence.
+  affected_files:
+  - common/resolve.py
+  - common/position_monitor.py
+  fix_applied: |
+    1. common/resolve.py: Added strict cross-instrument isolation in lookup_scan_sl_target:
+       - If is_stock is True, option contract keys (is_option_contract(clean_k)) are strictly skipped.
+       - If is_stock is False (options), cash stock keys are strictly skipped.
+    2. common/position_monitor.py: Enhanced STALE OUTLIER GUARD:
+       - Checked if current_sl diverges >300% from live LTP (current_sl / live_ltp > 3.0 or live_ltp / current_sl > 3.0).
+       - When true, marks is_outlier_entry = True and suppresses false EMERGENCY_HARD_SL triggers.
+  verification: |
+    1. Verified lookup_scan_sl_target('INFY', 'INFY', 'daily', is_stock=True) now returns stock-level current_sl (1850.0) and completely rejects option SL (42.50).
+    2. AST syntax check 100% PASS across common/resolve.py and common/position_monitor.py.
+    3. Full regression test suite (scratch/run_full_regression_test.py): 21/21 suites PASSED with 100% success rate.
+  status: RESOLVED
+  resolution_date: '2026-09-07'
 - id: ISSUE-093
-  title: Timeframe Closing Basis Invariant Enforcement — Morning Circuit Breaker Pause to 09:50 AM & AMO Option Order Elimination
+  title: Timeframe Closing Basis Invariant Enforcement — Opening Spread Safeguards, Fresh Fill Cooldown, and Complete Option AMO Elimination
   severity: HIGH
   category: Risk Management, Position Monitor, Execution Safety, Order Varieties
   family: ZERO_REGRESSION_AUDIT
@@ -20,22 +139,39 @@ issues:
     1. At 09:15:00 market open, PERSISTENT26SEP5600CE was bought via a queued weekend After Market Order (AMO) at 199.30, and immediately dumped 4 seconds later at 09:15:04 @ 149.25 due to a tick-level 15% catastrophic circuit breaker exit.
     2. The opening 30-minute timeframe candle was never allowed to close, violating the user's core Timeframe Closing Basis Invariant.
   root_cause: |
-    1. common/position_monitor.py contained a Morning Catastrophic Circuit Breaker active during 09:15-09:45 AM that evaluated raw tick-level LTP with a tight 15% threshold, triggering on normal morning bid-ask spread and opening volatility.
-    2. Trade_Option/app_option_Trade.py permitted 1-Click Buy orders to be submitted as After Market Orders (AMO) outside market hours, queuing stale weekend limit orders into market open.
+    1. CANDLE_API_OUTAGE_SHIELD in common/position_monitor.py:890 fired emergency exit on df.empty without checking pause_morning_circuit_breaker or fresh-fill cooldown, dumping the trade 4s after entry on empty morning candle data.
+    2. 1-Click Buy retry exception handler in Trade_Option/app_option_Trade.py, Trade_Stock/app_Stock_Trade.py, and routes_positions.py retried rejected regular orders with VARIETY_AMO for option contracts when Kite returned an "After Market Order" error string.
+    3. is_new_entry_allowed() permitted option entries from 09:15:00 sharp, catching distorted opening bid-ask spreads before the 09:16:00 spread normalization.
+    4. run_fast_radar_check in stock_options_trade_engine.py evaluated df_latest.iloc[-1] without checking if the candle was from today's date, allowing Friday's historical closing candle to trigger a breakout at 09:15:00.
+    5. SPOT_SL_GUARD in position_monitor.py:1273 was overridden by is_catastrophic_opt at a tight 15% threshold without checking if the fill was fresh (<120s old).
   affected_files:
   - common/position_monitor.py
+  - common/trading_core.py
   - Trade_Option/app_option_Trade.py
   - Trade_Stock/app_Stock_Trade.py
-  - common/websocket_monitor.py
-  - input/program_config.json
+  - Trade_Stock/blueprints/routes_positions.py
+  - Trade_Option/stock_options_trade_engine.py
+  - Trade_Option/index_options_trade_engine.py
   fix_applied: |
-    1. common/position_monitor.py: Extended failsafe_start_time default to 09:50 AM and paused all automated SL evaluations and emergency circuit breaker exits during 09:15-09:50 AM (allowing the opening 30-min candle to complete on closing-basis).
-    2. Trade_Option/app_option_Trade.py: Strictly disabled After Market Orders (AMO) for option contracts (NFO/BFO), rejecting off-market attempts with a descriptive safety error.
-    3. Updated failsafe_start_time defaults across Trade_Stock/app_Stock_Trade.py, common/websocket_monitor.py, and input/program_config.json.
+    1. common/position_monitor.py:
+       - Added get_seconds_since_entry(pos) to calculate exact elapsed seconds since trade entry.
+       - Hardened df.empty check: Suppressed emergency exits if trade is fresh (<120s old) or if morning circuit is paused before failsafe_start_time.
+       - Hardened morning catastrophic circuit breaker: Suppressed trigger for fresh fills (<120s old) to allow opening bid-ask spreads to settle.
+       - Hardened SPOT_SL_GUARD: Updated opt_emergency_cap to 35% and disabled catastrophic spot bypass for fresh fills (<120s).
+       - Updated is_new_entry_allowed(live_execution_active=True, is_option=True) to enforce 09:16:00 - 15:20:00 IST for options.
+    2. Trade_Option/app_option_Trade.py, Trade_Stock/app_Stock_Trade.py, routes_positions.py:
+       - Strictly prohibited VARIETY_AMO for option contracts (is_option_contract), rejecting offline option buys with 400 error.
+       - Suppressed automatic retry with VARIETY_AMO for option contracts when regular orders fail outside market hours.
+    3. Trade_Option/stock_options_trade_engine.py:
+       - Enforced is_new_entry_allowed(is_option=True) in execute_highest_rr_trade.
+       - Hardened run_fast_radar_check with is_new_entry_allowed guard and verified candle date is today before triggering breakouts.
+    4. Trade_Option/index_options_trade_engine.py:
+       - Enforced is_new_entry_allowed(is_option=True) in execute_highest_rr_trade.
+    5. Added unit test suite scratch/test_opening_spread_safeguards.py (3/3 PASS).
   verification: |
-    1. AST syntax parsed 100% across all files.
-    2. Full regression test suite (scratch/run_full_regression_test.py): 21/21 suites PASSED with 100% success rate.
-    3. Targeted unit verification suites: 100% PASS.
+    1. AST syntax parsed 100% across all 7 modified files.
+    2. Unit verification suites (scratch/test_opening_spread_safeguards.py, test_institutional_enhancements.py, test_parity_alignment.py, test_vcp_metrics.py, test_spread_liquidity_reconciler.py, test_cve_fixes.py, test_vix_portfolio_volume.py): 100% PASS.
+    3. Full regression test suite (scratch/run_full_regression_test.py): 21/21 suites PASSED with 100% success rate.
   status: RESOLVED
   resolution_date: '2026-09-07'
 - id: ISSUE-092

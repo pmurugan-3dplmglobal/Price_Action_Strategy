@@ -21,6 +21,7 @@ from trading_core import (
     fetch_and_resample_candles,
     log_to_journal,
     is_market_open,
+    is_new_entry_allowed,
     get_ist_date,
     get_ist_now,
     scan_anchor_bcd_breakout,
@@ -252,12 +253,22 @@ def execute_index_entry(kite, pos):
             logging.warning(f"[LIQUIDITY_GATE] Entry rejected for {pos['contract']}: {liq_msg}")
             return False
 
-        kite.place_order(
+        oid = kite.place_order(
             variety=kite.VARIETY_REGULAR, tradingsymbol=pos["contract"],
             exchange=target_exch, transaction_type=kite.TRANSACTION_TYPE_BUY,
             quantity=lot_sz * pos["position_size"], order_type=kite.ORDER_TYPE_LIMIT,
             price=price, product=kite.PRODUCT_NRML
         )
+        pos["order_id"] = str(oid)
+        pos["order_status"] = "OPEN"
+        sym = pos.get("symbol")
+        if sym and sym in ACTIVE_POSITIONS:
+            with position_lock:
+                ACTIVE_POSITIONS[sym]["order_id"] = str(oid)
+                ACTIVE_POSITIONS[sym]["order_status"] = "OPEN"
+        if pos.get("trade_id"):
+            trade_db.update_trade(pos["trade_id"], {"order_id": str(oid), "order_status": "OPEN"})
+        logging.info(f"Index Entry BUY LIMIT placed for {pos['contract']} Qty={lot_sz * pos['position_size']} @ {price} (Order ID: {oid})")
         return True
     except Exception as e:
         logging.error(f"Entry failed for {pos['contract']}: {e}")
@@ -275,7 +286,7 @@ def execute_highest_rr_trade(kite, staged):
     if not staged:
         return
     sorted_staged = sorted(staged, key=lambda t: (t.get("t3") or t.get("t1") or 0) - t.get("entry_spot", 0), reverse=True)
-    live_ok = LIVE_MARKET_DEPLOYMENT and live_execution_enabled(LIVE_EXECUTION_FLAG) and is_market_open()
+    live_ok = LIVE_MARKET_DEPLOYMENT and live_execution_enabled(LIVE_EXECUTION_FLAG) and is_new_entry_allowed(live_execution_active=True, is_option=True)
 
     for best in sorted_staged:
         key = f"{best['symbol']}|{best['pattern']}|{best['side']}|{best.get('strike', '')}"

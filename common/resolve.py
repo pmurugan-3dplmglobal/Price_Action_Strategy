@@ -550,6 +550,14 @@ def lookup_scan_sl_target(contract, symbol, engine, kite=None, entry_price=0, ti
                 eng_ov = overrides.get(eng_k, {})
                 for sym_k, vals in eng_ov.items():
                     clean_k = str(sym_k).replace(" ", "").upper()
+                    k_is_opt = is_option_contract(clean_k)
+                    # Cross-instrument isolation: Option overrides must never apply to Cash stocks,
+                    # and Cash stock overrides must never apply to Options!
+                    if is_stock and k_is_opt:
+                        continue
+                    if (not is_stock) and (not k_is_opt):
+                        continue
+
                     exact = (clean_k == clean_c) or (clean_sym and clean_k == clean_sym)
                     partial = bool(clean_k and clean_k in clean_c) or bool(clean_c and clean_c in clean_k)
                     if exact or partial:

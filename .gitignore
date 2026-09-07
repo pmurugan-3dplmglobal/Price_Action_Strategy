@@ -18,6 +18,8 @@ Trade_Stock/input/*.txt
 *.log
 *.tar.gz
 cloud_sync_payload.tar.gz
+*.db
+*.sqlite3
 
 # Environment
 .env

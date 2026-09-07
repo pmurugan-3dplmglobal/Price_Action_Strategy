@@ -426,10 +426,12 @@ def is_market_open():
     t_now = now.time()
     return datetime_time(9, 15) <= t_now <= datetime_time(15, 30)
 
-def is_new_entry_allowed(live_execution_active=True):
+def is_new_entry_allowed(live_execution_active=True, is_option=False):
     """Check if new trade entries are allowed.
     If live_execution_active is False (offline/scan-only/after-market mode), returns True to allow scanning & research anytime.
     If live_execution_active is True, restricts new entries strictly to Mon-Fri 09:15 to 15:20 IST.
+    For Options (is_option=True), opening 60 seconds (09:15:00 - 09:15:59 IST) suffer severe unformed spread distortion;
+    entries are restricted strictly from 09:16:00 to 15:20:00 IST.
     """
     if not live_execution_active:
         return True
@@ -437,7 +439,8 @@ def is_new_entry_allowed(live_execution_active=True):
     if now.weekday() >= 5:
         return False
     t_now = now.time()
-    return datetime_time(9, 15) <= t_now <= datetime_time(15, 20)
+    start_time = datetime_time(9, 16) if is_option else datetime_time(9, 15)
+    return start_time <= t_now <= datetime_time(15, 20)
 
 def close_position(kite, pos, live_market=True, product=None, qty_override=None, live=None, product_type=None):
     if live is not None:
@@ -792,12 +795,332 @@ def sanitize_entry_time(pos, now_ts=None):
     pos["entry_time"] = clean
     return clean
 
+def get_seconds_since_entry(pos):
+    """Return seconds elapsed since trade entry, or a large number if unavailable."""
+    try:
+        et = sanitize_entry_time(pos)
+        if not et:
+            return 999999.0
+        et_dt = pd.to_datetime(et)
+        if hasattr(et_dt, 'tz') and et_dt.tz is not None:
+            et_dt = et_dt.tz_convert('Asia/Kolkata').tz_localize(None)
+        now_dt = get_ist_now(naive=True)
+        return max(0.0, float((now_dt - et_dt).total_seconds()))
+    except Exception:
+        return 999999.0
+
+
+def reconcile_and_cancel_stale_orders(kite, positions_dict=None, position_lock=None, engine_name="all", live=True):
+    """
+    Evaluates all OPEN and TRIGGER PENDING entry orders on Kite.
+    Cancels orders if:
+    1. TARGET REACHED: Live LTP >= T1 * (1 - buffer) or High >= T1 before fill (prevents buying falling knife).
+    2. TIME-TO-LIVE (TTL) EXPIRED: Order unfilled for > unfilled_order_ttl_minutes (default: 15m).
+    3. STOP LOSS BREACHED: Contract LTP <= SL (or High >= SL for short stock) before fill.
+    4. EOD CUTOFF: Current time >= eod_cutoff_time (default: 15:15 IST).
+
+    Also synchronizes filled orders:
+    - If order became COMPLETE on Kite: marks order_status = 'FILLED' and updates entry_spot.
+    - If cancelled: removes from positions_dict, marks trade_db status = 'CANCELLED', releases pattern locks.
+    """
+    if kite is None:
+        return {"cancelled": 0, "evaluated": 0}
+
+    cfg = _load_program_config_file()
+    cfg_om = cfg.get("order_management", {}) if isinstance(cfg, dict) else {}
+    if not cfg_om.get("enable_stale_order_cancellation", True):
+        return {"cancelled": 0, "evaluated": 0}
+
+    ttl_minutes = float(cfg_om.get("unfilled_order_ttl_minutes", 15))
+    buffer_pct = float(cfg_om.get("target_reached_buffer_pct", 0.02))
+    cancel_target = bool(cfg_om.get("cancel_on_target_reached", True))
+    cancel_sl = bool(cfg_om.get("cancel_on_sl_breach", True))
+    cancel_ttl = bool(cfg_om.get("cancel_on_ttl_expired", True))
+    eod_time_str = str(cfg_om.get("eod_cutoff_time", "15:15"))
+
+    try:
+        orders = kite.orders()
+        if not orders:
+            return {"cancelled": 0, "evaluated": 0}
+    except Exception as e:
+        logging.debug(f"[ORDER_MANAGER] Failed to fetch Kite orders: {e}")
+        return {"cancelled": 0, "evaluated": 0}
+
+    try:
+        kp = kite.positions()
+        net_pos_dict = {p.get("tradingsymbol"): p for p in kp.get("net", []) if p.get("tradingsymbol")}
+    except Exception as e:
+        logging.debug(f"[ORDER_MANAGER] Failed to fetch Kite positions: {e}")
+        net_pos_dict = {}
+
+    # Synchronize orders that filled on Kite: update order_status from 'OPEN' to 'FILLED'
+    completed_orders_by_id = {str(o.get("order_id")): o for o in orders if o.get("status") == "COMPLETE"}
+    completed_orders_by_sym = {o.get("tradingsymbol"): o for o in orders if o.get("status") == "COMPLETE"}
+
+    if positions_dict:
+        items_to_check = []
+        if position_lock:
+            with position_lock:
+                items_to_check = list(positions_dict.items())
+        else:
+            items_to_check = list(positions_dict.items())
+
+        for sym, pos in items_to_check:
+            if pos.get("order_status") == "OPEN":
+                oid = str(pos.get("order_id", ""))
+                c = pos.get("contract") or sym
+                matched_o = completed_orders_by_id.get(oid) or completed_orders_by_sym.get(c)
+                if matched_o:
+                    avg_p = float(matched_o.get("average_price") or 0.0)
+                    logging.info(f"[ORDER_MANAGER] Order #{oid} for {sym} ({c}) filled on Kite @ {avg_p:.2f}. Mutating status to FILLED.")
+                    if position_lock:
+                        with position_lock:
+                            if sym in positions_dict:
+                                positions_dict[sym]["order_status"] = "FILLED"
+                                if avg_p > 0:
+                                    positions_dict[sym]["entry_spot"] = avg_p
+                    else:
+                        pos["order_status"] = "FILLED"
+                        if avg_p > 0:
+                            pos["entry_spot"] = avg_p
+
+    open_orders = [o for o in orders if o.get("status") in ["OPEN", "TRIGGER PENDING"]]
+    if not open_orders:
+        return {"cancelled": 0, "evaluated": 0}
+
+    # Batch quote for all open order symbols
+    quote_keys = []
+    for o in open_orders:
+        tsym = o.get("tradingsymbol")
+        if not tsym:
+            continue
+        exch = o.get("exchange")
+        if not exch:
+            is_opt = is_option_contract(tsym)
+            exch = "BFO" if ("SENSEX" in tsym.upper() or "BANKEX" in tsym.upper()) else ("NFO" if is_opt else "NSE")
+        quote_keys.append(f"{exch}:{tsym}")
+
+    quotes = {}
+    if quote_keys:
+        try:
+            quotes = kite.quote(quote_keys)
+        except Exception as e:
+            logging.debug(f"[ORDER_MANAGER] Batch quote failed: {e}")
+
+    import trade_db
+    from session import log_to_journal
+    try:
+        active_trades = trade_db.get_active_trades()
+    except Exception:
+        active_trades = []
+
+    trades_by_oid = {str(t.get("order_id")): t for t in active_trades if t.get("order_id")}
+    trades_by_contract = {t.get("contract"): t for t in active_trades if t.get("contract")}
+    trades_by_sym = {t.get("symbol"): t for t in active_trades if t.get("symbol")}
+
+    now_ist = get_ist_now(naive=True)
+    cancelled_count = 0
+
+    for o in open_orders:
+        tsym = o.get("tradingsymbol")
+        if not tsym:
+            continue
+        oid = str(o.get("order_id"))
+        var = o.get("variety") or getattr(kite, "VARIETY_REGULAR", "regular")
+        exch = o.get("exchange", "NFO")
+        ttype = str(o.get("transaction_type", "")).upper()
+        order_price = float(o.get("price") or 0.0)
+        filled_qty = int(o.get("filled_quantity", 0))
+        is_opt = is_option_contract(tsym)
+        held_qty = int(net_pos_dict.get(tsym, {}).get("quantity", 0))
+
+        # Disregard position exit orders (only evaluate entry orders)
+        if is_opt:
+            if ttype != "BUY":
+                continue
+        else:
+            if held_qty > 0 and ttype == "SELL":
+                continue
+            if held_qty < 0 and ttype == "BUY":
+                continue
+
+        # Calculate Order Age in minutes
+        order_ts = o.get("order_timestamp")
+        age_min = 0.0
+        if order_ts:
+            if isinstance(order_ts, str):
+                ts_clean = order_ts.replace("T", " ").split(".")[0].split("+")[0]
+                try:
+                    o_dt = dt.strptime(ts_clean, "%Y-%m-%d %H:%M:%S")
+                    age_min = max(0.0, (now_ist - o_dt).total_seconds() / 60.0)
+                except Exception:
+                    pass
+            elif isinstance(order_ts, dt):
+                age_min = max(0.0, (now_ist - order_ts.replace(tzinfo=None)).total_seconds() / 60.0)
+
+        # Retrieve setup parameters (T1, SL, direction)
+        t_match = trades_by_oid.get(oid) or trades_by_contract.get(tsym) or trades_by_sym.get(tsym)
+        p_match = None
+        matched_pos_key = None
+        if positions_dict:
+            if tsym in positions_dict:
+                p_match = positions_dict[tsym]
+                matched_pos_key = tsym
+            else:
+                for pk, pv in positions_dict.items():
+                    if isinstance(pv, dict) and (pv.get("contract") == tsym or str(pv.get("order_id", "")) == oid):
+                        p_match = pv
+                        matched_pos_key = pk
+                        break
+            if not p_match and t_match and t_match.get("symbol") in positions_dict:
+                p_match = positions_dict[t_match.get("symbol")]
+                matched_pos_key = t_match.get("symbol")
+
+        info = p_match or t_match or {}
+        t1 = float(info.get("t1") or 0.0) if info.get("t1") not in [None, "N/A", ""] else 0.0
+        sl = float(info.get("current_sl") or info.get("sl") or 0.0) if info.get("current_sl") not in [None, "N/A", ""] else 0.0
+        sym = info.get("symbol") or matched_pos_key or tsym
+        pat = info.get("pattern") or "ABCD"
+        side = info.get("side") or ("PE" if "PE" in tsym.upper() else ("CE" if "CE" in tsym.upper() else "BULL"))
+        direction = str(info.get("direction") or "BULL").upper()
+        trade_id = info.get("id") or info.get("trade_id")
+        engine_key = info.get("engine") or ("index" if ("NIFTY" in tsym.upper() or "SENSEX" in tsym.upper()) else "nifty50")
+
+        # Fallback to lookup_scan_sl_target if T1 or SL not in memory/DB
+        if (t1 <= 0 or sl <= 0) and kite:
+            try:
+                from resolve import lookup_scan_sl_target
+                is_stk = not is_opt
+                sl_lookup = lookup_scan_sl_target(contract=tsym, symbol=sym, engine=engine_key, kite=kite,
+                                                  entry_price=order_price, is_stock=is_stk, side=direction)
+                if sl_lookup:
+                    if t1 <= 0:
+                        t1 = float(sl_lookup.get("t1") or 0.0)
+                    if sl <= 0:
+                        sl = float(sl_lookup.get("current_sl") or sl_lookup.get("sl") or 0.0)
+                    if not sym:
+                        sym = sl_lookup.get("symbol") or tsym
+            except Exception:
+                pass
+
+        # Quote metrics
+        q_key = f"{exch}:{tsym}"
+        q_data = quotes.get(q_key, {})
+        ltp = float(q_data.get("last_price") or 0.0)
+        ohlc = q_data.get("ohlc", {})
+        day_high = float(ohlc.get("high") or ltp)
+        day_low = float(ohlc.get("low") or ltp)
+
+        cancel_reason = None
+        reason_code = None
+        is_short_stock = (not is_opt) and (direction == "BEAR" or ttype == "SELL")
+
+        # Invalidation Condition 1: Target T1 Touched Before Fill
+        if cancel_target and t1 > 0:
+            if is_short_stock:
+                target_thresh = round(t1 * (1.0 + buffer_pct), 2)
+                if (ltp > 0 and ltp <= target_thresh) or (day_low > 0 and day_low <= t1):
+                    cancel_reason = f"Target T1 ({t1:.2f}) touched before fill (LTP {ltp:.2f} <= {target_thresh:.2f}, Low {day_low:.2f})"
+                    reason_code = "CANCELLED_TARGET_REACHED"
+            else:
+                target_thresh = round(t1 * (1.0 - buffer_pct), 2)
+                if (ltp > 0 and ltp >= target_thresh) or (day_high > 0 and day_high >= t1):
+                    cancel_reason = f"Target T1 ({t1:.2f}) touched before fill (LTP {ltp:.2f} >= {target_thresh:.2f}, High {day_high:.2f})"
+                    reason_code = "CANCELLED_TARGET_REACHED"
+
+        # Invalidation Condition 2: Stop Loss Breached Before Fill
+        if not cancel_reason and cancel_sl and sl > 0:
+            if is_short_stock:
+                if (ltp > 0 and ltp >= sl) or (day_high > 0 and day_high >= sl):
+                    cancel_reason = f"SL breached before fill (LTP {ltp:.2f} >= SL {sl:.2f})"
+                    reason_code = "CANCELLED_SL_BREACHED"
+            else:
+                if (ltp > 0 and ltp <= sl) or (day_low > 0 and day_low <= sl):
+                    cancel_reason = f"SL breached before fill (LTP {ltp:.2f} <= SL {sl:.2f})"
+                    reason_code = "CANCELLED_SL_BREACHED"
+
+        # Invalidation Condition 3: Time-To-Live (TTL) Expired
+        if not cancel_reason and cancel_ttl and age_min >= ttl_minutes:
+            cancel_reason = f"TTL Expired: Unfilled for {age_min:.1f}m (Limit: {ttl_minutes:.0f}m)"
+            reason_code = "CANCELLED_TTL_EXPIRED"
+
+        # Invalidation Condition 4: EOD Cutoff
+        if not cancel_reason:
+            now_hm = now_ist.strftime("%H:%M")
+            if now_hm >= eod_time_str:
+                cancel_reason = f"EOD Cutoff reached ({now_hm} >= {eod_time_str})"
+                reason_code = "CANCELLED_EOD_CUTOFF"
+
+        if cancel_reason:
+            logging.warning(f"[UNFILLED_ORDER_MANAGER] Cancelling {tsym} Order #{oid}: {cancel_reason}")
+            if live:
+                try:
+                    kite.cancel_order(variety=var, order_id=oid)
+                except Exception as cancel_err:
+                    logging.error(f"[UNFILLED_ORDER_MANAGER] kite.cancel_order failed for #{oid}: {cancel_err}")
+
+            if positions_dict is not None:
+                def _cleanup_pos():
+                    keys_to_clean = [k for k in [tsym, sym, matched_pos_key] if k and k in positions_dict]
+                    for k in keys_to_clean:
+                        if filled_qty == 0:
+                            positions_dict.pop(k, None)
+                        else:
+                            positions_dict[k]["order_status"] = "COMPLETE"
+                if position_lock:
+                    with position_lock:
+                        _cleanup_pos()
+                else:
+                    _cleanup_pos()
+
+            if filled_qty == 0:
+                if trade_id:
+                    trade_db.update_trade_status(
+                        trade_id, "CANCELLED",
+                        exit_price=ltp if ltp > 0 else order_price,
+                        exit_reason=reason_code,
+                        details=f"Unfilled order #{oid} cancelled: {cancel_reason}"
+                    )
+                trade_db.mark_order_cancelled_by_contract_or_oid(tsym, oid, reason_code, cancel_reason)
+                pat_key = f"{sym}|{pat}|{side}|{info.get('strike','')}"
+                trade_db.clear_executed_pattern(engine_key, pat_key)
+            else:
+                if trade_id:
+                    trade_db.update_trade(trade_id, {
+                        "position_size": filled_qty,
+                        "order_status": "COMPLETE"
+                    })
+
+            try:
+                log_to_journal(
+                    sym, pat, info.get("timeframe", "15minute"),
+                    "CANCEL_UNFILLED", "CANCELLED",
+                    f"Order #{oid} cancelled: {cancel_reason}",
+                    entry=order_price, sl=sl, target=t1,
+                    event_time=now_ist.strftime("%Y-%m-%d %H:%M:%S")
+                )
+            except Exception:
+                pass
+
+            cancelled_count += 1
+
+    return {"cancelled": cancelled_count, "evaluated": len(open_orders)}
+
+
 def monitor_active_positions(kite, registry, positions_dict, lock, product_type, engine_name,
                               timeframe_entry, trade_db, log_fn, save_state_fn=None,
                               live=True):
     from_date = (get_ist_now(naive=True) - timedelta(days=2)).strftime("%Y-%m-%d")
     to_date = get_ist_now(naive=True).strftime("%Y-%m-%d")
     to_clear = []
+
+    # 0. Reconcile and cancel any stale / unfilled entry orders on Kite
+    if kite and live:
+        try:
+            reconcile_and_cancel_stale_orders(kite, positions_dict=positions_dict, position_lock=lock,
+                                              engine_name=engine_name, live=live)
+        except Exception as o_mgr_err:
+            logging.debug(f"[ORDER_MANAGER] Stale order evaluation error: {o_mgr_err}")
 
     # Load sl_mode from program config if available ("hybrid", "candle_close", or "tick_ltp")
     cfg = _load_program_config_file()
@@ -837,6 +1160,10 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
 
     for sym, pos in items:
         try:
+            # If position is still an unfilled entry limit order waiting on Kite,
+            # do NOT execute trailing SL or profit exits on 0 held quantity.
+            if pos.get("order_status") == "OPEN":
+                continue
             contract = pos.get("contract") or pos.get("symbol") or sym
             c_str = str(contract).upper()
             is_stock_spot = pos.get("position_type") == "stock" or (pos.get("position_type") is None and not ("CE" in c_str or "PE" in c_str))
@@ -887,12 +1214,23 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
             dir_val = str(pos.get("direction", "")).upper()
             is_short_stock = is_stock and (side_val in ["SELL", "PE", "BEAR"] or dir_val == "BEAR")
 
+            now_time_str = get_ist_now().strftime("%H:%M")
+            is_before_failsafe = now_time_str < failsafe_start_str
+            secs_since_entry = get_seconds_since_entry(pos)
+            is_fresh_fill = secs_since_entry < 120.0
+
             if df.empty:
+                # If trade is fresh (< 120s) or morning circuit is paused before failsafe time,
+                # do NOT execute emergency tick exit on empty candle data (allows candles and opening spreads to settle).
+                if is_fresh_fill or (is_before_failsafe and pause_morning_circuit):
+                    logging.info(f"[CANDLE_OUTAGE_SHIELD_SUPPRESSED] Suppressed empty-candle SL for {sym}: Fresh fill ({secs_since_entry:.0f}s old) or morning circuit paused.")
+                    continue
+
                 # CVE-4 FIX: Decouple emergency tick protection from candle REST API outages
                 entry_s = float(pos.get("entry_spot") or pos.get("entry_price") or 0.0)
                 current_sl = float(pos.get("current_sl", 0))
                 if live_ltp > 0 and entry_s > 0:
-                    max_loss_pct = 0.15 if not is_stock else 0.08
+                    max_loss_pct = float(cfg.get("max_option_loss_pct", 35.0)) / 100.0 if not is_stock else 0.08
                     if is_short_stock:
                         hard_max_sl = round(entry_s * (1.0 + max_loss_pct), 2)
                         is_breached = (live_ltp >= hard_max_sl) or (current_sl > 0 and live_ltp >= current_sl * 1.05)
@@ -1065,6 +1403,10 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                 if (entry_s / live_ltp > 3.0 or live_ltp / entry_s > 3.0) and pos.get("user_edited"):
                     is_outlier_entry = True
                     logging.warning(f"[STALE OUTLIER GUARD] {sym} entry {entry_s:.2f} diverges >300% from live LTP {live_ltp:.2f}. Skipping false emergency SL trigger.")
+            if current_sl > 0 and live_ltp > 0:
+                if current_sl / live_ltp > 3.0 or live_ltp / current_sl > 3.0:
+                    is_outlier_entry = True
+                    logging.warning(f"[STALE OUTLIER GUARD] {sym} SL {current_sl:.2f} diverges >300% from live LTP {live_ltp:.2f}. Skipping false emergency SL trigger.")
 
             if current_sl > 0:
                 sl_floor = get_sl_floor_time(pos)
@@ -1075,7 +1417,9 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                     # to close and settle on closing-basis without opening spread/tick noise whipsaws.
                     if not pause_morning_circuit:
                         # True Catastrophic Disaster Shield (only if explicitly unpaused, threshold >= 40%):
-                        if entry_s > 0 and live_ltp > 0 and not is_outlier_entry:
+                        if is_fresh_fill:
+                            logging.info(f"[FRESH_FILL_SPREAD_GUARD] Suppressed morning circuit breaker for {sym}: Trade entered {secs_since_entry:.0f}s ago (<120s cooldown).")
+                        elif entry_s > 0 and live_ltp > 0 and not is_outlier_entry:
                             opt_loss_cap = float(cfg.get("max_option_loss_pct", 40.0)) / 100.0 if not is_stock else 0.15
                             if is_short_stock and live_ltp >= (entry_s * 1.15):
                                 sl_hit = True
@@ -1241,8 +1585,10 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                         live_spot = float(list(sq.values())[0]["last_price"]) if sq else 0.0
                         side_str = str(pos.get("side", "CE")).upper()
                         is_bull = side_str in ["CE", "BUY", "BULL"]
-                        # Catastrophic option emergency cap: If option drops beyond max_loss_pct (15%), exit regardless of spot
-                        is_catastrophic_opt = (entry_s > 0 and live_ltp > 0 and live_ltp <= (entry_s * (1.0 - max_loss_pct)))
+                        # Catastrophic option emergency cap: If option drops beyond opt_emergency_cap (35%), exit regardless of spot
+                        # BUT do NOT trigger catastrophic override if trade is a fresh fill (<120s) to allow opening spread to settle
+                        opt_emergency_cap = float(cfg.get("max_option_loss_pct", 35.0)) / 100.0
+                        is_catastrophic_opt = (entry_s > 0 and live_ltp > 0 and live_ltp <= (entry_s * (1.0 - opt_emergency_cap)) and not is_fresh_fill)
 
                         if is_bull and live_spot > spot_sl and not is_catastrophic_opt:
                             logging.info(f"[SPOT_SL_GUARD] Suppressed premature option SL exit for {sym} ({pos.get('contract')}): Option LTP {live_ltp:.2f} tripped SL, but Underlying Spot ({live_spot:.2f}) is strictly holding above support ({spot_sl:.2f}).")
@@ -1337,7 +1683,7 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                 if tid:
                     trade_db.update_trade(tid, {"trailing_stage": 1, "current_sl": new_sl, "sl_set_time": sl_stamp})
 
-            t1_hit = (lp <= (t1_val + buf_t1)) if is_short_stock else (hp >= (t1_val - buf_t1))
+            t1_hit = ((lp <= (t1_val + buf_t1)) if is_short_stock else (hp >= (t1_val - buf_t1))) if (t1_val is not None and t1_val > 0) else False
             if t1_val and t1_hit:
                 # RULE: If T2 or T3 is NOT available, exit 100% at T1 (early exit threshold)!
                 if not has_higher_targets:
@@ -1356,9 +1702,9 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                         exit_price = live_ltp if live_ltp > 0 else (cp if cp > 0 else t1_val)
                         pnl = ((entry_s - exit_price) / entry_s * 100) if is_short_stock else (((exit_price - entry_s) / entry_s * 100) if entry_s else 0)
                         log_fn(sym, pos.get("pattern", ""), pos_tf, "EXIT_T1", "CLOSED",
-                               f"T1={t1_val:.2f} (Exit @ {exit_price:.2f})", pnl,
-                               entry=entry_s, sl=pos.get("current_sl", ""), target=t1_val,
-                               event_time=last.get('date'))
+                                f"T1={t1_val:.2f} (Exit @ {exit_price:.2f})", pnl,
+                                entry=entry_s, sl=pos.get("current_sl", ""), target=t1_val,
+                                event_time=last.get('date'))
                         det_str = f"T1 exit ({lp:.2f} <= {t1_val + buf_t1:.2f})" if is_short_stock else f"T1 exit ({hp:.2f} >= {t1_val - buf_t1:.2f})"
                         if tid:
                             trade_db.update_trade(tid, {
@@ -1442,7 +1788,7 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                         if tid:
                             trade_db.update_trade(tid, {"trailing_stage": 1, "current_sl": new_sl, "sl_set_time": sl_stamp})
 
-            t2_hit = (lp <= (t2_val + buf_t2)) if is_short_stock else (hp >= (t2_val - buf_t2))
+            t2_hit = ((lp <= (t2_val + buf_t2)) if is_short_stock else (hp >= (t2_val - buf_t2))) if (t2_val is not None and t2_val > 0) else False
             if pos.get("trailing_stage", 0) == 1 and t2_val and t2_hit:
                 has_t3 = t3_val is not None and t3_val > 0
                 if not has_t3:
@@ -1499,7 +1845,7 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                     if tid:
                         trade_db.update_trade(tid, {"trailing_stage": 2, "current_sl": new_sl, "sl_set_time": sl_stamp})
 
-            t3_hit = (lp <= (t3_val + buf_t3)) if is_short_stock else (hp >= (t3_val - buf_t3))
+            t3_hit = ((lp <= (t3_val + buf_t3)) if is_short_stock else (hp >= (t3_val - buf_t3))) if (t3_val is not None and t3_val > 0) else False
             if t3_val and t3_hit:
                 reached_val = lp if is_short_stock else hp
                 logging.info(f"T3 EXIT: {sym} reached {reached_val:.2f} (Target: {t3_val:.2f})")
@@ -1548,6 +1894,12 @@ def monitor_all_active_positions(kite, live=True):
     import trade_db
     from session import log_to_journal
     from registries import STOCK_REGISTRY, INDEX_REGISTRY
+
+    # 0. Reconcile and cancel stale / unfilled entry orders on Kite
+    try:
+        reconcile_and_cancel_stale_orders(kite, live=live)
+    except Exception as e:
+        logging.debug(f"[STANDALONE_MONITOR] Stale order reconcile error: {e}")
 
     # 1. Auto-reconcile zero-qty broker positions
     try:

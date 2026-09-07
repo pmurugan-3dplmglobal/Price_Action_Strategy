@@ -1745,7 +1745,14 @@ def api_buy_scanned_trade():
                     logging.warning(f"[1-CLICK {action_tag} LIQUIDITY WARNING] {contract}: {liq_msg}")
                     return jsonify({"ok": False, "error": f"Liquidity Trap Alert: {liq_msg}"}), 400
 
+                from common.trading_core import is_option_contract
                 market_open = is_market_open()
+                is_opt = is_option_contract(contract) or exch != "NSE"
+                if not market_open and is_opt:
+                    return jsonify({
+                        "ok": False,
+                        "error": "Markets are closed (09:15 - 15:30 IST). After-Market Orders (AMO) are strictly disabled for options to protect against opening spread noise, illiquidity, and weekend/overnight theta decay traps."
+                    }), 400
                 order_variety = _kite_session.VARIETY_REGULAR if market_open else _kite_session.VARIETY_AMO
 
                 try:
@@ -1763,7 +1770,13 @@ def api_buy_scanned_trade():
                     logging.info(f"[1-CLICK {action_tag}] Placed {v_label} for {contract} on {exch} (Order ID: {order_id})")
                 except Exception as first_err:
                     if order_variety == _kite_session.VARIETY_REGULAR and "After Market Order" in str(first_err):
-                        logging.info(f"[1-CLICK {action_tag}] Regular order rejected; retrying with VARIETY_AMO for {contract}...")
+                        if is_opt:
+                            logging.warning(f"[1-CLICK {action_tag}] Regular order rejected as AMO for option {contract}. Suppressing AMO retry to prevent opening spread trap.")
+                            return jsonify({
+                                "ok": False,
+                                "error": "Markets are closed or rejecting regular orders. Option AMOs are strictly prohibited to prevent opening spread traps."
+                            }), 400
+                        logging.info(f"[1-CLICK {action_tag}] Regular order rejected; retrying with VARIETY_AMO for cash equity {contract}...")
                         order_id = _kite_session.place_order(
                             variety=_kite_session.VARIETY_AMO,
                             tradingsymbol=contract,
