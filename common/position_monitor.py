@@ -323,7 +323,8 @@ def close_stock_position(kite, pos, live_market=True, product=None, qty_override
                 quantity=qty, order_type=kite.ORDER_TYPE_LIMIT,
                 price=price, product=target_product
             )
-            save_executed_exit(contract, oid, {"type": "LIMIT", "price": price, "qty": qty, "txn": exit_txn})
+            if not qty_override:
+                save_executed_exit(contract, oid, {"type": "LIMIT", "price": price, "qty": qty, "txn": exit_txn})
             logging.info(f"Closed stock {contract} via {action_label} with product {target_product} (Order ID: {oid})")
             return {"success": True, "order_id": str(oid), "type": "LIMIT", "price": price, "qty": qty}
         except Exception as primary_err:
@@ -337,7 +338,8 @@ def close_stock_position(kite, pos, live_market=True, product=None, qty_override
                         quantity=qty, order_type=kite.ORDER_TYPE_LIMIT,
                         price=price, product=alt_product
                     )
-                    save_executed_exit(contract, oid, {"type": "LIMIT_ALT", "price": price, "qty": qty, "txn": exit_txn})
+                    if not qty_override:
+                        save_executed_exit(contract, oid, {"type": "LIMIT_ALT", "price": price, "qty": qty, "txn": exit_txn})
                     logging.info(f"Fallback stock exit SUCCESS for {contract} with product {alt_product} (Order ID: {oid})")
                     return {"success": True, "order_id": str(oid), "type": "LIMIT_ALT", "price": price, "qty": qty}
                 except Exception as alt_err:
@@ -349,7 +351,8 @@ def close_stock_position(kite, pos, live_market=True, product=None, qty_override
                     quantity=qty, order_type=kite.ORDER_TYPE_MARKET,
                     product=target_product
                 )
-                save_executed_exit(contract, oid, {"type": "MARKET_EMERGENCY", "qty": qty, "txn": exit_txn})
+                if not qty_override:
+                    save_executed_exit(contract, oid, {"type": "MARKET_EMERGENCY", "qty": qty, "txn": exit_txn})
                 logging.info(f"Emergency MARKET stock exit SUCCESS for {contract} via {action_label} with product {target_product} (Order ID: {oid})")
                 return {"success": True, "order_id": str(oid), "type": "MARKET_EMERGENCY", "qty": qty}
             except Exception as m_final_err:
@@ -800,14 +803,19 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
     cfg = _load_program_config_file()
     sl_mode = cfg.get("sl_mode", "hybrid")
     emergency_buffer_pct = float(cfg.get("emergency_buffer_pct", 0.15))
-    failsafe_start_str = cfg.get("failsafe_start_time", "09:45")
+    failsafe_start_str = cfg.get("failsafe_start_time", "09:50")
+    pause_morning_circuit = cfg.get("pause_morning_circuit_breaker", True)
     try:
         f_h, f_m = map(int, failsafe_start_str.split(":"))
         fs_start_t = datetime_time(f_h, f_m)
+        fs_end_m = (f_m + 2) % 60
+        fs_end_h = f_h + ((f_m + 2) // 60)
+        fs_end_str = f"{fs_end_h:02d}:{fs_end_m:02d}"
     except Exception:
-        fs_start_t = datetime_time(9, 45)
+        fs_start_t = datetime_time(9, 50)
+        fs_end_str = "09:52"
 
-    # Target monitoring runs from 09:15 AM market open; SL checks are gated inside by is_before_0945 / failsafe_start_time.
+    # Target monitoring runs from 09:15 AM market open; SL checks are gated inside by is_before_failsafe / failsafe_start_time.
 
     # Update WebSocket subscriptions for active positions
     ws_mon = None
@@ -1043,10 +1051,10 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                         logging.critical(f"[EOD_SQUAREOFF FAILED] EOD exit order for {sym} failed or pending ({exit_res}). Retaining for retry.")
                     continue
 
-            # 1) SL Evaluation (Separated SL Monitor: Skipped 09:15-09:45 AM, Active at 09:45 AM+)
+            # 1) SL Evaluation (Separated SL Monitor: Skipped until failsafe_start_str, Active at failsafe_start_str+)
             now_time_str = get_ist_now().strftime("%H:%M")
-            is_before_0945 = now_time_str < "09:45"
-            is_start_0945 = "09:45" <= now_time_str <= "09:47"
+            is_before_failsafe = now_time_str < failsafe_start_str
+            is_start_failsafe = failsafe_start_str <= now_time_str <= fs_end_str
 
             # ── STALE / OUTLIER ENTRY PRICE GUARD ──
             # Prevent false emergency SL triggers when entry_spot or current_sl has an extreme data mismatch vs live LTP
@@ -1060,32 +1068,36 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
 
             if current_sl > 0:
                 sl_floor = get_sl_floor_time(pos)
-                if is_before_0945:
-                    # Target monitoring runs from 09:15 AM, structural candle SL is skipped until 09:45 AM.
-                    # CVE-3 FIX: Morning Catastrophic Circuit Breaker active 09:15-09:45 AM.
-                    # Protects against catastrophic opening gap-downs (>= 25% for options, >= 12% for stocks).
-                    if entry_s > 0 and live_ltp > 0 and not is_outlier_entry:
-                        opt_loss_cap = float(cfg.get("max_option_loss_pct", 15)) / 100.0 if not is_stock else 0.08
-                        if is_short_stock and live_ltp >= (entry_s * 1.12):
-                            sl_hit = True
-                            rise_pct = (live_ltp - entry_s) / entry_s * 100.0
-                            sl_reason = f"MORNING_CATASTROPHIC_CIRCUIT_12PCT (Short Stock LTP {live_ltp:.2f} up {rise_pct:.1f}% from entry {entry_s:.2f})"
-                            cp = live_ltp
-                            event_time = last.get('date')
-                        elif not is_short_stock and not is_stock and live_ltp <= (entry_s * (1.0 - opt_loss_cap)):
-                            sl_hit = True
-                            drop_pct = (entry_s - live_ltp) / entry_s * 100.0
-                            sl_reason = f"MORNING_CATASTROPHIC_CIRCUIT_{int(opt_loss_cap*100)}PCT (Option LTP {live_ltp:.2f} down {drop_pct:.1f}% from entry {entry_s:.2f})"
-                            cp = live_ltp
-                            event_time = last.get('date')
-                        elif not is_short_stock and is_stock and live_ltp <= (entry_s * 0.88):
-                            sl_hit = True
-                            drop_pct = (entry_s - live_ltp) / entry_s * 100.0
-                            sl_reason = f"MORNING_CATASTROPHIC_CIRCUIT_12PCT (Stock LTP {live_ltp:.2f} down {drop_pct:.1f}% from entry {entry_s:.2f})"
-                            cp = live_ltp
-                            event_time = last.get('date')
-                elif is_start_0945:
-                    # 09:45 AM Failsafe Check: If trading breached SL & prev candle closed breach & current candle trading breach
+                if is_before_failsafe:
+                    # Timeframe Closing Basis Invariant:
+                    # Target monitoring runs from 09:15 AM; all automated SL checks and emergency circuit breakers
+                    # are paused until failsafe_start_str AM (default 09:50 AM) to allow the opening 30-min candle
+                    # to close and settle on closing-basis without opening spread/tick noise whipsaws.
+                    if not pause_morning_circuit:
+                        # True Catastrophic Disaster Shield (only if explicitly unpaused, threshold >= 40%):
+                        if entry_s > 0 and live_ltp > 0 and not is_outlier_entry:
+                            opt_loss_cap = float(cfg.get("max_option_loss_pct", 40.0)) / 100.0 if not is_stock else 0.15
+                            if is_short_stock and live_ltp >= (entry_s * 1.15):
+                                sl_hit = True
+                                rise_pct = (live_ltp - entry_s) / entry_s * 100.0
+                                sl_reason = f"MORNING_CATASTROPHIC_CIRCUIT_15PCT (Short Stock LTP {live_ltp:.2f} up {rise_pct:.1f}% from entry {entry_s:.2f})"
+                                cp = live_ltp
+                                event_time = last.get('date')
+                            elif not is_short_stock and not is_stock and live_ltp <= (entry_s * (1.0 - opt_loss_cap)):
+                                sl_hit = True
+                                drop_pct = (entry_s - live_ltp) / entry_s * 100.0
+                                sl_reason = f"MORNING_CATASTROPHIC_CIRCUIT_{int(opt_loss_cap*100)}PCT (Option LTP {live_ltp:.2f} down {drop_pct:.1f}% from entry {entry_s:.2f})"
+                                cp = live_ltp
+                                event_time = last.get('date')
+                            elif not is_short_stock and is_stock and live_ltp <= (entry_s * 0.85):
+                                sl_hit = True
+                                drop_pct = (entry_s - live_ltp) / entry_s * 100.0
+                                sl_reason = f"MORNING_CATASTROPHIC_CIRCUIT_15PCT (Stock LTP {live_ltp:.2f} down {drop_pct:.1f}% from entry {entry_s:.2f})"
+                                cp = live_ltp
+                                event_time = last.get('date')
+                elif is_start_failsafe:
+                    # Failsafe Check at failsafe_start_time (09:50 AM):
+                    # Trigger ONLY IF previous candle closed in breach AND current live price is in breach.
                     prev_date = str(df.iloc[-2]['date']) if len(df) >= 2 else ""
                     if is_short_stock:
                         prev_closed_breach = (len(df) >= 2 and float(df.iloc[-2]['close']) >= current_sl
@@ -1097,11 +1109,11 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                         curr_breach = (live_ltp > 0 and live_ltp <= current_sl) or (float(df.iloc[-1]['close']) <= current_sl)
                     if curr_breach and prev_closed_breach:
                         sl_hit = True
-                        sl_reason = f"SL_FAILSAFE_0945_TRIGGER (LTP {live_ltp:.2f} {' >=' if is_short_stock else ' <='} {current_sl:.2f} & Prev Bar Closed Breach)"
+                        sl_reason = f"SL_FAILSAFE_MORNING_TRIGGER (LTP {live_ltp:.2f} {' >=' if is_short_stock else ' <='} {current_sl:.2f} & Prev Bar Closed Breach)"
                         cp = live_ltp if live_ltp > 0 else float(df.iloc[-1]['close'])
                         event_time = last.get('date')
                 else:
-                    # Normal Active SL Monitoring after 09:45 AM.
+                    # Normal Active SL Monitoring after failsafe_start_time
                     # ONLY candles >= sl_floor are judged against current_sl. A candle that
                     # formed BEFORE the current SL was set (e.g. pre-trailing entry-day bar)
                     # must never trip the SL, otherwise trailing raises SL and old dips
@@ -1146,8 +1158,8 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                                 sl_hit = False
                                 sl_reason = ""
 
-            # 2) Emergency Hard Stop / Direct LTP evaluation (Active after 09:45 AM)
-            if not sl_hit and current_sl > 0 and live_ltp > 0 and not is_before_0945 and not is_outlier_entry:
+            # 2) Emergency Hard Stop / Direct LTP evaluation (Active after failsafe_start_time)
+            if not sl_hit and current_sl > 0 and live_ltp > 0 and not is_before_failsafe and not is_outlier_entry:
                 if is_short_stock:
                     if sl_mode == "tick_ltp" and live_ltp >= current_sl:
                         sl_hit = True
@@ -1177,13 +1189,13 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
             max_loss_pct = float(cfg.get("max_option_loss_pct", 15)) / 100.0 if not is_stock else 0.08
             if is_short_stock:
                 hard_max_sl_threshold = round(entry_s * (1.0 + max_loss_pct), 2) if entry_s > 0 else 0.0
-                if not sl_hit and hard_max_sl_threshold > 0 and live_ltp > 0 and live_ltp >= hard_max_sl_threshold and not is_before_0945 and not is_outlier_entry:
+                if not sl_hit and hard_max_sl_threshold > 0 and live_ltp > 0 and live_ltp >= hard_max_sl_threshold and not is_before_failsafe and not is_outlier_entry:
                     sl_hit = True
                     sl_reason = f"HARD_MAX_{int(max_loss_pct*100)}PCT_SL (LTP {live_ltp:.2f} >= {hard_max_sl_threshold:.2f})"
                     cp = live_ltp
             else:
                 hard_max_sl_threshold = round(entry_s * (1.0 - max_loss_pct), 2) if entry_s > 0 else 0.0
-                if not sl_hit and hard_max_sl_threshold > 0 and live_ltp > 0 and live_ltp <= hard_max_sl_threshold and not is_before_0945 and not is_outlier_entry:
+                if not sl_hit and hard_max_sl_threshold > 0 and live_ltp > 0 and live_ltp <= hard_max_sl_threshold and not is_before_failsafe and not is_outlier_entry:
                     sl_hit = True
                     sl_reason = f"HARD_MAX_{int(max_loss_pct*100)}PCT_SL (LTP {live_ltp:.2f} <= {hard_max_sl_threshold:.2f})"
                     cp = live_ltp

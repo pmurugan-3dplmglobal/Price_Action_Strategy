@@ -103,12 +103,19 @@ class TestInstitutionalEnhancements(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual(ctype, "SPOT_VWAP_RECLAIM")
 
-        # D1 Bullish Reversal: Spot Support Hold (VWAP unavail or below, spot above SL)
-        ok, ctype = evaluate_spot_confluence(
+        # D1 Bullish Reversal: Spot EMA Trend (when VWAP unavailable)
+        ok_ema, ctype_ema = evaluate_spot_confluence(
+            side="CE", is_d2=False, current_spot=25000.0, spot_vwap=0.0, spot_sl=24950.0, spot_ema_trend=True
+        )
+        self.assertTrue(ok_ema)
+        self.assertEqual(ctype_ema, "SPOT_EMA_TREND")
+
+        # Without VWAP or EMA trend, confluence fails
+        ok_none, ctype_none = evaluate_spot_confluence(
             side="CE", is_d2=False, current_spot=25000.0, spot_vwap=0.0, spot_sl=24950.0, spot_ema_trend=False
         )
-        self.assertTrue(ok)
-        self.assertEqual(ctype, "SPOT_SUPPORT_HOLD")
+        self.assertFalse(ok_none)
+        self.assertEqual(ctype_none, "NONE")
 
         # D2 Bullish Continuation: Requires Trend Momentum Alignment (Spot >= EMA13/44)
         ok_d2_pass, ctype_d2_pass = evaluate_spot_confluence(

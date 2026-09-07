@@ -80,8 +80,9 @@ def run_preflight_reconciliation(kite=None, engines=("nifty50", "index", "daily"
         "summary": ""
     }
 
-    # 2. Fetch Broker Positions
+    # 2. Fetch Broker Positions and Holdings
     kite_positions = {}
+    kite_holdings = {}
     try:
         broker_res = kite.positions()
         for p in broker_res.get("net", []):
@@ -98,6 +99,22 @@ def run_preflight_reconciliation(kite=None, engines=("nifty50", "index", "daily"
     except Exception as pos_err:
         logging.warning(f"[09:16 PRE-FLIGHT] Could not fetch broker net positions: {pos_err}")
         report["discrepancies"].append(f"Broker position query failed: {pos_err}")
+
+    try:
+        holdings_res = kite.holdings()
+        if isinstance(holdings_res, list):
+            for h in holdings_res:
+                qty = int(h.get("quantity", 0)) + int(h.get("t1_quantity", 0))
+                if qty > 0:
+                    sym = h.get("tradingsymbol", "")
+                    kite_holdings[sym] = {
+                        "quantity": qty,
+                        "product": "CNC",
+                        "pnl": float(h.get("pnl", 0.0)),
+                        "exchange": h.get("exchange", "NSE")
+                    }
+    except Exception as hold_err:
+        logging.warning(f"[09:16 PRE-FLIGHT] Could not fetch broker holdings: {hold_err}")
 
     # 3. Audit Each Configured Engine in trade_db
     total_db_active = 0
@@ -119,18 +136,20 @@ def run_preflight_reconciliation(kite=None, engines=("nifty50", "index", "daily"
             is_stock = (pos_type == "stock")
             is_short_stock = is_stock and (side in ["SELL", "BEAR", "SHORT", "PE"] or dir_val == "BEAR")
 
-            # Check A: Exists in DB but closed on Broker
-            if contract not in kite_positions and is_market_open():
+            # Check A: Exists in DB but closed on Broker (Check both net positions & holdings for CNC)
+            in_net = contract in kite_positions or sym in kite_positions
+            in_hold = is_stock and (contract in kite_holdings or sym in kite_holdings)
+            if not in_net and not in_hold and is_market_open():
                 disc_msg = f"Trade #{tid} ({contract}) active in DB but 0 quantity on broker."
                 logging.warning(f"[09:16 PRE-FLIGHT MISMATCH] {disc_msg}")
                 report["discrepancies"].append(disc_msg)
-                trade_db.update_trade_status(tid, "CLOSED_EXTERNALLY", details="Zero quantity in broker net positions at 09:16 pre-flight")
+                trade_db.update_trade_status(tid, "CLOSED_EXTERNALLY", details="Zero quantity in broker net positions and holdings at 09:16 pre-flight")
                 continue
 
             # Check B: Overnight Opening Gap Audit
             try:
                 c_str = str(contract).upper()
-                target_exch = "BFO" if ("SENSEX" in c_str or "BSE" in c_str) else ("NFO" if ("CE" in c_str or "PE" in c_str) else "NSE")
+                target_exch = "BFO" if ("SENSEX" in c_str or "BSE" in c_str or "BANKEX" in c_str) else ("NFO" if ("CE" in c_str or "PE" in c_str) else "NSE")
                 q_key = f"{target_exch}:{contract}"
                 q = kite.quote([q_key])
                 if q_key in q:

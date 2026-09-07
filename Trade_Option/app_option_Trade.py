@@ -698,12 +698,12 @@ def refresh_data(single_run=False):
                                     clean_sym = str(contract_name).replace(" ", "").upper()
                                     now_t = get_ist_now().time()
                                     cfg_f = load_config()
-                                    fs_start_str = cfg_f.get("failsafe_start_time", "09:45")
+                                    fs_start_str = cfg_f.get("failsafe_start_time", "09:50")
                                     try:
                                         f_h, f_m = map(int, fs_start_str.split(":"))
                                         fs_start_t = datetime_time(f_h, f_m)
                                     except Exception:
-                                        fs_start_t = datetime_time(9, 45)
+                                        fs_start_t = datetime_time(9, 50)
 
                                     # Buffer & Previous Candle Confirmation for SL Exit (Micro-Tick Cushion)
                                     sl_cushion = max(0.20, sl_val * 0.02) if sl_val < 10 else max(0.80, sl_val * 0.01)
@@ -1890,6 +1890,11 @@ def api_buy_scanned_trade():
                 
                 from trading_core import is_market_open
                 market_open = is_market_open()
+                if not market_open and exch != "NSE":
+                    return jsonify({
+                        "ok": False,
+                        "error": "Markets are closed (09:15 - 15:30 IST). After-Market Orders (AMO) are strictly disabled for options to protect against opening spread noise, illiquidity, and weekend/overnight theta decay traps."
+                    }), 400
                 order_variety = _kite_session.VARIETY_REGULAR if market_open else _kite_session.VARIETY_AMO
 
                 try:

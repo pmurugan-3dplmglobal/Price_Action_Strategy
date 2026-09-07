@@ -15,7 +15,7 @@ class ActivePositionWebSocketMonitor:
     Performs real-time tick-level monitoring with 09:45 AM Opening Market Volatility Guard,
     automatic token subscription synchronization, and graceful fallback to REST.
     """
-    def __init__(self, api_key, access_token, failsafe_start_time="09:45"):
+    def __init__(self, api_key, access_token, failsafe_start_time="09:50"):
         self.api_key = api_key
         self.access_token = access_token
         self.failsafe_start_str = failsafe_start_time
@@ -170,7 +170,7 @@ class ActivePositionWebSocketMonitor:
                 pass
 
 
-def get_global_ws_monitor(api_key=None, access_token=None, failsafe_start_time="09:45"):
+def get_global_ws_monitor(api_key=None, access_token=None, failsafe_start_time="09:50"):
     """Singleton getter / factory for ActivePositionWebSocketMonitor."""
     global _GLOBAL_WS_MONITOR
     with _WS_LOCK:

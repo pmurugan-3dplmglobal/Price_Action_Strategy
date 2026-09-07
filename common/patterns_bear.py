@@ -238,6 +238,19 @@ def find_anchor_bearish_harami(df):
 #  BEARISH BREAKOUT SCANNER (A -> B -> C -> D)
 # ──────────────────────────────────────────────
 
+BEAR_SHORT_NAMES = {
+    "BEAR_A_ABCD_Engulf": "BE_ABCD",
+    "BEAR_A_HH_Sweep": "HH_ABCD",
+    "BEAR_A_HH_Sweep_Var1": "HH_ABCD",
+    "BEAR_A_HH_Sweep_Var2": "HH_ABCD",
+    "BEAR_A_Two_Lower_Lows": "LL_ABCD",
+    "BEAR_A_ShootingStar_Baby": "STAR_ABCD",
+    "BEAR_A_Baby_Shooting_Star": "STAR_ABCD",
+    "BEAR_A_Harami": "HARAMI_ABCD",
+    "BEAR_A_Base": "BASE_ABCD",
+    "BEAR_BASE_ABCD": "BASE_ABCD",
+}
+
 def scan_anchor_bcd_breakout_bearish(df_entry, df_anchor, anchor_tf="", entry_tf="", enable_swing_filter=None, swing_min_waves=3, swing_min_r2=0.55):
     """
     Two-phase A-first Bearish scanner with Institutional Phase 0 Parabolic Multi-Swing Filter:
@@ -435,7 +448,8 @@ def scan_anchor_bcd_breakout_bearish(df_entry, df_anchor, anchor_tf="", entry_tf
         if float(intermediate_bars['close'].max()) > a_high:
             continue
 
-        pattern_type = det_result["Pattern"] if det_result else "BEAR_BASE_ABCD"
+        anchor_name = det_result["Pattern"] if det_result else "BEAR_BASE_ABCD"
+        pattern_type = BEAR_SHORT_NAMES.get(anchor_name, "BASE_ABCD")
         if is_near_close_d and not pattern_type.endswith("_EARLY"):
             pattern_type += "_EARLY"
 
@@ -680,13 +694,7 @@ def scan_pattern_lifecycle_stage_bearish(df_entry, df_anchor, anchor_tf="", entr
         find_anchor_bearish_harami
     ]
 
-    short_names = {
-        "BEAR_A_ABCD_Engulf": "BE_ABCD",
-        "BEAR_A_HH_Sweep": "HH_ABCD",
-        "BEAR_A_Two_Lower_Lows": "LL_ABCD",
-        "BEAR_A_Baby_Shooting_Star": "STAR_ABCD",
-        "BEAR_A_Harami": "HARAMI_ABCD"
-    }
+    short_names = BEAR_SHORT_NAMES
 
     latest_close = float(df_entry.iloc[-1]['close'])
 

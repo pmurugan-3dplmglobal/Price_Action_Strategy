@@ -146,7 +146,7 @@ def check_portfolio_risk_caps(engine, symbol, candidate_tier=2, capital=100000.0
                 if cnt:
                     active_contracts.add(str(cnt).strip().upper())
 
-    total_active_count = len(active_symbols)
+    total_active_count = len(active_contracts) if active_contracts else len(active_symbols)
 
     # ── RULE 1: Max Concurrent Positions Cap ──
     if total_active_count >= max_concurrent:

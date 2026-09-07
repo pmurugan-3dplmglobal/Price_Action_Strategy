@@ -738,12 +738,12 @@ def refresh_data(single_run=False):
                                 clean_sym = str(sym).replace(" ", "").upper()
                                 now_t = get_ist_now().time()
                                 cfg_f = load_config()
-                                fs_start_str = cfg_f.get("failsafe_start_time", "09:45")
+                                fs_start_str = cfg_f.get("failsafe_start_time", "09:50")
                                 try:
                                     f_h, f_m = map(int, fs_start_str.split(":"))
                                     fs_start_t = datetime_time(f_h, f_m)
                                 except Exception:
-                                    fs_start_t = datetime_time(9, 45)
+                                    fs_start_t = datetime_time(9, 50)
 
                                 if is_short:
                                     sl_buffered = round(sl_val * 1.005, 2)

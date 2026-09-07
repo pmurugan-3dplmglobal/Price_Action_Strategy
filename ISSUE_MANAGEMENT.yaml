@@ -10,6 +10,69 @@ meta:
     recent_archived_batch: [FEATURE-031, FEATURE-030, FEATURE-029, ISSUE-084, ISSUE-083, ISSUE-082, ISSUE-081, ISSUE-080, FEATURE-036, FEATURE-035, FEATURE-034, FEATURE-033, ISSUE-054]
     key_archived_families: [ALGO_AUDIT_CVE, QUANT_ENHANCEMENTS, RADAR_LIFECYCLE, VCP_METRICS, SCANNER_DISCOVERY, SECURITY_CONFIG, ZERO_REGRESSION_AUDIT]
 issues:
+- id: ISSUE-093
+  title: Timeframe Closing Basis Invariant Enforcement — Morning Circuit Breaker Pause to 09:50 AM & AMO Option Order Elimination
+  severity: HIGH
+  category: Risk Management, Position Monitor, Execution Safety, Order Varieties
+  family: ZERO_REGRESSION_AUDIT
+  date_reported: '2026-09-07'
+  symptom: |
+    1. At 09:15:00 market open, PERSISTENT26SEP5600CE was bought via a queued weekend After Market Order (AMO) at 199.30, and immediately dumped 4 seconds later at 09:15:04 @ 149.25 due to a tick-level 15% catastrophic circuit breaker exit.
+    2. The opening 30-minute timeframe candle was never allowed to close, violating the user's core Timeframe Closing Basis Invariant.
+  root_cause: |
+    1. common/position_monitor.py contained a Morning Catastrophic Circuit Breaker active during 09:15-09:45 AM that evaluated raw tick-level LTP with a tight 15% threshold, triggering on normal morning bid-ask spread and opening volatility.
+    2. Trade_Option/app_option_Trade.py permitted 1-Click Buy orders to be submitted as After Market Orders (AMO) outside market hours, queuing stale weekend limit orders into market open.
+  affected_files:
+  - common/position_monitor.py
+  - Trade_Option/app_option_Trade.py
+  - Trade_Stock/app_Stock_Trade.py
+  - common/websocket_monitor.py
+  - input/program_config.json
+  fix_applied: |
+    1. common/position_monitor.py: Extended failsafe_start_time default to 09:50 AM and paused all automated SL evaluations and emergency circuit breaker exits during 09:15-09:50 AM (allowing the opening 30-min candle to complete on closing-basis).
+    2. Trade_Option/app_option_Trade.py: Strictly disabled After Market Orders (AMO) for option contracts (NFO/BFO), rejecting off-market attempts with a descriptive safety error.
+    3. Updated failsafe_start_time defaults across Trade_Stock/app_Stock_Trade.py, common/websocket_monitor.py, and input/program_config.json.
+  verification: |
+    1. AST syntax parsed 100% across all files.
+    2. Full regression test suite (scratch/run_full_regression_test.py): 21/21 suites PASSED with 100% success rate.
+    3. Targeted unit verification suites: 100% PASS.
+  status: RESOLVED
+  resolution_date: '2026-09-07'
+- id: ISSUE-092
+  title: Algo Expert Audit v2 — Stock Tranche Exit Guard, Bearish Short-Name Mapping, Overnight CNC Holdings, Portfolio Contract Cap & Display Writer Import
+  severity: HIGH
+  category: Risk Management, Pattern Parity, Portfolio Governance, Position Recovery
+  family: ZERO_REGRESSION_AUDIT
+  date_reported: '2026-09-07'
+  symptom: |
+    1. In stock equity 2-tranche profit booking, booking tranche 1 (50%) at T1 locked the contract in EXECUTED_EXITS, causing subsequent runner exit calls at T2/T3 to be blocked by exit guard, permanently orphaning the runner position.
+    2. In patterns_bear.py, scan_anchor_bcd_breakout_bearish did not map detector pattern names to canonical short names (BE_ABCD, HH_ABCD, STAR_ABCD, HARAMI_ABCD, LL_ABCD), causing is_true_anchor to evaluate to False 100% of the time and preventing any bearish reversal from reaching Tier 1 Gold.
+    3. In morning_reconciler.py, overnight cash equity (CNC) positions from day T moved to kite.holdings() on T+1; querying only kite.positions()['net'] resulted in false 'CLOSED_EXTERNALLY' status updates at 09:16 AM.
+    4. In portfolio_risk.py, check_portfolio_risk_caps counted unique symbols (len(active_symbols)) rather than active contracts (len(active_contracts)), under-counting multi-strike or spread positions.
+    5. In display_writer.py, atomic file replace retry loop called time.sleep() without importing time, raising NameError on Windows PermissionError file-lock conflicts.
+  root_cause: |
+    1. close_stock_position in position_monitor.py called save_executed_exit unconditionally without the `if not qty_override:` guard present in close_position.
+    2. patterns_bear.py lacked canonical BEAR_SHORT_NAMES mapping dictionary in scan_anchor_bcd_breakout_bearish, and scan_pattern_lifecycle_stage_bearish had mismatched detector keys.
+    3. morning_reconciler.py did not check kite.holdings() for cash equity positions.
+    4. portfolio_risk.py used total_active_count = len(active_symbols) instead of active_contracts.
+    5. display_writer.py omitted `import time`.
+  affected_files:
+  - common/position_monitor.py
+  - common/patterns_bear.py
+  - common/morning_reconciler.py
+  - common/portfolio_risk.py
+  - common/display_writer.py
+  fix_applied: |
+    1. common/position_monitor.py: Added `if not qty_override:` guard before calling save_executed_exit in close_stock_position across primary, fallback LIMIT_ALT, and emergency MARKET exit branches.
+    2. common/patterns_bear.py: Defined canonical BEAR_SHORT_NAMES dictionary and applied it in scan_anchor_bcd_breakout_bearish and scan_pattern_lifecycle_stage_bearish.
+    3. common/morning_reconciler.py: Added kite.holdings() query alongside kite.positions() to prevent false CLOSED_EXTERNALLY for overnight CNC equity trades, and added BANKEX to BFO exchange resolution.
+    4. common/portfolio_risk.py: Changed total_active_count = len(active_contracts) if active_contracts else len(active_symbols).
+    5. common/display_writer.py: Added `import time`.
+  verification: |
+    1. AST syntax check across all 5 files passed 100%.
+    2. Full regression suite (scratch/run_full_regression_test.py) and targeted unit test suites (test_parity_alignment.py, test_vix_portfolio_volume.py, test_institutional_enhancements.py, test_vcp_metrics.py, test_spread_liquidity_reconciler.py, test_cve_fixes.py) passed 100%.
+  status: RESOLVED
+  resolution_date: '2026-09-07'
 - id: ISSUE-091
   title: T1 Gold Over-Classification Remediation — Strict True Anchor, Wyckoff Base & Spot VWAP Confluence
   severity: HIGH
