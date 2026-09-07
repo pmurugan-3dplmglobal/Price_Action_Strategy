@@ -36,12 +36,12 @@ issues:
   - scratch/test_stale_order_invalidation.py
   fix_applied: |
     1. input/program_config.json:
-       - Added order_management section with configurable enable_stale_order_cancellation (true), unfilled_order_ttl_minutes (15), target_reached_buffer_pct (0.02), cancel_on_target_reached (true), cancel_on_sl_breach (true), cancel_on_ttl_expired (true), and eod_cutoff_time (15:15).
+       - Added order_management section with configurable enable_stale_order_cancellation (true), unfilled_order_ttl_minutes (30), target_reached_buffer_pct (0.02), cancel_on_target_reached (true), cancel_on_sl_breach (true), cancel_on_ttl_expired (true), and eod_cutoff_time (15:15).
     2. common/position_monitor.py:
        - Implemented reconcile_and_cancel_stale_orders(kite, positions_dict, position_lock, engine_name, live):
          * Evaluates all OPEN and TRIGGER PENDING orders from kite.orders().
          * Filters for entry orders (BUY for options/cash bull, SELL MIS for cash bear).
-         * Evaluates 4 invalidation triggers: Target T1 touched before fill, TTL expired (>15 min), SL breached before fill, and EOD cutoff (15:15).
+         * Evaluates 4 invalidation triggers: Target T1 touched before fill, TTL expired (>30 min), SL breached before fill, and EOD cutoff (15:15).
          * Calls kite.cancel_order(...) to kill stale limit orders immediately.
          * Handles partial fills: cancels unfilled remainder, retains filled portion.
          * Synchronizes order_status: transitions from OPEN to FILLED when filled on Kite, syncing actual average price.

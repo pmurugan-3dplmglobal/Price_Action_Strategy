@@ -104,7 +104,7 @@ def run_tests():
     # TEST 2: Time-To-Live (TTL) Expired Invalidation
     # ─────────────────────────────────────────────────────────────
     print("\n--- Test 2: Time-To-Live (TTL) Expired ---")
-    stale_ts = (dt.now() - timedelta(minutes=25)).strftime("%Y-%m-%d %H:%M:%S")
+    stale_ts = (dt.now() - timedelta(minutes=35)).strftime("%Y-%m-%d %H:%M:%S")
     mock_orders = [
         {
             "order_id": "1002",
@@ -122,7 +122,7 @@ def run_tests():
     ]
     mock_quotes = {
         "NFO:NIFTY24SEP23950PE": {
-            "last_price": 76.50, # near entry, but 25 minutes old (> 15m TTL)
+            "last_price": 76.50, # near entry, but 35 minutes old (> 30m TTL)
             "ohlc": {"high": 80.0, "low": 74.0, "open": 75.0}
         }
     }
@@ -144,7 +144,7 @@ def run_tests():
     assert len(mock_kite.cancelled_orders) == 1, f"Expected 1 cancelled order, got {len(mock_kite.cancelled_orders)}"
     assert mock_kite.cancelled_orders[0]["order_id"] == "1002"
     assert "NIFTY" not in pos_dict
-    print("[PASS] Test 2 Passed: NIFTY PE limit order cancelled due to TTL expiration (25m > 15m limit).")
+    print("[PASS] Test 2 Passed: NIFTY PE limit order cancelled due to TTL expiration (35m > 30m limit).")
     passed += 1
 
     # ─────────────────────────────────────────────────────────────

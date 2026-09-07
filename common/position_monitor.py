@@ -815,7 +815,7 @@ def reconcile_and_cancel_stale_orders(kite, positions_dict=None, position_lock=N
     Evaluates all OPEN and TRIGGER PENDING entry orders on Kite.
     Cancels orders if:
     1. TARGET REACHED: Live LTP >= T1 * (1 - buffer) or High >= T1 before fill (prevents buying falling knife).
-    2. TIME-TO-LIVE (TTL) EXPIRED: Order unfilled for > unfilled_order_ttl_minutes (default: 15m).
+    2. TIME-TO-LIVE (TTL) EXPIRED: Order unfilled for > unfilled_order_ttl_minutes (default: 30m).
     3. STOP LOSS BREACHED: Contract LTP <= SL (or High >= SL for short stock) before fill.
     4. EOD CUTOFF: Current time >= eod_cutoff_time (default: 15:15 IST).
 
@@ -831,7 +831,7 @@ def reconcile_and_cancel_stale_orders(kite, positions_dict=None, position_lock=N
     if not cfg_om.get("enable_stale_order_cancellation", True):
         return {"cancelled": 0, "evaluated": 0}
 
-    ttl_minutes = float(cfg_om.get("unfilled_order_ttl_minutes", 15))
+    ttl_minutes = float(cfg_om.get("unfilled_order_ttl_minutes", 30))
     buffer_pct = float(cfg_om.get("target_reached_buffer_pct", 0.02))
     cancel_target = bool(cfg_om.get("cancel_on_target_reached", True))
     cancel_sl = bool(cfg_om.get("cancel_on_sl_breach", True))
