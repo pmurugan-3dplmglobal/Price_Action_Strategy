@@ -586,12 +586,28 @@ def lookup_scan_sl_target(contract, symbol, engine, kite=None, entry_price=0, ti
         all_trades = trade_db.get_all_trades(engine)
         best_db = None
         best_len = -1
+        today_str = dt.now().strftime("%Y-%m-%d")
         for t in all_trades:
             t_is_stock = t.get("position_type") == "stock"
             t_date = (t.get("created_at") or t.get("entry_time") or "")[:10]
             tc = f"{t.get('symbol')}_{t_date}".replace(" ", "").upper() if t_is_stock else str(t.get("contract") or t.get("symbol") or "").replace(" ", "").upper()
             if not tc:
                 continue
+
+            # Invariant: Completed historical trades from past sessions/cycles must NOT contaminate
+            # a fresh live trade if the entry price diverges significantly (>50%) or if it was not created today.
+            t_status = str(t.get("status", "")).upper()
+            t_entry = float(t.get("entry_spot") or t.get("entry_price") or 0.0)
+            if t_status != "ACTIVE":
+                if entry_price and float(entry_price) > 0 and t_entry > 0:
+                    ep_float = float(entry_price)
+                    # If historical entry diverges by more than 50% from current broker entry, skip stale record
+                    if ep_float / t_entry > 1.5 or t_entry / ep_float > 1.5:
+                        continue
+                elif t_date and t_date != today_str:
+                    # Stale historical trade from a previous day
+                    continue
+
             if tc == clean_c:
                 best_db = t
                 break
@@ -651,6 +667,11 @@ def lookup_scan_sl_target(contract, symbol, engine, kite=None, entry_price=0, ti
                     tc = f"{trade.get('symbol')}_{t_date}".replace(" ", "").upper() if is_stock else str(trade.get("contract") or trade.get("symbol") or "").replace(" ", "").upper()
                     if not tc:
                         continue
+                    t_entry = float(trade.get("entry_spot") or trade.get("entry_price") or 0.0)
+                    if entry_price and float(entry_price) > 0 and t_entry > 0:
+                        ep_float = float(entry_price)
+                        if ep_float / t_entry > 1.5 or t_entry / ep_float > 1.5:
+                            continue
                     if tc == clean_c:
                         sl = trade.get("current_sl")
                         t1 = trade.get("t1")
@@ -686,6 +707,11 @@ def lookup_scan_sl_target(contract, symbol, engine, kite=None, entry_price=0, ti
                     for trade in data.get(section, []):
                         t_date = (trade.get("entry_time") or "")[:10]
                         tc = f"{trade.get('symbol')}_{t_date}".replace(" ", "").upper() if is_stock else str(trade.get("contract") or trade.get("symbol") or "").replace(" ", "").upper()
+                        t_entry = float(trade.get("entry_spot") or trade.get("entry_price") or 0.0)
+                        if entry_price and float(entry_price) > 0 and t_entry > 0:
+                            ep_float = float(entry_price)
+                            if ep_float / t_entry > 1.5 or t_entry / ep_float > 1.5:
+                                continue
                         if tc and clean_c in tc and len(tc) > best_len:
                             best_t = trade
                             best_len = len(tc)
@@ -1845,17 +1871,43 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
         strict_gate = cfg_engine.get("STRICT_MACRO_GATE", False) or cfg_engine.get("strict_macro_gate", False)
         strict_gate = True if str(strict_gate).lower() == "true" else bool(strict_gate)
 
-        # Step 1: Filter candidates by Spot Macro Trend Bias if available
-        preferred_candidates = [c for c in symbol_candidates if c.get("side") == macro_bias] if macro_bias else []
-        if strict_gate and macro_bias:
-            if not preferred_candidates:
-                logging.info(f"[STRICT_MACRO_GATE] Suppressed {symbol} counter-trend candidates because Spot is {macro_bias}-biased and Strict Gate is ON.")
-                pool = []
-            else:
-                pool = preferred_candidates
-        else:
-            # Mode 1 (Default): Soft Conflict Arbiter — Prefer aligned candidates, fallback if only one side formed
-            pool = preferred_candidates if preferred_candidates else symbol_candidates
+        # Step 1: Filter candidates by Spot Macro Trend Bias & Institutional Counter-Trend Governance
+        # A. Continuations (D2) MUST strictly align with the macro trend (never trade continuation counter to trend)
+        trend_governed_candidates = []
+        for c in symbol_candidates:
+            c_side = c.get("side")
+            is_ct = bool(macro_bias and c_side != macro_bias)
+            c_pat = str(c.get("pattern", "")).upper()
+            is_continuation = ("CONTINUATION" in c_pat or c_pat in ["D2", "TREND_CONTINUATION"])
+
+            if is_ct and is_continuation:
+                logging.info(f"[TREND_GUARD] Suppressed {symbol} {c.get('contract')}: Trend continuation ({c.get('pattern')}) cannot trade counter to MacroBias ({macro_bias}).")
+                continue
+
+            # B. Counter-Trend Reversals (D1):
+            # - If Strict Gate is ON: allow ONLY pristine Tier 1 Gold Reversals, reject weaker setups.
+            # - If Strict Gate is OFF: allow Tier 1 and Tier 2 Core Reversals (R:R >= 1.5), reject noisy Tier 3 setups.
+            if is_ct:
+                c_tier = int(c.get("tier", 2))
+                if strict_gate and c_tier > 1:
+                    logging.info(f"[STRICT_MACRO_GATE] Suppressed {symbol} counter-trend candidate {c.get('contract')} (Tier {c_tier} > 1) because Spot is {macro_bias}-biased and Strict Gate is ON.")
+                    continue
+                elif (not strict_gate) and c_tier > 2:
+                    logging.info(f"[COUNTER_TREND_GATE] Suppressed {symbol} counter-trend candidate {c.get('contract')} (Tier 3 Momentum) against {macro_bias} trend.")
+                    continue
+
+                # Apply Counter-Trend Conviction Scaling:
+                c["is_counter_trend"] = True
+                raw_pos_size = int(c.get("position_size", 1))
+                c["position_size"] = max(1, raw_pos_size // 2)
+                c["t2"] = None
+                c["t3"] = None
+                c["target_mode"] = "T1_SNAP_EXIT_COUNTER_TREND"
+
+            trend_governed_candidates.append(c)
+
+        preferred_candidates = [c for c in trend_governed_candidates if c.get("side") == macro_bias] if macro_bias else []
+        pool = preferred_candidates if preferred_candidates else trend_governed_candidates
 
         if not pool:
             return trades
@@ -1933,7 +1985,8 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
 
         pool.sort(key=_candidate_rank)
         best_trade = pool[0]
-        logging.info(f"[ARBITRAGE WINNER] {symbol}: Selected {best_trade['contract']} ({best_trade['side']} | Strike {best_trade.get('strike')}) | Tier: {best_trade.get('tier_label')} | Profit: {float(best_trade.get('t1',0))-float(best_trade.get('entry_spot',0)):.2f} pts | RR: {best_trade.get('rr')} | MacroBias: {macro_bias} | StrictGate: {strict_gate}")
+        ct_info = f" | CounterTrend: YES (Size={best_trade.get('position_size')}, Cap=T1)" if best_trade.get("is_counter_trend") else ""
+        logging.info(f"[ARBITRAGE WINNER] {symbol}: Selected {best_trade['contract']} ({best_trade['side']} | Strike {best_trade.get('strike')}) | Tier: {best_trade.get('tier_label')} | Profit: {float(best_trade.get('t1',0))-float(best_trade.get('entry_spot',0)):.2f} pts | RR: {best_trade.get('rr')} | MacroBias: {macro_bias} | StrictGate: {strict_gate}{ct_info}")
 
         # ── VIX Regime Gate Check ──
         vix_allowed, vix_reason, vix_val = evaluate_vix_regime(kite, tier_val=best_trade.get("tier", 2))
@@ -1974,11 +2027,12 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
         else:
             trade_db.stage_cycle_trade(engine_name, best_trade)
             trades.append(best_trade)
+            ct_tag = " [CounterTrend]" if best_trade.get("is_counter_trend") else ""
             log_fn(best_trade['contract'], best_trade['pattern'], timeframe_entry,
                    "SCAN_MATCH", "STAGED",
-                   f"Side={best_trade.get('side')} Strike={best_trade.get('strike')} RR={best_trade.get('rr','')} Tier={best_trade.get('tier_label','')} MacroBias={macro_bias}",
+                   f"Side={best_trade.get('side')} Strike={best_trade.get('strike')} RR={best_trade.get('rr','')} Tier={best_trade.get('tier_label','')} MacroBias={macro_bias}{ct_tag}",
                    entry=best_trade['entry_spot'], sl=best_trade['current_sl'],
-                   target=best_trade.get('t3',''), rr=best_trade.get('rr',''),
+                   target=best_trade.get('t3') or best_trade.get('t1',''), rr=best_trade.get('rr',''),
                    event_time=best_trade.get('entry_time',''))
 
     return trades

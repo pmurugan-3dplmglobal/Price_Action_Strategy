@@ -1396,17 +1396,17 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
 
             # ── STALE / OUTLIER ENTRY PRICE GUARD ──
             # Prevent false emergency SL triggers when entry_spot or current_sl has an extreme data mismatch vs live LTP
-            # (e.g. BSE entry 12.0 with SL 1.0 when live option market is trading at 0.60).
+            # (e.g. BSE entry 12.0 with SL 1.0 when live option market is trading at 0.60, or stale DB entry 110 vs live 28).
             is_outlier_entry = False
             entry_s = float(pos.get("entry_spot") or pos.get("entry_price") or 0.0)
             if entry_s > 0 and live_ltp > 0:
-                if (entry_s / live_ltp > 3.0 or live_ltp / entry_s > 3.0) and pos.get("user_edited"):
+                if (entry_s / live_ltp > 2.5 or live_ltp / entry_s > 2.5):
                     is_outlier_entry = True
-                    logging.warning(f"[STALE OUTLIER GUARD] {sym} entry {entry_s:.2f} diverges >300% from live LTP {live_ltp:.2f}. Skipping false emergency SL trigger.")
+                    logging.warning(f"[STALE OUTLIER GUARD] {sym} entry {entry_s:.2f} diverges >250% from live LTP {live_ltp:.2f}. Skipping false emergency SL trigger.")
             if current_sl > 0 and live_ltp > 0:
-                if current_sl / live_ltp > 3.0 or live_ltp / current_sl > 3.0:
+                if current_sl / live_ltp > 2.5 or live_ltp / current_sl > 2.5:
                     is_outlier_entry = True
-                    logging.warning(f"[STALE OUTLIER GUARD] {sym} SL {current_sl:.2f} diverges >300% from live LTP {live_ltp:.2f}. Skipping false emergency SL trigger.")
+                    logging.warning(f"[STALE OUTLIER GUARD] {sym} SL {current_sl:.2f} diverges >250% from live LTP {live_ltp:.2f}. Skipping false emergency SL trigger.")
 
             if current_sl > 0:
                 sl_floor = get_sl_floor_time(pos)
@@ -1439,7 +1439,7 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                                 sl_reason = f"MORNING_CATASTROPHIC_CIRCUIT_15PCT (Stock LTP {live_ltp:.2f} down {drop_pct:.1f}% from entry {entry_s:.2f})"
                                 cp = live_ltp
                                 event_time = last.get('date')
-                elif is_start_failsafe:
+                elif is_start_failsafe and not is_outlier_entry:
                     # Failsafe Check at failsafe_start_time (09:50 AM):
                     # Trigger ONLY IF previous candle closed in breach AND current live price is in breach.
                     prev_date = str(df.iloc[-2]['date']) if len(df) >= 2 else ""
@@ -1456,7 +1456,7 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                         sl_reason = f"SL_FAILSAFE_MORNING_TRIGGER (LTP {live_ltp:.2f} {' >=' if is_short_stock else ' <='} {current_sl:.2f} & Prev Bar Closed Breach)"
                         cp = live_ltp if live_ltp > 0 else float(df.iloc[-1]['close'])
                         event_time = last.get('date')
-                else:
+                elif not is_outlier_entry:
                     # Normal Active SL Monitoring after failsafe_start_time
                     # ONLY candles >= sl_floor are judged against current_sl. A candle that
                     # formed BEFORE the current SL was set (e.g. pre-trailing entry-day bar)
@@ -1583,12 +1583,17 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                     try:
                         sq = kite.ltp([spot_tok])
                         live_spot = float(list(sq.values())[0]["last_price"]) if sq else 0.0
+                        if live_spot > 0:
+                            pos["last_known_spot"] = live_spot
+                        else:
+                            live_spot = float(pos.get("last_known_spot") or pos.get("spot_entry") or 0.0)
+
                         side_str = str(pos.get("side", "CE")).upper()
                         is_bull = side_str in ["CE", "BUY", "BULL"]
                         # Catastrophic option emergency cap: If option drops beyond opt_emergency_cap (35%), exit regardless of spot
                         # BUT do NOT trigger catastrophic override if trade is a fresh fill (<120s) to allow opening spread to settle
                         opt_emergency_cap = float(cfg.get("max_option_loss_pct", 35.0)) / 100.0
-                        is_catastrophic_opt = (entry_s > 0 and live_ltp > 0 and live_ltp <= (entry_s * (1.0 - opt_emergency_cap)) and not is_fresh_fill)
+                        is_catastrophic_opt = (entry_s > 0 and live_ltp > 0 and live_ltp <= (entry_s * (1.0 - opt_emergency_cap)) and not is_fresh_fill and not is_outlier_entry)
 
                         if is_bull and live_spot > spot_sl and not is_catastrophic_opt:
                             logging.info(f"[SPOT_SL_GUARD] Suppressed premature option SL exit for {sym} ({pos.get('contract')}): Option LTP {live_ltp:.2f} tripped SL, but Underlying Spot ({live_spot:.2f}) is strictly holding above support ({spot_sl:.2f}).")
@@ -1598,6 +1603,19 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                             sl_hit = False
                     except Exception as s_err:
                         logging.warning(f"Spot SL guard check error for {sym}: {s_err}")
+                        # API Resiliency (Rate-Limit / 429 Shield): Fall back to last_known_spot or spot_entry
+                        cached_spot = float(pos.get("last_known_spot") or pos.get("spot_entry") or 0.0)
+                        side_str = str(pos.get("side", "CE")).upper()
+                        is_bull = side_str in ["CE", "BUY", "BULL"]
+                        opt_emergency_cap = float(cfg.get("max_option_loss_pct", 35.0)) / 100.0
+                        is_catastrophic_opt = (entry_s > 0 and live_ltp > 0 and live_ltp <= (entry_s * (1.0 - opt_emergency_cap)) and not is_fresh_fill and not is_outlier_entry)
+                        if cached_spot > 0 and not is_catastrophic_opt:
+                            if is_bull and cached_spot > spot_sl:
+                                logging.info(f"[SPOT_SL_GUARD FAILSAFE] API query error ({s_err}) for {sym}; last known spot ({cached_spot:.2f}) is holding above support ({spot_sl:.2f}). Suppressing premature option SL exit.")
+                                sl_hit = False
+                            elif (not is_bull) and cached_spot < spot_sl:
+                                logging.info(f"[SPOT_SL_GUARD FAILSAFE] API query error ({s_err}) for {sym}; last known spot ({cached_spot:.2f}) is holding below ceiling ({spot_sl:.2f}). Suppressing premature PE option SL exit.")
+                                sl_hit = False
 
             if sl_hit:
                 logging.warning(f"SL [{sl_reason}]: {sym} at {cp} (TF: {pos_tf})")
@@ -1950,22 +1968,60 @@ def monitor_all_active_positions(kite, live=True):
                 eng_type = "index" if is_index else ("nifty50" if is_opt else ("daily_bear" if is_short_eq else "daily"))
                 
                 # Auto-lookup scan SL/targets from trade history or chart
-                from resolve import lookup_scan_sl_target
-                sl_info = lookup_scan_sl_target(tsym, tsym, eng_type, kite=kite, entry_price=float(p.get("average_price", 0)), side="BEAR" if is_short_eq else "BULL")
-                
+                from resolve import lookup_scan_sl_target, derive_sl_targets_for_contract
+                broker_avg_p = float(p.get("average_price", 0))
+                sl_info = lookup_scan_sl_target(tsym, tsym, eng_type, kite=kite, entry_price=broker_avg_p, side="BEAR" if is_short_eq else "BULL")
+
+                # Sanitize recovered SL: Prevent immediate stop trigger if lookup returned a stale SL from an old trade
+                cand_sl = float(sl_info.get("current_sl") or 0.0) if sl_info else 0.0
+                cand_t1 = float(sl_info.get("t1") or 0.0) if sl_info else 0.0
+                cand_t2 = float(sl_info.get("t2") or 0.0) if sl_info else 0.0
+                cand_t3 = float(sl_info.get("t3") or 0.0) if sl_info else 0.0
+                cand_pat = sl_info.get("pattern", "BROKER_RECOVERED") if sl_info else "BROKER_RECOVERED"
+                cand_spot_sl = sl_info.get("spot_sl") if sl_info else None
+                cand_spot_entry = sl_info.get("spot_entry") if sl_info else None
+                cand_spot_token = sl_info.get("spot_token") if sl_info else None
+
+                sl_invalid = False
+                if broker_avg_p > 0 and cand_sl > 0:
+                    if is_short_eq:
+                        # Short stock: SL must be strictly above entry price
+                        if cand_sl <= broker_avg_p or cand_sl / broker_avg_p > 2.0:
+                            sl_invalid = True
+                    else:
+                        # Long stock or option: SL must be strictly below entry price
+                        if cand_sl >= broker_avg_p or broker_avg_p / cand_sl > 2.5:
+                            sl_invalid = True
+
+                if sl_invalid and kite and broker_avg_p > 0:
+                    logging.warning(f"[BROKER_RECOVERY] Stale SL ({cand_sl:.2f}) detected for {tsym} vs broker entry ({broker_avg_p:.2f}). Deriving fresh SL/targets.")
+                    derived = derive_sl_targets_for_contract(kite, tsym, broker_avg_p, "15minute", "15minute", side="BEAR" if is_short_eq else "BULL")
+                    if derived:
+                        cand_sl = float(derived.get("current_sl") or 0.0)
+                        cand_t1 = float(derived.get("t1") or 0.0)
+                        cand_t2 = float(derived.get("t2") or 0.0)
+                        cand_t3 = float(derived.get("t3") or 0.0)
+                        cand_pat = derived.get("pattern", "DERIVED_RECOVERY")
+                        cand_spot_sl = derived.get("spot_sl")
+                        cand_spot_entry = derived.get("spot_entry")
+                        cand_spot_token = derived.get("spot_token")
+
                 broker_pos_dict = {
                     "contract": tsym,
                     "symbol": tsym,
                     "quantity": abs(p_qty),
                     "position_size": abs(p_qty),
-                    "entry_spot": float(p.get("average_price", 0)),
-                    "entry_price": float(p.get("average_price", 0)),
-                    "current_sl": float(sl_info.get("current_sl") or 0.0) if sl_info else 0.0,
-                    "t1": float(sl_info.get("t1") or 0.0) if sl_info else 0.0,
-                    "t2": float(sl_info.get("t2") or 0.0) if sl_info else 0.0,
-                    "t3": float(sl_info.get("t3") or 0.0) if sl_info else 0.0,
+                    "entry_spot": broker_avg_p,
+                    "entry_price": broker_avg_p,
+                    "current_sl": cand_sl,
+                    "t1": cand_t1,
+                    "t2": cand_t2,
+                    "t3": cand_t3,
+                    "spot_sl": cand_spot_sl,
+                    "spot_entry": cand_spot_entry,
+                    "spot_token": cand_spot_token,
                     "trailing_stage": int(sl_info.get("trailing_stage") or 0) if sl_info else 0,
-                    "pattern": sl_info.get("pattern", "BROKER_RECOVERED") if sl_info else "BROKER_RECOVERED",
+                    "pattern": cand_pat,
                     "position_type": "option" if is_opt else "stock",
                     "side": "SELL" if is_short_eq else ("PE" if (is_opt and c_str.endswith("PE")) else ("CE" if is_opt else "BUY")),
                     "direction": "BEAR" if (is_short_eq or (is_opt and c_str.endswith("PE"))) else "BULL",

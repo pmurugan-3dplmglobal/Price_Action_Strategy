@@ -59,7 +59,7 @@ def _load_portfolio_risk_config(config=None, capital=None):
     if daily_loss is None and isinstance(cfg_all.get("portfolio_risk"), dict):
         daily_loss = cfg_all["portfolio_risk"].get("max_daily_loss_pct")
     if daily_loss is None:
-        daily_loss = 3.0
+        daily_loss = 5.0
 
     return {
         "enable": enable,

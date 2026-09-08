@@ -19,6 +19,7 @@ meta:
     - Robust Option Contract Identification (is_option_contract)
     - Datta & Minervini Law (Risk Discipline, Outcome Bias Immunity, & Objective D2 Re-Entry Mandate)
     - Automated Stale / Unfilled Limit Order Manager & TTL Invalidation Watcher (reconcile_and_cancel_stale_orders)
+    - Broker Position Recovery SL Sanitization & Stale Historical Override Invariant (ISSUE-096)
 
 architecture:
   diagram: |
@@ -45,8 +46,8 @@ architecture:
       paths.py: "Single source of truth for canonical system file paths across engines and dashboards (TRADES_DB, ACTIVE_POSITIONS_DB, SCAN_DISPLAY_*, TOKEN_FILE, etc.)"
       pattern_funnel.py: "Price Action Surveillance Radar & Funnel Manager maintaining 3-tier lifecycle stages (Category A+ Imminent Velocity, Category A Breakout Ready, Category B Anchor Incubator) with sub-15s execution dispatch."
       swing_detection.py: "Phase 0 Parabolic Multi-Swing Cascade Filter with Unified Hybrid Dynamic Legs, ATR Volatility Adaptive Scaling (2-5 bars), BOS integrity, calculate_vcp_metrics (ATR3/ATR14, TTM Squeeze), calculate_option_vwap (+2σ bands), and calculate_twap_c_stability."
-      resolve.py: "Dynamic strike resolution, Option vs Stock domain parity, evaluate_spot_confluence (D1 Reversal vs D2 Continuation), candidate arbitrage scoring, and robust is_option_contract detection."
-      position_monitor.py: "Autonomous position surveillance, reconcile_and_cancel_stale_orders (Target T1 hit invalidation, 30m TTL expiration, SL breach invalidation, EOD cutoff), Spot-Anchored SL Guard, +BE Positive Breakeven lock, 3-tier exit execution, NoneType target exception safety (ISSUE-095), and short cash equity cover execution (BUY MIS at ask * 1.005)."
+      resolve.py: "Dynamic strike resolution, Option vs Stock domain parity, evaluate_spot_confluence (D1 Reversal vs D2 Continuation), Institutional Counter-Trend Reversal Governance (0.5x conviction sizing, T1 target truncation, strict D2 continuation suppression), candidate arbitrage scoring, and robust is_option_contract detection."
+      position_monitor.py: "Autonomous position surveillance, reconcile_and_cancel_stale_orders (Target T1 hit invalidation, 30m TTL expiration, SL breach invalidation, EOD cutoff), Spot-Anchored SL Guard with HTTP 429 rate-limit failsafe fallback to cached spot, +BE Positive Breakeven lock, 3-tier exit execution, NoneType target exception safety (ISSUE-095), and short cash equity cover execution (BUY MIS at ask * 1.005)."
       vix_guard.py: "India VIX Macro Regime Gate (60s TTL RAM cache) evaluating normal (<=20.0), elevated (20-25), and extreme (>25.0) market volatility states."
       portfolio_risk.py: "Cross-engine portfolio risk governor enforcing dynamic capital-scaled concurrent positions (6 per 100k), max daily drawdown limit (-3.0%), and sector caps (max 2 per sector)."
       ema_engine.py: "13 EMA & 44 EMA crossover scanner and display output builder with 6-day monthly option contract rollover rule."

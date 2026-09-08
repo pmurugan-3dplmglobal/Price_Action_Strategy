@@ -1,15 +1,107 @@
 meta:
   system: Price Action Unified Strategy System
   version: v2.1.0-stable
-  last_updated: '2026-09-06'
+  last_updated: '2026-09-08'
   purpose: Active operational tracker for v2.1.0-stable failures, root causes, regressions, and enhancements.
   historical_archive: archive/ISSUE_HISTORY_ARCHIVE.yaml (Preserves 119 resolved legacy issues prior to 2026-09-05)
-  total_active_issues: 16
+  total_active_issues: 19
   archived_issues_summary:
     total_archived: 119
     recent_archived_batch: [FEATURE-031, FEATURE-030, FEATURE-029, ISSUE-084, ISSUE-083, ISSUE-082, ISSUE-081, ISSUE-080, FEATURE-036, FEATURE-035, FEATURE-034, FEATURE-033, ISSUE-054]
     key_archived_families: [ALGO_AUDIT_CVE, QUANT_ENHANCEMENTS, RADAR_LIFECYCLE, VCP_METRICS, SCANNER_DISCOVERY, SECURITY_CONFIG, ZERO_REGRESSION_AUDIT]
 issues:
+- id: ISSUE-096
+  title: Stale Historical Trade SL Override & Outlier Bypass Causing Premature Broker Position Exit
+  severity: CRITICAL
+  category: Position Monitor, Trade DB Resolution, Broker Position Recovery, Spot SL Guard
+  family: ZERO_REGRESSION_AUDIT
+  date_reported: '2026-09-08'
+  symptom: |
+    1. On the morning of Sep 8, 2026, background service trading-stock on Bhavani's VM (129.225.69.131) executed premature market SELL orders on NIFTY2690823750CE (195 qty @ 09:22:48, 195 qty @ 09:24:30, 130 qty @ 09:30:34) at LTP ~27.40.
+    2. Logs showed exit reason: 'SL [MORNING_CATASTROPHIC_CIRCUIT_15PCT (Option LTP 27.40 down 54.8% from entry 60.64)]: NIFTY2690823750CE at 27.4'.
+    3. The positions were re-entries / active fills around Rs 28-32, but the monitor assigned stale historical entry prices (Rs 60.64, Rs 71.21, Rs 110.53) from previous cycles.
+    4. Furthermore, the Catastrophic Option Stop completely bypassed the Spot SL Guard even though underlying NIFTY spot was holding support.
+  root_cause: |
+    1. In common/resolve.py (lookup_scan_sl_target):
+       Iterated all_trades from trade_db without filtering out COMPLETED trades from prior cycles or previous days. An old completed cycle's entry price (e.g. 60.64 / 110.53) and old SL were matched and returned, corrupting the fresh trade's baseline.
+    2. In common/position_monitor.py (STALE / OUTLIER ENTRY PRICE GUARD):
+       `if (entry_s / live_ltp > 3.0 or live_ltp / entry_s > 3.0) and pos.get("user_edited"):` required user_edited to be True. For broker-recovered positions, user_edited was False/None, so 3x-4x stale entry price divergences bypassed the outlier guard.
+    3. In common/position_monitor.py (Spot SL Guard catastrophic override):
+       `is_catastrophic_opt` did NOT check `and not is_outlier_entry`, allowing a corrupted entry_s to immediately bypass the Spot SL Guard.
+    4. In common/position_monitor.py (monitor_all_active_positions):
+       When recovering positions from Kite, candidate SL from lookup_scan_sl_target was assigned directly without validating against broker_average_price (e.g. assigning SL >= entry or SL 2.5x away).
+  affected_files:
+  - common/position_monitor.py
+  - common/resolve.py
+  fix_applied: |
+    1. common/resolve.py:
+       - In lookup_scan_sl_target: filtered all_trades so completed trades whose entry price deviates by >50% from current entry_price, or non-active trades from previous days, are ignored.
+       - Also applied the >50% entry price divergence guard to scan display data search loops.
+    2. common/position_monitor.py:
+       - Outlier Entry Guard: removed `and pos.get("user_edited")` constraint, tightened divergence threshold to 2.5x (250%), and added `not is_outlier_entry` to failsafe and candle-close SL blocks.
+       - Spot SL Guard: added `and not is_outlier_entry` to `is_catastrophic_opt` in both primary and failsafe paths.
+       - Broker Recovery: sanitized candidate SL against broker_average_price. If candidate SL is inverted (SL >= entry for longs or SL <= entry for shorts) or diverges >2.5x, automatically re-derives fresh SL and targets via `derive_sl_targets_for_contract`.
+  verification: |
+    1. AST syntax checked 100% OK across common/position_monitor.py, common/resolve.py, and common/portfolio_risk.py.
+    2. Import smoke test passed across all modules and dashboards.
+    3. Unit verification suites (test_institutional_enhancements.py, test_parity_alignment.py, test_cve_fixes.py): 100% PASS.
+    4. Master regression suite (scratch/run_full_regression_test.py): PASSED with zero regressions.
+  status: RESOLVED
+  resolution_date: '2026-09-08'
+- id: ISSUE-085
+  title: Spot SL Guard Rate-Limit Resiliency & Institutional Counter-Trend Reversal Governance
+  severity: HIGH
+  category: Risk Management, Execution Engine, Rate-Limit Resiliency, Counter-Trend Sizing
+  family: QUANT_ENHANCEMENTS
+  date_reported: '2026-09-08'
+  symptom: |
+    1. During high-frequency surveillance loops, Kite API returned HTTP 429 'Too many requests' when querying spot LTP for Spot SL Guard (e.g. MIDCPNIFTY 14700 CE and NIFTY 23850 CE).
+    2. The unhandled exception in position_monitor.py left sl_hit=True, prematurely triggering automated exit orders at bottom-tick option prices even though underlying spot was safely holding above structural support.
+    3. Enabling strict EMA macro gating (StrictGate) blocked all reversal setups at swing bottoms because reversals by definition form when spot is below the lagging 13 EMA, while disabling StrictGate allowed counter-trend reversals at full 1.0x risk with multi-tier targets into opposing EMA resistance.
+  root_cause: |
+    1. common/position_monitor.py caught spot check exceptions without falling back to cached spot prices, allowing sl_hit to fall through to market/limit exits.
+    2. common/resolve.py lacked differentiation between D1 Reversals and D2 Continuations, and lacked conviction scaling (0.5x) and target truncation (T1 cap) for counter-trend reversals.
+  affected_files:
+  - common/position_monitor.py
+  - common/resolve.py
+  - scratch/test_spot_sl_guard_resiliency.py
+  - scratch/test_counter_trend_governance.py
+  fix_applied: |
+    1. common/position_monitor.py:
+       - Cached spot quotes (pos['last_known_spot']) on every tick.
+       - Implemented fail-safe fallback to cached spot or spot_entry during API errors/rate-limits (HTTP 429), suppressing premature exits if spot structure is held and catastrophic cap is not breached.
+    2. common/resolve.py:
+       - Strictly suppressed counter-trend D2 continuations (TREND_CONTINUATION_REENTRY against MacroBias).
+       - Allowed high-quality D1 Reversals (Tier 1/Tier 2) against MacroBias, but applied Conviction Sizing (0.5x half-risk) and truncated targets to T1 (mean-reversion snap exit).
+       - Filtered out weak Tier 3 counter-trend momentum noise.
+  verification: |
+    1. Ran scratch/test_spot_sl_guard_resiliency.py: PASS (429 API rate-limit correctly suppressed).
+    2. Ran scratch/test_counter_trend_governance.py: PASS (Counter-trend D2 suppressed, Tier 3 suppressed, Tier 1 half-sized and capped at T1).
+    3. Ran python scratch/run_full_regression_test.py: 21/21 test suites passed (100% success).
+  status: RESOLVED
+
+- id: FEATURE-043
+  title: Portfolio Daily Drawdown Cap Scaled from 3.0% to 5.0%
+  severity: MEDIUM
+  category: Portfolio Risk Governance, Capital Allocation, Drawdown Controls
+  family: QUANT_ENHANCEMENTS
+  date_reported: '2026-09-08'
+  symptom: |
+    Daily drawdown cap of 3.0% (-Rs 3,000 on Rs 100,000 capital) caused premature automated and manual 1-click execution lockout after 2-3 standard stop losses, blocking valid second-wave institutional breakout setups.
+  root_cause: |
+    max_daily_loss_pct was configured at 3.0% across portfolio_risk and engine sections in program_config.json, which restricted daily risk capacity during higher volatility sessions.
+  affected_files:
+  - input/program_config.json
+  - common/portfolio_risk.py
+  fix_applied: |
+    1. input/program_config.json: Updated portfolio_risk.max_daily_loss_pct to 5.0%.
+    2. Synchronized engine-specific max_daily_loss_pct to 5.0% across nifty50, index, bear_trade, daily, weekly, and weekly_bear.
+    3. common/portfolio_risk.py: Updated fallback default in _load_portfolio_risk_config from 3.0% to 5.0%.
+  verification: |
+    1. Executed python scratch/run_full_regression_test.py: 21/21 test suites passed (100% success).
+    2. Verified portfolio risk cap calculation: With Rs 100,000 capital, max allowed daily loss is now -Rs 5,000.00 (-5.0%).
+  status: RESOLVED
+
 - id: FEATURE-042
   title: Automated Stale / Unfilled Limit Order Manager & TTL Invalidation Watcher
   severity: HIGH
