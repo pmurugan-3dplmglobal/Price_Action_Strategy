@@ -232,8 +232,11 @@ def write_scan_display_data(staged, active, display_file, engine_name=None):
         contract_map = {}
         for t in combined_staged:
             key = _trade_key(t)
-            if not key or key in active_keys:
+            if not key:
                 continue
+            if key in active_keys:
+                t["is_active_holding"] = True
+                t["staged_tag"] = "ACTIVE_HOLDING"
             if key not in contract_map:
                 contract_map[key] = t
             else:

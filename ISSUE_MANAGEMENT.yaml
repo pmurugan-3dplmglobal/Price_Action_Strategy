@@ -4,12 +4,33 @@ meta:
   last_updated: '2026-09-08'
   purpose: Active operational tracker for v2.1.0-stable failures, root causes, regressions, and enhancements.
   historical_archive: archive/ISSUE_HISTORY_ARCHIVE.yaml (Preserves 119 resolved legacy issues prior to 2026-09-05)
-  total_active_issues: 21
+  total_active_issues: 22
   archived_issues_summary:
     total_archived: 119
     recent_archived_batch: [FEATURE-031, FEATURE-030, FEATURE-029, ISSUE-084, ISSUE-083, ISSUE-082, ISSUE-081, ISSUE-080, FEATURE-036, FEATURE-035, FEATURE-034, FEATURE-033, ISSUE-054]
     key_archived_families: [ALGO_AUDIT_CVE, QUANT_ENHANCEMENTS, RADAR_LIFECYCLE, VCP_METRICS, SCANNER_DISCOVERY, SECURITY_CONFIG, ZERO_REGRESSION_AUDIT]
 issues:
+- id: FEATURE-040
+  title: Universal 200+ F&O Universe Scan & Active Symbol Routing to Scan Tab (Without Duplicate Execution)
+  severity: MEDIUM
+  category: Scanner Discovery, Radar Funnel, Dashboard Display, Execution Safety
+  family: RADAR_LIFECYCLE
+  date_reported: '2026-09-08'
+  symptom: |
+    1. Active positions in stock_options_trade_engine.py and index_options_trade_engine.py were completely skipped during discovery scanning, preventing newly maturing A+/A/B patterns from progressing or being viewed on the dashboard Scan Tab.
+    2. Traders had zero visibility into evolving setups or secondary re-entries for symbols currently held.
+  root_cause: |
+    1. run_scan_cycle checked `if symbol in ACTIVE_POSITIONS: continue` before dispatching worker threads, completely bypassing active tickers.
+    2. display_writer.py dropped any staged trade matching active_keys.
+  affected_files:
+  - Trade_Option/stock_options_trade_engine.py
+  - Trade_Option/index_options_trade_engine.py
+  - common/display_writer.py
+  resolution: |
+    1. Removed active positions skip from scan loops in stock_options_trade_engine.py and index_options_trade_engine.py to continuously scan all 200+ F&O constituents.
+    2. Updated display_writer.py to retain active holdings on the Scan Tab tagged with ACTIVE_HOLDING so the trader has complete visibility.
+    3. Preserved strict active position guards in execute_highest_rr_trade, preventing duplicate automated orders.
+  status: RESOLVED
 - id: FEATURE-039
   title: Transition Option Engine to Pure Price Action & Spot Intraday VWAP (Decommissioning Lagging EMA Whipsaws)
   severity: HIGH

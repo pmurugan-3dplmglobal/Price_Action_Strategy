@@ -198,9 +198,7 @@ def run_scan_cycle(kite):
     ]
     temp_stored_trades = []
     for symbol, config in INDEX_REGISTRY.items():
-        with position_lock:
-            if symbol in ACTIVE_POSITIONS:
-                continue
+        # Do not skip active symbols here; scan continuously so new setups appear on the Scan Tab
         trades = scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anchor,
                              entry_scanners, anchor_scanners,
                              lambda sym, sp, step, opt, r: shared_resolve_strikes(instrument_dump, sym, sp, step, opt, r),

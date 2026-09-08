@@ -313,9 +313,8 @@ def run_scan_cycle(kite):
             config = STOCK_REGISTRY.get(symbol)
             if not config or not config.get("token"):
                 continue
-            with position_lock:
-                if symbol in ACTIVE_POSITIONS:
-                    continue
+            # Note: Do not skip active symbols here; all 200+ F&O stocks are scanned so setups
+            # advance through the funnel and appear on the Scan Tab even if a position is currently held.
             s_ltp = spot_quotes.get(f"NSE:{symbol}", {}).get("last_price")
             futures[pool.submit(_process_stock, kite, symbol, config,
                 from_entry, to_entry, from_anchor, to_anchor,
