@@ -1,29 +1,13 @@
-# Zero-Prompt Autonomous Execution Directive
+# Operational Protocol: Plan & Consult -> Autonomous Execution
 
-## Absolute Rule: No Permission Pauses
+## 1. Phase 1: Planning & Alignment Phase (Consultative)
+- When a task has design ambiguity, architectural trade-offs, or requires user input:
+  - Feel free to propose high-level plans, ask clarifying questions, or discuss options.
+  - Keep questions targeted, high-signal, and concise.
 
-1. **Unconditional Pre-Approval**:
-   - The USER has permanently granted unconditional, pre-approved authorization for all operations in this project.
-   - Authorized actions include: file creation, file edits, AST parsing, test execution, regression runs, shell commands, git operations (`git add`, `git commit`, `git push`), SSH commands, and cloud VM deployments (`140.245.197.71` and `129.225.69.131`).
-
-2. **No Permission Prompts**:
-   - NEVER ask the user questions like:
-     - "Should I proceed with the fix?"
-     - "Do you want me to execute this plan?"
-     - "May I run the test?"
-     - "Can I commit this to git?"
-   - Do NOT use interactive confirmation modals or question tools for routine development, bug fixing, or deployment.
-
-3. **No Blocking Planning Mode Pauses**:
-   - When creating or modifying `implementation_plan.md` or other artifacts, always set `RequestFeedback: false` unless the user explicitly requested a plan review.
-   - Do NOT pause execution to wait for user approval after planning. Proceed immediately to execution, verification, and deployment in the same turn.
-
-4. **Autonomous End-to-End Pipeline**:
-   - Always execute the full lifecycle autonomously:
-     1. Investigate and identify root cause.
-     2. Apply code modifications across all relevant files.
-     3. Verify with AST syntax checks and full regression test suite.
-     4. Synchronize documentation (`ISSUE_MANAGEMENT.yaml` & `MASTER_DOCUMENTATION.yaml`).
-     5. Commit to git and push to `origin/master`.
-     6. Pull on Cloud VMs and restart services.
-     7. Provide a concise, transparent walkthrough of completed work to the user.
+## 2. Phase 2: Execution Phase ("Once Given the Go")
+- Once the user gives the go-ahead (e.g., "go", "proceed", "implement", "continue", "fix it", "approved"):
+  - **Zero-Prompt Autonomous Run**: Execute the entire implementation end-to-end without asking for permission on individual steps.
+  - Automatically read files, write code, run AST checks, execute regression test suites, commit/push to git, and deploy to Cloud VMs without pausing.
+  - NEVER stop mid-way to ask "May I edit this file?", "May I run the test?", or "May I push to git?".
+  - Keep the user updated with clean, structured progress logs until the task is 100% complete.

@@ -21,10 +21,9 @@ AGY operates with three integrated identities across all tasks:
 ## Ground Rules
 
 - **READ `AI_CONTEXT_INDEX.md` FIRST** — it tiers every directory (Tier 1 core / Tier 2 reference / Tier 3 runtime).
-- **Zero-Prompt Autonomous Execution**:
-  - The user has permanently granted unconditional, pre-approved authorization for all project operations (file edits, tool runs, AST parsing, regression suites, shell commands, git commit/push, and cloud VM service updates).
-  - NEVER ask permission, never prompt with confirmation dialogs, and never pause execution for planning approval (`RequestFeedback: false`).
-  - Execute all workflows end-to-end autonomously (Diagnose -> Fix -> Verify -> Git Commit/Push -> Cloud VM Deploy) and report the completed results.
+- **Two-Phase Operational Model (Consult First -> Full Autonomous Go)**:
+  - **Phase 1 (Alignment)**: Propose plans, discuss architecture/trade-offs, or ask clarifying questions when requirements are ambiguous or critical decisions are needed.
+  - **Phase 2 (Once Given the Go)**: Once the user says "go", "proceed", "implement", "continue", or approves the direction: execute the entire workflow 100% autonomously end-to-end. Read files, write code, run AST/regression tests, commit/push to git, and deploy to Cloud VMs without pausing to ask permission for individual actions.
 - **Strict Cloud VM Deployment Pipeline (`Local -> Test -> Git Push -> Git Pull on VM`)**:
   - **NEVER edit code directly on remote cloud VMs** (Oracle Cloud / AWS).
   - Workflow: 1. Local Dev -> 2. Local AST & Regression Test (100% pass) -> 3. Git Push `origin/master` -> 4. Git Pull on VM & restart systemd services (`sudo systemctl restart trading-options trading-stock trading-export`).
