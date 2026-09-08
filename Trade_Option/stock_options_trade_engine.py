@@ -54,7 +54,8 @@ from trading_core import (
     extract_underlying_symbol,
     get_option_lot_size,
     calculate_sl_buffer,
-    STOCK_EXPIRY_ROLLOVER_DAYS
+    STOCK_EXPIRY_ROLLOVER_DAYS,
+    slice_quantity_for_freeze
 )
 
 LIVE_MARKET_DEPLOYMENT = True
@@ -348,6 +349,9 @@ def _avg_target_rank(trade):
         return 0
     base_rr = abs(avg_target - trade["entry_spot"]) / risk
 
+    # Spot Confluence bonus: D1 VWAP reclaim or D2 EMA trend alignment gets +0.40 priority
+    spot_bonus = 0.40 if trade.get("spot_confluence") else 0.0
+
     # Volatility Contraction / Squeeze ranking bonus:
     # Setups coiled in a TTM squeeze or heavy ATR compression get priority execution
     vcp_bonus = 0.0
@@ -356,7 +360,16 @@ def _avg_target_rank(trade):
     elif float(trade.get("atr_ratio", 1.0) or 1.0) <= 0.60:
         vcp_bonus = 0.30
 
-    return base_rr + vcp_bonus
+    # Option Contract VWAP Overpay penalty: demote stretched contracts
+    vwap_penalty = 0.0
+    v_st = str(trade.get("vwap_status", "")).upper()
+    v_str = float(trade.get("vwap_stretch", 0.0) or 0.0)
+    if v_st == "STRETCHED" or v_str > 15.0:
+        vwap_penalty = 1.0
+    elif v_st == "EXPANDED" or v_str > 8.0:
+        vwap_penalty = 0.20
+
+    return max(0.0, base_rr + spot_bonus + vcp_bonus - vwap_penalty)
 
 def execute_highest_rr_trade(kite, staged):
     """After a scan cycle, filter ONLY Tier 1 (🥇 T1 Gold) candidates, pick best by avg RR and execute (if live) at Benchmark limit price."""
@@ -489,6 +502,17 @@ def execute_highest_rr_trade(kite, staged):
                                event_time=best.get("entry_time"))
                 continue
 
+            # Stage 0.5: Option Contract VWAP Overpay Guard
+            # Never buy options overstretched > 15% or > +2σ above contract VWAP (prevents buying tops)
+            v_st = str(best.get("vwap_status", "")).upper()
+            v_str = float(best.get("vwap_stretch", 0.0) or 0.0)
+            if v_st == "STRETCHED" or v_str > 15.0:
+                logging.warning(f"[OPTION_VWAP_GUARD] Auto-execution skipped for {sym} ({contract}): Option is overstretched ({v_str:.1f}% above VWAP, status={v_st}); checking next candidate")
+                log_to_journal(sym, best["pattern"], TIMEFRAME_ENTRY, "SKIP_OVERSTRETCHED_VWAP", "REJECTED",
+                               f"Option stretched {v_str:.1f}% above VWAP", entry=limit_price, sl=best["current_sl"], target=best["t1"],
+                               event_time=best.get("entry_time"))
+                continue
+
             # Stage 1: Smart Pegged Limit Order Routing (Passive Mid-Price Peg)
             # If spread >= 0.8%, peg limit order at Mid price between Best Bid and Best Ask to capture spread savings
             best_bid = float(depth_details.get("best_bid", 0.0))
@@ -537,16 +561,22 @@ def execute_highest_rr_trade(kite, staged):
         if live_ok:
             try:
                 qty = best["lot_size"] * pos_size
-                oid = kite.place_order(
-                    variety=kite.VARIETY_REGULAR, tradingsymbol=contract,
-                    exchange=kite.EXCHANGE_NFO, transaction_type=kite.TRANSACTION_TYPE_BUY,
-                    quantity=qty, order_type=kite.ORDER_TYPE_LIMIT, price=limit_price,
-                    product=kite.PRODUCT_NRML
-                )
-                logging.info(f"🥇 T1 AUTO-EXECUTE BUY LIMIT: {contract} Qty={qty} @ Benchmark Limit Price={limit_price} (Order ID: {oid})")
+                qty_slices = slice_quantity_for_freeze(contract, qty)
+                placed_oids = []
+                for s_qty in qty_slices:
+                    s_oid = kite.place_order(
+                        variety=kite.VARIETY_REGULAR, tradingsymbol=contract,
+                        exchange=kite.EXCHANGE_NFO, transaction_type=kite.TRANSACTION_TYPE_BUY,
+                        quantity=s_qty, order_type=kite.ORDER_TYPE_LIMIT, price=limit_price,
+                        product=kite.PRODUCT_NRML
+                    )
+                    placed_oids.append(str(s_oid))
+                oid = placed_oids[0]
+                logging.info(f"🥇 T1 AUTO-EXECUTE BUY LIMIT: {contract} TotalQty={qty} @ Benchmark Limit Price={limit_price} (Orders: {placed_oids})")
                 with position_lock:
                     if sym in ACTIVE_POSITIONS:
                         ACTIVE_POSITIONS[sym]["order_id"] = str(oid)
+                        ACTIVE_POSITIONS[sym]["order_ids"] = placed_oids
                         ACTIVE_POSITIONS[sym]["order_status"] = "OPEN"
                 if pos.get("trade_id"):
                     trade_db.update_trade(pos["trade_id"], {"order_id": str(oid), "order_status": "OPEN"})
@@ -555,13 +585,17 @@ def execute_highest_rr_trade(kite, staged):
                 if spread_info:
                     try:
                         leg2_c = spread_info["leg2"]["contract"]
-                        oid2 = kite.place_order(
-                            variety=kite.VARIETY_REGULAR, tradingsymbol=leg2_c,
-                            exchange=kite.EXCHANGE_NFO, transaction_type=kite.TRANSACTION_TYPE_SELL,
-                            quantity=qty, order_type=kite.ORDER_TYPE_MARKET,
-                            product=kite.PRODUCT_NRML
-                        )
-                        logging.info(f"[DEBIT SPREAD SHORT LEG] Placed {leg2_c} Qty={qty} (Order ID: {oid2})")
+                        leg2_slices = slice_quantity_for_freeze(leg2_c, qty)
+                        leg2_placed = []
+                        for l2_s_qty in leg2_slices:
+                            oid2 = kite.place_order(
+                                variety=kite.VARIETY_REGULAR, tradingsymbol=leg2_c,
+                                exchange=kite.EXCHANGE_NFO, transaction_type=kite.TRANSACTION_TYPE_SELL,
+                                quantity=l2_s_qty, order_type=kite.ORDER_TYPE_MARKET,
+                                product=kite.PRODUCT_NRML
+                            )
+                            leg2_placed.append(str(oid2))
+                        logging.info(f"[DEBIT SPREAD SHORT LEG] Placed {leg2_c} TotalQty={qty} (Orders: {leg2_placed})")
                     except Exception as leg2_err:
                         logging.error(f"[DEBIT SPREAD SHORT LEG FAILED] {spread_info['leg2']['contract']}: {leg2_err}")
 

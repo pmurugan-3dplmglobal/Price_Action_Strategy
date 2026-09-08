@@ -1876,15 +1876,22 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
         trend_governed_candidates = []
         for c in symbol_candidates:
             c_side = c.get("side")
-            is_ct = bool(macro_bias and c_side != macro_bias)
             c_pat = str(c.get("pattern", "")).upper()
             is_continuation = ("CONTINUATION" in c_pat or c_pat in ["D2", "TREND_CONTINUATION"])
+            conf_type = str(c.get("spot_confluence_type", "")).upper()
+
+            # Institutional Reversal: Spot Intraday VWAP Reclaim/Reject proves institutional presence at the turn
+            is_vwap_reclaim = (c_side == "CE" and conf_type == "SPOT_VWAP_RECLAIM") or (c_side == "PE" and conf_type == "SPOT_VWAP_REJECT")
+            is_institutional_reversal = (not is_continuation) and is_vwap_reclaim
+
+            # Pure counter-trend trade without institutional VWAP reclaim
+            is_ct = bool(macro_bias and c_side != macro_bias) and (not is_institutional_reversal)
 
             if is_ct and is_continuation:
                 logging.info(f"[TREND_GUARD] Suppressed {symbol} {c.get('contract')}: Trend continuation ({c.get('pattern')}) cannot trade counter to MacroBias ({macro_bias}).")
                 continue
 
-            # B. Counter-Trend Reversals (D1):
+            # B. Counter-Trend Reversals (D1 without VWAP reclaim):
             # - If Strict Gate is ON: allow ONLY pristine Tier 1 Gold Reversals, reject weaker setups.
             # - If Strict Gate is OFF: allow Tier 1 and Tier 2 Core Reversals (R:R >= 1.5), reject noisy Tier 3 setups.
             if is_ct:
@@ -1896,18 +1903,27 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                     logging.info(f"[COUNTER_TREND_GATE] Suppressed {symbol} counter-trend candidate {c.get('contract')} (Tier 3 Momentum) against {macro_bias} trend.")
                     continue
 
-                # Apply Counter-Trend Conviction Scaling:
+                # Apply Counter-Trend Conviction Scaling ONLY for pure unconfirmed counter-trend trades:
                 c["is_counter_trend"] = True
                 raw_pos_size = int(c.get("position_size", 1))
                 c["position_size"] = max(1, raw_pos_size // 2)
                 c["t2"] = None
                 c["t3"] = None
                 c["target_mode"] = "T1_SNAP_EXIT_COUNTER_TREND"
+            elif is_institutional_reversal:
+                logging.info(f"[INSTITUTIONAL_REVERSAL_CONFIRMED] {symbol} {c.get('contract')}: Confirmed D1 Reversal with {conf_type} (Tier {c.get('tier')}, RR {c.get('rr')}). Full allocation approved.")
 
             trend_governed_candidates.append(c)
 
+        # Priority Pool: 🥇 Tier 1 Gold candidates (including institutional VWAP reversals) get highest priority
+        t1_candidates = [c for c in trend_governed_candidates if int(c.get("tier", 2)) == 1]
         preferred_candidates = [c for c in trend_governed_candidates if c.get("side") == macro_bias] if macro_bias else []
-        pool = preferred_candidates if preferred_candidates else trend_governed_candidates
+        if t1_candidates:
+            pool = t1_candidates
+        elif preferred_candidates:
+            pool = preferred_candidates
+        else:
+            pool = trend_governed_candidates
 
         if not pool:
             return trades

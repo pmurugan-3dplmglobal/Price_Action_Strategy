@@ -163,7 +163,9 @@ from position_monitor import (
     _nfo_cache_mtime,
     _EXECUTED_EXITS_MTIME,
     _CONTRACT_EXPIRY_RE,
-    _load_program_config_file
+    _load_program_config_file,
+    get_exchange_freeze_limit,
+    slice_quantity_for_freeze
 )
 
 # ── display_writer ──

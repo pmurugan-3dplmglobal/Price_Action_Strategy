@@ -46,7 +46,8 @@ from trading_core import (
     INDEX_REGISTRY,
     match_registry_symbol,
     get_option_lot_size,
-    clear_executed_exit
+    clear_executed_exit,
+    slice_quantity_for_freeze
 )
 
 LIVE_MARKET_DEPLOYMENT = True
@@ -253,22 +254,30 @@ def execute_index_entry(kite, pos):
             logging.warning(f"[LIQUIDITY_GATE] Entry rejected for {pos['contract']}: {liq_msg}")
             return False
 
-        oid = kite.place_order(
-            variety=kite.VARIETY_REGULAR, tradingsymbol=pos["contract"],
-            exchange=target_exch, transaction_type=kite.TRANSACTION_TYPE_BUY,
-            quantity=lot_sz * pos["position_size"], order_type=kite.ORDER_TYPE_LIMIT,
-            price=price, product=kite.PRODUCT_NRML
-        )
-        pos["order_id"] = str(oid)
+        total_qty = lot_sz * pos["position_size"]
+        qty_slices = slice_quantity_for_freeze(pos["contract"], total_qty)
+        placed_oids = []
+        for s_qty in qty_slices:
+            oid = kite.place_order(
+                variety=kite.VARIETY_REGULAR, tradingsymbol=pos["contract"],
+                exchange=target_exch, transaction_type=kite.TRANSACTION_TYPE_BUY,
+                quantity=s_qty, order_type=kite.ORDER_TYPE_LIMIT,
+                price=price, product=kite.PRODUCT_NRML
+            )
+            placed_oids.append(str(oid))
+        primary_oid = placed_oids[0]
+        pos["order_id"] = primary_oid
+        pos["order_ids"] = placed_oids
         pos["order_status"] = "OPEN"
         sym = pos.get("symbol")
         if sym and sym in ACTIVE_POSITIONS:
             with position_lock:
-                ACTIVE_POSITIONS[sym]["order_id"] = str(oid)
+                ACTIVE_POSITIONS[sym]["order_id"] = primary_oid
+                ACTIVE_POSITIONS[sym]["order_ids"] = placed_oids
                 ACTIVE_POSITIONS[sym]["order_status"] = "OPEN"
         if pos.get("trade_id"):
-            trade_db.update_trade(pos["trade_id"], {"order_id": str(oid), "order_status": "OPEN"})
-        logging.info(f"Index Entry BUY LIMIT placed for {pos['contract']} Qty={lot_sz * pos['position_size']} @ {price} (Order ID: {oid})")
+            trade_db.update_trade(pos["trade_id"], {"order_id": primary_oid, "order_status": "OPEN"})
+        logging.info(f"Index Entry BUY LIMIT placed for {pos['contract']} TotalQty={total_qty} @ {price} (Orders: {placed_oids})")
         return True
     except Exception as e:
         logging.error(f"Entry failed for {pos['contract']}: {e}")

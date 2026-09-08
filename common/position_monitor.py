@@ -442,6 +442,34 @@ def is_new_entry_allowed(live_execution_active=True, is_option=False):
     start_time = datetime_time(9, 16) if is_option else datetime_time(9, 15)
     return start_time <= t_now <= datetime_time(15, 20)
 
+def get_exchange_freeze_limit(symbol_or_contract: str) -> int:
+    """Returns the NSE/BSE exchange freeze limit for options and index contracts."""
+    s = str(symbol_or_contract).upper()
+    if "BANKNIFTY" in s:
+        return 900
+    elif "FINNIFTY" in s:
+        return 1800
+    elif "MIDCPNIFTY" in s:
+        return 2800
+    elif "NIFTY" in s:
+        return 1755
+    elif "SENSEX" in s or "BANKEX" in s:
+        return 1000
+    return 1755
+
+def slice_quantity_for_freeze(symbol_or_contract: str, total_qty: int) -> list:
+    """Slices order quantity into chunks <= exchange freeze limit to prevent RMS rejections."""
+    limit = get_exchange_freeze_limit(symbol_or_contract)
+    if total_qty <= limit or limit <= 0:
+        return [total_qty]
+    slices = []
+    rem = total_qty
+    while rem > 0:
+        chunk = min(rem, limit)
+        slices.append(chunk)
+        rem -= chunk
+    return slices
+
 def close_position(kite, pos, live_market=True, product=None, qty_override=None, live=None, product_type=None):
     if live is not None:
         live_market = live
@@ -633,16 +661,21 @@ def close_position(kite, pos, live_market=True, product=None, qty_override=None,
         logging.info(f"[BACKTEST EXIT] {contract}")
         return {"success": True, "reason": "BACKTEST"}
 
+    qty_slices = slice_quantity_for_freeze(contract, qty)
     try:
-        oid = kite.place_order(
-            variety=kite.VARIETY_REGULAR, tradingsymbol=contract,
-            exchange=target_exch, transaction_type=kite.TRANSACTION_TYPE_SELL,
-            quantity=qty, order_type=kite.ORDER_TYPE_LIMIT,
-            price=price, product=target_product
-        )
+        placed_oids = []
+        for s_qty in qty_slices:
+            s_oid = kite.place_order(
+                variety=kite.VARIETY_REGULAR, tradingsymbol=contract,
+                exchange=target_exch, transaction_type=kite.TRANSACTION_TYPE_SELL,
+                quantity=s_qty, order_type=kite.ORDER_TYPE_LIMIT,
+                price=price, product=target_product
+            )
+            placed_oids.append(str(s_oid))
+        oid = placed_oids[0]
         if not qty_override:
-            save_executed_exit(contract, oid, {"type": "LIMIT", "price": price, "qty": qty})
-        logging.info(f"Closed {contract} with Marketable LIMIT order price {price} on exchange {target_exch} (Order ID: {oid}, Qty: {qty})")
+            save_executed_exit(contract, oid, {"type": "LIMIT", "price": price, "qty": qty, "order_ids": placed_oids})
+        logging.info(f"Closed {contract} with Marketable LIMIT order price {price} on exchange {target_exch} (Orders: {placed_oids}, Total Qty: {qty})")
 
         # Spread Exit: If 2-leg Debit Spread, cover the short leg concurrently
         if pos.get("position_type") == "option_spread" and pos.get("leg2_contract"):
@@ -665,43 +698,55 @@ def close_position(kite, pos, live_market=True, product=None, qty_override=None,
 
             if not leg2_already_closed:
                 try:
-                    oid_leg2 = kite.place_order(
-                        variety=kite.VARIETY_REGULAR, tradingsymbol=leg2_c,
-                        exchange=target_exch, transaction_type=kite.TRANSACTION_TYPE_BUY,
-                        quantity=leg2_qty, order_type=kite.ORDER_TYPE_MARKET,
-                        product=target_product
-                    )
-                    save_executed_exit(leg2_c, oid_leg2, {"type": "SPREAD_LEG2_EXIT", "qty": leg2_qty})
-                    logging.info(f"[SPREAD EXIT] Covered short leg {leg2_c} (Order ID: {oid_leg2}, Qty: {leg2_qty})")
+                    leg2_slices = slice_quantity_for_freeze(leg2_c, leg2_qty)
+                    leg2_oids = []
+                    for l2_s_qty in leg2_slices:
+                        oid_leg2 = kite.place_order(
+                            variety=kite.VARIETY_REGULAR, tradingsymbol=leg2_c,
+                            exchange=target_exch, transaction_type=kite.TRANSACTION_TYPE_BUY,
+                            quantity=l2_s_qty, order_type=kite.ORDER_TYPE_MARKET,
+                            product=target_product
+                        )
+                        leg2_oids.append(str(oid_leg2))
+                    save_executed_exit(leg2_c, leg2_oids[0], {"type": "SPREAD_LEG2_EXIT", "qty": leg2_qty, "order_ids": leg2_oids})
+                    logging.info(f"[SPREAD EXIT] Covered short leg {leg2_c} (Orders: {leg2_oids}, Qty: {leg2_qty})")
                 except Exception as leg2_err:
                     logging.error(f"[SPREAD EXIT ERROR] Failed to exit short leg {leg2_c}: {leg2_err}")
-        return {"success": True, "order_id": str(oid), "type": "LIMIT", "price": price, "qty": qty}
+        return {"success": True, "order_id": str(oid), "type": "LIMIT", "price": price, "qty": qty, "order_ids": placed_oids}
     except Exception as primary_err:
         logging.warning(f"Primary LIMIT exit with {target_product} on {target_exch} failed for {contract}: {primary_err}. Retrying with aggressive limit fallback...")
         try:
             fallback_price = max(0.05, round(round((ref_price * 0.98) / 0.05) * 0.05, 2))
-            oid = kite.place_order(
-                variety=kite.VARIETY_REGULAR, tradingsymbol=contract,
-                exchange=target_exch, transaction_type=kite.TRANSACTION_TYPE_SELL,
-                quantity=qty, order_type=kite.ORDER_TYPE_LIMIT,
-                price=fallback_price, product=target_product
-            )
-            if not qty_override:
-                save_executed_exit(contract, oid, {"type": "LIMIT_FALLBACK", "price": fallback_price, "qty": qty})
-            logging.info(f"Fallback Marketable LIMIT exit SUCCESS for {contract} on exchange {target_exch} at price {fallback_price} with product {target_product}")
-            return {"success": True, "order_id": str(oid), "type": "LIMIT_FALLBACK", "price": fallback_price, "qty": qty}
-        except Exception as m_err:
-            try:
-                oid = kite.place_order(
+            placed_fallback_oids = []
+            for s_qty in qty_slices:
+                s_oid = kite.place_order(
                     variety=kite.VARIETY_REGULAR, tradingsymbol=contract,
                     exchange=target_exch, transaction_type=kite.TRANSACTION_TYPE_SELL,
-                    quantity=qty, order_type=kite.ORDER_TYPE_MARKET,
-                    product=target_product
+                    quantity=s_qty, order_type=kite.ORDER_TYPE_LIMIT,
+                    price=fallback_price, product=target_product
                 )
+                placed_fallback_oids.append(str(s_oid))
+            oid = placed_fallback_oids[0]
+            if not qty_override:
+                save_executed_exit(contract, oid, {"type": "LIMIT_FALLBACK", "price": fallback_price, "qty": qty, "order_ids": placed_fallback_oids})
+            logging.info(f"Fallback Marketable LIMIT exit SUCCESS for {contract} on exchange {target_exch} at price {fallback_price} (Orders: {placed_fallback_oids})")
+            return {"success": True, "order_id": str(oid), "type": "LIMIT_FALLBACK", "price": fallback_price, "qty": qty, "order_ids": placed_fallback_oids}
+        except Exception as m_err:
+            try:
+                placed_m_oids = []
+                for s_qty in qty_slices:
+                    s_oid = kite.place_order(
+                        variety=kite.VARIETY_REGULAR, tradingsymbol=contract,
+                        exchange=target_exch, transaction_type=kite.TRANSACTION_TYPE_SELL,
+                        quantity=s_qty, order_type=kite.ORDER_TYPE_MARKET,
+                        product=target_product
+                    )
+                    placed_m_oids.append(str(s_oid))
+                oid = placed_m_oids[0]
                 if not qty_override:
-                    save_executed_exit(contract, oid, {"type": "MARKET_EMERGENCY", "qty": qty})
-                logging.info(f"Emergency MARKET exit SUCCESS for {contract} on exchange {target_exch} with product {target_product}")
-                return {"success": True, "order_id": str(oid), "type": "MARKET_EMERGENCY", "qty": qty}
+                    save_executed_exit(contract, oid, {"type": "MARKET_EMERGENCY", "qty": qty, "order_ids": placed_m_oids})
+                logging.info(f"Emergency MARKET exit SUCCESS for {contract} on exchange {target_exch} (Orders: {placed_m_oids})")
+                return {"success": True, "order_id": str(oid), "type": "MARKET_EMERGENCY", "qty": qty, "order_ids": placed_m_oids}
             except Exception as m_final_err:
                 save_executed_exit(contract, "REJECTED_ERROR", {"error": str(m_final_err)})
                 logging.error(f"All exit attempts failed for {contract}: primary={primary_err}, alt={m_err}, market={m_final_err}")

@@ -731,7 +731,9 @@ def refresh_data(single_run=False):
 
                                     if is_below_buffer and not is_deep_break and token_id and _kite_session:
                                         try:
-                                            df_hist = fetch_and_resample_candles(_kite_session, token_id, (dt.now() - timedelta(days=2)).strftime("%Y-%m-%d"), dt.now().strftime("%Y-%m-%d"), "15minute")
+                                            # Timeframe Parity: evaluate completed candle matching trade's entry timeframe
+                                            pos_tf = scan_sl.get("timeframe") or scan_sl.get("entry_tf") or "30minute"
+                                            df_hist = fetch_and_resample_candles(_kite_session, token_id, (dt.now() - timedelta(days=2)).strftime("%Y-%m-%d"), dt.now().strftime("%Y-%m-%d"), pos_tf)
                                             if len(df_hist) >= 2:
                                                 prev_row = df_hist.iloc[-2]
                                                 prev_date_str = str(prev_row.get("date", ""))
