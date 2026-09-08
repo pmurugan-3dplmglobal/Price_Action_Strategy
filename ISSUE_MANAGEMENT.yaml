@@ -10,6 +10,41 @@ meta:
     recent_archived_batch: [FEATURE-031, FEATURE-030, FEATURE-029, ISSUE-084, ISSUE-083, ISSUE-082, ISSUE-081, ISSUE-080, FEATURE-036, FEATURE-035, FEATURE-034, FEATURE-033, ISSUE-054]
     key_archived_families: [ALGO_AUDIT_CVE, QUANT_ENHANCEMENTS, RADAR_LIFECYCLE, VCP_METRICS, SCANNER_DISCOVERY, SECURITY_CONFIG, ZERO_REGRESSION_AUDIT]
 issues:
+- id: FEATURE-037
+  title: Global Pause Button for SL Exit Monitor (Common for Stock & Option Engines, Targets Active)
+  severity: HIGH
+  category: Position Monitor, Dashboard Control, Failsafe Monitor, UI Enhancement
+  family: OPERATIONAL_CONTROLS
+  date_reported: '2026-09-08'
+  symptom: |
+    1. During high-volatility sessions or recovery rallies, automated SL monitors (CANDLE_CLOSE_SL, EMERGENCY_HARD_SL, DIRECT_LTP_SL_FALLBACK) exited profitable or recovering positions (e.g. NIFTY 23700 CE exited at Rs 36.10 on 09:45-10:00 historical candle before shooting to Rs 60+).
+    2. Users needed an immediate manual killswitch to pause all stop-loss exits across Stock and Option engines without turning off the system, while ensuring target profit orders (T1, T2, T3) continue to fire automatically.
+  root_cause: |
+    1. No global runtime toggle existed to pause SL exits while leaving profit target monitoring active.
+    2. In Trade_Option/app_option_Trade.py, the failsafe_monitor checked historical candle closes without verifying if the candle timestamp preceded trade entry_time, allowing pre-entry morning dips to trigger false retroactive CANDLE_CLOSE_SL exits on newly entered trades.
+  affected_files:
+  - input/program_config.json
+  - common/position_monitor.py
+  - Trade_Option/app_option_Trade.py
+  - Trade_Option/templates/index.html
+  - Trade_Stock/app_Stock_Trade.py
+  - Trade_Stock/templates/index.html
+  fix_applied: |
+    1. Top-Level Global Config (`pause_sl_monitor`):
+       - Added `pause_sl_monitor: false` in `input/program_config.json`, shared across both Stock and Option engines.
+    2. Engine & Position Monitor Gates:
+       - In `common/position_monitor.py`: Loaded `pause_sl_monitor` on every loop. If True, suppresses `sl_hit` and emergency outage exits while allowing target checks (T1, T2, T3) to execute normally.
+       - In `Trade_Option/app_option_Trade.py` & `Trade_Stock/app_Stock_Trade.py`: Added `pause_sl_monitor` check in background `failsafe_monitor` loops to skip SL exits when paused.
+       - Fixed `app_option_Trade.py` failsafe candle date verification to ensure previous candle formed AFTER trade `entry_time`.
+    3. APIs & UI Controls:
+       - Added `/api/toggle-sl-pause` (GET/POST) in both `Trade_Option/app_option_Trade.py` and `Trade_Stock/app_Stock_Trade.py`.
+       - Added interactive `btn-sl-pause` button in Positions header in both dashboards. Visual cue: Dark gray `⏸ SL Monitor` when active; High-contrast Red `⏸ SL PAUSED` when paused.
+       - Integrated status polling via `/api/status` so state stays synchronized across all connected browsers.
+  verification: |
+    - Unit test `test_pause_sl_monitor.py` passed: verified SL exits suppressed while target exits execute.
+    - Full regression test suite passed with 0 template JS compiler or syntax errors.
+  status: RESOLVED
+
 - id: ISSUE-096
   title: Stale Historical Trade SL Override & Outlier Bypass Causing Premature Broker Position Exit
   severity: CRITICAL

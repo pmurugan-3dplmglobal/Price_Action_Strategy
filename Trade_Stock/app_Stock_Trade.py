@@ -761,12 +761,17 @@ def refresh_data(single_run=False):
                                     try:
                                         df_hist = fetch_and_resample_candles(_kite_session, token_id, (dt.now() - timedelta(days=2)).strftime("%Y-%m-%d"), dt.now().strftime("%Y-%m-%d"), "15minute")
                                         if len(df_hist) >= 2:
-                                            prev_close_val = float(df_hist.iloc[-2]["close"])
-                                            if prev_close_val > 0:
-                                                if is_short and prev_close_val >= sl_val:
-                                                    prev_closed_breach = True
-                                                elif not is_short and prev_close_val <= sl_val:
-                                                    prev_closed_breach = True
+                                            prev_row = df_hist.iloc[-2]
+                                            prev_date_str = str(prev_row.get("date", ""))
+                                            from position_monitor import sanitize_entry_time, is_candle_before_entry
+                                            entry_time_str = sanitize_entry_time(scan_sl)
+                                            if not is_candle_before_entry(prev_date_str, entry_time_str):
+                                                prev_close_val = float(prev_row["close"])
+                                                if prev_close_val > 0:
+                                                    if is_short and prev_close_val >= sl_val:
+                                                        prev_closed_breach = True
+                                                    elif not is_short and prev_close_val <= sl_val:
+                                                        prev_closed_breach = True
                                     except Exception:
                                         pass
 
@@ -1634,12 +1639,22 @@ def api_update_position():
         if not matched:
             contract = symbol
             exchange = "NSE"
+            matched_kp = None
             for kp in cached_data.get("kite_positions", []):
                 if _is_match(kp.get("symbol"), kp.get("contract")):
                     contract = kp.get("contract", symbol)
                     exchange = kp.get("exchange", "NSE")
+                    matched_kp = kp
                     break
             is_stock = exchange == "NSE"
+            effective_entry = float(vals.get("entry_spot") or 0.0)
+            if effective_entry <= 0 and matched_kp:
+                effective_entry = float(matched_kp.get("buy_price") or matched_kp.get("average_price") or matched_kp.get("last_price") or 0.0)
+            if effective_entry > 0:
+                vals["entry_spot"] = effective_entry
+                vals["entry_price"] = effective_entry
+            if not vals.get("entry_time"):
+                vals["entry_time"] = dt.now().isoformat()
             trade_data = {"contract": contract, "entry_spot": vals.get("entry_spot", 0), "position_type": "stock" if is_stock else "option"}
             trade_data.update(vals)
             db_symbol = resolve_underlying(symbol or contract, engine)

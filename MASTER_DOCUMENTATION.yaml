@@ -20,6 +20,7 @@ meta:
     - Datta & Minervini Law (Risk Discipline, Outcome Bias Immunity, & Objective D2 Re-Entry Mandate)
     - Automated Stale / Unfilled Limit Order Manager & TTL Invalidation Watcher (reconcile_and_cancel_stale_orders)
     - Broker Position Recovery SL Sanitization & Stale Historical Override Invariant (ISSUE-096)
+    - Global Pause Button for SL Exit Monitor & Failsafe Candle Entry Invariant (FEATURE-037)
 
 architecture:
   diagram: |

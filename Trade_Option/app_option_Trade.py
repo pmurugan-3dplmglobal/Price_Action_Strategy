@@ -1788,12 +1788,22 @@ def api_update_position():
         if not matched:
             contract = symbol
             exchange = "NSE"
+            matched_kp = None
             for kp in cached_data.get("kite_positions", []):
                 if _is_match(kp.get("symbol"), kp.get("contract")):
                     contract = kp.get("contract", symbol)
                     exchange = kp.get("exchange", "NSE")
+                    matched_kp = kp
                     break
             is_stock = exchange == "NSE"
+            effective_entry = float(vals.get("entry_spot") or 0.0)
+            if effective_entry <= 0 and matched_kp:
+                effective_entry = float(matched_kp.get("buy_price") or matched_kp.get("average_price") or matched_kp.get("last_price") or 0.0)
+            if effective_entry > 0:
+                vals["entry_spot"] = effective_entry
+                vals["entry_price"] = effective_entry
+            if not vals.get("entry_time"):
+                vals["entry_time"] = dt.now().isoformat()
             trade_data = {"contract": contract, "entry_spot": vals.get("entry_spot", 0), "position_type": "stock" if is_stock else "option"}
             trade_data.update(vals)
             db_symbol = resolve_underlying(symbol or contract, engine)
