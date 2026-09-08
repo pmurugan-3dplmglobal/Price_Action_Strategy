@@ -667,10 +667,12 @@ def run_fast_radar_check(kite):
             if df_latest is not None and not df_latest.empty:
                 last_candle = df_latest.iloc[-1]
                 candle_date_str = str(last_candle.get('date', ''))
+                c_dt = get_ist_now(naive=True)
                 try:
-                    c_dt = pd.to_datetime(candle_date_str)
-                    if hasattr(c_dt, 'tz') and c_dt.tz is not None:
-                        c_dt = c_dt.tz_convert('Asia/Kolkata').tz_localize(None)
+                    parsed_dt = pd.to_datetime(candle_date_str)
+                    if hasattr(parsed_dt, 'tz') and parsed_dt.tz is not None:
+                        parsed_dt = parsed_dt.tz_convert('Asia/Kolkata').tz_localize(None)
+                    c_dt = parsed_dt
                     if c_dt.date() < get_ist_now(naive=True).date():
                         # Historical candle from prior session cannot trigger a breakout today
                         continue
@@ -684,10 +686,39 @@ def run_fast_radar_check(kite):
                     logging.info(f"[RADAR EVICT] {sym} breached SL floor ({c_now} <= {sl})")
                     pattern_funnel.evict_item("nifty50", item)
                     continue
+
                 if bm > 0 and c_now >= bm:
-                    logging.info(f"⚡ [RADAR TRIGGER] {sym} ({item.get('contract')}) Close {c_now} >= Benchmark {bm}!")
+                    # Check 1: Timeframe Maturity Guard (80% Near-Close or Completed Bar)
+                    from timeframe_utils import is_live_candle_near_close, get_tf_minutes
+                    item_tf = item.get("timeframe", TIMEFRAME_ENTRY)
+                    tf_mins = get_tf_minutes(item_tf)
+                    now_ist = get_ist_now(naive=True)
+                    is_closed_bar = (now_ist - c_dt).total_seconds() >= (tf_mins * 60.0)
+                    is_80pct_mature = is_live_candle_near_close(candle_date_str, item_tf, completion_pct=0.80)
+
+                    if not (is_80pct_mature or is_closed_bar):
+                        logging.debug(f"[RADAR COILING] {sym} ({item.get('contract')}) at {c_now} >= Benchmark {bm}, awaiting 80% candle maturity (Minute >= {int(tf_mins*0.8)}).")
+                        continue
+
+                    # Check 2: Option VWAP Support & Overpay Guard
+                    from swing_detection import calculate_option_vwap
+                    vwap_info = calculate_option_vwap(df_latest)
+                    opt_vwap = float(vwap_info.get("vwap") or 0.0)
+                    stretch_pct = float(vwap_info.get("stretch_pct") or 0.0)
+
+                    if opt_vwap > 0 and c_now < opt_vwap:
+                        logging.debug(f"[RADAR VWAP GATE] {sym} ({item.get('contract')}) at {c_now} >= Benchmark {bm}, but lacks VWAP support (LTP {c_now} < VWAP {opt_vwap}).")
+                        continue
+
+                    if stretch_pct > 15.0:
+                        logging.info(f"[RADAR OVERPAY GUARD] {sym} ({item.get('contract')}) stretched {stretch_pct:.1f}% > 15% above VWAP ({opt_vwap}). Skipping entry.")
+                        continue
+
+                    trigger_type = "80%_EARLY_D" if (is_80pct_mature and not is_closed_bar) else "COMPLETED_BAR_D"
+                    logging.info(f"⚡ [RADAR TRIGGER: {trigger_type}] {sym} ({item.get('contract')}) Close {c_now} >= Benchmark {bm} (VWAP={opt_vwap:.2f}, Stretch={stretch_pct:.1f}%)!")
                     item["entry_spot"] = c_now
                     item["entry_time"] = str(last_candle.get('date', dt.now().isoformat()))
+                    item["trigger_type"] = trigger_type
                     triggered.append(item)
                     pattern_funnel.evict_item("nifty50", item)
         except Exception as radar_err:
