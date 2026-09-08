@@ -22,6 +22,7 @@ meta:
     - Broker Position Recovery SL Sanitization & Stale Historical Override Invariant (ISSUE-096)
     - Global Pause Button for SL Exit Monitor & Failsafe Candle Entry Invariant (FEATURE-037)
     - Institutional D1 Reversal vs D2 Continuation Spot Gating, Timeframe SL Parity & Exchange Freeze Slicing (FEATURE-038)
+    - Pure Price Action & Spot Intraday VWAP Macro Regime Governance (Decommissioning 13 EMA Whipsaws) (FEATURE-039)
 
 architecture:
   diagram: |

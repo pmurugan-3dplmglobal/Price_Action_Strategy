@@ -126,11 +126,16 @@ def evaluate_spot_confluence(side: str, is_d2: bool, current_spot: float, spot_v
             return False, "NONE"
         else:
             # D1 Reversal: Bottom reversal is naturally below lagging EMAs.
-            # Institutional confluence is confirmed when Spot reclaims/holds intraday VWAP
+            # Institutional confluence is confirmed when Spot reclaims/holds intraday VWAP,
+            # holds above structural support floor (spot_sl) when VWAP is active,
             # or shows early EMA recovery when VWAP is unavailable.
-            if spot_vwap > 0 and current_spot >= spot_vwap:
-                return True, "SPOT_VWAP_RECLAIM"
-            elif spot_vwap <= 0 and spot_ema_trend:
+            if spot_vwap > 0:
+                if current_spot >= spot_vwap:
+                    return True, "SPOT_VWAP_RECLAIM"
+                elif spot_sl > 0 and current_spot >= spot_sl:
+                    return True, "SPOT_SUPPORT_HOLD"
+                return False, "NONE"
+            elif spot_ema_trend:
                 return True, "SPOT_EMA_TREND"
             return False, "NONE"
     else:  # PE
@@ -141,11 +146,16 @@ def evaluate_spot_confluence(side: str, is_d2: bool, current_spot: float, spot_v
             return False, "NONE"
         else:
             # D1 Reversal: Top reversal is naturally above lagging EMAs.
-            # Institutional confluence confirmed when Spot rejects below intraday VWAP
+            # Institutional confluence confirmed when Spot rejects below intraday VWAP,
+            # holds below structural resistance ceiling (spot_sl) when VWAP is active,
             # or shows EMA breakdown when VWAP is unavailable.
-            if spot_vwap > 0 and current_spot <= spot_vwap:
-                return True, "SPOT_VWAP_REJECT"
-            elif spot_vwap <= 0 and spot_ema_trend:
+            if spot_vwap > 0:
+                if current_spot <= spot_vwap:
+                    return True, "SPOT_VWAP_REJECT"
+                elif spot_sl > 0 and current_spot <= spot_sl:
+                    return True, "SPOT_RESISTANCE_HOLD"
+                return False, "NONE"
+            elif spot_ema_trend:
                 return True, "SPOT_EMA_TREND"
             return False, "NONE"
 
@@ -1389,18 +1399,6 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
             logging.warning(f"Spot data failed for {symbol}: {e}")
             return []
 
-    # Layer 1: Spot Macro Trend Calculation (13 EMA on Anchor / Entry Timeframe)
-    try:
-        if df_spot is None or len(df_spot) < 13:
-            df_spot = safe_kite_call(fetch_and_resample_candles, kite, config["token"], from_anchor, to_anchor, timeframe_anchor)
-        if df_spot is not None and len(df_spot) >= 13:
-            ema_13 = float(df_spot['close'].ewm(span=13, adjust=False).mean().iloc[-1])
-            spot_close = float(df_spot.iloc[-1]['close'])
-            macro_bias = "CE" if spot_close >= ema_13 else "PE"
-            logging.debug(f"[MACRO_TREND] {symbol}: Spot={spot_close:.2f} vs EMA13={ema_13:.2f} -> MacroBias={macro_bias}")
-    except Exception as e:
-        logging.debug(f"Spot EMA calculation error for {symbol}: {e}")
-
     # Calculate Spot Intraday VWAP (Volume-Weighted Average Price)
     spot_vwap = 0.0
     if df_spot is not None and not df_spot.empty and 'volume' in df_spot.columns:
@@ -1420,22 +1418,49 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
         except Exception as v_err:
             logging.debug(f"Spot VWAP calculation error for {symbol}: {v_err}")
 
-    # Spot-Relative Confluence Mapping (Resolves 'Option Chart Illusion')
-    mapped_spot_tf = get_mapped_spot_timeframe(timeframe_entry)
+    # Layer 1: Pure Price Action & Spot Intraday VWAP Macro Regime (Replaces lagging 13 EMA)
+    if spot_vwap > 0 and current_spot > 0:
+        macro_bias = "CE" if current_spot >= spot_vwap else "PE"
+        logging.debug(f"[MACRO_REGIME_VWAP] {symbol}: Spot={current_spot:.2f} vs VWAP={spot_vwap:.2f} -> MacroBias={macro_bias}")
+    else:
+        # Fallback if volume/VWAP unavailable (e.g. synthetic test fixtures)
+        try:
+            if df_spot is None or len(df_spot) < 13:
+                df_spot = safe_kite_call(fetch_and_resample_candles, kite, config["token"], from_anchor, to_anchor, timeframe_anchor)
+            if df_spot is not None and len(df_spot) >= 1:
+                spot_close = float(df_spot.iloc[-1]['close'])
+                if len(df_spot) >= 13:
+                    ema_13 = float(df_spot['close'].ewm(span=13, adjust=False).mean().iloc[-1])
+                    macro_bias = "CE" if spot_close >= ema_13 else "PE"
+                else:
+                    macro_bias = "CE" if spot_close >= float(df_spot.iloc[0]['open']) else "PE"
+                logging.debug(f"[MACRO_REGIME_FALLBACK] {symbol}: Spot={spot_close:.2f} -> MacroBias={macro_bias}")
+        except Exception as e:
+            logging.debug(f"Spot fallback calculation error for {symbol}: {e}")
+
+    # Spot Intraday Regime Alignment (Pure Price Action & VWAP)
+    # If Spot Intraday VWAP is active, use institutional volume benchmark directly
+    # and eliminate redundant multi-day candle queries
     spot_ema_bull = False
     spot_ema_bear = False
-    try:
-        df_spot_mapped = safe_kite_call(fetch_and_resample_candles, kite, config["token"], from_anchor, to_anchor, mapped_spot_tf)
-        if df_spot_mapped is not None and len(df_spot_mapped) >= 13:
-            ema_mapped = float(df_spot_mapped['close'].ewm(span=13, adjust=False).mean().iloc[-1])
-            last_mapped_close = float(df_spot_mapped.iloc[-1]['close'])
-            if last_mapped_close >= ema_mapped:
-                spot_ema_bull = True
-            if last_mapped_close <= ema_mapped:
-                spot_ema_bear = True
-            logging.debug(f"[SPOT_CONFLUENCE] {symbol}: Spot {mapped_spot_tf} Close={last_mapped_close:.2f} vs EMA13={ema_mapped:.2f} (Bull={spot_ema_bull}, Bear={spot_ema_bear}) | Spot VWAP={spot_vwap:.2f}")
-    except Exception as e:
-        logging.debug(f"Spot mapped confluence error for {symbol}: {e}")
+    if spot_vwap > 0 and current_spot > 0:
+        spot_ema_bull = (current_spot >= spot_vwap)
+        spot_ema_bear = (current_spot <= spot_vwap)
+        logging.debug(f"[SPOT_VWAP_CONFLUENCE] {symbol}: Spot={current_spot:.2f} vs VWAP={spot_vwap:.2f} (Bull={spot_ema_bull}, Bear={spot_ema_bear})")
+    else:
+        mapped_spot_tf = get_mapped_spot_timeframe(timeframe_entry)
+        try:
+            df_spot_mapped = safe_kite_call(fetch_and_resample_candles, kite, config["token"], from_anchor, to_anchor, mapped_spot_tf)
+            if df_spot_mapped is not None and len(df_spot_mapped) >= 13:
+                ema_mapped = float(df_spot_mapped['close'].ewm(span=13, adjust=False).mean().iloc[-1])
+                last_mapped_close = float(df_spot_mapped.iloc[-1]['close'])
+                if last_mapped_close >= ema_mapped:
+                    spot_ema_bull = True
+                if last_mapped_close <= ema_mapped:
+                    spot_ema_bear = True
+                logging.debug(f"[SPOT_CONFLUENCE] {symbol}: Spot {mapped_spot_tf} Close={last_mapped_close:.2f} vs EMA13={ema_mapped:.2f} (Bull={spot_ema_bull}, Bear={spot_ema_bear}) | Spot VWAP={spot_vwap:.2f}")
+        except Exception as e:
+            logging.debug(f"Spot mapped confluence error for {symbol}: {e}")
 
     # Layer 3: Mutual Exclusivity Guard — Check existing active position on this symbol
     existing_active_side = None
