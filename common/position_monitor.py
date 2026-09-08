@@ -1128,6 +1128,7 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
     emergency_buffer_pct = float(cfg.get("emergency_buffer_pct", 0.15))
     failsafe_start_str = cfg.get("failsafe_start_time", "09:50")
     pause_morning_circuit = cfg.get("pause_morning_circuit_breaker", True)
+    pause_sl_monitor = bool(cfg.get("pause_sl_monitor", False))
     try:
         f_h, f_m = map(int, failsafe_start_str.split(":"))
         fs_start_t = datetime_time(f_h, f_m)
@@ -1238,6 +1239,9 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                         hard_max_sl = round(entry_s * (1.0 - max_loss_pct), 2)
                         is_breached = (live_ltp <= hard_max_sl) or (current_sl > 0 and live_ltp <= current_sl * 0.95)
                     if is_breached:
+                        if pause_sl_monitor:
+                            logging.info(f"[SL_PAUSE_ACTIVE] Outage emergency breach for {sym} (LTP {live_ltp:.2f}) but SL Exit Monitor is PAUSED. Skipping emergency exit.")
+                            continue
                         logging.critical(f"[CANDLE_API_OUTAGE_SHIELD] Candle fetch empty for {sym}, but live LTP {live_ltp:.2f} breached emergency threshold (Entry {entry_s:.2f}, SL {current_sl:.2f}). Executing emergency exit.")
                         if is_stock:
                             exit_res = close_stock_position(kite, pos, live, product_type)
@@ -1530,16 +1534,25 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                             cp = live_ltp
 
             # 2b) Hard Max-Loss Circuit Shield (Default 15% Cap on Entry Price for Options, 8% for Stocks)
+            # SUBORDINATE INVARIANT: The structural Anchor SL, UI Override SL, or Trailed SL (current_sl) ALWAYS takes higher precedence.
+            # A fixed 15% mathematical loss threshold must NEVER preempt a valid wider Anchor SL or a custom UI/Trailed SL.
+            # It acts solely as a last-resort safety net when no valid current_sl exists (current_sl <= 0) or when current_sl is also in breach.
             max_loss_pct = float(cfg.get("max_option_loss_pct", 15)) / 100.0 if not is_stock else 0.08
             if is_short_stock:
                 hard_max_sl_threshold = round(entry_s * (1.0 + max_loss_pct), 2) if entry_s > 0 else 0.0
-                if not sl_hit and hard_max_sl_threshold > 0 and live_ltp > 0 and live_ltp >= hard_max_sl_threshold and not is_before_failsafe and not is_outlier_entry:
+                has_active_sl = current_sl > 0 and current_sl > entry_s
+                # If an active Anchor/UI/Trailed SL exists, do NOT trigger HARD_MAX unless price is also >= current_sl
+                is_sl_eligible = (not has_active_sl) or (live_ltp >= current_sl)
+                if not sl_hit and hard_max_sl_threshold > 0 and live_ltp > 0 and live_ltp >= hard_max_sl_threshold and is_sl_eligible and not is_before_failsafe and not is_outlier_entry:
                     sl_hit = True
                     sl_reason = f"HARD_MAX_{int(max_loss_pct*100)}PCT_SL (LTP {live_ltp:.2f} >= {hard_max_sl_threshold:.2f})"
                     cp = live_ltp
             else:
                 hard_max_sl_threshold = round(entry_s * (1.0 - max_loss_pct), 2) if entry_s > 0 else 0.0
-                if not sl_hit and hard_max_sl_threshold > 0 and live_ltp > 0 and live_ltp <= hard_max_sl_threshold and not is_before_failsafe and not is_outlier_entry:
+                has_active_sl = current_sl > 0 and current_sl < entry_s
+                # If an active Anchor/UI/Trailed SL exists, do NOT trigger HARD_MAX unless price is also <= current_sl
+                is_sl_eligible = (not has_active_sl) or (live_ltp <= current_sl)
+                if not sl_hit and hard_max_sl_threshold > 0 and live_ltp > 0 and live_ltp <= hard_max_sl_threshold and is_sl_eligible and not is_before_failsafe and not is_outlier_entry:
                     sl_hit = True
                     sl_reason = f"HARD_MAX_{int(max_loss_pct*100)}PCT_SL (LTP {live_ltp:.2f} <= {hard_max_sl_threshold:.2f})"
                     cp = live_ltp
@@ -1551,9 +1564,8 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
             enable_spot_guard = cfg.get("enable_spot_sl_guard", True) if isinstance(cfg, dict) else True
             trailing_stg = int(pos.get("trailing_stage") or 0)
             is_trailed_stop = (trailing_stg >= 1) or (entry_s > 0 and current_sl >= (entry_s * 0.99))
-            is_hard_max_sl = "HARD_MAX_" in sl_reason or "CATASTROPHIC" in sl_reason
 
-            if sl_hit and not is_hard_max_sl and not is_stock and enable_spot_guard and not is_trailed_stop and kite:
+            if sl_hit and not is_stock and enable_spot_guard and not is_trailed_stop and kite:
                 spot_tok = pos.get("spot_token") or pos.get("index_token") or pos.get("underlying_token")
                 if not spot_tok:
                     from registries import STOCK_REGISTRY, INDEX_REGISTRY
@@ -1618,35 +1630,39 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                                 sl_hit = False
 
             if sl_hit:
-                logging.warning(f"SL [{sl_reason}]: {sym} at {cp} (TF: {pos_tf})")
-                if is_stock:
-                    exit_res = close_stock_position(kite, pos, live, product_type)
+                if pause_sl_monitor:
+                    logging.info(f"[SL_PAUSE_ACTIVE] SL triggered [{sl_reason}] for {sym} at {cp} (TF: {pos_tf}) but SL Exit Monitor is PAUSED. Skipping SL exit. Targets remain active.")
+                    sl_hit = False
                 else:
-                    exit_res = close_position(kite, pos, live, product_type)
-                
-                exit_ok = True
-                if live and kite:
-                    exit_ok = bool(exit_res and exit_res.get("success"))
+                    logging.warning(f"SL [{sl_reason}]: {sym} at {cp} (TF: {pos_tf})")
+                    if is_stock:
+                        exit_res = close_stock_position(kite, pos, live, product_type)
+                    else:
+                        exit_res = close_position(kite, pos, live, product_type)
+                    
+                    exit_ok = True
+                    if live and kite:
+                        exit_ok = bool(exit_res and exit_res.get("success"))
 
-                if exit_ok:
-                    entry_s = pos.get("entry_spot", 0)
-                    exit_price = live_ltp if live_ltp > 0 else (cp if cp > 0 else current_sl)
-                    pnl = ((entry_s - exit_price) / entry_s * 100) if is_short_stock else (((exit_price - entry_s) / entry_s * 100) if entry_s else 0)
-                    log_fn(sym, pos.get("pattern", ""), pos_tf, "EXIT_SL", "CLOSED",
-                           f"SL hit [{sl_reason}]: {exit_price:.2f}", pnl,
-                           entry=entry_s, sl=current_sl, target=pos.get("t1", ""),
-                           event_time=event_time)
-                    if tid:
-                        trade_db.update_trade(tid, {
-                            "status": "SL_HIT",
-                            "exit_time": dt.now().strftime("%Y-%m-%d %H:%M:%S"),
-                            "pnl_percent": round(pnl, 2),
-                            "details": f"SL hit [{sl_reason}] | TF: {pos_tf}"
-                        })
-                    to_clear.append(sym)
-                else:
-                    logging.critical(f"[EXIT_SL FAILED] Exit order for {sym} failed or pending ({exit_res}). Retaining in memory for retry.")
-                continue
+                    if exit_ok:
+                        entry_s = pos.get("entry_spot", 0)
+                        exit_price = live_ltp if live_ltp > 0 else (cp if cp > 0 else current_sl)
+                        pnl = ((entry_s - exit_price) / entry_s * 100) if is_short_stock else (((exit_price - entry_s) / entry_s * 100) if entry_s else 0)
+                        log_fn(sym, pos.get("pattern", ""), pos_tf, "EXIT_SL", "CLOSED",
+                               f"SL hit [{sl_reason}]: {exit_price:.2f}", pnl,
+                               entry=entry_s, sl=current_sl, target=pos.get("t1", ""),
+                               event_time=event_time)
+                        if tid:
+                            trade_db.update_trade(tid, {
+                                "status": "SL_HIT",
+                                "exit_time": dt.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                "pnl_percent": round(pnl, 2),
+                                "details": f"SL hit [{sl_reason}] | TF: {pos_tf}"
+                            })
+                        to_clear.append(sym)
+                    else:
+                        logging.critical(f"[EXIT_SL FAILED] Exit order for {sym} failed or pending ({exit_res}). Retaining in memory for retry.")
+                    continue
 
             t1_val = float(pos.get("t1")) if pos.get("t1") is not None and pos.get("t1") != "N/A" else None
             t2_val = float(pos.get("t2")) if pos.get("t2") is not None and pos.get("t2") != "N/A" else None

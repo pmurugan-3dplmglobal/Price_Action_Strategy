@@ -424,6 +424,39 @@
             }
         };
 
+        window.toggleSLPause = async function() {
+            try {
+                const r = await fetch('/api/toggle-sl-pause', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({})
+                });
+                const d = await r.json();
+                updateSLPauseBtn(d.pause_sl_monitor);
+                if (typeof showToast === 'function') {
+                    showToast(d.pause_sl_monitor ? 'SL Exit Monitor PAUSED (Targets remain active)' : 'SL Exit Monitor RESUMED (Active)', d.pause_sl_monitor ? 'warning' : 'success');
+                }
+            } catch(e) { console.error('Toggle SL pause error:', e); }
+        };
+
+        window.updateSLPauseBtn = function(paused) {
+            const btn = document.getElementById('btn-sl-pause');
+            if (!btn) return;
+            if (paused) {
+                btn.style.background = '#da3633';
+                btn.style.borderColor = '#f85149';
+                btn.style.color = '#fff';
+                btn.innerHTML = '⏸ SL PAUSED';
+                btn.title = 'SL Exits are currently PAUSED across Stock & Option engines. Targets (T1/T2/T3) remain active. Click to Resume.';
+            } else {
+                btn.style.background = '#21262d';
+                btn.style.borderColor = '#30363d';
+                btn.style.color = '#8b949e';
+                btn.innerHTML = '⏸ SL Monitor';
+                btn.title = 'SL Exit Monitor is ACTIVE. Click to Pause SL exits (Targets will remain active).';
+            }
+        };
+
         async function runNegationAnalysis() {
             const symbol = (document.getElementById('an-symbol') || {}).value || '';
             const entryVal = (document.getElementById('an-entry') || {}).value;
@@ -1498,6 +1531,7 @@
                     if (sw) { sw.classList.toggle('on', !!enabled); }
                     if (lb) { lb.textContent = enabled ? 'LIVE' : 'SCAN'; lb.style.color = enabled ? '#3fb950' : '#8b949e'; }
                 }
+                updateSLPauseBtn(d.config ? d.config.pause_sl_monitor : false);
                 renderReport();
                 refreshTokenStatus();
             } catch(e) { console.log('Refresh error:', e); }
@@ -2106,7 +2140,8 @@
                             <button class="pos-filter-btn" onclick="setFilter('position','completed')">Completed</button>
                             <button class="pos-filter-btn" onclick="setFilter('position','sl_hit')">SL Hit</button>
                             <button class="pos-filter-btn" onclick="setFilter('position','all')">All</button>
-                            <button class="btn-exit-all" onclick="manualExitAllPositions()" style="padding:2px 10px;background:#da3633;border:1px solid #f85149;color:#fff;border-radius:4px;font-size:10px;cursor:pointer;font-weight:600;margin-left:8px;">EXIT ALL</button>
+                            <button id="btn-sl-pause" onclick="toggleSLPause()" style="padding:2px 10px;background:#21262d;border:1px solid #30363d;color:#8b949e;border-radius:4px;font-size:10px;cursor:pointer;font-weight:600;margin-left:6px;" title="Pause SL Exits (Only Targets Active)">⏸ SL Monitor</button>
+                            <button class="btn-exit-all" onclick="manualExitAllPositions()" style="padding:2px 10px;background:#da3633;border:1px solid #f85149;color:#fff;border-radius:4px;font-size:10px;cursor:pointer;font-weight:600;margin-left:4px;">EXIT ALL</button>
                         </div>
                     </div>
                     <div id="active-positions-body"><p class="empty-state">No positions</p></div>

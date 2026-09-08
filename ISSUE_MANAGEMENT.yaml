@@ -39,7 +39,8 @@ issues:
        - Also applied the >50% entry price divergence guard to scan display data search loops.
     2. common/position_monitor.py:
        - Outlier Entry Guard: removed `and pos.get("user_edited")` constraint, tightened divergence threshold to 2.5x (250%), and added `not is_outlier_entry` to failsafe and candle-close SL blocks.
-       - Spot SL Guard: added `and not is_outlier_entry` to `is_catastrophic_opt` in both primary and failsafe paths.
+       - Hard Max-Loss Circuit Subordination: Subordinated `HARD_MAX_{pct}PCT_SL` to structural Anchor SL, UI overrides, and Trailed SL (`current_sl`). A fixed 15% mathematical loss threshold can never preempt a valid wider Anchor SL or a custom UI/Trailed SL, triggering only if no active `current_sl` exists or if `current_sl` is also breached.
+       - Spot SL Guard: Removed hard `is_hard_max_sl` exclusion from Spot SL Guard and added `and not is_outlier_entry` to `is_catastrophic_opt` in both primary and failsafe paths.
        - Broker Recovery: sanitized candidate SL against broker_average_price. If candidate SL is inverted (SL >= entry for longs or SL <= entry for shorts) or diverges >2.5x, automatically re-derives fresh SL and targets via `derive_sl_targets_for_contract`.
   verification: |
     1. AST syntax checked 100% OK across common/position_monitor.py, common/resolve.py, and common/portfolio_risk.py.

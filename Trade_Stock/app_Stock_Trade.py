@@ -738,6 +738,7 @@ def refresh_data(single_run=False):
                                 clean_sym = str(sym).replace(" ", "").upper()
                                 now_t = get_ist_now().time()
                                 cfg_f = load_config()
+                                pause_sl_monitor = bool(cfg_f.get("pause_sl_monitor", False))
                                 fs_start_str = cfg_f.get("failsafe_start_time", "09:50")
                                 try:
                                     f_h, f_m = map(int, fs_start_str.split(":"))
@@ -809,9 +810,12 @@ def refresh_data(single_run=False):
 
                                 # TASK 2: Execute SL exit ONLY IF after 09:45 AM AND (candle closed breach OR emergency deep break OR hard max 8% loss cap hit)
                                 if now_t >= fs_start_t and ltp_val > 0 and (sl_val > 0 or hard_max_8pct_break) and (is_breach_buffer or hard_max_8pct_break) and (prev_closed_breach or is_deep_break or hard_max_8pct_break):
-                                    logging.warning(f"[FAILSAFE MONITOR EXIT SL CONFIRMED] {sym} LTP={ltp_val} (Reason: {'HARD_MAX_8PCT_SL' if hard_max_8pct_break else ('CANDLE_CLOSE_SL' if prev_closed_breach else 'EMERGENCY_HARD_SL')}, Entry={effective_entry}, SL={sl_val})")
-                                    pos_obj = {"contract": sym, "position_size": abs_qty, "quantity": abs_qty, "symbol": sym, "side": "SELL" if is_short else "BUY", "direction": "BEAR" if is_short else "BULL"}
-                                    shared_close_stock_position(_kite_session, pos_obj, True, p.get("product"))
+                                    if pause_sl_monitor:
+                                        logging.info(f"[SL_PAUSE_ACTIVE] Failsafe stock SL triggered for {sym} at {ltp_val} but SL Exit Monitor is PAUSED. Skipping exit. Targets remain active.")
+                                    else:
+                                        logging.warning(f"[FAILSAFE MONITOR EXIT SL CONFIRMED] {sym} LTP={ltp_val} (Reason: {'HARD_MAX_8PCT_SL' if hard_max_8pct_break else ('CANDLE_CLOSE_SL' if prev_closed_breach else 'EMERGENCY_HARD_SL')}, Entry={effective_entry}, SL={sl_val})")
+                                        pos_obj = {"contract": sym, "position_size": abs_qty, "quantity": abs_qty, "symbol": sym, "side": "SELL" if is_short else "BUY", "direction": "BEAR" if is_short else "BULL"}
+                                        shared_close_stock_position(_kite_session, pos_obj, True, p.get("product"))
                                 elif now_t < fs_start_t and ltp_val > 0 and sl_val > 0 and is_breach_buffer:
                                     logging.info(f"[FAILSAFE SL PAUSED BEFORE {fs_start_str} AM] {sym} SL check paused until {fs_start_str} AM (Current time: {now_t.strftime('%H:%M:%S')}).")
                         except Exception as fs_err:
@@ -1160,6 +1164,23 @@ def api_save_config(prog_id):
         return jsonify({"ok": False, "error": "Invalid JSON"})
     save_config(prog_id, data)
     return jsonify({"ok": True})
+
+@app.route("/api/toggle-sl-pause", methods=["GET", "POST"])
+def api_toggle_sl_pause():
+    cfg = load_config()
+    if request.method == "POST":
+        data = request.get_json(force=True, silent=True) or {}
+        if "enabled" in data:
+            new_val = bool(data["enabled"])
+        else:
+            new_val = not bool(cfg.get("pause_sl_monitor", False))
+        cfg["pause_sl_monitor"] = new_val
+        os.makedirs(os.path.dirname(CONFIG_FILE), exist_ok=True)
+        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=2)
+        state_label = "PAUSED" if new_val else "ACTIVE"
+        logging.warning(f"[SL_MONITOR_TOGGLE] SL Exit Monitor is now {state_label}")
+    return jsonify({"ok": True, "pause_sl_monitor": bool(cfg.get("pause_sl_monitor", False))})
 
 @app.route("/api/scan/clear", methods=["POST"])
 def api_scan_clear():

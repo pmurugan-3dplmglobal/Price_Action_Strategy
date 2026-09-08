@@ -698,6 +698,7 @@ def refresh_data(single_run=False):
                                     clean_sym = str(contract_name).replace(" ", "").upper()
                                     now_t = get_ist_now().time()
                                     cfg_f = load_config()
+                                    pause_sl_monitor = bool(cfg_f.get("pause_sl_monitor", False))
                                     fs_start_str = cfg_f.get("failsafe_start_time", "09:50")
                                     try:
                                         f_h, f_m = map(int, fs_start_str.split(":"))
@@ -732,9 +733,14 @@ def refresh_data(single_run=False):
                                         try:
                                             df_hist = fetch_and_resample_candles(_kite_session, token_id, (dt.now() - timedelta(days=2)).strftime("%Y-%m-%d"), dt.now().strftime("%Y-%m-%d"), "15minute")
                                             if len(df_hist) >= 2:
-                                                prev_close_val = float(df_hist.iloc[-2]["close"])
-                                                if prev_close_val > 0 and prev_close_val <= sl_val:
-                                                    prev_closed_below = True
+                                                prev_row = df_hist.iloc[-2]
+                                                prev_date_str = str(prev_row.get("date", ""))
+                                                from position_monitor import sanitize_entry_time, is_candle_before_entry
+                                                entry_time_str = sanitize_entry_time(scan_sl)
+                                                if not is_candle_before_entry(prev_date_str, entry_time_str):
+                                                    prev_close_val = float(prev_row["close"])
+                                                    if prev_close_val > 0 and prev_close_val <= sl_val:
+                                                        prev_closed_below = True
                                         except Exception:
                                             pass
 
@@ -782,11 +788,14 @@ def refresh_data(single_run=False):
                                         exit_reason_label = "DIRECT_LTP_SL_FALLBACK"
 
                                     if now_t >= fs_start_t and ltp_val > 0 and (sl_val > 0 or hard_max_15pct_break) and sl_hit_confirmed:
-                                        logging.warning(f"[FAILSAFE MONITOR EXIT SL CONFIRMED] {contract_name} LTP={ltp_val} (Reason: {exit_reason_label}, Entry={effective_entry}, SL={sl_val})")
-                                        pos_obj = {"contract": contract_name, "position_size": qty, "quantity": qty}
-                                        shared_close_position(_kite_session, pos_obj, True, p.get("product"))
-                                        _failsafe_exit_mark("EXIT_SL", "SL_HIT",
-                                                            f"SL hit [{exit_reason_label}] | LTP {ltp_val:.2f} | Entry {effective_entry:.2f} | SL {sl_val:.2f}", ltp_val)
+                                        if pause_sl_monitor:
+                                            logging.info(f"[SL_PAUSE_ACTIVE] Failsafe SL triggered [{exit_reason_label}] for {contract_name} at {ltp_val} but SL Exit Monitor is PAUSED. Skipping exit. Targets remain active.")
+                                        else:
+                                            logging.warning(f"[FAILSAFE MONITOR EXIT SL CONFIRMED] {contract_name} LTP={ltp_val} (Reason: {exit_reason_label}, Entry={effective_entry}, SL={sl_val})")
+                                            pos_obj = {"contract": contract_name, "position_size": qty, "quantity": qty}
+                                            shared_close_position(_kite_session, pos_obj, True, p.get("product"))
+                                            _failsafe_exit_mark("EXIT_SL", "SL_HIT",
+                                                                f"SL hit [{exit_reason_label}] | LTP {ltp_val:.2f} | Entry {effective_entry:.2f} | SL {sl_val:.2f}", ltp_val)
                                     elif now_t < fs_start_t and ltp_val > 0 and sl_val > 0 and is_below_buffer:
                                         logging.info(f"[FAILSAFE SL PAUSED BEFORE {fs_start_str} AM] {contract_name} SL check paused until {fs_start_str} AM (Current time: {now_t.strftime('%H:%M:%S')}).")
                                     # Track highest price reached for position
@@ -1225,6 +1234,23 @@ def api_save_config(prog_id):
         return jsonify({"ok": False, "error": "Invalid JSON"})
     save_config(prog_id, data)
     return jsonify({"ok": True})
+
+@app.route("/api/toggle-sl-pause", methods=["GET", "POST"])
+def api_toggle_sl_pause():
+    cfg = load_config()
+    if request.method == "POST":
+        data = request.get_json(force=True, silent=True) or {}
+        if "enabled" in data:
+            new_val = bool(data["enabled"])
+        else:
+            new_val = not bool(cfg.get("pause_sl_monitor", False))
+        cfg["pause_sl_monitor"] = new_val
+        os.makedirs(os.path.dirname(CONFIG_FILE), exist_ok=True)
+        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=2)
+        state_label = "PAUSED" if new_val else "ACTIVE"
+        logging.warning(f"[SL_MONITOR_TOGGLE] SL Exit Monitor is now {state_label}")
+    return jsonify({"ok": True, "pause_sl_monitor": bool(cfg.get("pause_sl_monitor", False))})
 
 @app.route("/api/scan/clear", methods=["POST"])
 def api_scan_clear():
