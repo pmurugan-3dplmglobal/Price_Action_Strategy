@@ -491,6 +491,11 @@ def scan_anchor_bcd_breakout(df_entry, df_anchor, anchor_tf="", entry_tf="", ena
                 stage_status = "T2_CONTINUATION"
                 priority_level = "LOW_PRIORITY"
                 sl_val = t1  # Trailed SL to T1 level to protect banked gains
+            else:
+                # 5. Post-D Retest: Price is hovering near Benchmark (+/- 2.5%) without hitting T1 or SL
+                if benchmark > 0 and (benchmark * 0.980 <= latest_close <= benchmark * 1.025):
+                    stage_status = "POST_D_RETEST"
+                    close_price = latest_close
 
         risk = close_price - sl_val
         if risk <= 0 or risk < close_price * 0.002 or ((t1 - close_price) / risk) < 1.5:

@@ -25,6 +25,7 @@ meta:
     - Pure Price Action & Spot Intraday VWAP Macro Regime Governance (Decommissioning 13 EMA Whipsaws) (FEATURE-039)
     - Universal 200+ F&O Scan & Active Symbol Routing to Scan Tab (FEATURE-040)
     - 80% Early D Formation Trigger & Option VWAP Support in Fast Radar (FEATURE-041)
+    - Post-D Retest Entry Near Benchmark with VWAP Support & Dynamic Risk Management (FEATURE-042)
 
 architecture:
   diagram: |

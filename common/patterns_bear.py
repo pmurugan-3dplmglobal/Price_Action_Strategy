@@ -466,6 +466,8 @@ def scan_anchor_bcd_breakout_bearish(df_entry, df_anchor, anchor_tf="", entry_tf
 
         # Post-D 3-Tier Classification Filter
         after_d = df_entry.iloc[d_idx + 1 :]
+        latest_close = float(df_entry.iloc[-1]['close'])
+        benchmark = a_low
         if not after_d.empty:
             # 1. Discard if SL hit after D (A.high + buffer)
             if float(after_d['close'].max()) >= sl_val:
@@ -481,6 +483,11 @@ def scan_anchor_bcd_breakout_bearish(df_entry, df_anchor, anchor_tf="", entry_tf
                 stage_status = "T2_CONTINUATION"
                 priority_level = "LOW_PRIORITY"
                 sl_val = t1  # Trailed SL to T1 level to protect banked gains
+            else:
+                # 5. Post-D Retest: Price is hovering near Benchmark (+/- 2.5%) without hitting T1 or SL
+                if benchmark > 0 and (benchmark * 0.975 <= latest_close <= benchmark * 1.020):
+                    stage_status = "POST_D_RETEST"
+                    entry_close = latest_close
 
         risk = sl_val - entry_close
         if risk <= 0:

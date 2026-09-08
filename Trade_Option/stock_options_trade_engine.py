@@ -682,12 +682,24 @@ def run_fast_radar_check(kite):
                 c_now = float(last_candle['close'])
                 bm = float(item.get("benchmark") or 0.0)
                 sl = float(item.get("current_sl") or 0.0)
+                t1 = float(item.get("t1") or 0.0)
                 if sl > 0 and c_now <= sl:
                     logging.info(f"[RADAR EVICT] {sym} breached SL floor ({c_now} <= {sl})")
                     pattern_funnel.evict_item("nifty50", item)
                     continue
 
-                if bm > 0 and c_now >= bm:
+                # Trigger 1: Breakout / 80% Early D Trigger
+                is_breakout = (bm > 0 and c_now >= bm)
+
+                # Trigger 2: Post-D Retest Entry (D formed, pre-T1, SL intact, retesting Benchmark zone +/- 2.5%)
+                is_retest = False
+                if bm > 0 and sl > 0 and t1 > 0:
+                    retest_lower = bm * 0.980
+                    retest_upper = bm * 1.025
+                    if retest_lower <= c_now <= retest_upper and c_now < t1 and c_now > sl:
+                        is_retest = True
+
+                if is_breakout or is_retest:
                     # Check 1: Timeframe Maturity Guard (80% Near-Close or Completed Bar)
                     from timeframe_utils import is_live_candle_near_close, get_tf_minutes
                     item_tf = item.get("timeframe", TIMEFRAME_ENTRY)
@@ -696,9 +708,11 @@ def run_fast_radar_check(kite):
                     is_closed_bar = (now_ist - c_dt).total_seconds() >= (tf_mins * 60.0)
                     is_80pct_mature = is_live_candle_near_close(candle_date_str, item_tf, completion_pct=0.80)
 
-                    if not (is_80pct_mature or is_closed_bar):
-                        logging.debug(f"[RADAR COILING] {sym} ({item.get('contract')}) at {c_now} >= Benchmark {bm}, awaiting 80% candle maturity (Minute >= {int(tf_mins*0.8)}).")
-                        continue
+                    # For initial breakouts, require 80% bar maturity or bar close to avoid premature wicks
+                    if is_breakout and not is_retest:
+                        if not (is_80pct_mature or is_closed_bar):
+                            logging.debug(f"[RADAR COILING] {sym} ({item.get('contract')}) at {c_now} >= Benchmark {bm}, awaiting 80% candle maturity (Minute >= {int(tf_mins*0.8)}).")
+                            continue
 
                     # Check 2: Option VWAP Support & Overpay Guard
                     from swing_detection import calculate_option_vwap
@@ -707,18 +721,28 @@ def run_fast_radar_check(kite):
                     stretch_pct = float(vwap_info.get("stretch_pct") or 0.0)
 
                     if opt_vwap > 0 and c_now < opt_vwap:
-                        logging.debug(f"[RADAR VWAP GATE] {sym} ({item.get('contract')}) at {c_now} >= Benchmark {bm}, but lacks VWAP support (LTP {c_now} < VWAP {opt_vwap}).")
+                        logging.debug(f"[RADAR VWAP GATE] {sym} ({item.get('contract')}) at {c_now}, but lacks VWAP support (LTP {c_now} < VWAP {opt_vwap}).")
                         continue
 
                     if stretch_pct > 15.0:
                         logging.info(f"[RADAR OVERPAY GUARD] {sym} ({item.get('contract')}) stretched {stretch_pct:.1f}% > 15% above VWAP ({opt_vwap}). Skipping entry.")
                         continue
 
-                    trigger_type = "80%_EARLY_D" if (is_80pct_mature and not is_closed_bar) else "COMPLETED_BAR_D"
-                    logging.info(f"⚡ [RADAR TRIGGER: {trigger_type}] {sym} ({item.get('contract')}) Close {c_now} >= Benchmark {bm} (VWAP={opt_vwap:.2f}, Stretch={stretch_pct:.1f}%)!")
+                    if is_retest and not is_breakout:
+                        trigger_type = "POST_D_RETEST"
+                    elif is_80pct_mature and not is_closed_bar:
+                        trigger_type = "80%_EARLY_D"
+                    else:
+                        trigger_type = "COMPLETED_BAR_D"
+
+                    logging.info(f"⚡ [RADAR TRIGGER: {trigger_type}] {sym} ({item.get('contract')}) LTP={c_now:.2f} vs Benchmark={bm:.2f} (VWAP={opt_vwap:.2f}, Stretch={stretch_pct:.1f}%)!")
                     item["entry_spot"] = c_now
                     item["entry_time"] = str(last_candle.get('date', dt.now().isoformat()))
                     item["trigger_type"] = trigger_type
+                    # Recompute R:R based on exact retest entry price
+                    risk_now = abs(c_now - sl)
+                    if risk_now > 0 and t1 > 0:
+                        item["rr"] = round(abs(t1 - c_now) / risk_now, 2)
                     triggered.append(item)
                     pattern_funnel.evict_item("nifty50", item)
         except Exception as radar_err:

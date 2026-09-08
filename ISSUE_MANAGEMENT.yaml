@@ -4,12 +4,33 @@ meta:
   last_updated: '2026-09-08'
   purpose: Active operational tracker for v2.1.0-stable failures, root causes, regressions, and enhancements.
   historical_archive: archive/ISSUE_HISTORY_ARCHIVE.yaml (Preserves 119 resolved legacy issues prior to 2026-09-05)
-  total_active_issues: 23
+  total_active_issues: 24
   archived_issues_summary:
     total_archived: 119
     recent_archived_batch: [FEATURE-031, FEATURE-030, FEATURE-029, ISSUE-084, ISSUE-083, ISSUE-082, ISSUE-081, ISSUE-080, FEATURE-036, FEATURE-035, FEATURE-034, FEATURE-033, ISSUE-054]
     key_archived_families: [ALGO_AUDIT_CVE, QUANT_ENHANCEMENTS, RADAR_LIFECYCLE, VCP_METRICS, SCANNER_DISCOVERY, SECURITY_CONFIG, ZERO_REGRESSION_AUDIT]
 issues:
+- id: FEATURE-042
+  title: Post-D Retest Entry Near Benchmark with VWAP Support & Dynamic Risk Management
+  severity: HIGH
+  category: Breakout Execution, Post-D Retest, Radar Lifecycle, Price Action Geometry
+  family: RADAR_LIFECYCLE
+  date_reported: '2026-09-08'
+  symptom: |
+    1. When a setup broke out at D but was missed or paused, if price pulled back to retest the benchmark breakout level without hitting T1 or SL, the engine had no mechanism to execute a re-entry.
+    2. Bullish and bearish scanners classified all post-D candles as either T2_CONTINUATION or dropped them, missing prime low-risk retest pullback entries.
+  root_cause: |
+    1. Fast radar check only evaluated initial breakout condition `c_now >= bm` (for Bull).
+    2. Pattern scanners lacked `POST_D_RETEST` stage classification for price action hovering near benchmark (+/- 2.5%) with intact structural invalidation.
+  affected_files:
+  - common/patterns_bull.py
+  - common/patterns_bear.py
+  - Trade_Option/stock_options_trade_engine.py
+  resolution: |
+    1. Added POST_D_RETEST classification in patterns_bull.py (benchmark * 0.98 <= latest_close <= benchmark * 1.025) and patterns_bear.py (a_low * 0.975 <= latest_close <= a_low * 1.020) when T1 and SL are untouched.
+    2. Enhanced run_fast_radar_check to trigger on `is_retest` within benchmark +/- 2.5%, requiring Option VWAP support and <= 15% stretch.
+    3. Dynamically recomputes Risk:Reward (`abs(t1 - c_now) / abs(c_now - sl)`) based on live retest entry price, tagging trigger_type as POST_D_RETEST.
+  status: RESOLVED
 - id: FEATURE-041
   title: 80% Early D Formation Trigger & Option VWAP Support in Fast Surveillance Radar
   severity: HIGH
