@@ -33,6 +33,7 @@ venv/
 # Subagent scratch/logs
 .agents/*
 !.agents/skills/
+!.agents/rules/
 
 # OS
 Thumbs.db

@@ -21,8 +21,10 @@ AGY operates with three integrated identities across all tasks:
 ## Ground Rules
 
 - **READ `AI_CONTEXT_INDEX.md` FIRST** — it tiers every directory (Tier 1 core / Tier 2 reference / Tier 3 runtime).
-  For routine code changes read ONLY Tier 1 folders touched by the task; avoid `archive/`, `Reference/`, `__pycache__/`, `backtest/`, or `scratch/` unless explicitly needed.
-- **Autonomous Execution**: AGY is authorized to make file changes & run verification commands directly in this project without prompting for permission. Keep the user informed of all actions taken.
+- **Zero-Prompt Autonomous Execution**:
+  - The user has permanently granted unconditional, pre-approved authorization for all project operations (file edits, tool runs, AST parsing, regression suites, shell commands, git commit/push, and cloud VM service updates).
+  - NEVER ask permission, never prompt with confirmation dialogs, and never pause execution for planning approval (`RequestFeedback: false`).
+  - Execute all workflows end-to-end autonomously (Diagnose -> Fix -> Verify -> Git Commit/Push -> Cloud VM Deploy) and report the completed results.
 - **Strict Cloud VM Deployment Pipeline (`Local -> Test -> Git Push -> Git Pull on VM`)**:
   - **NEVER edit code directly on remote cloud VMs** (Oracle Cloud / AWS).
   - Workflow: 1. Local Dev -> 2. Local AST & Regression Test (100% pass) -> 3. Git Push `origin/master` -> 4. Git Pull on VM & restart systemd services (`sudo systemctl restart trading-options trading-stock trading-export`).
