@@ -1683,6 +1683,7 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                                         f_tier_ce = 1
                                         f_label_ce = "TIER_1_GOLD"
                                         f_badge_ce = "🥇 T1"
+                                ce_lot_f = int(ce.get("lot_size") or config.get("lot_size", 1))
                                 funnel_item = {
                                     "symbol": symbol, "contract": ce['tradingsymbol'], "option_token": ce['token'],
                                     "spot_token": config["token"], "spot_entry": current_spot, "strike": strike,
@@ -1692,6 +1693,7 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                                     "t1": stage_ce.get("t1"), "t2": stage_ce.get("t2"), "t3": stage_ce.get("t3"),
                                     "rr": stage_ce.get("rr", 0.0), "pattern": stage_ce.get("pattern", "BASE_ABCD"),
                                     "side": "CE", "timeframe": timeframe_entry,
+                                    "lot_size": ce_lot_f,
                                     "candle_a_time": stage_ce.get("candle_a_time", ""),
                                     "candle_b_time": stage_ce.get("candle_b_time", ""),
                                     "candle_c_time": stage_ce.get("candle_c_time", ""),
@@ -1825,6 +1827,7 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                                         f_tier_pe = 1
                                         f_label_pe = "TIER_1_GOLD"
                                         f_badge_pe = "🥇 T1"
+                                pe_lot_f = int(pe.get("lot_size") or config.get("lot_size", 1))
                                 funnel_item = {
                                     "symbol": symbol, "contract": pe['tradingsymbol'], "option_token": pe['token'],
                                     "spot_token": config["token"], "spot_entry": current_spot, "strike": strike,
@@ -1834,6 +1837,7 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                                     "t1": stage_pe.get("t1"), "t2": stage_pe.get("t2"), "t3": stage_pe.get("t3"),
                                     "rr": stage_pe.get("rr", 0.0), "pattern": stage_pe.get("pattern", "BASE_ABCD"),
                                     "side": "PE", "timeframe": timeframe_entry,
+                                    "lot_size": pe_lot_f,
                                     "candle_a_time": stage_pe.get("candle_a_time", ""),
                                     "candle_b_time": stage_pe.get("candle_b_time", ""),
                                     "candle_c_time": stage_pe.get("candle_c_time", ""),
@@ -1872,6 +1876,7 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                     "t1": None, "t2": None, "t3": None, "rr": 0.0,
                     "pattern": res_ce["Pattern"], "side": "CE",
                     "timeframe": timeframe_anchor, "candle_a_time": str(res_ce.get("CandleATime", "")),
+                    "lot_size": int(ce.get("lot_size") or config.get("lot_size", 1)),
                     "tier": 3, "tier_label": "TIER_3_MOMENTUM", "tier_badge": "🌱 B",
                     "stage": pattern_funnel.STAGE_B
                 }
@@ -1888,6 +1893,7 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                     "t1": None, "t2": None, "t3": None, "rr": 0.0,
                     "pattern": res_pe["Pattern"], "side": "PE",
                     "timeframe": timeframe_anchor, "candle_a_time": str(res_pe.get("CandleATime", "")),
+                    "lot_size": int(pe.get("lot_size") or config.get("lot_size", 1)),
                     "tier": 3, "tier_label": "TIER_3_MOMENTUM", "tier_badge": "🌱 B",
                     "stage": pattern_funnel.STAGE_B
                 }

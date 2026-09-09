@@ -4,12 +4,46 @@ meta:
   last_updated: '2026-09-09'
   purpose: Active operational tracker for v2.1.0-stable failures, root causes, regressions, and enhancements.
   historical_archive: archive/ISSUE_HISTORY_ARCHIVE.yaml (Preserves 119 resolved legacy issues prior to 2026-09-05)
-  total_active_issues: 35
+  total_active_issues: 36
   archived_issues_summary:
     total_archived: 119
     recent_archived_batch: [FEATURE-031, FEATURE-030, FEATURE-029, ISSUE-084, ISSUE-083, ISSUE-082, ISSUE-081, ISSUE-080, FEATURE-036, FEATURE-035, FEATURE-034, FEATURE-033, ISSUE-054]
     key_archived_families: [ALGO_AUDIT_CVE, QUANT_ENHANCEMENTS, RADAR_LIFECYCLE, VCP_METRICS, SCANNER_DISCOVERY, SECURITY_CONFIG, ZERO_REGRESSION_AUDIT]
 issues:
+- id: ISSUE-099
+  title: Radar Auto-Execution KeyError 'lot_size' Elimination & Fast Radar Robustness
+  severity: CRITICAL
+  category: Execution Pipeline, Radar Automation, Head-of-Line Starvation, Error Logging
+  family: QUANT_ENHANCEMENTS
+  date_reported: '2026-09-09'
+  symptom: |
+    1. During live fast radar surveillance on 2026-09-09, logs reported '⚡ [RADAR TRIGGERED] Executing 1 setup(s) immediately!' for candidates like BHEL, BEL, MOTILALOFS, yet no limit buy orders were placed in Kite.
+    2. In batches with multiple triggered candidates (e.g. 7 candidates at 06:11:04 UTC), failure on candidate #1 aborted the execution loop, starving all remaining candidates (Head-of-Line starvation).
+    3. Triggered candidates were evicted from pattern_funnel before execution completed, disappearing from active radar without placing orders or logging errors.
+    4. Exceptions inside fast_radar_loop were suppressed at logging.debug without traceback, masking the root cause.
+  root_cause: |
+    1. common/resolve.py promoted Category A+ fast radar items to pattern_funnel without injecting 'lot_size' into funnel_item and b_item dictionaries.
+    2. Trade_Option/stock_options_trade_engine.py:execute_highest_rr_trade accessed best['lot_size'] directly on lines 631, 649, and 662 outside any try-except block, raising KeyError: 'lot_size'.
+    3. The candidate loop in execute_highest_rr_trade was not wrapped in per-candidate try-except, causing an unhandled KeyError on the first candidate to crash the entire batch.
+    4. fast_radar_loop caught the exception and logged it as debug (`logging.debug(f"Fast radar loop error: {e}")`), silently hiding the failure in production.
+  affected_files:
+  - common/resolve.py
+  - Trade_Option/stock_options_trade_engine.py
+  fix_applied: |
+    1. common/resolve.py: Added 'lot_size': int(ce/pe.get('lot_size') or config.get('lot_size', 1)) across CE/PE funnel_item and b_item dictionary constructors.
+    2. Trade_Option/stock_options_trade_engine.py:
+       - Safely resolved lot size: `lot_sz = int(best.get("lot_size") or (get_option_lot_size(contract) if contract else None) or STOCK_REGISTRY.get(sym, {}).get("lot_size", 1) or 1)`.
+       - Replaced all raw best['lot_size'] accesses with defensive `lot_sz` variable across pos dictionary, spread leg 2 qty, freeze slicing, and logging.
+       - Wrapped per-candidate execution loop body in `try...except Exception as cand_err:` with detailed error logging to prevent batch-level Head-of-Line starvation.
+       - Enhanced fast_radar_loop error logging from `logging.debug` to `logging.error(f"Fast radar loop error: {e}", exc_info=True)`.
+  verification: |
+    1. AST syntax check passed 100% on both modified files.
+    2. Strategy regression test suite (scratch/run_full_regression_test.py): 19/19 offline invariant suites passed.
+    3. Phase 1 hardening suite (scratch/test_phase1_hardening.py): 6/6 tests passed.
+    4. CVE fixes suite (scratch/test_cve_fixes.py): 5/5 tests passed.
+  status: RESOLVED
+  resolution_date: '2026-09-09'
+
 - id: ISSUE-098
   title: Sys.path Namespace Discrepancy & ModuleNotFoundError 'common' in Debit Spread Resolution
   severity: HIGH
