@@ -102,5 +102,27 @@ print(f"DEFENSIVE_IMPORT_OK:{imported_via}")
         self.assertEqual(res.returncode, 0, f"Failed with: {res.stderr}")
         self.assertIn("DEFENSIVE_IMPORT_OK:FALLBACK", res.stdout)
 
+    def test_common_package_root_only_import(self):
+        """Verify importing common package submodules works when only PROJECT_ROOT is initially in sys.path."""
+        code = '''
+import sys, os
+project_root = os.path.abspath(r"''' + PROJECT_ROOT.replace('\\', '/') + '''")
+# Filter out common from sys.path
+sys.path = [p for p in sys.path if not p.endswith("common")]
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
+import common.daily_trade_journal
+import common.trading_core
+import common.trade_db
+import common.position_monitor
+print("COMMON_PACKAGE_ROOT_ONLY_OK")
+'''
+        cmd = [sys.executable, "-c", code]
+        temp_cwd = "C:\\" if os.name == "nt" else "/"
+        res = subprocess.run(cmd, cwd=temp_cwd, capture_output=True, text=True)
+        self.assertEqual(res.returncode, 0, f"Failed with: {res.stderr}")
+        self.assertIn("COMMON_PACKAGE_ROOT_ONLY_OK", res.stdout)
+
 if __name__ == "__main__":
     unittest.main()

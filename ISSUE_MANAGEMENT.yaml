@@ -36,6 +36,7 @@ issues:
   - Trade_Stock/stock_bearish_reversal_scanner.py
   - Trade_Stock/stock_weekly_bull_scanner.py
   - Trade_Stock/stock_weekly_bear_scanner.py
+  - common/__init__.py
   - common/paths.py
   - common/patterns_bear.py
   - common/patterns_bull.py
@@ -46,9 +47,9 @@ issues:
   - scratch/run_full_regression_test.py
   resolution: |
     1. Top-Level sys.path Normalization: Ensured both PROJECT_ROOT and COMMON_DIR are inserted into sys.path across all engines, daemons, scanners, and common modules.
-    2. Global Import Safety: Added sys.path normalization inside common/paths.py, guaranteeing that any module importing paths automatically registers both PROJECT_ROOT and COMMON_DIR in sys.path.
+    2. Global Package Import Safety: Added sys.path normalization inside common/__init__.py and common/paths.py, guaranteeing that any module importing common or importing paths automatically registers both PROJECT_ROOT and COMMON_DIR in sys.path.
     3. Defensive Import Fallback: Updated stock_options_trade_engine.py spread resolution with nested try/except to seamlessly support both package (`from common.xxx import ...`) and direct (`from xxx import ...`) module imports.
-    4. Unit & Regression Tests: Added dedicated test suite scratch/test_sys_path_normalization.py (5/5 passing) and TEST 22 in scratch/run_full_regression_test.py (19/19 offline tests passing).
+    4. Unit & Regression Tests: Added dedicated test suite scratch/test_sys_path_normalization.py (6/6 passing) and TEST 22 in scratch/run_full_regression_test.py (19/19 offline tests passing).
   status: RESOLVED
   resolution_date: '2026-09-09'
 

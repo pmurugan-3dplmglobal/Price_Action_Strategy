@@ -742,6 +742,19 @@ try:
     res_paths = subprocess.run(cmd_paths, cwd=os.path.join(PROJECT_ROOT, "common"), capture_output=True, text=True)
     assert res_paths.returncode == 0, f"paths sys.path failed: {res_paths.stderr}"
 
+    cmd_common = [
+        sys.executable,
+        "-c",
+        "import sys; "
+        "sys.path = [p for p in sys.path if not p.endswith('common')]; "
+        f"sys.path.insert(0, r'{PROJECT_ROOT}'); "
+        "import common.daily_trade_journal; "
+        "import common.trading_core; "
+        "print('OK')"
+    ]
+    res_common = subprocess.run(cmd_common, cwd=PROJECT_ROOT, capture_output=True, text=True)
+    assert res_common.returncode == 0, f"common package import failed: {res_common.stderr}"
+
     print(" PASSED [OK]", flush=True)
 except Exception as e:
     errors.append(f"Sys.path Normalization Invariant Failed: {e}")
