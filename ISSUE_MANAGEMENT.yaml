@@ -4,12 +4,37 @@ meta:
   last_updated: '2026-09-09'
   purpose: Active operational tracker for v2.1.0-stable failures, root causes, regressions, and enhancements.
   historical_archive: archive/ISSUE_HISTORY_ARCHIVE.yaml (Preserves 119 resolved legacy issues prior to 2026-09-05)
-  total_active_issues: 31
+  total_active_issues: 32
   archived_issues_summary:
     total_archived: 119
     recent_archived_batch: [FEATURE-031, FEATURE-030, FEATURE-029, ISSUE-084, ISSUE-083, ISSUE-082, ISSUE-081, ISSUE-080, FEATURE-036, FEATURE-035, FEATURE-034, FEATURE-033, ISSUE-054]
     key_archived_families: [ALGO_AUDIT_CVE, QUANT_ENHANCEMENTS, RADAR_LIFECYCLE, VCP_METRICS, SCANNER_DISCOVERY, SECURITY_CONFIG, ZERO_REGRESSION_AUDIT]
 issues:
+- id: FEATURE-050
+  title: Single-Pass Instrument Synchronization & Fresh Cache Re-Use (< 12h) to Eliminate TimeoutErrors
+  severity: MEDIUM
+  category: Performance Optimization, Startup Synchronization, Network Latency, Cache Lifecycle
+  family: QUANT_ENHANCEMENTS
+  date_reported: '2026-09-09'
+  symptom: |
+    1. During engine startup on Cloud VM, stock_options_trade_engine logged:
+       '2026-09-09 05:44:33,116 [ERROR] Instrument sync failed: TimeoutError'.
+    2. Syncing instruments took over 140 seconds, exceeding the 90-second timeout threshold.
+  root_cause: |
+    1. stock_options_trade_engine.py and common/registries.py performed redundant sequential downloads of the entire NSE (5,000 instruments) and NFO (38,000 contracts) universes:
+       - sync_stock_tokens called kite.instruments('NSE')
+       - sync_fno_stock_registry called kite.instruments('NFO') and kite.instruments('NSE')
+       - sync_instruments called kite.instruments('NFO') again and kite.instruments('BFO').
+    2. Total network payload exceeded 43 MB across 4 separate full downloads, exceeding future.result(timeout=90).
+    3. The engine did not reuse NFO_CACHE_FILE already fetched and saved by index_options_trade_engine earlier that morning.
+  affected_files:
+  - common/registries.py
+  - Trade_Option/stock_options_trade_engine.py
+  resolution: |
+    1. Optimized common/registries.py to accept pre-fetched df_nse and df_nfo DataFrames, completely eliminating duplicate network requests.
+    2. Added immediate reuse of today's fresh (< 12h old) NFO_CACHE_FILE in stock_options_trade_engine.py, reducing startup time to < 1 second.
+    3. Implemented single-pass downloading when cache is missing/stale and expanded the timeout to 180 seconds.
+  status: RESOLVED
 - id: ISSUE-097
   title: Premature Limit Order Cancellation via Static Session Day High / Low in Unfilled Order Manager
   severity: HIGH

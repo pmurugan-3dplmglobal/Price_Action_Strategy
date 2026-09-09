@@ -33,6 +33,7 @@ meta:
     - Automated Runaway Breakout (> BM + 5%), Target T1 Hit, and Stale Setup Eviction Guards (FEATURE-047)
     - Option-Aware Left-Side Scoping (30 Bars), Flexible Point C Retest, and 25% VWAP Stretch Guard (FEATURE-048)
     - High-Capacity HTTP Connection Pooling (50 Sessions) for KiteConnect REST & WebSocket Architecture (FEATURE-049)
+    - Single-Pass Instrument Synchronization & Fresh Cache Re-Use (< 12h) to Eliminate TimeoutErrors (FEATURE-050)
 
 architecture:
   diagram: |

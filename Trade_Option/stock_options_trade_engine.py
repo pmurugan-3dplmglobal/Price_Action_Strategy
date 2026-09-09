@@ -123,9 +123,35 @@ def sync_instruments(kite):
     def _do_sync():
         global NFO_INSTRUMENTS
         from registries import sync_fno_stock_registry, sync_stock_tokens
-        sync_stock_tokens(kite)
-        sync_fno_stock_registry(kite, target_universe=TARGET_UNIVERSE)
+
+        # Optimization 1: Reuse today's NFO cache if already fetched (< 12h old)
+        if os.path.exists(NFO_CACHE_FILE):
+            try:
+                mtime = os.path.getmtime(NFO_CACHE_FILE)
+                if (time.time() - mtime) < 43200:  # Fresh within 12 hours
+                    df_cached = pd.read_csv(NFO_CACHE_FILE)
+                    if not df_cached.empty and len(df_cached) >= 1000:
+                        with instruments_lock:
+                            NFO_INSTRUMENTS = df_cached
+                            NFO_INSTRUMENTS['name'] = NFO_INSTRUMENTS['name'].str.strip().str.upper()
+                            NFO_INSTRUMENTS['instrument_type'] = NFO_INSTRUMENTS['instrument_type'].str.strip().str.upper()
+                        sync_stock_tokens(kite)
+                        from registries import _populate_stock_registry_from_cache
+                        _populate_stock_registry_from_cache()
+                        logging.info(f"Loaded {len(NFO_INSTRUMENTS)} NFO/BFO contracts from today's cache ({len(STOCK_REGISTRY)} F&O equities in registry)")
+                        return
+            except Exception as c_err:
+                logging.debug(f"Cache check error: {c_err}")
+
+        # Optimization 2: Single-pass download for NSE, NFO, and BFO
+        nse = kite.instruments("NSE")
+        df_nse = pd.DataFrame(nse) if nse else pd.DataFrame()
+        sync_stock_tokens(kite, df_nse=df_nse)
+
         nfo = kite.instruments("NFO")
+        df_nfo = pd.DataFrame(nfo) if nfo else pd.DataFrame()
+        sync_fno_stock_registry(kite, target_universe=TARGET_UNIVERSE, df_nfo=df_nfo, df_nse=df_nse)
+
         try:
             bfo = kite.instruments("BFO")
         except Exception:
@@ -139,16 +165,14 @@ def sync_instruments(kite):
                 logging.info(f"Synced {len(NFO_INSTRUMENTS)} NFO/BFO contracts ({len(STOCK_REGISTRY)} F&O equities in registry)")
                 os.makedirs(os.path.dirname(NFO_CACHE_FILE), exist_ok=True)
                 NFO_INSTRUMENTS.to_csv(NFO_CACHE_FILE, index=False)
+
     pool = ThreadPoolExecutor(max_workers=1)
     try:
         future = pool.submit(_do_sync)
-        future.result(timeout=90)
-    except TimeoutError:
-        logging.warning("Instrument sync timed out after 90s, trying cached NFO data")
-        _load_cached_nfo()
+        future.result(timeout=180)
     except Exception as e:
         err_msg = str(e) if str(e).strip() else type(e).__name__
-        logging.error(f"Instrument sync failed: {err_msg}")
+        logging.warning(f"Instrument sync notice: {err_msg}, falling back to cached NFO data")
         _load_cached_nfo()
     finally:
         pool.shutdown(wait=False)

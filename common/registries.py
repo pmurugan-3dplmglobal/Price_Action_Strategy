@@ -144,10 +144,13 @@ def _populate_stock_registry_from_cache():
 
 _populate_stock_registry_from_cache()
 
-def sync_stock_tokens(kite):
+def sync_stock_tokens(kite, df_nse=None):
     try:
-        instruments = kite.instruments("NSE")
-        df = pd.DataFrame(instruments)
+        if df_nse is None or (isinstance(df_nse, pd.DataFrame) and df_nse.empty):
+            instruments = kite.instruments("NSE")
+            df = pd.DataFrame(instruments)
+        else:
+            df = df_nse.copy()
         if not df.empty:
             df['tradingsymbol'] = df['tradingsymbol'].str.strip()
             df['segment'] = df['segment'].str.strip()
@@ -165,7 +168,7 @@ def sync_stock_tokens(kite):
         logging.error(f"Stock token sync failed: {e}")
     return STOCK_REGISTRY
 
-def sync_fno_stock_registry(kite, target_universe="FNO_ALL"):
+def sync_fno_stock_registry(kite, target_universe="FNO_ALL", df_nfo=None, df_nse=None):
     """
     Dynamically discover all NSE F&O underlying equities from NFO instrument master,
     resolve tokens from NSE instrument master, calculate exact strike steps & lot sizes,
@@ -173,8 +176,9 @@ def sync_fno_stock_registry(kite, target_universe="FNO_ALL"):
     """
     try:
         logging.info("Syncing full NSE F&O stock registry from Kite Connect...")
-        nfo = kite.instruments("NFO")
-        df_nfo = pd.DataFrame(nfo)
+        if df_nfo is None or (isinstance(df_nfo, pd.DataFrame) and df_nfo.empty):
+            nfo = kite.instruments("NFO")
+            df_nfo = pd.DataFrame(nfo)
         if df_nfo.empty:
             return STOCK_REGISTRY
 
@@ -182,13 +186,14 @@ def sync_fno_stock_registry(kite, target_universe="FNO_ALL"):
         if options.empty:
             return STOCK_REGISTRY
 
-        nse = kite.instruments("NSE")
-        df_nse = pd.DataFrame(nse)
+        if df_nse is None or (isinstance(df_nse, pd.DataFrame) and df_nse.empty):
+            nse = kite.instruments("NSE")
+            df_nse = pd.DataFrame(nse)
         if df_nse.empty:
             return STOCK_REGISTRY
 
-        df_nse = df_nse[df_nse['segment'] == 'NSE']
-        nse_token_map = dict(zip(df_nse['tradingsymbol'].str.strip(), df_nse['instrument_token']))
+        df_nse_sub = df_nse[df_nse['segment'] == 'NSE'] if 'segment' in df_nse.columns else df_nse
+        nse_token_map = dict(zip(df_nse_sub['tradingsymbol'].str.strip(), df_nse_sub['instrument_token']))
 
         index_names = {'NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'SENSEX', 'BANKEX', 'NIFTYNXT50'}
         added_count = 0
