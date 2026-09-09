@@ -19,6 +19,7 @@ import pattern_funnel
 from trading_core import (
     load_kite_session,
     ensure_kite_session,
+    optimize_kite_session,
     safe_kite_call,
     fetch_and_resample_candles,
     log_to_journal,
@@ -1146,6 +1147,7 @@ def main():
         ak, at = load_kite_session()
         kite = KiteConnect(api_key=ak)
         kite.set_access_token(at)
+        optimize_kite_session(kite)
         sync_instruments(kite)
         if BACKTEST_DATE is None:
             load_state()

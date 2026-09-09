@@ -74,6 +74,7 @@ from session import (
     _GLOBAL_KITE_RATE_LIMITER,
     load_kite_session,
     ensure_kite_session,
+    optimize_kite_session,
     get_best_token_file,
     safe_kite_call,
     get_weekly_expiry,

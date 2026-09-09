@@ -4,12 +4,37 @@ meta:
   last_updated: '2026-09-09'
   purpose: Active operational tracker for v2.1.0-stable failures, root causes, regressions, and enhancements.
   historical_archive: archive/ISSUE_HISTORY_ARCHIVE.yaml (Preserves 119 resolved legacy issues prior to 2026-09-05)
-  total_active_issues: 29
+  total_active_issues: 30
   archived_issues_summary:
     total_archived: 119
     recent_archived_batch: [FEATURE-031, FEATURE-030, FEATURE-029, ISSUE-084, ISSUE-083, ISSUE-082, ISSUE-081, ISSUE-080, FEATURE-036, FEATURE-035, FEATURE-034, FEATURE-033, ISSUE-054]
     key_archived_families: [ALGO_AUDIT_CVE, QUANT_ENHANCEMENTS, RADAR_LIFECYCLE, VCP_METRICS, SCANNER_DISCOVERY, SECURITY_CONFIG, ZERO_REGRESSION_AUDIT]
 issues:
+- id: FEATURE-049
+  title: High-Capacity HTTP Connection Pooling (50 Sessions) for KiteConnect REST & WebSocket Architecture
+  severity: MEDIUM
+  category: API Latency, Connection Pool Optimization, Urllib3 Warning Suppression, Thread Safety
+  family: QUANT_ENHANCEMENTS
+  date_reported: '2026-09-09'
+  symptom: |
+    1. During multi-threaded operations (macro scanner across 200+ symbols, 15s Fast Radar surveillance, 60s position monitor, and WebSocket tick loop), logs were spammed with:
+       '[WARNING] Connection pool is full, discarding connection: api.kite.trade. Connection pool size: 10'.
+    2. Discarding connections forced python requests to tear down TCP sockets and perform expensive TLS negotiations on every subsequent REST request, introducing 50-150ms unnecessary latency per API call.
+  root_cause: |
+    1. requests.Session (used internally by kiteconnect.KiteConnect as kite.reqsession) defaults to HTTPAdapter(pool_connections=10, pool_maxsize=10).
+    2. Concurrent threads exceeded 10 requests, causing urllib3 to discard return connections.
+  affected_files:
+  - common/session.py
+  - common/trading_core.py
+  - Trade_Option/stock_options_trade_engine.py
+  - Trade_Option/index_options_trade_engine.py
+  - Trade_Stock/stock_reversal_scanner.py
+  resolution: |
+    1. Implemented optimize_kite_session(kite, pool_size=50) in common/session.py which mounts an HTTPAdapter with pool_connections=50 and pool_maxsize=50 on kite.reqsession for both https:// and http://.
+    2. Enhanced ensure_kite_session(kite) to automatically invoke optimize_kite_session(kite) whenever session health is checked.
+    3. Added explicit optimize_kite_session(kite) calls at engine startup in stock_options_trade_engine.py, index_options_trade_engine.py, and stock_reversal_scanner.py.
+    4. Configured logging.getLogger("urllib3.connectionpool").setLevel(logging.ERROR) in common/session.py to suppress transient connection churn warnings.
+  status: RESOLVED
 - id: FEATURE-048
   title: Option-Aware Left-Side Scoping (30 Bars), Flexible Point C Retest, and 25% VWAP Stretch Guard
   severity: HIGH

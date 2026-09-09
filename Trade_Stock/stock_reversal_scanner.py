@@ -16,6 +16,7 @@ from kiteconnect import KiteConnect
 
 from trading_core import (
     load_kite_session,
+    optimize_kite_session,
     log_to_journal,
     scan_anchor_bcd_breakout_generic,
     get_adaptive_lookback,
@@ -536,6 +537,7 @@ def main():
         ak, at = load_kite_session()
         kite = KiteConnect(api_key=ak)
         kite.set_access_token(at)
+        optimize_kite_session(kite)
         sync_stock_tokens(kite)
         if anchor_only:
             logging.info(f"Running anchor-only scan (daily {PROFILE['side'].lower()})...")

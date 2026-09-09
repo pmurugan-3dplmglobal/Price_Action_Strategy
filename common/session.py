@@ -20,6 +20,9 @@ import paths
 TOKEN_FILE = paths.TOKEN_FILE
 JOURNAL_FILE = paths.TRADE_JOURNAL_CSV
 
+# Suppress urllib3 connectionpool warnings when transient bursts occur
+logging.getLogger("urllib3.connectionpool").setLevel(logging.ERROR)
+
 def get_best_token_file(default_path=TOKEN_FILE):
     base = paths.PROJECT_ROOT
     candidates = [
@@ -51,9 +54,30 @@ def load_kite_session(token_file=TOKEN_FILE):
         raise ValueError(f"Corrupted token file at {target_file}.")
     return data["api_key"], data["access_token"]
 
-def ensure_kite_session(kite, token_file=TOKEN_FILE):
-    """Ensure the KiteConnect object in memory has the latest access token from disk if it changed."""
+def optimize_kite_session(kite, pool_size=50):
+    """
+    Mount high-capacity HTTP connection pool adapter on KiteConnect requests session.
+    Prevents urllib3 'Connection pool is full, discarding connection: api.kite.trade. Connection pool size: 10'
+    warnings and eliminates TCP/TLS re-handshake latency under multi-threaded concurrency.
+    """
     try:
+        if kite and hasattr(kite, "reqsession") and kite.reqsession:
+            if not getattr(kite, "_pool_optimized", False):
+                from requests.adapters import HTTPAdapter
+                adapter = HTTPAdapter(pool_connections=pool_size, pool_maxsize=pool_size)
+                kite.reqsession.mount("https://", adapter)
+                kite.reqsession.mount("http://", adapter)
+                setattr(kite, "_pool_optimized", True)
+                logging.debug(f"[KITE_SESSION] Mounted high-capacity HTTP connection pool (size={pool_size}) on KiteConnect session.")
+    except Exception as e:
+        logging.debug(f"Could not mount optimized HTTPAdapter on Kite session: {e}")
+
+
+def ensure_kite_session(kite, token_file=TOKEN_FILE):
+    """Ensure the KiteConnect object in memory has the latest access token from disk if it changed and has high-capacity connection pools."""
+    try:
+        if kite:
+            optimize_kite_session(kite)
         target_file = get_best_token_file(token_file)
         if not kite or not os.path.exists(target_file):
             return

@@ -17,6 +17,7 @@ import trade_db
 from trading_core import (
     load_kite_session,
     ensure_kite_session,
+    optimize_kite_session,
     safe_kite_call,
     fetch_and_resample_candles,
     log_to_journal,
@@ -642,6 +643,7 @@ def main():
         api_key, access_token = load_kite_session()
         kite = KiteConnect(api_key=api_key)
         kite.set_access_token(access_token)
+        optimize_kite_session(kite)
         fetch_instruments(kite)
     except Exception as e:
         logging.error(f"Init failed: {e}")
