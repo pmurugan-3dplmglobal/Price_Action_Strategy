@@ -241,6 +241,10 @@ from morning_reconciler import (
     is_preflight_window
 )
 
-
-
+# ── rvol_calculator ──
+from rvol_calculator import (
+    calculate_rvol,
+    detect_daily_breakout,
+    get_market_elapsed_minutes
+)
 

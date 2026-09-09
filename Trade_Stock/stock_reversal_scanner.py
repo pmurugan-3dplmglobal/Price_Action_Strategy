@@ -28,7 +28,9 @@ from trading_core import (
     STOCK_REGISTRY,
     detect_parabolic_multi_swings,
     evaluate_vix_regime,
-    check_portfolio_risk_caps
+    check_portfolio_risk_caps,
+    calculate_rvol,
+    detect_daily_breakout
 )
 from equity_universe import get_universe_symbols_and_tokens, is_liquid_cash_stock
 
@@ -259,6 +261,10 @@ def run_scan(kite):
                     "tier_badge": swing_res.get("tier_badge", "🥈 T2")
                 }
 
+            # Phase 0B: Institutional Relative Volume (RVOL) & Daily Breakout
+            rvol_res = calculate_rvol(df_e, tf_is_daily=(TIMEFRAME_ENTRY == "day"))
+            bkout_res = detect_daily_breakout(df_e)
+
             for name, scanner_func in scanners:
                 result = scanner_func(df_e, df_a)
                 if result:
@@ -280,6 +286,10 @@ def run_scan(kite):
                     else:
                         effective_tier = pattern_tier
 
+                    # Institutional Volume Surge Boost: If RVOL > 20D or Daily Breakout confirmed, promote to Tier 1 Gold
+                    if rvol_res.get("is_surge") or bkout_res.get("is_breakout"):
+                        effective_tier = 1
+
                     result["tier"] = effective_tier
                     if effective_tier == 1:
                         result["tier_label"] = "TIER_1_GOLD"
@@ -291,6 +301,14 @@ def run_scan(kite):
                         result["tier"] = 3
                         result["tier_label"] = "TIER_3_MOMENTUM"
                         result["tier_badge"] = "🥉 T3"
+
+                    # Attach RVOL & Breakout badges
+                    result["rvol_abs"] = rvol_res.get("rvol_abs", 1.0)
+                    result["rvol_projected"] = rvol_res.get("rvol_projected", 1.0)
+                    result["rvol_badge"] = rvol_res.get("badge", "NORMAL")
+                    result["is_rvol_surge"] = rvol_res.get("is_surge", False)
+                    result["is_daily_breakout"] = bkout_res.get("is_breakout", False)
+                    result["breakout_badge"] = bkout_res.get("badge", "")
 
                     # ── VIX Regime Gate Check ──
                     vix_allowed, vix_reason, _ = evaluate_vix_regime(kite, tier_val=effective_tier)
@@ -366,7 +384,12 @@ def run_scan(kite):
                             "vcp_badge": r.get("vcp_badge", ""),
                             "twap_c_stable": r.get("twap_c_stable", False),
                             "twap_c_score": r.get("twap_c_score", 0.0),
-                            "twap_c_std": r.get("twap_c_std", 0.0)
+                            "twap_c_std": r.get("twap_c_std", 0.0),
+                            "rvol_abs": r.get("rvol_abs", 1.0),
+                            "rvol_projected": r.get("rvol_projected", 1.0),
+                            "rvol_badge": r.get("rvol_badge", "NORMAL"),
+                            "is_daily_breakout": r.get("is_daily_breakout", False),
+                            "breakout_badge": r.get("breakout_badge", "")
                         } for r in all_disp if r.get("Symbol") or r.get("symbol")]
                         shared_write_display(formatted_all, dict(ACTIVE_POSITIONS), PROFILE["display_file"], PROFILE["config_section"])
                     matched = True
@@ -408,7 +431,12 @@ def run_scan(kite):
                 "vcp_badge": r.get("vcp_badge", ""),
                 "twap_c_stable": r.get("twap_c_stable", False),
                 "twap_c_score": r.get("twap_c_score", 0.0),
-                "twap_c_std": r.get("twap_c_std", 0.0)
+                "twap_c_std": r.get("twap_c_std", 0.0),
+                "rvol_abs": r.get("rvol_abs", 1.0),
+                "rvol_projected": r.get("rvol_projected", 1.0),
+                "rvol_badge": r.get("rvol_badge", "NORMAL"),
+                "is_daily_breakout": r.get("is_daily_breakout", False),
+                "breakout_badge": r.get("breakout_badge", "")
             })
     if formed_display:
         with position_lock:

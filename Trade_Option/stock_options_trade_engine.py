@@ -200,6 +200,9 @@ def resolve_option_contract(symbol, spot, step, opt_type, target_strike=None):
                         target_exp = expiries[1]
                         logging.info(f"[STOCK EXPIRY ROLLOVER 85%] {symbol}: {days_rem}d to expiry ({curr_exp}) -> Selected NEXT MONTH ({target_exp})")
                         sel = future[future['expiry_dt'] == target_exp].iloc[0]
+                    elif days_rem <= 2 and len(expiries) <= 1:
+                        logging.warning(f"[PHYSICAL DELIVERY GUARD] {symbol}: Only {days_rem}d to monthly expiry with no next-month contract. Skipping to prevent physical settlement margin penalty.")
+                        return None
                     else:
                         sel = future.iloc[0]
                 else:
@@ -727,6 +730,33 @@ def run_fast_radar_check(kite):
                     if stretch_pct > 15.0:
                         logging.info(f"[RADAR OVERPAY GUARD] {sym} ({item.get('contract')}) stretched {stretch_pct:.1f}% > 15% above VWAP ({opt_vwap}). Skipping entry.")
                         continue
+
+                    # Check 3: Spot Institutional Relative Volume (RVOL) Confluence
+                    spot_tok = item.get("spot_token")
+                    if not spot_tok:
+                        from registries import STOCK_REGISTRY
+                        reg = STOCK_REGISTRY.get(sym)
+                        if isinstance(reg, dict):
+                            spot_tok = reg.get("token")
+                    
+                    if spot_tok:
+                        try:
+                            df_spot_rvol = safe_kite_call(
+                                fetch_and_resample_candles,
+                                kite, spot_tok,
+                                (dt.now() - timedelta(days=35)).strftime('%Y-%m-%d'),
+                                dt.now().strftime('%Y-%m-%d'),
+                                "day"
+                            )
+                            if df_spot_rvol is not None and len(df_spot_rvol) >= 5:
+                                from rvol_calculator import calculate_rvol
+                                rvol_spot = calculate_rvol(df_spot_rvol, tf_is_daily=True)
+                                if rvol_spot.get("badge") != "NORMAL":
+                                    item["spot_rvol_badge"] = rvol_spot.get("badge")
+                                    item["spot_rvol_projected"] = rvol_spot.get("rvol_projected")
+                                    logging.info(f"🔥 [SPOT RVOL CONFLUENCE] {sym}: Underlying has {rvol_spot.get('badge')} (Projected {rvol_spot.get('rvol_projected')}x) backing option breakout!")
+                        except Exception as rvol_err:
+                            logging.debug(f"Spot RVOL check error for {sym}: {rvol_err}")
 
                     if is_retest and not is_breakout:
                         trigger_type = "POST_D_RETEST"

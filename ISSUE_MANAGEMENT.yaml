@@ -1,15 +1,39 @@
 meta:
   system: Price Action Unified Strategy System
   version: v2.1.0-stable
-  last_updated: '2026-09-08'
+  last_updated: '2026-09-09'
   purpose: Active operational tracker for v2.1.0-stable failures, root causes, regressions, and enhancements.
   historical_archive: archive/ISSUE_HISTORY_ARCHIVE.yaml (Preserves 119 resolved legacy issues prior to 2026-09-05)
-  total_active_issues: 24
+  total_active_issues: 25
   archived_issues_summary:
     total_archived: 119
     recent_archived_batch: [FEATURE-031, FEATURE-030, FEATURE-029, ISSUE-084, ISSUE-083, ISSUE-082, ISSUE-081, ISSUE-080, FEATURE-036, FEATURE-035, FEATURE-034, FEATURE-033, ISSUE-054]
     key_archived_families: [ALGO_AUDIT_CVE, QUANT_ENHANCEMENTS, RADAR_LIFECYCLE, VCP_METRICS, SCANNER_DISCOVERY, SECURITY_CONFIG, ZERO_REGRESSION_AUDIT]
 issues:
+- id: FEATURE-043
+  title: Institutional Relative Volume (RVOL) Surge Engine, Daily Breakout Detector & Stock vs Option Differentiation
+  severity: HIGH
+  category: Relative Volume (RVOL), Daily Breakout, Institutional Scanners, Physical Delivery Guard
+  family: QUANT_ENHANCEMENTS
+  date_reported: '2026-09-09'
+  symptom: |
+    1. The system lacked an institutional Relative Volume (RVOL) surge alert engine (as seen in leading apps like Dhan) that flags when intraday volume surpasses the full 20-day daily average mid-day (e.g. at 10:45 AM) or paces at > 2.0x 20D volume.
+    2. The Stock Engine (cash equity swing trading) and Option Engine (derivatives momentum trading) needed sharp strategic separation regarding holding horizon, theta decay mitigation, and physical delivery settlement protection.
+  root_cause: |
+    1. Volatility and volume checks were purely candle-level (VCP ATR ratios) without session-level time-adjusted pacing projection against 20-day baseline daily volume.
+    2. Stock options lacked a hard physical delivery margin cutoff when within 2 days of monthly expiry.
+  affected_files:
+  - common/rvol_calculator.py
+  - common/trading_core.py
+  - Trade_Stock/stock_reversal_scanner.py
+  - Trade_Option/stock_options_trade_engine.py
+  - scratch/test_rvol_engine.py
+  resolution: |
+    1. Built common/rvol_calculator.py computing 20-day average volume, absolute RVOL, time-of-day pacing (elapsed / 375 mins), and alert badges: 🔥 RVOL > 20D, ⚡ RVOL 2.0x+ PACE, and 🚀 DAILY BREAKOUT.
+    2. Integrated RVOL and Daily Breakout into Trade_Stock/stock_reversal_scanner.py, elevating confirmed volume surges to 🥇 T1 Gold and passing metrics to the dashboard UI.
+    3. Integrated Spot RVOL Confluence into Trade_Option/stock_options_trade_engine.py to verify underlying institutional volume behind option D-breakouts.
+    4. Enforced Physical Delivery Safety Guard in stock_options_trade_engine.py to prevent entering stock options within 2 days of monthly expiry with no next-month contract.
+  status: RESOLVED
 - id: FEATURE-042
   title: Post-D Retest Entry Near Benchmark with VWAP Support & Dynamic Risk Management
   severity: HIGH
