@@ -34,8 +34,9 @@ issues:
        - Runaway eviction only triggers when price completes >= 80% of the journey to Target 1: t1_80pct = BM + 0.80 * (T1 - BM).
        - Removed tick-level SL eviction; delegated SL eviction strictly to candle-aware timeframe close checks.
     2. Enhanced run_fast_radar_check and audit_funnel_anchor_closures in Trade_Option/stock_options_trade_engine.py:
-       - Evaluated candle timeframe maturity (is_closed_bar) upfront.
-       - SL eviction only triggers if is_closed_bar and c_now <= sl; intra-bar wicks hold setup on radar with [RADAR SL WICK HELD].
+       - Enforced that SL eviction is strictly governed by the Anchor Timeframe (15m) candle close with calculate_sl_buffer: buffered_sl = calculate_sl_buffer(sl, side="BULL").
+       - In audit_funnel_anchor_closures, candidate eviction only triggers if the completed 15m candle closes at or below buffered_sl. If price closes between buffered_sl and raw SL, setup is preserved on radar.
+       - In run_fast_radar_check (3m/5m fast radar), price below SL simply holds execution [RADAR SL HELD: AWAITING ANCHOR TF CLOSE] without evicting candidates from the funnel.
        - Runaway eviction enforced strictly at c_now >= t1_80pct; eliminated hardcoded +8% chase standby block.
     3. Updated Trade_Option/templates/index.html evalItemStatus to compute isRunaway at >= 80% T1 with '🏃 80% T1 RUNAWAY' status badge.
     4. Updated Test 20 in scratch/run_full_regression_test.py to validate 80% T1 threshold and TF closing SL policy.

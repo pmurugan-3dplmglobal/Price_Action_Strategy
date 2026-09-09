@@ -409,14 +409,19 @@ def run_scan_cycle(kite):
                         last_a_close = float(last_candle['close'])
                         t1_80pct = round(bm + 0.80 * (t1 - bm), 2) if (bm > 0 and t1 > bm) else round(t1 * 0.80, 2) if t1 > 0 else 0.0
 
-                        if sl > 0 and last_a_close <= sl:
+                        from targets import calculate_sl_buffer
+                        buffered_sl = calculate_sl_buffer(sl, side="BULL") if sl > 0 else 0.0
+
+                        if buffered_sl > 0 and last_a_close <= buffered_sl:
                             if is_closed_anchor:
-                                logging.info(f"[ANCHOR TF EVICT: SL BREACH] {sym} ({item.get('contract')}) closed at/below SL on {TIMEFRAME_ANCHOR} ({last_a_close} <= {sl}). Evicting from {pool_key}.")
+                                logging.info(f"[ANCHOR TF EVICT: SL BREACH] {sym} ({item.get('contract')}) closed at/below buffered SL on {TIMEFRAME_ANCHOR} ({last_a_close:.2f} <= {buffered_sl:.2f}, raw SL={sl:.2f}). Evicting from {pool_key}.")
                                 pattern_funnel.evict_item("nifty50", item)
                             else:
-                                logging.debug(f"[ANCHOR TF SL WICK HELD] {sym} ({item.get('contract')}) tick at/below SL ({last_a_close} <= {sl}) on forming {TIMEFRAME_ANCHOR} bar. Not evicting.")
+                                logging.debug(f"[ANCHOR TF SL WICK HELD] {sym} ({item.get('contract')}) tick at/below buffered SL ({last_a_close:.2f} <= {buffered_sl:.2f}) on forming {TIMEFRAME_ANCHOR} bar. Not evicting.")
+                        elif sl > 0 and buffered_sl < last_a_close <= sl:
+                            logging.debug(f"[ANCHOR TF SL BUFFER HELD] {sym} ({item.get('contract')}) closed at {last_a_close:.2f} within SL buffer zone ({buffered_sl:.2f} to {sl:.2f}). Preserving setup.")
                         elif t1_80pct > 0 and last_a_close >= t1_80pct:
-                            logging.info(f"[ANCHOR TF EVICT: 80% T1 HIT] {sym} ({item.get('contract')}) reached 80% T1 on {TIMEFRAME_ANCHOR} ({last_a_close} >= {t1_80pct:.2f}, T1={t1:.2f}, BM={bm:.2f}). Evicting from {pool_key}.")
+                            logging.info(f"[ANCHOR TF EVICT: 80% T1 HIT] {sym} ({item.get('contract')}) reached 80% T1 on {TIMEFRAME_ANCHOR} ({last_a_close:.2f} >= {t1_80pct:.2f}, T1={t1:.2f}, BM={bm:.2f}). Evicting from {pool_key}.")
                             pattern_funnel.evict_item("nifty50", item)
     except Exception as audit_err:
         logging.debug(f"Anchor TF funnel audit error: {audit_err}")
@@ -819,15 +824,12 @@ def run_fast_radar_check(kite):
                             pattern_funnel.evict_item("nifty50", item)
                         continue
 
-                    # Hard Eviction Rule 1: SL breached on TF CLOSING basis
+                    # Surveillance Guard 1: SL Breach Check
+                    # IMPORTANT: Eviction must strictly be on Anchor Timeframe (15m) close with buffer (handled in audit_funnel_anchor_closures).
+                    # During fast radar surveillance (3m/5m), price below SL simply skips entry execution without evicting the setup from the funnel.
                     if sl > 0 and c_now <= sl:
-                        if is_closed_bar:
-                            logging.info(f"[RADAR EVICT: SL CLOSED BREACH] {sym} ({item.get('contract')}) closed at/below SL on {item_tf} ({c_now:.2f} <= {sl:.2f}). Evicting setup.")
-                            pattern_funnel.evict_item("nifty50", item)
-                            continue
-                        else:
-                            logging.debug(f"[RADAR SL WICK HELD] {sym} ({item.get('contract')}) intra-bar tick ({c_now:.2f} <= SL {sl:.2f}) on forming {item_tf} bar. Awaiting bar close.")
-                            continue
+                        logging.debug(f"[RADAR SL HELD: AWAITING ANCHOR TF CLOSE] {sym} ({item.get('contract')}) price at {c_now:.2f} <= SL {sl:.2f} on {item_tf}. Skipping entry; awaiting Anchor TF close for eviction.")
+                        continue
 
                     # Hard Eviction Rule 2: 80% T1 achieved pre-entry (Do Not Chase)
                     t1_80pct = round(bm + 0.80 * (t1 - bm), 2) if (bm > 0 and t1 > bm) else round(t1 * 0.80, 2) if t1 > 0 else 0.0
