@@ -399,9 +399,6 @@ def run_scan_cycle(kite):
                         elif t1 > 0 and last_a_close >= (t1 * 0.995):
                             logging.info(f"[ANCHOR TF EVICT: T1 HIT] {sym} ({item.get('contract')}) closed at/above T1 on {TIMEFRAME_ANCHOR} ({last_a_close} >= {t1}). Evicting from {pool_key}.")
                             pattern_funnel.evict_item("nifty50", item)
-                        elif bm > 0 and last_a_close > (bm * 1.05):
-                            logging.info(f"[ANCHOR TF EVICT: RUNAWAY] {sym} ({item.get('contract')}) ran away on {TIMEFRAME_ANCHOR} ({last_a_close} > BM {bm} +5%). Evicting from {pool_key}.")
-                            pattern_funnel.evict_item("nifty50", item)
     except Exception as audit_err:
         logging.debug(f"Anchor TF funnel audit error: {audit_err}")
 
@@ -807,11 +804,12 @@ def run_fast_radar_check(kite):
                         pattern_funnel.evict_item("nifty50", item)
                         continue
 
-                    # Hard Eviction Rule 3: Runaway Breakout Guard (LTP > BM + 5% pre-entry)
-                    # Chasing a runaway premium creates massive adverse risk/reward and severe drawdown risk
-                    if bm > 0 and c_now > (bm * 1.05):
-                        logging.info(f"[RADAR EVICT: RUNAWAY BREAKOUT] {sym} ({item.get('contract')}) ran away pre-entry ({c_now:.2f} > BM {bm:.2f} +5.0%). Evicting setup to prevent chasing.")
-                        pattern_funnel.evict_item("nifty50", item)
+                    # Rule 3: Runaway Breakout Guard (LTP > BM + 8% pre-entry)
+                    # Chasing a runaway premium creates massive adverse risk/reward and severe drawdown risk.
+                    # IMPORTANT: Do NOT permanently evict! Put on standby so if it pulls back to Benchmark,
+                    # it can cleanly execute as a POST_D_RETEST trade!
+                    if bm > 0 and c_now > (bm * 1.08):
+                        logging.info(f"[RADAR STANDBY: RUNAWAY] {sym} ({item.get('contract')}) ran away pre-entry ({c_now:.2f} > BM {bm:.2f} +8.0%). Skipping chase; keeping on radar for retest.")
                         continue
 
                     # Trigger 1: Breakout / 80% Early D Trigger

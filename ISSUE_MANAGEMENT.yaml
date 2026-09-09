@@ -133,9 +133,9 @@ issues:
     3. Enhanced Fast Radar surveillance in Trade_Option/stock_options_trade_engine.py:
        - Hard Eviction Rule 1: SL breached pre-entry (c_now <= sl).
        - Hard Eviction Rule 2: T1 achieved pre-entry (c_now >= t1 * 0.995).
-       - Hard Eviction Rule 3: Runaway Breakout Guard (c_now > bm * 1.05 pre-entry) evicts overstretched contracts to prevent chasing.
-       - Stale Prior-Day Cleanup: Prior session setups with c_dt.date() < today that already hit T1, ran past BM, or breached SL are immediately purged.
-    4. Enhanced Anchor TF funnel audit in stock_options_trade_engine.py to evict setups on T1 hit, runaway, or SL breach.
+       - Hard Eviction Rule 3: Runaway Breakout Guard (c_now > bm * 1.08 pre-entry) skips chasing, logging [RADAR STANDBY: RUNAWAY] while preserving the setup in the funnel so it can execute on pullback via POST_D_RETEST.
+       - Stale Prior-Day Cleanup: Prior session setups with c_dt.date() < today that already hit T1 or breached SL are immediately purged.
+    4. Enhanced Anchor TF funnel audit in stock_options_trade_engine.py to evict setups on T1 hit or SL breach while preserving viable retest setups.
     5. Enhanced Trade_Option/templates/index.html:
        - Cross-checks item contract/symbol against live LTP.
        - Added default-checked checkbox toggle: [x] Hide Runaway / T1 Hit.
