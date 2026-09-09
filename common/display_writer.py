@@ -138,7 +138,16 @@ def write_scan_display_data(staged, active, display_file, engine_name=None):
                 "spot_confluence_type": str(t.get("spot_confluence_type", "NONE")),
                 "twap_c_stable": bool(t.get("twap_c_stable", False)),
                 "twap_c_score": float(t.get("twap_c_score", 0.0)),
-                "twap_c_std": float(t.get("twap_c_std", 0.0))
+                "twap_c_std": float(t.get("twap_c_std", 0.0)),
+                "opt_rvol_badge": t.get("opt_rvol_badge", "NORMAL"),
+                "vol_d_ratio": float(t.get("vol_d_ratio", 1.0)),
+                "vol_c_ratio": float(t.get("vol_c_ratio", 1.0)),
+                "vol_score": int(t.get("vol_score", 3)),
+                "rvol_abs": float(t.get("rvol_abs", 1.0)),
+                "rvol_projected": float(t.get("rvol_projected", 1.0)),
+                "rvol_badge": t.get("rvol_badge", "NORMAL"),
+                "is_daily_breakout": bool(t.get("is_daily_breakout", False)),
+                "breakout_badge": t.get("breakout_badge", "")
             }
         new_staged = [build_trade(t, t.get("pattern", "BE_ABCD"), t.get("entry_time", now_str), None, is_staged=True) for t in (staged or [])]
         carry_fwd = []

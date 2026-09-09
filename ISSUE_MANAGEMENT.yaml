@@ -4,12 +4,34 @@ meta:
   last_updated: '2026-09-09'
   purpose: Active operational tracker for v2.1.0-stable failures, root causes, regressions, and enhancements.
   historical_archive: archive/ISSUE_HISTORY_ARCHIVE.yaml (Preserves 119 resolved legacy issues prior to 2026-09-05)
-  total_active_issues: 25
+  total_active_issues: 26
   archived_issues_summary:
     total_archived: 119
     recent_archived_batch: [FEATURE-031, FEATURE-030, FEATURE-029, ISSUE-084, ISSUE-083, ISSUE-082, ISSUE-081, ISSUE-080, FEATURE-036, FEATURE-035, FEATURE-034, FEATURE-033, ISSUE-054]
     key_archived_families: [ALGO_AUDIT_CVE, QUANT_ENHANCEMENTS, RADAR_LIFECYCLE, VCP_METRICS, SCANNER_DISCOVERY, SECURITY_CONFIG, ZERO_REGRESSION_AUDIT]
 issues:
+- id: FEATURE-044
+  title: Intraday Bar RVOL on Option Charts (Point C Volume Dry-Up & Point D Breakout Surge)
+  severity: HIGH
+  category: Option Greeks, Volume Profile, Datta Price Action, Breakout Execution
+  family: QUANT_ENHANCEMENTS
+  date_reported: '2026-09-09'
+  symptom: |
+    1. Multi-day 20-day daily RVOL cannot be used on Option Charts due to weekly expiry lifespan (5-7 days) and moneyness strike migration distortions (OTM to ATM causing false 100x spikes).
+    2. Option breakout candidates needed pure Intraday Bar-to-Bar RVOL against the 20-period moving average of intraday bars on that specific contract to validate Datta's Point C volume dry-up (<= 0.85x) and Point D breakout expansion (>= 1.5x).
+  root_cause: |
+    1. Volume profile scoring lacked explicit badges (opt_rvol_badge) and direct elevation into Tier 1 Gold for confirmed option breakouts.
+    2. Display serialization did not pass option bar RVOL metrics to the frontend dashboard.
+  affected_files:
+  - common/patterns_bull.py
+  - common/patterns_bear.py
+  - common/display_writer.py
+  resolution: |
+    1. Upgraded volume profile analysis in patterns_bull.py and patterns_bear.py to measure Intraday Bar RVOL (V_D / SMA20 >= 1.5x) and Point C Retest Dry-up (<= 0.85x).
+    2. Added automated badges: ⚡ OPT RVOL 2.0x+, 📈 OPT RVOL 1.5x+, and 🎯 DRYUP+EXP.
+    3. Confirmed option RVOL surges (vol_score >= 5 and R:R >= 1.8) are promoted to 🥇 T1 Gold.
+    4. Serialized opt_rvol_badge, vol_d_ratio, vol_c_ratio, and vol_score in display_writer.py.
+  status: RESOLVED
 - id: FEATURE-043
   title: Institutional Relative Volume (RVOL) Surge Engine, Daily Breakout Detector & Stock vs Option Differentiation
   severity: HIGH

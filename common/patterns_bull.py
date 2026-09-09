@@ -518,12 +518,13 @@ def scan_anchor_bcd_breakout(df_entry, df_anchor, anchor_tf="", entry_tf="", ena
         d_time_str = str(d.get("date", ""))
         a_time_str = str(cand.get("a_time") or a.get("date", ""))
 
-        # ── Volume Profile Analysis on B-C-D ──
+        # ── Volume Profile Analysis on B-C-D (Option Chart Intraday RVOL) ──
         vol_b_ratio = 1.0
         vol_c_ratio = 1.0
         vol_d_ratio = 1.0
         vol_confirmed = True
         vol_profile_score = 3
+        opt_rvol_badge = "NORMAL"
         if 'volume' in df_entry.columns and d_idx >= 5:
             try:
                 avg_vol_20 = float(df_entry['volume'].iloc[max(0, d_idx - 20):d_idx].mean())
@@ -534,16 +535,24 @@ def scan_anchor_bcd_breakout(df_entry, df_anchor, anchor_tf="", entry_tf="", ena
                     vol_b_ratio = round(vb / avg_vol_20, 2)
                     vol_c_ratio = round(vc / vb, 2) if vb > 0 else round(vc / avg_vol_20, 2)
                     vol_d_ratio = round(vd / avg_vol_20, 2)
+                    c_rvol = round(vc / avg_vol_20, 2)
 
-                    # Retest Volume Dry-up: VC should ideally be lower than VB (pullback on declining volume)
-                    # Trigger Volume Expansion: VD should be expanding relative to 20-period avg
-                    is_c_dryup = (vol_c_ratio <= 0.90) or (vc <= avg_vol_20)
-                    is_d_expansion = (vol_d_ratio >= 1.0) or (is_near_close_d and vol_d_ratio >= 0.60)
+                    # Retest Volume Dry-up: VC should ideally be lower than VB (pullback on declining volume <= 0.85)
+                    # Trigger Volume Expansion: VD should be expanding relative to 20-period avg (>= 1.5x)
+                    is_c_dryup = (vol_c_ratio <= 0.85) or (c_rvol <= 0.85) or (vc <= avg_vol_20)
+                    is_d_expansion = (vol_d_ratio >= 1.50) or (is_near_close_d and vol_d_ratio >= 1.00) or (vol_d_ratio >= 1.20)
                     vol_confirmed = bool(is_c_dryup and is_d_expansion)
 
-                    if vol_confirmed and vol_d_ratio >= 1.3:
+                    if vol_d_ratio >= 2.0:
+                        opt_rvol_badge = f"⚡ OPT RVOL {vol_d_ratio:.1f}x"
+                    elif vol_d_ratio >= 1.5:
+                        opt_rvol_badge = f"📈 OPT RVOL {vol_d_ratio:.1f}x"
+                    elif is_c_dryup and vol_d_ratio >= 1.2:
+                        opt_rvol_badge = f"🎯 DRYUP+EXP ({vol_d_ratio:.1f}x)"
+
+                    if vol_confirmed and vol_d_ratio >= 1.5:
                         vol_profile_score = 5
-                    elif vol_confirmed:
+                    elif vol_confirmed and vol_d_ratio >= 1.2:
                         vol_profile_score = 4
                     elif is_c_dryup or is_d_expansion:
                         vol_profile_score = 3
@@ -573,6 +582,7 @@ def scan_anchor_bcd_breakout(df_entry, df_anchor, anchor_tf="", entry_tf="", ena
             "vol_b_ratio": vol_b_ratio,
             "vol_c_ratio": vol_c_ratio,
             "vol_d_ratio": vol_d_ratio,
+            "opt_rvol_badge": opt_rvol_badge,
             "vol_confirmed": vol_confirmed,
             "vol_score": vol_profile_score,
             "twap_c_stable": twap_c_info.get("twap_stable", False),
@@ -610,15 +620,16 @@ def scan_anchor_bcd_breakout(df_entry, df_anchor, anchor_tf="", entry_tf="", ena
     is_true_anchor = any(k in p_name for k in ["BE_ABCD", "LL_ABCD", "HAMMER_ABCD", "HARAMI_ABCD", "HH_ABCD"]) and "BASE_ABCD" not in p_name
     is_higher_timeframe = str(anchor_tf).lower() in ["day", "week", "1d", "1w", "daily", "weekly", "d", "w"]
     twap_c_stable = bool(best_latest.get("twap_c_stable", False))
+    opt_vol_score = int(best_latest.get("vol_score", 3))
 
     # Option A Balanced Tiering (T1 Gold 1:2 / 2.0, T2 Core 1:1.5 / 1.5):
     # Tier 1 (Gold): 
-    #   - Intraday Options: Strictly 5 True Anchors + (>=3 Waves or Tier 1 Multi-Swing Arch or Stable TWAP C Base) + R:R >= 2.0
+    #   - Intraday Options: Strictly 5 True Anchors + (>=3 Waves or Tier 1 Multi-Swing Arch or Stable TWAP C Base or Option RVOL Surge >= 1.5x) + R:R >= 2.0
     #   - Daily/Weekly Equities: True Anchor / Institutional Liquidity Base + R:R >= 2.0
     # Tier 2 (Core): 5 True Anchors (>=2 Waves / R:R >= 1.5) OR strong BASE_ABCD with (>=3 Waves and R:R >= 2.0) OR Higher TF with R:R >= 1.5 OR TWAP C Stable (R:R >= 1.5)
     # Tier 3 (Momentum): Standard/early BASE_ABCD and trend continuations (R:R >= 1.5)
     if rr_val >= 2.0 and (
-        (is_true_anchor and (sw_waves >= 2 or is_higher_timeframe or swing_meta.get("tier") == 1 or (twap_c_stable and sw_waves >= 1)))
+        (is_true_anchor and (sw_waves >= 2 or is_higher_timeframe or swing_meta.get("tier") == 1 or (twap_c_stable and sw_waves >= 1) or opt_vol_score >= 5))
         or (is_higher_timeframe and (is_true_anchor or term_base))
         or (not is_true_anchor and sw_waves >= 3 and term_base)
     ):
@@ -651,6 +662,7 @@ def scan_anchor_bcd_breakout(df_entry, df_anchor, anchor_tf="", entry_tf="", ena
     best_latest["is_squeeze"] = vcp_m.get("is_squeeze", False)
     best_latest["vcp_tier"] = vcp_m.get("vcp_tier", "NORMAL")
     best_latest["vcp_badge"] = vcp_m.get("vcp_badge", "")
+    best_latest["opt_rvol_badge"] = best_latest.get("opt_rvol_badge", "NORMAL")
     return best_latest
 
 
