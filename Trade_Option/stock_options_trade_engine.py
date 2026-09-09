@@ -64,7 +64,7 @@ INITIAL_CAPITAL = 100000.0
 MAX_RISK_PERCENT = 1.0
 TOKEN_FILE = paths.TOKEN_FILE
 STATE_FILE = paths.monitor_file("stock_positions_state.json")
-SCAN_INTERVAL_SECONDS = 300
+SCAN_INTERVAL_SECONDS = 900
 STRIKE_RANGE = 0
 
 TIMEFRAME_ENTRY = "15minute"
@@ -645,9 +645,39 @@ def run_fast_radar_check(kite):
         return []
 
     funnel_summary = pattern_funnel.get_funnel_summary("nifty50")
-    radar_pool = funnel_summary.get("category_a_plus", []) + funnel_summary.get("category_a", [])
+    radar_pool = list(funnel_summary.get("category_a_plus", []) + funnel_summary.get("category_a", []))
+
+    # Ingest unexecuted high-conviction candidates directly from the Scan Tab (SCAN_DISPLAY_FILE)
+    if os.path.exists(SCAN_DISPLAY_FILE):
+        try:
+            with open(SCAN_DISPLAY_FILE, "r", encoding="utf-8") as f:
+                scan_disp = json.load(f)
+            staged_tab = scan_disp.get("staged_trades", [])
+            existing_keys = {
+                (x.get("symbol"), x.get("contract")): True for x in radar_pool
+            }
+            for st in staged_tab:
+                s_key = (st.get("symbol"), st.get("contract"))
+                if s_key not in existing_keys:
+                    bm = float(st.get("benchmark") or 0.0)
+                    sl = float(st.get("current_sl") or 0.0)
+                    # Filter: valid benchmark & SL, and not marked as active holding
+                    if bm > 0 and sl > 0 and st.get("staged_tag") != "ACTIVE_HOLDING":
+                        radar_pool.append(st)
+                        existing_keys[s_key] = True
+        except Exception as disp_err:
+            logging.debug(f"Radar Scan Tab ingestion error: {disp_err}")
+
     if not radar_pool:
         return []
+
+    # Prioritize: Tier 1 Gold first, then highest R:R
+    def _radar_priority(x):
+        tier_val = int(x.get("tier", 2))
+        rr_val = float(x.get("rr", 0.0) or 0.0)
+        return (-tier_val, rr_val)
+
+    radar_pool.sort(key=_radar_priority, reverse=True)
 
     triggered = []
     for item in radar_pool:

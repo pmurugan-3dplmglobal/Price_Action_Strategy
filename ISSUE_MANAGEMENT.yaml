@@ -4,12 +4,32 @@ meta:
   last_updated: '2026-09-09'
   purpose: Active operational tracker for v2.1.0-stable failures, root causes, regressions, and enhancements.
   historical_archive: archive/ISSUE_HISTORY_ARCHIVE.yaml (Preserves 119 resolved legacy issues prior to 2026-09-05)
-  total_active_issues: 26
+  total_active_issues: 27
   archived_issues_summary:
     total_archived: 119
     recent_archived_batch: [FEATURE-031, FEATURE-030, FEATURE-029, ISSUE-084, ISSUE-083, ISSUE-082, ISSUE-081, ISSUE-080, FEATURE-036, FEATURE-035, FEATURE-034, FEATURE-033, ISSUE-054]
     key_archived_families: [ALGO_AUDIT_CVE, QUANT_ENHANCEMENTS, RADAR_LIFECYCLE, VCP_METRICS, SCANNER_DISCOVERY, SECURITY_CONFIG, ZERO_REGRESSION_AUDIT]
 issues:
+- id: FEATURE-045
+  title: 15-Minute Macro Discovery Scan Interval & Scan Tab Ingestion into 15s Fast Radar
+  severity: HIGH
+  category: Fast Radar, Surveillance Lifecycle, Scan Tab Integration, Performance Optimization
+  family: RADAR_LIFECYCLE
+  date_reported: '2026-09-09'
+  symptom: |
+    1. Running full 200+ F&O macro discovery scans every 5 minutes (300s) consumed unnecessary API rate limits and network latency when intraday execution is handled by the 15-second Fast Surveillance Radar.
+    2. The Fast Surveillance Radar only monitored Category A+ and A candidates from the pattern funnel, omitting high-conviction scripts staged directly on the Scan Tab (scan_display.json).
+  root_cause: |
+    1. Default SCAN_INTERVAL_SECONDS was 300s in stock_options_trade_engine.py.
+    2. run_fast_radar_check only queried pattern_funnel and did not ingest staged setups from SCAN_DISPLAY_FILE.
+  affected_files:
+  - Trade_Option/stock_options_trade_engine.py
+  - input/program_config.json
+  resolution: |
+    1. Set macro discovery scan interval to 15 minutes (900s) in stock_options_trade_engine.py and input/program_config.json.
+    2. Enhanced run_fast_radar_check to ingest unexecuted candidates from SCAN_DISPLAY_FILE, skipping active holdings.
+    3. Added multi-factor prioritization to the radar pool: Tier 1 Gold first, followed by highest Risk:Reward.
+  status: RESOLVED
 - id: FEATURE-044
   title: Intraday Bar RVOL on Option Charts (Point C Volume Dry-Up & Point D Breakout Surge)
   severity: HIGH
