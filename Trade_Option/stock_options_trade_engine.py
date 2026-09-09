@@ -581,6 +581,8 @@ def execute_highest_rr_trade(kite, staged):
                     "side": opt_type, "strike": target_strike,
                     "benchmark": benchmark_val, "anchor_floor": best.get("anchor_floor"),
                     "direction": best.get("direction", "BULL"),
+                    "spot_token": best.get("spot_token"),
+                    "spot_sl": best.get("spot_sl"),
                     "entry_time": dt.now().isoformat(),
                     "position_type": "option_spread" if spread_info else "option",
                     "tier": best.get("tier", 1),
