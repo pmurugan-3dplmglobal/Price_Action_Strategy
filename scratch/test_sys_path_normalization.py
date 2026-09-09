@@ -75,11 +75,13 @@ class TestSysPathNormalization(unittest.TestCase):
     def test_defensive_spread_import_fallback(self):
         """Simulate environment where common package is missing from sys.path to verify fallback."""
         code = '''
-import sys
-# Remove PROJECT_ROOT, keep only COMMON_DIR
-common_dir = r"''' + COMMON_DIR.replace('\\', '/') + '''"
-sys.path = [p for p in sys.path if "Price_Action_Strategy" not in p]
-sys.path.insert(0, common_dir)
+import sys, os
+# Remove exact PROJECT_ROOT, keep only COMMON_DIR and environment site-packages
+project_root = os.path.abspath(r"''' + PROJECT_ROOT.replace('\\', '/') + '''")
+common_dir = os.path.abspath(r"''' + COMMON_DIR.replace('\\', '/') + '''")
+sys.path = [p for p in sys.path if os.path.abspath(p) != project_root]
+if common_dir not in sys.path:
+    sys.path.insert(0, common_dir)
 
 try:
     from common.position_monitor import _get_nfo_cache
