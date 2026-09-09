@@ -629,7 +629,7 @@ def scan_anchor_bcd_breakout_bearish(df_entry, df_anchor, anchor_tf="", entry_tf
     return best_match
 
 
-def scan_pattern_lifecycle_stage_bearish(df_entry, df_anchor, anchor_tf="", entry_tf="", enable_swing_filter=None, swing_min_waves=3, swing_min_r2=0.55):
+def scan_pattern_lifecycle_stage_bearish(df_entry, df_anchor, anchor_tf="", entry_tf="", enable_swing_filter=None, swing_min_waves=3, swing_min_r2=0.55, is_option=False):
     """
     Evaluates the current maturity of a bearish symbol across the 4-stage lifecycle funnel:
       1. STAGE_FULL_ABCD: D breakdown confirmed or near-close triggered (Ready for immediate execution).
@@ -717,6 +717,7 @@ def scan_pattern_lifecycle_stage_bearish(df_entry, df_anchor, anchor_tf="", entr
 
     df_target = df_anchor if (df_anchor is not None and len(df_anchor) >= 8) else df_entry
     latest_close = float(df_entry.iloc[-1]['close']) if (df_entry is not None and not df_entry.empty) else float(df_target.iloc[-1]['close'])
+    opt_mode = is_option or ("minute" in str(anchor_tf).lower() and len(df_target) <= 180)
 
     for anchor_idx in range(len(df_target) - 2, max(0, len(df_target) - 75), -1):
         sub_anchor_df = df_target.iloc[:anchor_idx + 1]
@@ -739,8 +740,11 @@ def scan_pattern_lifecycle_stage_bearish(df_entry, df_anchor, anchor_tf="", entr
         pattern_label = short_names.get(anchor_name, "BASE_ABCD")
         a_date = str(det_result.get("CandleATime") or anchor_candle.get('date', ''))
 
-        # 1. Left-Side Rule on Anchor TF: No close above Anchor High in past 100 candles
-        left_df = df_target.iloc[max(0, anchor_idx - 100) : anchor_idx]
+        # 1. Left-Side Rule on Anchor TF:
+        # On Spot equity charts, check 100 candles. On Option charts, scope to 30 bars (~2-3 days)
+        # to prevent historical out-of-the-money penny prices from falsely invalidating live option bases.
+        lookback_bars = 30 if opt_mode else 100
+        left_df = df_target.iloc[max(0, anchor_idx - lookback_bars) : anchor_idx]
         if not left_df.empty and float(left_df['close'].max()) > a_high:
             continue
 
@@ -787,8 +791,10 @@ def scan_pattern_lifecycle_stage_bearish(df_entry, df_anchor, anchor_tf="", entr
                 c_high = float(c_row['high'])
                 c_close = float(c_row['close'])
                 c_open = float(c_row['open'])
-                is_green = c_close > c_open
-                if (c_high >= a_low and c_close <= a_high and is_green) or \
+                c_low = float(c_row['low'])
+                is_green = c_close >= c_open
+                is_doji_or_narrow = (abs(c_close - c_open) / max(0.05, c_high - c_low)) <= 0.40
+                if (c_high >= a_low * 0.985 and c_close <= a_high and (is_green or is_doji_or_narrow)) or \
                    (c_high >= a_high and c_close <= a_high and c_close > float(anchor_candle['open']) and is_green):
                     c_idx = b_idx + 1 + j
                     break

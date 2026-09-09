@@ -4,12 +4,39 @@ meta:
   last_updated: '2026-09-09'
   purpose: Active operational tracker for v2.1.0-stable failures, root causes, regressions, and enhancements.
   historical_archive: archive/ISSUE_HISTORY_ARCHIVE.yaml (Preserves 119 resolved legacy issues prior to 2026-09-05)
-  total_active_issues: 28
+  total_active_issues: 29
   archived_issues_summary:
     total_archived: 119
     recent_archived_batch: [FEATURE-031, FEATURE-030, FEATURE-029, ISSUE-084, ISSUE-083, ISSUE-082, ISSUE-081, ISSUE-080, FEATURE-036, FEATURE-035, FEATURE-034, FEATURE-033, ISSUE-054]
     key_archived_families: [ALGO_AUDIT_CVE, QUANT_ENHANCEMENTS, RADAR_LIFECYCLE, VCP_METRICS, SCANNER_DISCOVERY, SECURITY_CONFIG, ZERO_REGRESSION_AUDIT]
 issues:
+- id: FEATURE-048
+  title: Option-Aware Left-Side Scoping (30 Bars), Flexible Point C Retest, and 25% VWAP Stretch Guard
+  severity: HIGH
+  category: Option Engine, Funnel Category Discovery, Left-Side Lookback, VWAP Execution Guard
+  family: RADAR_LIFECYCLE
+  date_reported: '2026-09-09'
+  symptom: |
+    1. The Option Engine had 0 or very few scripts populated into Category A and Category A+, despite multiple F&O stocks demonstrating strong base formation and clean intraday setups.
+    2. Deep market expert analysis revealed that applying the 100-candle left-side lookback rule directly to option premium charts caused false invalidation: contracts that are ATM/near-ATM today (e.g. ₹40-₹60) traded at deep OTM penny levels (₹2-₹8) just 5-8 days ago, tripping left_df['close'].min() < a_low on virtually all contracts.
+    3. Point C formation rejected tight institutional absorption candles and dojis if they were not strictly red candles closing below B, even when retesting within 1.5% of Benchmark and holding above Anchor Low.
+    4. Option Fast Radar's 15% VWAP stretch guard overly constrained high-momentum options during opening breakout bursts.
+  root_cause: |
+    1. scan_pattern_lifecycle_stage applied an unconditioned 100-bar lookback for all assets without accounting for option premium theta decay and moneyness migration.
+    2. scan_pattern_lifecycle_stage and scan_pattern_lifecycle_stage_bearish did not pass is_option=True from common/resolve.py.
+    3. Point C retest logic required strict red bars, discarding narrow-range/doji absorption pullbacks.
+    4. VWAP stretch cap was set at 15.0% in stock_options_trade_engine.py.
+  affected_files:
+  - common/patterns_bull.py
+  - common/patterns_bear.py
+  - common/resolve.py
+  - Trade_Option/stock_options_trade_engine.py
+  resolution: |
+    1. Added is_option flag to scan_pattern_lifecycle_stage and scan_pattern_lifecycle_stage_bearish, scoping the left-side lookback to 30 bars (~2 days) for option contracts vs 100 bars for spot equities.
+    2. Broadened Point C retest in both bullish and bearish lifecycle scanners to accept narrow-range/doji absorption bars (is_doji_or_narrow <= 0.40) holding above Anchor Low.
+    3. Explicitly passed is_option=True in common/resolve.py for CE and PE option scans.
+    4. Relaxed the Fast Radar VWAP stretch guard threshold in Trade_Option/stock_options_trade_engine.py from 15.0% to 25.0%.
+  status: RESOLVED
 - id: FEATURE-047
   title: Automated Runaway Breakout (> BM + 5%), Target T1 Hit, and Stale Setup Eviction Guards
   severity: HIGH

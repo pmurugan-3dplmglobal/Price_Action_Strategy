@@ -1666,7 +1666,7 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                         pattern_funnel.evict_item(engine_name, ce['tradingsymbol'])
                     elif name == "Setup_1_Anchor_BCD":
                         try:
-                            stage_ce = scan_pattern_lifecycle_stage(df_ce_e, df_ce_a, anchor_tf=timeframe_anchor, entry_tf=timeframe_entry)
+                            stage_ce = scan_pattern_lifecycle_stage(df_ce_e, df_ce_a, anchor_tf=timeframe_anchor, entry_tf=timeframe_entry, is_option=True)
                             if stage_ce and stage_ce.get("stage") in ["STAGE_A_PLUS_READY", "STAGE_A_READY", "STAGE_B_ANCHOR"]:
                                 f_stage = pattern_funnel.STAGE_A_PLUS if stage_ce["stage"] == "STAGE_A_PLUS_READY" else (pattern_funnel.STAGE_A if stage_ce["stage"] == "STAGE_A_READY" else pattern_funnel.STAGE_B)
                                 spot_conf_ce_f, spot_conf_type_ce_f = evaluate_spot_confluence("CE", False, current_spot, spot_vwap, spot_sl_ce, spot_ema_bull)
@@ -1808,7 +1808,7 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                         pattern_funnel.evict_item(engine_name, pe['tradingsymbol'])
                     elif name == "Setup_1_Anchor_BCD":
                         try:
-                            stage_pe = scan_pattern_lifecycle_stage(df_pe_e, df_pe_a, anchor_tf=timeframe_anchor, entry_tf=timeframe_entry)
+                            stage_pe = scan_pattern_lifecycle_stage(df_pe_e, df_pe_a, anchor_tf=timeframe_anchor, entry_tf=timeframe_entry, is_option=True)
                             if stage_pe and stage_pe.get("stage") in ["STAGE_A_PLUS_READY", "STAGE_A_READY", "STAGE_B_ANCHOR"]:
                                 f_stage = pattern_funnel.STAGE_A_PLUS if stage_pe["stage"] == "STAGE_A_PLUS_READY" else (pattern_funnel.STAGE_A if stage_pe["stage"] == "STAGE_A_READY" else pattern_funnel.STAGE_B)
                                 spot_conf_pe_f, spot_conf_type_pe_f = evaluate_spot_confluence("PE", False, current_spot, spot_vwap, spot_sl_pe, spot_ema_bear)

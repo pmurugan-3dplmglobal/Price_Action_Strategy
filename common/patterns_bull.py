@@ -666,7 +666,7 @@ def scan_anchor_bcd_breakout(df_entry, df_anchor, anchor_tf="", entry_tf="", ena
     return best_latest
 
 
-def scan_pattern_lifecycle_stage(df_entry, df_anchor, anchor_tf="", entry_tf="", enable_swing_filter=None, swing_min_waves=3, swing_min_r2=0.55):
+def scan_pattern_lifecycle_stage(df_entry, df_anchor, anchor_tf="", entry_tf="", enable_swing_filter=None, swing_min_waves=3, swing_min_r2=0.55, is_option=False):
     """
     Evaluates the current maturity of a symbol across the 4-stage lifecycle funnel:
       1. STAGE_FULL_ABCD: D breakout confirmed or near-close triggered (Ready for immediate execution).
@@ -763,6 +763,7 @@ def scan_pattern_lifecycle_stage(df_entry, df_anchor, anchor_tf="", entry_tf="",
 
     df_target = df_anchor if (df_anchor is not None and len(df_anchor) >= 8) else df_entry
     latest_close = float(df_entry.iloc[-1]['close']) if (df_entry is not None and not df_entry.empty) else float(df_target.iloc[-1]['close'])
+    opt_mode = is_option or ("minute" in str(anchor_tf).lower() and len(df_target) <= 180)
 
     # Search backward from newest candles on Anchor TF for the most recent valid active Anchor A
     for a_idx in range(len(df_target) - 2, max(0, len(df_target) - 75), -1):
@@ -786,8 +787,11 @@ def scan_pattern_lifecycle_stage(df_entry, df_anchor, anchor_tf="", entry_tf="",
         pattern_label = short_names.get(anchor_name, "BASE_ABCD")
         a_time_val = str(anchor_match.get("CandleATime") or a.get("date", ""))
 
-        # 1. Left-Side Rule on Anchor TF: No close below Anchor Low in past 100 candles
-        left_df = df_target.iloc[max(0, a_idx - 100) : a_idx]
+        # 1. Left-Side Rule on Anchor TF:
+        # On Spot equity charts, check 100 candles. On Option charts (with weekly/monthly lifespans and moneyness decay),
+        # scope lookback to 30 bars (~2-3 days) to prevent historical out-of-the-money penny prices from falsely invalidating live option bases.
+        lookback_bars = 30 if opt_mode else 100
+        left_df = df_target.iloc[max(0, a_idx - lookback_bars) : a_idx]
         if not left_df.empty and float(left_df['close'].min()) < a_low:
             continue
 
@@ -834,8 +838,12 @@ def scan_pattern_lifecycle_stage(df_entry, df_anchor, anchor_tf="", entry_tf="",
                 c_low = float(c_row['low'])
                 c_close = float(c_row['close'])
                 c_open = float(c_row['open'])
-                is_red = c_close < c_open
-                if (c_low <= benchmark and c_close >= a_low and is_red) or \
+                c_high = float(c_row['high'])
+                is_red = c_close <= c_open
+                is_doji_or_narrow = (abs(c_close - c_open) / max(0.05, c_high - c_low)) <= 0.40
+
+                # Confirmed Retest: Dips to or near benchmark (+/- 1.5%), holds above A.low, and is either a red pullback or a narrow absorption bar
+                if (c_low <= benchmark * 1.015 and c_close >= a_low and (is_red or is_doji_or_narrow)) or \
                    (c_low <= a_low and c_close >= a_low and c_close < float(a['open']) and is_red):
                     c_idx = b_idx + 1 + j
                     break

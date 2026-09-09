@@ -823,8 +823,8 @@ def run_fast_radar_check(kite):
                             logging.debug(f"[RADAR VWAP GATE] {sym} ({item.get('contract')}) at {c_now}, but lacks VWAP support (LTP {c_now} < VWAP {opt_vwap}).")
                             continue
 
-                        if stretch_pct > 15.0:
-                            logging.info(f"[RADAR OVERPAY GUARD] {sym} ({item.get('contract')}) stretched {stretch_pct:.1f}% > 15% above VWAP ({opt_vwap}). Skipping entry.")
+                        if stretch_pct > 25.0:
+                            logging.info(f"[RADAR OVERPAY GUARD] {sym} ({item.get('contract')}) stretched {stretch_pct:.1f}% > 25% above VWAP ({opt_vwap}). Skipping entry.")
                             continue
 
                         # Check 3: Spot Institutional Relative Volume (RVOL) Confluence

@@ -30,6 +30,8 @@ meta:
     - Intraday Bar RVOL on Option Charts (Point C Volume Dry-Up & Point D Breakout Surge) (FEATURE-044)
     - 15-Minute Macro Discovery Scan Interval & Scan Tab Ingestion into 15s Fast Radar (FEATURE-045)
     - Anchor TF Geometry Lifecycle (100-Candle Left-Side Rule & Hard T1/SL Eviction) with Zero-Latency Radar Priority (FEATURE-046)
+    - Automated Runaway Breakout (> BM + 5%), Target T1 Hit, and Stale Setup Eviction Guards (FEATURE-047)
+    - Option-Aware Left-Side Scoping (30 Bars), Flexible Point C Retest, and 25% VWAP Stretch Guard (FEATURE-048)
 
 architecture:
   diagram: |
