@@ -6,8 +6,10 @@ Extracted from trading_core.py (2026-08-11).
 import os
 import sys
 COMMON_DIR = os.path.dirname(os.path.abspath(__file__))
-if COMMON_DIR not in sys.path:
-    sys.path.insert(0, COMMON_DIR)
+PROJECT_ROOT = os.path.dirname(COMMON_DIR)
+for p in [PROJECT_ROOT, COMMON_DIR]:
+    if p not in sys.path:
+        sys.path.insert(0, p)
 
 import json
 import logging

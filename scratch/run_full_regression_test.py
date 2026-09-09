@@ -710,6 +710,43 @@ except Exception as e:
     errors.append(f"Option vs Stock Parity Invariants Failed: {e}")
     print(f" FAILED [ERR] ({e})", flush=True)
 
+# -------------------------------------------------------------------------
+# TEST 22: Sys.path Normalization & Package Import Invariant (ISSUE-098)
+# -------------------------------------------------------------------------
+print("[TEST 22] Testing Sys.path Normalization & Package Import Invariants (ISSUE-098)...", end="", flush=True)
+try:
+    import subprocess
+    import paths
+    PROJECT_ROOT = paths.PROJECT_ROOT
+    cmd = [
+        sys.executable,
+        "-c",
+        "import sys; import stock_options_trade_engine; "
+        "assert any(p.endswith('Price_Action_Strategy') for p in sys.path), 'PROJECT_ROOT not in sys.path'; "
+        "assert any(p.endswith('common') for p in sys.path), 'COMMON_DIR not in sys.path'; "
+        "from common.position_monitor import _get_nfo_cache; "
+        "from common.resolve import resolve_option_spread; "
+        "print('OK')"
+    ]
+    res = subprocess.run(cmd, cwd=os.path.join(PROJECT_ROOT, "Trade_Option"), capture_output=True, text=True)
+    assert res.returncode == 0, f"Stock options engine sys.path failed: {res.stderr}"
+
+    cmd_paths = [
+        sys.executable,
+        "-c",
+        "import sys; import paths; "
+        "assert any(p.endswith('Price_Action_Strategy') for p in sys.path); "
+        "assert any(p.endswith('common') for p in sys.path); "
+        "print('OK')"
+    ]
+    res_paths = subprocess.run(cmd_paths, cwd=os.path.join(PROJECT_ROOT, "common"), capture_output=True, text=True)
+    assert res_paths.returncode == 0, f"paths sys.path failed: {res_paths.stderr}"
+
+    print(" PASSED [OK]", flush=True)
+except Exception as e:
+    errors.append(f"Sys.path Normalization Invariant Failed: {e}")
+    print(f" FAILED [ERR] ({e})", flush=True)
+
 print("\n" + "=" * 100)
 if not errors:
     print("      ALL REGRESSION TESTS PASSED WITH 100% SUCCESS -- ZERO REGRESSIONS FOUND!")

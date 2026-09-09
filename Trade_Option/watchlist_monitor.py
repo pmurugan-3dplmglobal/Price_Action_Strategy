@@ -14,9 +14,11 @@ import argparse
 from datetime import datetime
 
 # Adjust path for common imports
-COMMON_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "common")
-if COMMON_DIR not in sys.path:
-    sys.path.insert(0, COMMON_DIR)
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+COMMON_DIR = os.path.join(PROJECT_ROOT, "common")
+for p in [PROJECT_ROOT, COMMON_DIR]:
+    if p not in sys.path:
+        sys.path.insert(0, p)
 
 import paths
 import session

@@ -1,6 +1,11 @@
 import os
+import sys
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+COMMON_DIR = os.path.join(PROJECT_ROOT, "common")
+for p in [PROJECT_ROOT, COMMON_DIR]:
+    if p not in sys.path:
+        sys.path.insert(0, p)
 
 # Directory for temporary scratch files (validation artifacts, etc.)
 SCRATCH_DIR = os.path.join(PROJECT_ROOT, "scratch")

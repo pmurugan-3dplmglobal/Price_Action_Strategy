@@ -4,12 +4,54 @@ meta:
   last_updated: '2026-09-09'
   purpose: Active operational tracker for v2.1.0-stable failures, root causes, regressions, and enhancements.
   historical_archive: archive/ISSUE_HISTORY_ARCHIVE.yaml (Preserves 119 resolved legacy issues prior to 2026-09-05)
-  total_active_issues: 34
+  total_active_issues: 35
   archived_issues_summary:
     total_archived: 119
     recent_archived_batch: [FEATURE-031, FEATURE-030, FEATURE-029, ISSUE-084, ISSUE-083, ISSUE-082, ISSUE-081, ISSUE-080, FEATURE-036, FEATURE-035, FEATURE-034, FEATURE-033, ISSUE-054]
     key_archived_families: [ALGO_AUDIT_CVE, QUANT_ENHANCEMENTS, RADAR_LIFECYCLE, VCP_METRICS, SCANNER_DISCOVERY, SECURITY_CONFIG, ZERO_REGRESSION_AUDIT]
 issues:
+- id: ISSUE-098
+  title: Sys.path Namespace Discrepancy & ModuleNotFoundError 'common' in Debit Spread Resolution
+  severity: HIGH
+  category: Python Module Resolution, Sys.path Normalization, Debit Spread Execution
+  family: QUANT_ENHANCEMENTS
+  date_reported: '2026-09-09'
+  symptom: |
+    1. In stock_options_trade_engine.py during fast radar execution for tickers like BEL (BEL26SEP405CE) and BHEL (BHEL26SEP415CE), 2-Leg Bull Call Debit Spread construction failed with warning:
+       'Spread resolution fallback to naked for BEL: No module named common'.
+    2. Caught by the exception handler, the engine cleanly fell back to naked option mode, routing a single-leg limit order rather than the theta-shielded 2-leg spread.
+  root_cause: |
+    1. stock_options_trade_engine.py:7-9 inserted COMMON_DIR into sys.path but omitted PROJECT_ROOT.
+    2. When running with WorkingDirectory=$APP_DIR/Trade_Option (as configured in systemd unit trading-options.service), Python sys.path contained [COMMON_DIR, Trade_Option] but not PROJECT_ROOT.
+    3. Line 531 executed `from common.position_monitor import _get_nfo_cache`. Since PROJECT_ROOT was not in sys.path, Python looked for a package named 'common' inside COMMON_DIR and Trade_Option, failed, and raised ModuleNotFoundError: No module named 'common'.
+    4. Similar sys.path inconsistencies existed in index_options_trade_engine.py, automated_strategy_exporter.py, run_export_scheduler_daemon.py, watchlist_monitor.py, stock scanners, and common sub-modules.
+  affected_files:
+  - Trade_Option/stock_options_trade_engine.py
+  - Trade_Option/index_options_trade_engine.py
+  - Trade_Option/automated_strategy_exporter.py
+  - Trade_Option/run_export_scheduler_daemon.py
+  - Trade_Option/watchlist_monitor.py
+  - Trade_Stock/stock_reversal_scanner.py
+  - Trade_Stock/stock_bullish_reversal_scanner.py
+  - Trade_Stock/stock_bearish_reversal_scanner.py
+  - Trade_Stock/stock_weekly_bull_scanner.py
+  - Trade_Stock/stock_weekly_bear_scanner.py
+  - common/paths.py
+  - common/patterns_bear.py
+  - common/patterns_bull.py
+  - common/position_monitor.py
+  - common/resolve.py
+  - common/session.py
+  - scratch/test_sys_path_normalization.py
+  - scratch/run_full_regression_test.py
+  resolution: |
+    1. Top-Level sys.path Normalization: Ensured both PROJECT_ROOT and COMMON_DIR are inserted into sys.path across all engines, daemons, scanners, and common modules.
+    2. Global Import Safety: Added sys.path normalization inside common/paths.py, guaranteeing that any module importing paths automatically registers both PROJECT_ROOT and COMMON_DIR in sys.path.
+    3. Defensive Import Fallback: Updated stock_options_trade_engine.py spread resolution with nested try/except to seamlessly support both package (`from common.xxx import ...`) and direct (`from xxx import ...`) module imports.
+    4. Unit & Regression Tests: Added dedicated test suite scratch/test_sys_path_normalization.py (5/5 passing) and TEST 22 in scratch/run_full_regression_test.py (19/19 offline tests passing).
+  status: RESOLVED
+  resolution_date: '2026-09-09'
+
 - id: FEATURE-052
   title: Phase 1 Engine & Monitor Hardening — Timeframe Synchronization, Safe Adaptive Breakeven Buffers, and Spacing Normalization
   severity: HIGH

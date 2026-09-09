@@ -4,9 +4,11 @@ import logging
 import time
 import threading
 import sys
-COMMON_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "common"))
-if COMMON_DIR not in sys.path:
-    sys.path.insert(0, COMMON_DIR)
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+COMMON_DIR = os.path.join(PROJECT_ROOT, "common")
+for p in [PROJECT_ROOT, COMMON_DIR]:
+    if p not in sys.path:
+        sys.path.insert(0, p)
 import paths
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime as dt, timedelta
@@ -528,8 +530,12 @@ def execute_highest_rr_trade(kite, staged):
         option_token = None
         if use_spread:
             try:
-                from common.position_monitor import _get_nfo_cache
-                from resolve import resolve_option_spread
+                try:
+                    from common.position_monitor import _get_nfo_cache
+                    from common.resolve import resolve_option_spread
+                except ModuleNotFoundError:
+                    from position_monitor import _get_nfo_cache
+                    from resolve import resolve_option_spread
                 nfo_df = _get_nfo_cache()
                 spread_info = resolve_option_spread(
                     nfo_instruments=nfo_df,

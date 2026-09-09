@@ -36,6 +36,7 @@ meta:
     - Single-Pass Instrument Synchronization & Fresh Cache Re-Use (< 12h) to Eliminate TimeoutErrors (FEATURE-050)
     - Setup Funnel Eviction Mandate — 80% Target 1 (T1) Runaway & Stop-Loss (SL) on Timeframe Closing Basis (FEATURE-051)
     - Phase 1 Hardening: Timeframe Synchronization (15m), Safe Adaptive Breakeven Buffers (get_sl_buffer_distance), and Spacing Normalization (FEATURE-052)
+    - Sys.path Normalization & Debit Spread Import Invariant (ISSUE-098)
 
 architecture:
   diagram: |
@@ -466,6 +467,9 @@ verification_and_quality_assurance:
   vix_portfolio_suite: "scratch/test_vix_portfolio_volume.py — 47/47 Unit Tests Passing (100% Success Rate)"
   ast_syntax_integrity: "100% Python files parsed with zero syntax errors"
   recent_major_issues_resolved:
+    - id: "ISSUE-098"
+      title: "Sys.path Namespace Discrepancy & ModuleNotFoundError 'common' in Debit Spread Resolution"
+      status: "RESOLVED"
     - id: "FEATURE-052"
       title: "Phase 1 Engine & Monitor Hardening — Timeframe Synchronization, Safe Adaptive Breakeven Buffers, and Spacing Normalization"
       status: "RESOLVED"
