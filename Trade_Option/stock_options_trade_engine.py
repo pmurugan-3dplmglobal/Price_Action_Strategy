@@ -347,7 +347,7 @@ def run_scan_cycle(kite):
         with position_lock:
             shared_write_display(temp_stored_trades, dict(ACTIVE_POSITIONS), SCAN_DISPLAY_FILE, "nifty50")
 
-    # Audit incubating setups in Category B and Category A for Anchor TF T1 / SL closure
+    # Audit incubating setups in Category B and Category A for Anchor TF T1 / SL closure / Runaway
     try:
         current_funnel = pattern_funnel.load_funnel_state("nifty50")
         for pool_key in ["category_a_plus", "category_a", "category_b"]:
@@ -355,8 +355,9 @@ def run_scan_cycle(kite):
                 sym = item.get("symbol")
                 sl = float(item.get("current_sl") or 0.0)
                 t1 = float(item.get("t1") or 0.0)
+                bm = float(item.get("benchmark") or 0.0)
                 tok = item.get("option_token") or item.get("spot_token")
-                if tok and (sl > 0 or t1 > 0):
+                if tok and (sl > 0 or t1 > 0 or bm > 0):
                     from timeframe_utils import fetch_and_resample_candles
                     df_a_check = safe_kite_call(
                         fetch_and_resample_candles,
@@ -370,8 +371,11 @@ def run_scan_cycle(kite):
                         if sl > 0 and last_a_close <= sl:
                             logging.info(f"[ANCHOR TF EVICT: SL BREACH] {sym} ({item.get('contract')}) closed at/below SL on {TIMEFRAME_ANCHOR} ({last_a_close} <= {sl}). Evicting from {pool_key}.")
                             pattern_funnel.evict_item("nifty50", item)
-                        elif t1 > 0 and last_a_close >= t1:
+                        elif t1 > 0 and last_a_close >= (t1 * 0.995):
                             logging.info(f"[ANCHOR TF EVICT: T1 HIT] {sym} ({item.get('contract')}) closed at/above T1 on {TIMEFRAME_ANCHOR} ({last_a_close} >= {t1}). Evicting from {pool_key}.")
+                            pattern_funnel.evict_item("nifty50", item)
+                        elif bm > 0 and last_a_close > (bm * 1.05):
+                            logging.info(f"[ANCHOR TF EVICT: RUNAWAY] {sym} ({item.get('contract')}) ran away on {TIMEFRAME_ANCHOR} ({last_a_close} > BM {bm} +5%). Evicting from {pool_key}.")
                             pattern_funnel.evict_item("nifty50", item)
     except Exception as audit_err:
         logging.debug(f"Anchor TF funnel audit error: {audit_err}")
@@ -749,25 +753,37 @@ def run_fast_radar_check(kite):
                         if hasattr(parsed_dt, 'tz') and parsed_dt.tz is not None:
                             parsed_dt = parsed_dt.tz_convert('Asia/Kolkata').tz_localize(None)
                         c_dt = parsed_dt
-                        if c_dt.date() < get_ist_now(naive=True).date():
-                            # Historical candle from prior session cannot trigger a breakout today
-                            continue
                     except Exception:
                         pass
-
                     c_now = float(last_candle['close'])
                     bm = float(item.get("benchmark") or 0.0)
                     sl = float(item.get("current_sl") or 0.0)
                     t1 = float(item.get("t1") or 0.0)
 
-                    # Hard Eviction Rule: SL breached or T1 achieved pre-entry
+                    # Historical candle from prior session check
+                    if c_dt.date() < get_ist_now(naive=True).date():
+                        # If prior session setup already hit T1, ran past BM, or breached SL, evict it now
+                        if (t1 > 0 and c_now >= (t1 * 0.995)) or (bm > 0 and c_now >= bm) or (sl > 0 and c_now <= sl):
+                            logging.info(f"[RADAR EVICT: STALE PRIOR-DAY SETUP] {sym} ({item.get('contract')}) from {c_dt.date()} already reached level (Close={c_now:.2f}, BM={bm:.2f}, T1={t1:.2f}, SL={sl:.2f}). Evicting setup.")
+                            pattern_funnel.evict_item("nifty50", item)
+                        continue
+
+                    # Hard Eviction Rule 1: SL breached pre-entry
                     if sl > 0 and c_now <= sl:
                         logging.info(f"[RADAR EVICT: SL BREACH] {sym} ({item.get('contract')}) breached SL floor ({c_now} <= {sl})")
                         pattern_funnel.evict_item("nifty50", item)
                         continue
 
-                    if t1 > 0 and c_now >= t1:
+                    # Hard Eviction Rule 2: T1 achieved pre-entry (Do Not Chase)
+                    if t1 > 0 and c_now >= (t1 * 0.995):
                         logging.info(f"[RADAR EVICT: T1 HIT] {sym} ({item.get('contract')}) reached/closed at T1 ({c_now} >= {t1}) before entry. Evicting setup.")
+                        pattern_funnel.evict_item("nifty50", item)
+                        continue
+
+                    # Hard Eviction Rule 3: Runaway Breakout Guard (LTP > BM + 5% pre-entry)
+                    # Chasing a runaway premium creates massive adverse risk/reward and severe drawdown risk
+                    if bm > 0 and c_now > (bm * 1.05):
+                        logging.info(f"[RADAR EVICT: RUNAWAY BREAKOUT] {sym} ({item.get('contract')}) ran away pre-entry ({c_now:.2f} > BM {bm:.2f} +5.0%). Evicting setup to prevent chasing.")
                         pattern_funnel.evict_item("nifty50", item)
                         continue
 

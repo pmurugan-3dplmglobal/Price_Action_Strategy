@@ -130,7 +130,8 @@ from pattern_funnel import (
     promote_item,
     evict_item,
     clear_funnel,
-    get_funnel_summary
+    get_funnel_summary,
+    purge_invalidated_or_triggered
 )
 
 # ── position_monitor ──

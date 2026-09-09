@@ -10,6 +10,41 @@ meta:
     recent_archived_batch: [FEATURE-031, FEATURE-030, FEATURE-029, ISSUE-084, ISSUE-083, ISSUE-082, ISSUE-081, ISSUE-080, FEATURE-036, FEATURE-035, FEATURE-034, FEATURE-033, ISSUE-054]
     key_archived_families: [ALGO_AUDIT_CVE, QUANT_ENHANCEMENTS, RADAR_LIFECYCLE, VCP_METRICS, SCANNER_DISCOVERY, SECURITY_CONFIG, ZERO_REGRESSION_AUDIT]
 issues:
+- id: FEATURE-047
+  title: Automated Runaway Breakout (> BM + 5%), Target T1 Hit, and Stale Setup Eviction Guards
+  severity: HIGH
+  category: Risk Management, Pattern Radar, FOMO Prevention, Funnel Eviction
+  family: RADAR_LIFECYCLE
+  date_reported: '2026-09-09'
+  symptom: |
+    1. Setups like BOSCHLTD26SEP47500CE that had already broken out and surged +117% (running past T1 to 1,957 on prior days) lingered in the Pattern Radar / Funnel with "Awaiting D Breakout", exposing traders to accidental FOMO entries and adverse risk/reward.
+    2. The Fast Surveillance Radar in stock_options_trade_engine.py silently skipped candles older than today (date < today) without evicting already-run or stale setups from pattern_funnel.json.
+    3. UI Radar Tab in index.html had no runaway detection or filtering, displaying completed/target-hit setups as active candidates.
+  root_cause: |
+    1. common/pattern_funnel.py lacked an automated purge routine to evict setups whose live prices breached SL, hit T1, or ran away past Benchmark D-trigger (> BM * 1.05).
+    2. stock_options_trade_engine.py did not enforce a runaway entry cap (LTP > BM + 5%) or clean up prior-day stale setups during fast radar surveillance.
+    3. Trade_Option/templates/index.html lacked client-side live LTP cross-checking and a default "Hide Runaway / T1 Hit" filter.
+  affected_files:
+  - common/pattern_funnel.py
+  - common/trading_core.py
+  - Trade_Option/stock_options_trade_engine.py
+  - Trade_Option/templates/index.html
+  - scratch/run_full_regression_test.py
+  resolution: |
+    1. Implemented purge_invalidated_or_triggered(engine_name, ltp_dict, max_runaway_pct=0.05) in common/pattern_funnel.py and re-exported it in common/trading_core.py to automatically evict T1-hit, runaway (+5%), SL-breached, and prior-day triggered setups.
+    2. Updated get_funnel_summary to automatically invoke purge_invalidated_or_triggered whenever ltp_dict is supplied.
+    3. Enhanced Fast Radar surveillance in Trade_Option/stock_options_trade_engine.py:
+       - Hard Eviction Rule 1: SL breached pre-entry (c_now <= sl).
+       - Hard Eviction Rule 2: T1 achieved pre-entry (c_now >= t1 * 0.995).
+       - Hard Eviction Rule 3: Runaway Breakout Guard (c_now > bm * 1.05 pre-entry) evicts overstretched contracts to prevent chasing.
+       - Stale Prior-Day Cleanup: Prior session setups with c_dt.date() < today that already hit T1, ran past BM, or breached SL are immediately purged.
+    4. Enhanced Anchor TF funnel audit in stock_options_trade_engine.py to evict setups on T1 hit, runaway, or SL breach.
+    5. Enhanced Trade_Option/templates/index.html:
+       - Cross-checks item contract/symbol against live LTP.
+       - Added default-checked checkbox toggle: [x] Hide Runaway / T1 Hit.
+       - When unhidden, displays prominent warning badges: 🎯 T1 HIT (⛔ DO NOT CHASE) or 🏃 RUNAWAY (⛔ OVEREXTENDED).
+    6. Added automated unit tests to Test 20 in scratch/run_full_regression_test.py validating all purge invariants.
+  status: RESOLVED
 - id: FEATURE-046
   title: Anchor TF Geometry Lifecycle (100-Candle Left-Side Rule & Hard T1/SL Eviction) with Zero-Latency Radar Priority
   severity: HIGH

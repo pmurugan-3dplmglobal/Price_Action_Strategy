@@ -291,9 +291,91 @@ def clear_funnel(engine_name):
         save_funnel_state(engine_name, updated)
         return updated
 
-def get_funnel_summary(engine_name):
-    """Return counts and quick stats for UI dashboards."""
+def purge_invalidated_or_triggered(engine_name, ltp_dict=None, max_runaway_pct=0.05):
+    """
+    Evicts setups from the funnel that:
+      1. Have achieved Target T1 (LTP >= T1 * 0.995).
+      2. Have run away excessively past Benchmark D-trigger (LTP > BM * (1 + max_runaway_pct)).
+      3. Have breached their Stop-Loss floor (LTP <= SL).
+      4. Are stale setups from prior days that already ran/broke out.
+    """
     with _funnel_lock:
+        current = load_funnel_state(engine_name)
+        today_date = get_ist_now(naive=True).date()
+
+        def _should_keep(item):
+            sym = str(item.get("symbol") or "").strip().upper()
+            cntr = str(item.get("contract") or "").strip().upper()
+            bm = float(item.get("benchmark") or 0.0)
+            sl = float(item.get("current_sl") or item.get("anchor_low") or 0.0)
+            t1 = float(item.get("t1") or 0.0)
+
+            # Resolve live LTP if available
+            live_price = None
+            if ltp_dict and isinstance(ltp_dict, dict):
+                for k in [cntr, sym, f"NFO:{cntr}", f"NSE:{sym}"]:
+                    val = ltp_dict.get(k)
+                    if isinstance(val, (int, float)) and val > 0:
+                        live_price = float(val)
+                        break
+                    elif isinstance(val, dict) and "last_price" in val and val["last_price"] > 0:
+                        live_price = float(val["last_price"])
+                        break
+
+            if live_price is not None and live_price > 0:
+                # 1. Target T1 achieved
+                if t1 > 0 and live_price >= (t1 * 0.995):
+                    logger.info(f"[FUNNEL PURGE: T1 HIT] {cntr or sym} at {live_price:.2f} >= T1 {t1:.2f}. Evicting from funnel.")
+                    return False
+
+                # 2. Runaway breakout past Benchmark
+                if bm > 0 and live_price > (bm * (1.0 + max_runaway_pct)):
+                    logger.info(f"[FUNNEL PURGE: RUNAWAY] {cntr or sym} at {live_price:.2f} > BM {bm:.2f} (+{max_runaway_pct*100:.0f}%). Evicting from funnel.")
+                    return False
+
+                # 3. Stop-Loss floor breached
+                if sl > 0 and live_price <= sl:
+                    logger.info(f"[FUNNEL PURGE: SL BREACH] {cntr or sym} at {live_price:.2f} <= SL {sl:.2f}. Evicting from funnel.")
+                    return False
+
+            # 4. Prior-day stale setup check: If Candle A / Entry Time is from prior session and setup already broke out
+            candle_time_str = item.get("candle_c_time") or item.get("candle_b_time") or item.get("candle_a_time")
+            if candle_time_str:
+                try:
+                    c_dt = clean_timestamp(candle_time_str)
+                    if len(c_dt) >= 10:
+                        c_date = dt.strptime(c_dt[:10], "%Y-%m-%d").date()
+                        if c_date < today_date:
+                            # Prior session setup: If live price is known and at/above BM, it already ran
+                            if live_price is not None and bm > 0 and live_price >= bm:
+                                logger.info(f"[FUNNEL PURGE: STALE RUN] {cntr or sym} prior-day {c_date} setup already above BM ({live_price:.2f} >= {bm:.2f}). Evicting.")
+                                return False
+                except Exception:
+                    pass
+
+            return True
+
+        new_a_plus = [x for x in current.get("category_a_plus", []) if _should_keep(x)]
+        new_a = [x for x in current.get("category_a", []) if _should_keep(x)]
+        new_b = [x for x in current.get("category_b", []) if _should_keep(x)]
+
+        if (len(new_a_plus) != len(current.get("category_a_plus", [])) or
+            len(new_a) != len(current.get("category_a", [])) or
+            len(new_b) != len(current.get("category_b", []))):
+            updated = {
+                "category_a_plus": new_a_plus,
+                "category_a": new_a,
+                "category_b": new_b,
+            }
+            save_funnel_state(engine_name, updated)
+            return updated
+        return current
+
+def get_funnel_summary(engine_name, ltp_dict=None):
+    """Return counts and quick stats for UI dashboards, optionally purging invalidated setups if ltp_dict provided."""
+    with _funnel_lock:
+        if ltp_dict:
+            purge_invalidated_or_triggered(engine_name, ltp_dict=ltp_dict)
         state = load_funnel_state(engine_name)
         return {
             "engine": engine_name,
@@ -310,3 +392,4 @@ def get_funnel_summary(engine_name):
             "category_a": state.get("category_a", []),
             "category_b": state.get("category_b", [])
         }
+
