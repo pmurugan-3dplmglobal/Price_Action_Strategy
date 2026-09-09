@@ -17,7 +17,7 @@ from targets import (
     find_profit_targets_bearish, check_left_side_rule_bearish,
     calculate_sl_buffer
 )
-from timeframe_utils import get_adaptive_lookback, resample_timeframe, trading_days_between, is_live_candle_near_close
+from timeframe_utils import get_adaptive_lookback, resample_timeframe, trading_days_between, is_live_candle_near_close, get_tf_minutes
 from swing_detection import (
     is_parabolic_arch_enhanced,
     extract_swing_pivots,
@@ -265,6 +265,12 @@ def scan_anchor_bcd_breakout_bearish(df_entry, df_anchor, anchor_tf="", entry_tf
     if len(df_anchor) < 10 or len(df_entry) < 10:
         return None
 
+    tf_str = entry_tf or anchor_tf or "15minute"
+    tf_minutes = get_tf_minutes(tf_str)
+    if tf_minutes <= 0:
+        tf_minutes = 15
+    max_bc_candles = max(25, int(180 / tf_minutes))
+
     swing_meta = {"swing_waves": 0, "terminal_base": False, "terminal_date": ""}
     if enable_swing_filter is None:
         try:
@@ -381,7 +387,7 @@ def scan_anchor_bcd_breakout_bearish(df_entry, df_anchor, anchor_tf="", entry_tf
         except Exception:
             pass
 
-        for i in range(b_idx + 1, min(b_idx + 26, len(df_entry))):
+        for i in range(b_idx + 1, min(b_idx + max_bc_candles + 1, len(df_entry))):
             candle = df_entry.iloc[i]
             # Excursion guard: If price already dropped > 1.5x risk below benchmark, move is exhausted
             if float(candle['low']) < min_b_excursion:
@@ -404,7 +410,8 @@ def scan_anchor_bcd_breakout_bearish(df_entry, df_anchor, anchor_tf="", entry_tf
 
         d_idx = None
         is_near_close_d = False
-        for i in range(c_idx + 1, min(c_idx + 60, len(df_entry))):
+        max_cd_candles = 60
+        for i in range(c_idx + 1, min(c_idx + max_cd_candles + 1, len(df_entry))):
             candle = df_entry.iloc[i]
             c_close = float(candle['close'])
             c_open = float(candle['open'])
@@ -718,6 +725,11 @@ def scan_pattern_lifecycle_stage_bearish(df_entry, df_anchor, anchor_tf="", entr
     df_target = df_anchor if (df_anchor is not None and len(df_anchor) >= 8) else df_entry
     latest_close = float(df_entry.iloc[-1]['close']) if (df_entry is not None and not df_entry.empty) else float(df_target.iloc[-1]['close'])
     opt_mode = is_option or ("minute" in str(anchor_tf).lower() and len(df_target) <= 180)
+    tf_str = anchor_tf or entry_tf or "15minute"
+    tf_minutes = get_tf_minutes(tf_str)
+    if tf_minutes <= 0:
+        tf_minutes = 15
+    max_bc_candles = max(25, int(180 / tf_minutes))
 
     for anchor_idx in range(len(df_target) - 2, max(0, len(df_target) - 75), -1):
         sub_anchor_df = df_target.iloc[:anchor_idx + 1]
@@ -783,7 +795,7 @@ def scan_pattern_lifecycle_stage_bearish(df_entry, df_anchor, anchor_tf="", entr
                 max_b_excursion = max(max_b_excursion, float(t1))
 
             for j in range(len(c_slice)):
-                if j > 25:
+                if j > max_bc_candles:
                     break
                 c_row = c_slice.iloc[j]
                 if float(c_row['low']) < max_b_excursion:

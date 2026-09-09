@@ -42,10 +42,14 @@ def test_cve1_rejected_error_retry():
     print("  [PASS] REJECTED_ERROR correctly tracks and increments retry_count")
 
 def test_feature5_positive_breakeven_math():
-    print("[TEST 2] Testing Feature 5: Positive Breakeven (+BE: Entry + 2%) calculation...")
-    # Bull CE Entry = 100.0
+    print("[TEST 2] Testing Feature 5: Positive Breakeven (+BE) & Adaptive Buffer calculation...")
+    from targets import get_sl_buffer_distance
+    # Bull CE Entry = 100.0, atr = 2.0
     entry_s = 100.0
-    be_target = round(round((entry_s * 1.02) / 0.05) * 0.05, 2)
+    atr = 2.0
+    buf_dist = get_sl_buffer_distance(entry_s, side="BULL")
+    assert buf_dist == 2.0, f"Expected 2.0, got {buf_dist}"
+    be_target = round(round((entry_s + max(buf_dist, 0.5 * atr)) / 0.05) * 0.05, 2)
     assert be_target == 102.0, f"Expected 102.0, got {be_target}"
     
     # Odd Entry = 33.8
@@ -53,11 +57,27 @@ def test_feature5_positive_breakeven_math():
     be_target2 = round(round((entry_s2 * 1.02) / 0.05) * 0.05, 2)
     assert be_target2 == 34.50, f"Expected 34.50, got {be_target2}"
     
-    # Bear PE Entry = 100.0
-    entry_s_bear = 100.0
-    be_target_bear = round(round((entry_s_bear * 0.98) / 0.05) * 0.05, 2)
-    assert be_target_bear == 98.0, f"Expected 98.0, got {be_target_bear}"
-    print("  [PASS] +BE (+2% / -2%) snapped to 0.05 tick works correctly")
+    # Short Stock (MIS) Entry = 100.0, atr = 2.0 (Short seller profits as price falls -> BE is below entry)
+    entry_s_short = 100.0
+    buf_dist_short = get_sl_buffer_distance(entry_s_short, side="BEAR")
+    assert buf_dist_short == 2.0, f"Expected 2.0, got {buf_dist_short}"
+    be_target_short = round(round((entry_s_short - max(buf_dist_short, 0.5 * atr)) / 0.05) * 0.05, 2)
+    assert be_target_short == 98.0, f"Expected 98.0, got {be_target_short}"
+
+    # Option PE (Long Option Buyer) Entry = 100.0, atr = 2.0 (Option buyer profits as premium rises -> BE is above entry)
+    entry_opt_pe = 100.0
+    buf_dist_pe = get_sl_buffer_distance(entry_opt_pe, side="BULL")
+    assert buf_dist_pe == 2.0, f"Expected 2.0, got {buf_dist_pe}"
+    be_target_pe = round(round((entry_opt_pe + max(buf_dist_pe, 0.5 * atr)) / 0.05) * 0.05, 2)
+    assert be_target_pe == 102.0, f"Expected 102.0, got {be_target_pe}"
+
+    # Cheap Option Entry = 10.0 (spread protection)
+    entry_opt = 10.0
+    buf_dist_opt = get_sl_buffer_distance(entry_opt, side="BULL")
+    assert buf_dist_opt == 0.80, f"Expected 0.80, got {buf_dist_opt}"
+    be_target_opt = round(round((entry_opt + max(buf_dist_opt, 0.5 * 0.5)) / 0.05) * 0.05, 2)
+    assert be_target_opt == 10.80, f"Expected 10.80, got {be_target_opt}"
+    print("  [PASS] Safe Adaptive +BE math and buffer distance snapped to 0.05 tick works correctly")
 
 def test_cve3_morning_catastrophic_thresholds():
     print("[TEST 3] Testing CVE-3: Morning catastrophic circuit thresholds...")

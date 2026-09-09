@@ -4,12 +4,48 @@ meta:
   last_updated: '2026-09-09'
   purpose: Active operational tracker for v2.1.0-stable failures, root causes, regressions, and enhancements.
   historical_archive: archive/ISSUE_HISTORY_ARCHIVE.yaml (Preserves 119 resolved legacy issues prior to 2026-09-05)
-  total_active_issues: 33
+  total_active_issues: 34
   archived_issues_summary:
     total_archived: 119
     recent_archived_batch: [FEATURE-031, FEATURE-030, FEATURE-029, ISSUE-084, ISSUE-083, ISSUE-082, ISSUE-081, ISSUE-080, FEATURE-036, FEATURE-035, FEATURE-034, FEATURE-033, ISSUE-054]
     key_archived_families: [ALGO_AUDIT_CVE, QUANT_ENHANCEMENTS, RADAR_LIFECYCLE, VCP_METRICS, SCANNER_DISCOVERY, SECURITY_CONFIG, ZERO_REGRESSION_AUDIT]
 issues:
+- id: FEATURE-052
+  title: Phase 1 Engine & Monitor Hardening — Timeframe Synchronization, Safe Adaptive Breakeven Buffers, and Spacing Normalization
+  severity: HIGH
+  category: Trailing Discipline, Timeframe Alignment, Geometric Parity, Risk Governance
+  family: QUANT_ENHANCEMENTS
+  date_reported: '2026-09-09'
+  symptom: |
+    1. Standalone background position monitor used '30minute' timeframe_entry for stock_options_positions while stock_options_trade_engine operated on '15minute' TIMEFRAME_ENTRY, risking divergent candle evaluations.
+    2. Fixed +2%/-2% breakeven stop formulas on cheap option contracts (e.g. 10.0 premium) set BE stops only 0.20 pts away, causing runners to get stopped out prematurely by normal bid-ask spread fluctuations (0.15 - 0.30 pts).
+    3. Treating calculate_sl_buffer (which returns absolute floor/ceiling price) as an additive delta offset caused extreme values, requiring a dedicated distance extractor.
+    4. B-C spacing guards were hardcoded to 25 bars across all timeframes, artificially restricting fast intraday timeframes (3m/5m) where 25 candles represented only 75-125 minutes of session time.
+    5. C-to-D and Point B search bounds diverged between Bull (unbounded B/D search without floor invalidation) and Bear (capped at 60 bars with ceiling breach break), risking stale breakout execution in bull scans.
+    6. Trailing breakeven in position_monitor.py checked `pos.get('side') in ['CE', 'BUY', 'BULL']`, erroneously treating Put Option (PE) positions as short trades and moving stops below entry into the loss zone instead of locking profit above entry.
+  root_cause: |
+    1. common/position_monitor.py L2131 hardcoded timeframe_entry="30minute" for stock_options_positions.
+    2. Breakeven calculations in position_monitor.py directly multiplied entry price by 1.02 / 0.98 without asset-adaptive spread cushioning or ATR consideration.
+    3. Missing helper to extract the buffer distance in points from calculate_sl_buffer.
+    4. B-C spacing guard checked j > 25 instead of scaling with timeframe duration (int(180 / tf_minutes)).
+    5. scan_anchor_bcd_breakout in patterns_bull.py searched all candles without 60-candle horizon or floor breach break for Points B and D.
+    6. Conflating directional market sentiment with order execution type: long option buyers (both CE and PE) buy contracts long and profit as premium rises, requiring Entry + offset (+BE) stop trailing; only short equities (is_short_stock) require Entry - offset.
+  affected_files:
+  - common/targets.py
+  - common/trading_core.py
+  - common/position_monitor.py
+  - common/patterns_bull.py
+  - common/patterns_bear.py
+  - scratch/run_full_regression_test.py
+  - scratch/test_cve_fixes.py
+  - scratch/test_phase1_hardening.py
+  resolution: |
+    1. Harmonized Dashboard vs Engine Timeframe: Updated timeframe_entry in common/position_monitor.py L2168 from '30minute' to '15minute' for stock_options_positions, matching stock_options_trade_engine.py TIMEFRAME_ENTRY.
+    2. Implemented get_sl_buffer_distance(price_level, side="BULL") in common/targets.py (and exported in common/trading_core.py) returning abs(price_level - calculate_sl_buffer(price_level, side)).
+    3. Safe Adaptive Breakeven Formulas: In common/position_monitor.py, updated Feature 5 gain lock, Tranche 1 partial exit runner, single-lot trailing, and Stage 2 T1 trailing to cleanly evaluate `if is_short_stock:` (Entry - offset, min ratcheting) vs `else:` (Entry + offset, max ratcheting) across ALL long positions (Long Stock, CE Option, PE Option), guaranteeing positive profit protection for long put option buyers.
+    4. Spacing & Breakout Search Normalization: In common/patterns_bull.py and common/patterns_bear.py, normalized B-C spacing to max_bc_candles = max(25, int(180 / tf_minutes)) across breakout scans and lifecycle stage evaluations. Harmonized Bull Point B and C-to-D search bounds to 60 candles max with immediate break on Anchor Low floor breach.
+    5. Synchronized Regression Test: Updated Test 19 in scratch/run_full_regression_test.py and scratch/test_cve_fixes.py with adaptive breakeven, buffer distance, and PE option assertions. Created dedicated scratch/test_phase1_hardening.py (6/6 passed).
+  status: RESOLVED
 - id: FEATURE-051
   title: Setup Funnel Eviction Mandate — 80% Target 1 (T1) Runaway & Stop-Loss (SL) on Timeframe Closing Basis
   severity: HIGH

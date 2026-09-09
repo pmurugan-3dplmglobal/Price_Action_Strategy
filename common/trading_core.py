@@ -90,6 +90,7 @@ from targets import (
     check_left_side,
     check_left_side_bearish,
     calculate_sl_buffer,
+    get_sl_buffer_distance,
     calc_rr,
     check_circuit_and_spread_shield
 )

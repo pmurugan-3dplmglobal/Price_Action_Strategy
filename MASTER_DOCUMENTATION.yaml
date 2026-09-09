@@ -35,6 +35,7 @@ meta:
     - High-Capacity HTTP Connection Pooling (50 Sessions) for KiteConnect REST & WebSocket Architecture (FEATURE-049)
     - Single-Pass Instrument Synchronization & Fresh Cache Re-Use (< 12h) to Eliminate TimeoutErrors (FEATURE-050)
     - Setup Funnel Eviction Mandate — 80% Target 1 (T1) Runaway & Stop-Loss (SL) on Timeframe Closing Basis (FEATURE-051)
+    - Phase 1 Hardening: Timeframe Synchronization (15m), Safe Adaptive Breakeven Buffers (get_sl_buffer_distance), and Spacing Normalization (FEATURE-052)
 
 architecture:
   diagram: |
@@ -437,7 +438,7 @@ system_integrity_safeguards:
   fno_universe_auto_population: "_populate_stock_registry_from_cache() auto-populates all 210+ F&O equities into STOCK_REGISTRY on startup directly from nfo_instruments_cache.csv with exact lot sizes, strikes, and tokens."
   dynamic_position_recovery: "stock_options_trade_engine.py and app_option_Trade.py resolve underlying symbols and lot sizes via extract_underlying_symbol() and get_option_lot_size(), ensuring 100% of live Zerodha F&O positions are recovered and monitored."
   direct_ltp_sl_fallback: "Emergency capital protection shield: If historical candle token resolution fails, app_option_Trade falls back immediately to DIRECT_LTP_SL_FALLBACK on buffer breach without waiting for candle confirmation."
-  breakeven_trailing_shield: "Positive Breakeven (+BE: Entry + 2% for Bull, Entry - 2% for Bear, snapped to 0.05 tick) locks profit upon reaching +10% peak gain or touching T1, preventing winning trades from slipping into losses."
+  breakeven_trailing_shield: "Safe Adaptive Positive Breakeven (+BE: Entry + max(buf_dist, 0.5 * atr) for all Long positions [Long Equities, CE Options, PE Options], Entry - max(buf_dist, 0.5 * atr) for Short Equities [is_short_stock], snapped to 0.05 tick) locks profit upon reaching +10% peak gain or touching T1. Uses get_sl_buffer_distance() to provide robust spread breathing room for cheap option contracts while preventing runner shakeouts."
   spot_anchored_sl_guard: "Spot-Anchored SL Guard (enable_spot_sl_guard: true): For option contracts, queries live Cash Spot price against the structural anchor support floor (spot_sl) before tripping stop-loss. Prevents IV crush and spread wick shakeouts while Spot is holding support, backed by a 35% catastrophic option circuit cap."
   two_tranche_profit_model: "2-Tranche Core + Runner Profit Booking (tranche_mode: true): Multi-lot positions (>= 2 lots) execute 50% partial cash exit at Target 1 (T1) and raise remaining runner SL to Breakeven. Single-lot positions (1 lot) ratchet SL to Breakeven at T1 to create a zero-risk runner riding to T2 and T3."
   datta_d2_reentry_engine: "Datta D2 Trend Continuation Re-Entry Engine (scan_trend_continuation_reentry): Wired into Stock and Index Option trade engines to scan post-Point-B flag pullbacks and automatically trigger secondary continuation breakouts."
@@ -465,6 +466,9 @@ verification_and_quality_assurance:
   vix_portfolio_suite: "scratch/test_vix_portfolio_volume.py — 47/47 Unit Tests Passing (100% Success Rate)"
   ast_syntax_integrity: "100% Python files parsed with zero syntax errors"
   recent_major_issues_resolved:
+    - id: "FEATURE-052"
+      title: "Phase 1 Engine & Monitor Hardening — Timeframe Synchronization, Safe Adaptive Breakeven Buffers, and Spacing Normalization"
+      status: "RESOLVED"
     - id: "ISSUE-093"
       title: "Timeframe Closing Basis Invariant Enforcement — Morning Circuit Breaker Pause to 09:50 AM & AMO Option Order Elimination"
       status: "RESOLVED"

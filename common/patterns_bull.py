@@ -17,7 +17,7 @@ from targets import (
     find_profit_targets, check_left_side_rule,
     calculate_sl_buffer, calculate_position_size, calc_rr
 )
-from timeframe_utils import get_adaptive_lookback, resample_timeframe, trading_days_between, is_live_candle_near_close
+from timeframe_utils import get_adaptive_lookback, resample_timeframe, trading_days_between, is_live_candle_near_close, get_tf_minutes
 from swing_detection import (
     is_parabolic_arch_enhanced,
     extract_swing_pivots,
@@ -266,6 +266,12 @@ def scan_anchor_bcd_breakout(df_entry, df_anchor, anchor_tf="", entry_tf="", ena
     if df_entry is None or df_entry.empty or df_anchor is None or df_anchor.empty:
         return None
 
+    tf_str = entry_tf or anchor_tf or "15minute"
+    tf_minutes = get_tf_minutes(tf_str)
+    if tf_minutes <= 0:
+        tf_minutes = 15
+    max_bc_candles = max(25, int(180 / tf_minutes))
+
     swing_meta = {"swing_waves": 0, "terminal_base": False, "terminal_date": ""}
     if enable_swing_filter is None:
         try:
@@ -374,10 +380,13 @@ def scan_anchor_bcd_breakout(df_entry, df_anchor, anchor_tf="", entry_tf="", ena
         if len(remaining) < 3:
             continue
 
-        # Point B: FIRST candle after A closing above benchmark
+        # Point B: FIRST candle after A closing above benchmark (max 60 candles, invalid if close < a_low)
         b_idx = None
-        for j in range(len(remaining)):
-            if float(remaining.iloc[j]['close']) > benchmark:
+        for j in range(min(60, len(remaining))):
+            c_close_b = float(remaining.iloc[j]['close'])
+            if c_close_b < a_low:
+                break
+            if c_close_b > benchmark:
                 b_idx = a_idx + 1 + j
                 break
         if b_idx is None:
@@ -392,8 +401,8 @@ def scan_anchor_bcd_breakout(df_entry, df_anchor, anchor_tf="", entry_tf="", ena
             max_b_excursion = min(max_b_excursion, float(t1))
 
         for j in range(len(c_slice)):
-            # Spacing guard: Retest C must form within 25 candles of breakout B
-            if j > 25:
+            # Spacing guard: Retest C must form within max_bc_candles of breakout B
+            if j > max_bc_candles:
                 break
             c_row = c_slice.iloc[j]
             # Excursion guard: If price already rallied > 1.5x risk or reached T1, move is exhausted
@@ -414,11 +423,15 @@ def scan_anchor_bcd_breakout(df_entry, df_anchor, anchor_tf="", entry_tf="", ena
         d_slice = df_entry.iloc[c_idx + 1:]
         d_idx = None
         is_near_close_d = False
-        for j in range(len(d_slice)):
+        max_cd_candles = 60
+        for j in range(min(max_cd_candles, len(d_slice))):
             curr_idx = c_idx + 1 + j
             d_row = d_slice.iloc[j]
             d_close = float(d_row['close'])
             d_open = float(d_row['open'])
+
+            if d_close < a_low:
+                break
 
             # Case A: Completed Historical Candle (100% closed)
             if curr_idx < len(df_entry) - 1:
@@ -764,6 +777,11 @@ def scan_pattern_lifecycle_stage(df_entry, df_anchor, anchor_tf="", entry_tf="",
     df_target = df_anchor if (df_anchor is not None and len(df_anchor) >= 8) else df_entry
     latest_close = float(df_entry.iloc[-1]['close']) if (df_entry is not None and not df_entry.empty) else float(df_target.iloc[-1]['close'])
     opt_mode = is_option or ("minute" in str(anchor_tf).lower() and len(df_target) <= 180)
+    tf_str = anchor_tf or entry_tf or "15minute"
+    tf_minutes = get_tf_minutes(tf_str)
+    if tf_minutes <= 0:
+        tf_minutes = 15
+    max_bc_candles = max(25, int(180 / tf_minutes))
 
     # Search backward from newest candles on Anchor TF for the most recent valid active Anchor A
     for a_idx in range(len(df_target) - 2, max(0, len(df_target) - 75), -1):
@@ -830,7 +848,7 @@ def scan_pattern_lifecycle_stage(df_entry, df_anchor, anchor_tf="", entry_tf="",
                 max_b_excursion = min(max_b_excursion, float(t1))
 
             for j in range(len(c_slice)):
-                if j > 25:
+                if j > max_bc_candles:
                     break
                 c_row = c_slice.iloc[j]
                 if float(c_row['high']) > max_b_excursion:

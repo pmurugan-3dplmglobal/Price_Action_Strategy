@@ -465,10 +465,30 @@ try:
     assert position_monitor.EXECUTED_EXITS[c_test]["details"]["retry_count"] == 2
     position_monitor.clear_executed_exit(c_test)
 
-    # 2. Feature 5 +BE math
+    # 2. Feature 5 Safe Adaptive +BE Math & Buffer Distance
+    from targets import get_sl_buffer_distance
     entry_s = 100.0
-    be_target = round(round((entry_s * 1.02) / 0.05) * 0.05, 2)
-    assert be_target == 102.0
+    atr_val = 2.0
+    buf_dist_bull = get_sl_buffer_distance(entry_s, side="BULL")
+    assert buf_dist_bull == 2.0, f"Expected 2.0 buffer distance, got {buf_dist_bull}"
+    be_target = round(round((entry_s + max(buf_dist_bull, 0.5 * atr_val)) / 0.05) * 0.05, 2)
+    assert be_target == 102.0, f"Expected 102.0, got {be_target}"
+
+    buf_dist_bear = get_sl_buffer_distance(entry_s, side="BEAR")
+    assert buf_dist_bear == 2.0, f"Expected 2.0 buffer distance, got {buf_dist_bear}"
+    be_target_bear = round(round((entry_s - max(buf_dist_bear, 0.5 * atr_val)) / 0.05) * 0.05, 2)
+    assert be_target_bear == 98.0, f"Expected 98.0, got {be_target_bear}"
+
+    # Option PE (Long Option Buyer) Entry = 100.0, atr = 2.0 -> Long buyer profits on rise -> BE is above entry
+    buf_dist_pe = get_sl_buffer_distance(entry_s, side="BULL")
+    be_target_pe = round(round((entry_s + max(buf_dist_pe, 0.5 * atr_val)) / 0.05) * 0.05, 2)
+    assert be_target_pe == 102.0, f"Expected 102.0 for Option PE BE, got {be_target_pe}"
+
+    entry_opt = 10.0
+    buf_dist_opt = get_sl_buffer_distance(entry_opt, side="BULL")
+    assert buf_dist_opt == 0.80, f"Expected 0.80 buffer distance for 10.0 option, got {buf_dist_opt}"
+    be_target_opt = round(round((entry_opt + max(buf_dist_opt, 0.5 * 0.5)) / 0.05) * 0.05, 2)
+    assert be_target_opt == 10.80, f"Expected 10.80 adaptive BE, got {be_target_opt}"
 
     # 3. Hammer Baby containment
     df_h_bad = pd.DataFrame([

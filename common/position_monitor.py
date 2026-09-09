@@ -16,6 +16,7 @@ import threading
 from datetime import datetime as dt, timedelta, time as datetime_time
 import pandas as pd
 import paths
+from targets import get_sl_buffer_distance
 from timeframe_utils import fetch_and_resample_candles, get_ist_now, get_ist_date, get_ist_time
 
 NFO_CACHE_FILE = paths.NFO_CACHE_FILE
@@ -1736,20 +1737,30 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
             else:
                 gain_pct = ((hp - entry_s) / entry_s * 100) if entry_s > 0 else 0.0
 
-            # Feature 5: Positive Breakeven (+BE: Entry + 2% for Long, Entry - 2% for Short) Triggered when peak gain >= +10%
+            # Compute position ATR for adaptive buffer / breakeven calculations
+            atr = float(pos.get("atr", 0.0) or 0.0)
+            if atr <= 0:
+                if df is not None and not df.empty and len(df) >= 3:
+                    high_low_diff = (df['high'] - df['low']).abs()
+                    atr = float(high_low_diff.tail(14).mean()) if len(df) >= 14 else float(high_low_diff.mean())
+                else:
+                    atr = entry_s * 0.02
+            if pd.isna(atr) or atr <= 0:
+                atr = entry_s * 0.02
+
+            # Feature 5: Positive Breakeven (+BE: Entry + max(buf, 0.5*ATR) for Long, Entry - max(buf, 0.5*ATR) for Short) Triggered when peak gain >= +10%
             if pos.get("trailing_stage", 0) == 0 and gain_pct >= 10.0 and has_higher_targets:
                 curr_sl = float(pos.get("current_sl") or 0.0)
                 if is_short_stock:
-                    be_target = round(round((entry_s * 0.98) / 0.05) * 0.05, 2)
+                    buf_dist = get_sl_buffer_distance(entry_s, side="BEAR")
+                    be_offset = max(buf_dist, 0.5 * atr)
+                    be_target = round(round((entry_s - be_offset) / 0.05) * 0.05, 2)
                     new_sl = min(curr_sl, be_target) if curr_sl > 0 else be_target
                 else:
-                    is_bull = str(pos.get("side","CE")).upper() in ["CE", "BUY", "BULL"]
-                    if is_bull:
-                        be_target = round(round((entry_s * 1.02) / 0.05) * 0.05, 2)
-                        new_sl = max(curr_sl, be_target)
-                    else:
-                        be_target = round(round((entry_s * 0.98) / 0.05) * 0.05, 2)
-                        new_sl = min(curr_sl, be_target) if curr_sl > 0 else be_target
+                    buf_dist = get_sl_buffer_distance(entry_s, side="BULL")
+                    be_offset = max(buf_dist, 0.5 * atr)
+                    be_target = round(round((entry_s + be_offset) / 0.05) * 0.05, 2)
+                    new_sl = max(curr_sl, be_target)
                 sl_stamp = dt.now().isoformat()
                 with lock:
                     if sym in positions_dict:
@@ -1819,11 +1830,14 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
 
                         if exit_ok:
                             if is_short_stock:
-                                be_sl = round(round((entry_s * 0.98)/0.05)*0.05, 2)
+                                buf_dist = get_sl_buffer_distance(entry_s, side="BEAR")
+                                be_offset = max(buf_dist, 0.5 * atr)
+                                be_sl = round(round((entry_s - be_offset) / 0.05) * 0.05, 2)
                                 partial_pnl = ((entry_s - t1_val) / entry_s * 100) if entry_s else 0
                             else:
-                                is_bull = str(pos.get("side","CE")).upper() in ["CE", "BUY", "BULL"]
-                                be_sl = round(round((entry_s * 1.02)/0.05)*0.05, 2) if is_bull else round(round((entry_s * 0.98)/0.05)*0.05, 2)
+                                buf_dist = get_sl_buffer_distance(entry_s, side="BULL")
+                                be_offset = max(buf_dist, 0.5 * atr)
+                                be_sl = round(round((entry_s + be_offset) / 0.05) * 0.05, 2)
                                 partial_pnl = ((t1_val - entry_s) / entry_s * 100) if entry_s else 0
                             with lock:
                                 if sym in positions_dict:
@@ -1847,15 +1861,18 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                         else:
                             logging.critical(f"[TRANCHE_1_EXIT FAILED] Partial exit order for {sym} failed ({exit_res}). Preserving full position.")
                     else:
-                        # Single-lot trailing to Positive Breakeven (+2%)
+                        # Single-lot trailing to Positive Breakeven
                         curr_sl = float(pos.get("current_sl") or 0.0)
                         if is_short_stock:
-                            be_sl = round(round((entry_s * 0.98)/0.05)*0.05, 2)
+                            buf_dist = get_sl_buffer_distance(entry_s, side="BEAR")
+                            be_offset = max(buf_dist, 0.5 * atr)
+                            be_sl = round(round((entry_s - be_offset) / 0.05) * 0.05, 2)
                             new_sl = min(curr_sl, be_sl) if curr_sl > 0 else be_sl
                         else:
-                            is_bull = str(pos.get("side","CE")).upper() in ["CE", "BUY", "BULL"]
-                            be_sl = round(round((entry_s * 1.02)/0.05)*0.05, 2) if is_bull else round(round((entry_s * 0.98)/0.05)*0.05, 2)
-                            new_sl = max(curr_sl, be_sl) if is_bull else (min(curr_sl, be_sl) if curr_sl > 0 else be_sl)
+                            buf_dist = get_sl_buffer_distance(entry_s, side="BULL")
+                            be_offset = max(buf_dist, 0.5 * atr)
+                            be_sl = round(round((entry_s + be_offset) / 0.05) * 0.05, 2)
+                            new_sl = max(curr_sl, be_sl)
                         sl_stamp = dt.now().isoformat()
                         with lock:
                             if sym in positions_dict:
@@ -1912,7 +1929,7 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                     if is_short_stock:
                         new_sl = min(curr_sl, target_base) if curr_sl > 0 else target_base
                     else:
-                        new_sl = max(curr_sl, target_base) if str(pos.get("side","CE")).upper() in ["CE", "BUY", "BULL"] else (min(curr_sl, target_base) if curr_sl > 0 else target_base)
+                        new_sl = max(curr_sl, target_base)
                     sl_stamp = dt.now().isoformat()
                     with lock:
                         if sym in positions_dict:
@@ -2128,7 +2145,7 @@ def monitor_all_active_positions(kite, live=True):
             lock=lock_opt,
             product_type="NRML",
             engine_name="nifty50",
-            timeframe_entry="30minute",
+            timeframe_entry="15minute",
             trade_db=trade_db,
             log_fn=log_to_journal,
             live=live

@@ -217,6 +217,17 @@ def calculate_sl_buffer(price_level, side="BULL"):
         return round(max(0.05, price - buffer), 2)
 
 
+def get_sl_buffer_distance(price_level, side="BULL"):
+    """
+    Asset-adaptive Stop Loss buffer distance (delta offset in points).
+    Returns abs(price_level - calculate_sl_buffer(price_level, side)).
+    Protects callers against erroneously treating calculate_sl_buffer (which returns
+    an absolute price floor/ceiling) as an additive delta offset.
+    """
+    p = float(price_level)
+    return round(abs(p - calculate_sl_buffer(p, side=side)), 2)
+
+
 def check_circuit_and_spread_shield(kite, symbol, exchange="NSE", side="BUY"):
     """
     Circuit Band & Liquidity Safety Shield:
