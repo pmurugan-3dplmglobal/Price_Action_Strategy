@@ -715,10 +715,11 @@ def scan_pattern_lifecycle_stage_bearish(df_entry, df_anchor, anchor_tf="", entr
 
     short_names = BEAR_SHORT_NAMES
 
-    latest_close = float(df_entry.iloc[-1]['close'])
+    df_target = df_anchor if (df_anchor is not None and len(df_anchor) >= 8) else df_entry
+    latest_close = float(df_entry.iloc[-1]['close']) if (df_entry is not None and not df_entry.empty) else float(df_target.iloc[-1]['close'])
 
-    for anchor_idx in range(len(df_entry) - 2, max(0, len(df_entry) - 75), -1):
-        sub_anchor_df = df_entry.iloc[:anchor_idx + 1]
+    for anchor_idx in range(len(df_target) - 2, max(0, len(df_target) - 75), -1):
+        sub_anchor_df = df_target.iloc[:anchor_idx + 1]
         anchor_candle = sub_anchor_df.iloc[-1]
         
         det_result = None
@@ -738,27 +739,39 @@ def scan_pattern_lifecycle_stage_bearish(df_entry, df_anchor, anchor_tf="", entr
         pattern_label = short_names.get(anchor_name, "BASE_ABCD")
         a_date = str(det_result.get("CandleATime") or anchor_candle.get('date', ''))
 
-        # Invalidation check: Price must not have closed above invalidation post-A
-        after_a = df_entry.iloc[anchor_idx + 1:]
-        if not after_a.empty and float(after_a['close'].max()) >= invalidation:
-            continue
-        if latest_close >= invalidation:
+        # 1. Left-Side Rule on Anchor TF: No close above Anchor High in past 100 candles
+        left_df = df_target.iloc[max(0, anchor_idx - 100) : anchor_idx]
+        if not left_df.empty and float(left_df['close'].max()) > a_high:
             continue
 
-        # Check Point B: breakdown below a_low
+        t1, t2, t3 = find_profit_targets_bearish(df_anchor, a_low, stop_loss=invalidation)
+        risk = invalidation - a_low
+        rr = (a_low - t1) / risk if (t1 and risk > 0) else 0.0
+
+        # 2. Hard Anchor TF Eviction Rule: Discard if post-A closed >= SL or <= T1
+        after_a = df_target.iloc[anchor_idx + 1:]
+        if not after_a.empty:
+            if float(after_a['close'].max()) >= invalidation:
+                continue
+            if t1 is not None and float(after_a['close'].min()) <= t1:
+                continue
+            if t2 is not None and float(after_a['close'].min()) <= t2:
+                continue
+        if latest_close >= invalidation:
+            continue
+        if t1 is not None and latest_close <= t1:
+            continue
+
+        # 3. Check Point B: breakdown below a_low on Anchor TF
         b_idx = None
         for j in range(len(after_a)):
             if float(after_a.iloc[j]['close']) < a_low:
                 b_idx = anchor_idx + 1 + j
                 break
 
-        t1, t2, t3 = find_profit_targets_bearish(df_anchor, a_low, stop_loss=invalidation)
-        risk = invalidation - a_low
-        rr = (a_low - t1) / risk if (t1 and risk > 0) else 0.0
-
         if b_idx is not None:
-            # Check Point C: green retest
-            c_slice = df_entry.iloc[b_idx + 1:]
+            # 4. Check Point C on Anchor TF
+            c_slice = df_target.iloc[b_idx + 1:]
             c_idx = None
             risk_dist = max(0.50, a_high - a_low)
             max_b_excursion = a_low - (1.5 * risk_dist)
@@ -781,9 +794,10 @@ def scan_pattern_lifecycle_stage_bearish(df_entry, df_anchor, anchor_tf="", entr
                     break
 
             if c_idx is not None:
-                b_row = df_entry.iloc[b_idx]
-                c_row = df_entry.iloc[c_idx]
-                twap_c_info = calculate_twap_c_stability(df_entry.iloc[c_idx:], risk_dist=risk_dist)
+                # Stage A / A+: Both B and C are formed on Anchor TF! Coiling for D breakdown
+                b_row = df_target.iloc[b_idx]
+                c_row = df_target.iloc[c_idx]
+                twap_c_info = calculate_twap_c_stability(df_target.iloc[c_idx:], risk_dist=risk_dist)
                 twap_c_stable = bool(twap_c_info.get("twap_stable", False))
                 has_parabolic = bool(
                     (swing_meta.get("swing_waves", 0) >= 2 and swing_meta.get("terminal_base", False))
@@ -825,7 +839,7 @@ def scan_pattern_lifecycle_stage_bearish(df_entry, df_anchor, anchor_tf="", entr
                     "twap_c_std": twap_c_info.get("twap_std", 0.0)
                 }
 
-        # Stage B Bearish: Valid Anchor A formed, waiting for B / C
+        # Stage B Bearish: Valid Anchor A formed on Anchor TF with 100-candle rule, waiting for B / C
         dist_pct = round(((latest_close - a_low) / latest_close) * 100, 2) if latest_close > 0 else 0.0
         return {
             "stage": "STAGE_B_ANCHOR",

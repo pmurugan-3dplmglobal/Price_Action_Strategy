@@ -120,7 +120,7 @@ class TokenBucketRateLimiter:
         self.last_update = time.time()
         self.lock = threading.Lock()
 
-    def acquire(self, tokens=1):
+    def acquire(self, tokens=1, priority=False):
         with self.lock:
             while True:
                 now = time.time()
@@ -128,19 +128,21 @@ class TokenBucketRateLimiter:
                 self.last_update = now
                 self.tokens = min(self.capacity, self.tokens + elapsed * self.rate)
                 
-                if self.tokens >= tokens:
+                # Priority calls (Fast Radar) can immediately borrow down to -1.0 token to avoid delay
+                min_threshold = -1.0 if priority else 0.0
+                if (self.tokens - tokens) >= min_threshold or self.tokens >= tokens:
                     self.tokens -= tokens
                     return
                 # Need to wait
                 needed = tokens - self.tokens
                 wait_time = needed / self.rate
-                time.sleep(max(0.01, wait_time))
+                time.sleep(max(0.005, wait_time))
 
 _GLOBAL_KITE_RATE_LIMITER = TokenBucketRateLimiter(rate=2.8, capacity=3.0)
 
 
-def safe_kite_call(func, *args, retries=3, delay=0.8, **kwargs):
-    _GLOBAL_KITE_RATE_LIMITER.acquire()
+def safe_kite_call(func, *args, retries=3, delay=0.8, priority=False, **kwargs):
+    _GLOBAL_KITE_RATE_LIMITER.acquire(priority=priority)
     for attempt in range(retries):
         try:
             return func(*args, **kwargs)
@@ -148,7 +150,7 @@ def safe_kite_call(func, *args, retries=3, delay=0.8, **kwargs):
             err_str = str(err).lower()
             if "too many" in err_str or "requests" in err_str or "429" in err_str:
                 time.sleep(delay * (attempt + 1.5))
-                _GLOBAL_KITE_RATE_LIMITER.acquire()
+                _GLOBAL_KITE_RATE_LIMITER.acquire(priority=priority)
             elif "access_token" in err_str or "api_key" in err_str:
                 time.sleep(delay)
             else:

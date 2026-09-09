@@ -80,6 +80,7 @@ ANCHOR_SCAN_REQUEST_FILE = paths.monitor_file("anchor_scan_request.txt")
 LIVE_EXECUTION_FLAG = paths.NIFTY50_LIVE_FLAG
 SCAN_DISPLAY_FILE = paths.SCAN_DISPLAY_FILE
 SL_TARGET_OVERRIDES_FILE = paths.SL_TARGET_OVERRIDES_FILE
+_RADAR_ACTIVE = threading.Event()
 
 class FlushFileHandler(logging.FileHandler):
     def emit(self, record):
@@ -236,6 +237,9 @@ def reconcile_positions(kite):
 # ──────────────────────────────────────────────
 
 def _process_stock(kite, symbol, config, from_entry, to_entry, from_anchor, to_anchor, entry_scanners, anchor_scanners, spot_ltp=None):
+    # Priority Coordination: If Fast Radar is actively evaluating Category A/A+ candidates, pause briefly to yield Kite rate limits
+    if _RADAR_ACTIVE.is_set():
+        time.sleep(0.35)
     return scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anchor,
                        entry_scanners, anchor_scanners,
                        lambda sym, sp, step, opt, r: shared_resolve_strikes(NFO_INSTRUMENTS, sym, sp, step, opt, r),
@@ -310,7 +314,13 @@ def run_scan_cycle(kite):
 
     temp_stored_trades = []
 
-    with ThreadPoolExecutor(max_workers=8) as pool:
+    funnel_summary = pattern_funnel.get_funnel_summary("nifty50")
+    radar_active_count = funnel_summary.get("count_a_plus", 0) + funnel_summary.get("count_a", 0)
+    worker_threads = 3 if radar_active_count > 0 else 6
+    if radar_active_count > 0:
+        logging.info(f"[RADAR PRIORITY GATE] {radar_active_count} setup(s) on radar. Throttling macro scan (workers={worker_threads}) to preserve Zerodha Kite rate limits.")
+
+    with ThreadPoolExecutor(max_workers=worker_threads) as pool:
         futures = {}
         for symbol in scan_order:
             config = STOCK_REGISTRY.get(symbol)
@@ -336,6 +346,35 @@ def run_scan_cycle(kite):
 
         with position_lock:
             shared_write_display(temp_stored_trades, dict(ACTIVE_POSITIONS), SCAN_DISPLAY_FILE, "nifty50")
+
+    # Audit incubating setups in Category B and Category A for Anchor TF T1 / SL closure
+    try:
+        current_funnel = pattern_funnel.load_funnel_state("nifty50")
+        for pool_key in ["category_a_plus", "category_a", "category_b"]:
+            for item in list(current_funnel.get(pool_key, [])):
+                sym = item.get("symbol")
+                sl = float(item.get("current_sl") or 0.0)
+                t1 = float(item.get("t1") or 0.0)
+                tok = item.get("option_token") or item.get("spot_token")
+                if tok and (sl > 0 or t1 > 0):
+                    from timeframe_utils import fetch_and_resample_candles
+                    df_a_check = safe_kite_call(
+                        fetch_and_resample_candles,
+                        kite, tok,
+                        (dt.now() - timedelta(days=5)).strftime('%Y-%m-%d'),
+                        dt.now().strftime('%Y-%m-%d'),
+                        TIMEFRAME_ANCHOR
+                    )
+                    if df_a_check is not None and not df_a_check.empty:
+                        last_a_close = float(df_a_check.iloc[-1]['close'])
+                        if sl > 0 and last_a_close <= sl:
+                            logging.info(f"[ANCHOR TF EVICT: SL BREACH] {sym} ({item.get('contract')}) closed at/below SL on {TIMEFRAME_ANCHOR} ({last_a_close} <= {sl}). Evicting from {pool_key}.")
+                            pattern_funnel.evict_item("nifty50", item)
+                        elif t1 > 0 and last_a_close >= t1:
+                            logging.info(f"[ANCHOR TF EVICT: T1 HIT] {sym} ({item.get('contract')}) closed at/above T1 on {TIMEFRAME_ANCHOR} ({last_a_close} >= {t1}). Evicting from {pool_key}.")
+                            pattern_funnel.evict_item("nifty50", item)
+    except Exception as audit_err:
+        logging.debug(f"Anchor TF funnel audit error: {audit_err}")
 
     if not temp_stored_trades:
         logging.info("No new trades meet criteria this cycle.")
@@ -644,174 +683,188 @@ def run_fast_radar_check(kite):
     if not is_new_entry_allowed(live_execution_active=True, is_option=True):
         return []
 
-    funnel_summary = pattern_funnel.get_funnel_summary("nifty50")
-    radar_pool = list(funnel_summary.get("category_a_plus", []) + funnel_summary.get("category_a", []))
+    _RADAR_ACTIVE.set()
+    try:
+        funnel_summary = pattern_funnel.get_funnel_summary("nifty50")
+        radar_pool = list(funnel_summary.get("category_a_plus", []) + funnel_summary.get("category_a", []))
 
-    # Ingest unexecuted high-conviction candidates directly from the Scan Tab (SCAN_DISPLAY_FILE)
-    if os.path.exists(SCAN_DISPLAY_FILE):
-        try:
-            with open(SCAN_DISPLAY_FILE, "r", encoding="utf-8") as f:
-                scan_disp = json.load(f)
-            staged_tab = scan_disp.get("staged_trades", [])
-            existing_keys = {
-                (x.get("symbol"), x.get("contract")): True for x in radar_pool
-            }
-            for st in staged_tab:
-                s_key = (st.get("symbol"), st.get("contract"))
-                if s_key not in existing_keys:
-                    bm = float(st.get("benchmark") or 0.0)
-                    sl = float(st.get("current_sl") or 0.0)
-                    # Filter: valid benchmark & SL, and not marked as active holding
-                    if bm > 0 and sl > 0 and st.get("staged_tag") != "ACTIVE_HOLDING":
-                        radar_pool.append(st)
-                        existing_keys[s_key] = True
-        except Exception as disp_err:
-            logging.debug(f"Radar Scan Tab ingestion error: {disp_err}")
+        # Ingest unexecuted high-conviction candidates directly from the Scan Tab (SCAN_DISPLAY_FILE)
+        if os.path.exists(SCAN_DISPLAY_FILE):
+            try:
+                with open(SCAN_DISPLAY_FILE, "r", encoding="utf-8") as f:
+                    scan_disp = json.load(f)
+                staged_tab = scan_disp.get("staged_trades", [])
+                existing_keys = {
+                    (x.get("symbol"), x.get("contract")): True for x in radar_pool
+                }
+                for st in staged_tab:
+                    s_key = (st.get("symbol"), st.get("contract"))
+                    if s_key not in existing_keys:
+                        bm = float(st.get("benchmark") or 0.0)
+                        sl = float(st.get("current_sl") or 0.0)
+                        # Filter: valid benchmark & SL, and not marked as active holding
+                        if bm > 0 and sl > 0 and st.get("staged_tag") != "ACTIVE_HOLDING":
+                            radar_pool.append(st)
+                            existing_keys[s_key] = True
+            except Exception as disp_err:
+                logging.debug(f"Radar Scan Tab ingestion error: {disp_err}")
 
-    if not radar_pool:
-        return []
+        if not radar_pool:
+            return []
 
-    # Prioritize: Tier 1 Gold first, then highest R:R
-    def _radar_priority(x):
-        tier_val = int(x.get("tier", 2))
-        rr_val = float(x.get("rr", 0.0) or 0.0)
-        return (-tier_val, rr_val)
+        # Prioritize: Tier 1 Gold first, then highest R:R
+        def _radar_priority(x):
+            tier_val = int(x.get("tier", 2))
+            rr_val = float(x.get("rr", 0.0) or 0.0)
+            return (-tier_val, rr_val)
 
-    radar_pool.sort(key=_radar_priority, reverse=True)
+        radar_pool.sort(key=_radar_priority, reverse=True)
 
-    triggered = []
-    for item in radar_pool:
-        sym = item.get("symbol")
-        with position_lock:
-            if sym in ACTIVE_POSITIONS:
-                continue
-        tok = item.get("option_token") or item.get("spot_token")
-        if not tok:
-            continue
-        try:
-            from timeframe_utils import fetch_and_resample_candles
-            df_latest = safe_kite_call(
-                fetch_and_resample_candles,
-                kite, tok,
-                (dt.now() - timedelta(days=2)).strftime('%Y-%m-%d'),
-                dt.now().strftime('%Y-%m-%d'),
-                item.get("timeframe", TIMEFRAME_ENTRY)
-            )
-            if df_latest is not None and not df_latest.empty:
-                last_candle = df_latest.iloc[-1]
-                candle_date_str = str(last_candle.get('date', ''))
-                c_dt = get_ist_now(naive=True)
-                try:
-                    parsed_dt = pd.to_datetime(candle_date_str)
-                    if hasattr(parsed_dt, 'tz') and parsed_dt.tz is not None:
-                        parsed_dt = parsed_dt.tz_convert('Asia/Kolkata').tz_localize(None)
-                    c_dt = parsed_dt
-                    if c_dt.date() < get_ist_now(naive=True).date():
-                        # Historical candle from prior session cannot trigger a breakout today
-                        continue
-                except Exception:
-                    pass
-
-                c_now = float(last_candle['close'])
-                bm = float(item.get("benchmark") or 0.0)
-                sl = float(item.get("current_sl") or 0.0)
-                t1 = float(item.get("t1") or 0.0)
-                if sl > 0 and c_now <= sl:
-                    logging.info(f"[RADAR EVICT] {sym} breached SL floor ({c_now} <= {sl})")
-                    pattern_funnel.evict_item("nifty50", item)
+        triggered = []
+        for item in radar_pool:
+            sym = item.get("symbol")
+            with position_lock:
+                if sym in ACTIVE_POSITIONS:
                     continue
+            tok = item.get("option_token") or item.get("spot_token")
+            if not tok:
+                continue
+            try:
+                from timeframe_utils import fetch_and_resample_candles
+                # High priority Kite API fetch — ensures fast radar is NEVER delayed by background macro scan
+                df_latest = safe_kite_call(
+                    fetch_and_resample_candles,
+                    kite, tok,
+                    (dt.now() - timedelta(days=2)).strftime('%Y-%m-%d'),
+                    dt.now().strftime('%Y-%m-%d'),
+                    item.get("timeframe", TIMEFRAME_ENTRY),
+                    priority=True
+                )
+                if df_latest is not None and not df_latest.empty:
+                    last_candle = df_latest.iloc[-1]
+                    candle_date_str = str(last_candle.get('date', ''))
+                    c_dt = get_ist_now(naive=True)
+                    try:
+                        parsed_dt = pd.to_datetime(candle_date_str)
+                        if hasattr(parsed_dt, 'tz') and parsed_dt.tz is not None:
+                            parsed_dt = parsed_dt.tz_convert('Asia/Kolkata').tz_localize(None)
+                        c_dt = parsed_dt
+                        if c_dt.date() < get_ist_now(naive=True).date():
+                            # Historical candle from prior session cannot trigger a breakout today
+                            continue
+                    except Exception:
+                        pass
 
-                # Trigger 1: Breakout / 80% Early D Trigger
-                is_breakout = (bm > 0 and c_now >= bm)
+                    c_now = float(last_candle['close'])
+                    bm = float(item.get("benchmark") or 0.0)
+                    sl = float(item.get("current_sl") or 0.0)
+                    t1 = float(item.get("t1") or 0.0)
 
-                # Trigger 2: Post-D Retest Entry (D formed, pre-T1, SL intact, retesting Benchmark zone +/- 2.5%)
-                is_retest = False
-                if bm > 0 and sl > 0 and t1 > 0:
-                    retest_lower = bm * 0.980
-                    retest_upper = bm * 1.025
-                    if retest_lower <= c_now <= retest_upper and c_now < t1 and c_now > sl:
-                        is_retest = True
+                    # Hard Eviction Rule: SL breached or T1 achieved pre-entry
+                    if sl > 0 and c_now <= sl:
+                        logging.info(f"[RADAR EVICT: SL BREACH] {sym} ({item.get('contract')}) breached SL floor ({c_now} <= {sl})")
+                        pattern_funnel.evict_item("nifty50", item)
+                        continue
 
-                if is_breakout or is_retest:
-                    # Check 1: Timeframe Maturity Guard (80% Near-Close or Completed Bar)
-                    from timeframe_utils import is_live_candle_near_close, get_tf_minutes
-                    item_tf = item.get("timeframe", TIMEFRAME_ENTRY)
-                    tf_mins = get_tf_minutes(item_tf)
-                    now_ist = get_ist_now(naive=True)
-                    is_closed_bar = (now_ist - c_dt).total_seconds() >= (tf_mins * 60.0)
-                    is_80pct_mature = is_live_candle_near_close(candle_date_str, item_tf, completion_pct=0.80)
+                    if t1 > 0 and c_now >= t1:
+                        logging.info(f"[RADAR EVICT: T1 HIT] {sym} ({item.get('contract')}) reached/closed at T1 ({c_now} >= {t1}) before entry. Evicting setup.")
+                        pattern_funnel.evict_item("nifty50", item)
+                        continue
 
-                    # For initial breakouts, require 80% bar maturity or bar close to avoid premature wicks
-                    if is_breakout and not is_retest:
-                        if not (is_80pct_mature or is_closed_bar):
-                            logging.debug(f"[RADAR COILING] {sym} ({item.get('contract')}) at {c_now} >= Benchmark {bm}, awaiting 80% candle maturity (Minute >= {int(tf_mins*0.8)}).")
+                    # Trigger 1: Breakout / 80% Early D Trigger
+                    is_breakout = (bm > 0 and c_now >= bm)
+
+                    # Trigger 2: Post-D Retest Entry (D formed, pre-T1, SL intact, retesting Benchmark zone +/- 2.5%)
+                    is_retest = False
+                    if bm > 0 and sl > 0 and t1 > 0:
+                        retest_lower = bm * 0.980
+                        retest_upper = bm * 1.025
+                        if retest_lower <= c_now <= retest_upper and c_now < t1 and c_now > sl:
+                            is_retest = True
+
+                    if is_breakout or is_retest:
+                        # Check 1: Timeframe Maturity Guard (80% Near-Close or Completed Bar)
+                        from timeframe_utils import is_live_candle_near_close, get_tf_minutes
+                        item_tf = item.get("timeframe", TIMEFRAME_ENTRY)
+                        tf_mins = get_tf_minutes(item_tf)
+                        now_ist = get_ist_now(naive=True)
+                        is_closed_bar = (now_ist - c_dt).total_seconds() >= (tf_mins * 60.0)
+                        is_80pct_mature = is_live_candle_near_close(candle_date_str, item_tf, completion_pct=0.80)
+
+                        # For initial breakouts, require 80% bar maturity or bar close to avoid premature wicks
+                        if is_breakout and not is_retest:
+                            if not (is_80pct_mature or is_closed_bar):
+                                logging.debug(f"[RADAR COILING] {sym} ({item.get('contract')}) at {c_now} >= Benchmark {bm}, awaiting 80% candle maturity (Minute >= {int(tf_mins*0.8)}).")
+                                continue
+
+                        # Check 2: Option VWAP Support & Overpay Guard
+                        from swing_detection import calculate_option_vwap
+                        vwap_info = calculate_option_vwap(df_latest)
+                        opt_vwap = float(vwap_info.get("vwap") or 0.0)
+                        stretch_pct = float(vwap_info.get("stretch_pct") or 0.0)
+
+                        if opt_vwap > 0 and c_now < opt_vwap:
+                            logging.debug(f"[RADAR VWAP GATE] {sym} ({item.get('contract')}) at {c_now}, but lacks VWAP support (LTP {c_now} < VWAP {opt_vwap}).")
                             continue
 
-                    # Check 2: Option VWAP Support & Overpay Guard
-                    from swing_detection import calculate_option_vwap
-                    vwap_info = calculate_option_vwap(df_latest)
-                    opt_vwap = float(vwap_info.get("vwap") or 0.0)
-                    stretch_pct = float(vwap_info.get("stretch_pct") or 0.0)
+                        if stretch_pct > 15.0:
+                            logging.info(f"[RADAR OVERPAY GUARD] {sym} ({item.get('contract')}) stretched {stretch_pct:.1f}% > 15% above VWAP ({opt_vwap}). Skipping entry.")
+                            continue
 
-                    if opt_vwap > 0 and c_now < opt_vwap:
-                        logging.debug(f"[RADAR VWAP GATE] {sym} ({item.get('contract')}) at {c_now}, but lacks VWAP support (LTP {c_now} < VWAP {opt_vwap}).")
-                        continue
+                        # Check 3: Spot Institutional Relative Volume (RVOL) Confluence
+                        spot_tok = item.get("spot_token")
+                        if not spot_tok:
+                            from registries import STOCK_REGISTRY
+                            reg = STOCK_REGISTRY.get(sym)
+                            if isinstance(reg, dict):
+                                spot_tok = reg.get("token")
+                        
+                        if spot_tok:
+                            try:
+                                df_spot_rvol = safe_kite_call(
+                                    fetch_and_resample_candles,
+                                    kite, spot_tok,
+                                    (dt.now() - timedelta(days=35)).strftime('%Y-%m-%d'),
+                                    dt.now().strftime('%Y-%m-%d'),
+                                    "day",
+                                    priority=True
+                                )
+                                if df_spot_rvol is not None and len(df_spot_rvol) >= 5:
+                                    from rvol_calculator import calculate_rvol
+                                    rvol_spot = calculate_rvol(df_spot_rvol, tf_is_daily=True)
+                                    if rvol_spot.get("badge") != "NORMAL":
+                                        item["spot_rvol_badge"] = rvol_spot.get("badge")
+                                        item["spot_rvol_projected"] = rvol_spot.get("rvol_projected")
+                                        logging.info(f"🔥 [SPOT RVOL CONFLUENCE] {sym}: Underlying has {rvol_spot.get('badge')} (Projected {rvol_spot.get('rvol_projected')}x) backing option breakout!")
+                            except Exception as rvol_err:
+                                logging.debug(f"Spot RVOL check error for {sym}: {rvol_err}")
 
-                    if stretch_pct > 15.0:
-                        logging.info(f"[RADAR OVERPAY GUARD] {sym} ({item.get('contract')}) stretched {stretch_pct:.1f}% > 15% above VWAP ({opt_vwap}). Skipping entry.")
-                        continue
+                        if is_retest and not is_breakout:
+                            trigger_type = "POST_D_RETEST"
+                        elif is_80pct_mature and not is_closed_bar:
+                            trigger_type = "80%_EARLY_D"
+                        else:
+                            trigger_type = "COMPLETED_BAR_D"
 
-                    # Check 3: Spot Institutional Relative Volume (RVOL) Confluence
-                    spot_tok = item.get("spot_token")
-                    if not spot_tok:
-                        from registries import STOCK_REGISTRY
-                        reg = STOCK_REGISTRY.get(sym)
-                        if isinstance(reg, dict):
-                            spot_tok = reg.get("token")
-                    
-                    if spot_tok:
-                        try:
-                            df_spot_rvol = safe_kite_call(
-                                fetch_and_resample_candles,
-                                kite, spot_tok,
-                                (dt.now() - timedelta(days=35)).strftime('%Y-%m-%d'),
-                                dt.now().strftime('%Y-%m-%d'),
-                                "day"
-                            )
-                            if df_spot_rvol is not None and len(df_spot_rvol) >= 5:
-                                from rvol_calculator import calculate_rvol
-                                rvol_spot = calculate_rvol(df_spot_rvol, tf_is_daily=True)
-                                if rvol_spot.get("badge") != "NORMAL":
-                                    item["spot_rvol_badge"] = rvol_spot.get("badge")
-                                    item["spot_rvol_projected"] = rvol_spot.get("rvol_projected")
-                                    logging.info(f"🔥 [SPOT RVOL CONFLUENCE] {sym}: Underlying has {rvol_spot.get('badge')} (Projected {rvol_spot.get('rvol_projected')}x) backing option breakout!")
-                        except Exception as rvol_err:
-                            logging.debug(f"Spot RVOL check error for {sym}: {rvol_err}")
+                        logging.info(f"⚡ [RADAR TRIGGER: {trigger_type}] {sym} ({item.get('contract')}) LTP={c_now:.2f} vs Benchmark={bm:.2f} (VWAP={opt_vwap:.2f}, Stretch={stretch_pct:.1f}%)!")
+                        item["entry_spot"] = c_now
+                        item["entry_time"] = str(last_candle.get('date', dt.now().isoformat()))
+                        item["trigger_type"] = trigger_type
+                        # Recompute R:R based on exact retest entry price
+                        risk_now = abs(c_now - sl)
+                        if risk_now > 0 and t1 > 0:
+                            item["rr"] = round(abs(t1 - c_now) / risk_now, 2)
+                        triggered.append(item)
+                        pattern_funnel.evict_item("nifty50", item)
+            except Exception as radar_err:
+                logging.debug(f"Radar check error for {sym}: {radar_err}")
 
-                    if is_retest and not is_breakout:
-                        trigger_type = "POST_D_RETEST"
-                    elif is_80pct_mature and not is_closed_bar:
-                        trigger_type = "80%_EARLY_D"
-                    else:
-                        trigger_type = "COMPLETED_BAR_D"
-
-                    logging.info(f"⚡ [RADAR TRIGGER: {trigger_type}] {sym} ({item.get('contract')}) LTP={c_now:.2f} vs Benchmark={bm:.2f} (VWAP={opt_vwap:.2f}, Stretch={stretch_pct:.1f}%)!")
-                    item["entry_spot"] = c_now
-                    item["entry_time"] = str(last_candle.get('date', dt.now().isoformat()))
-                    item["trigger_type"] = trigger_type
-                    # Recompute R:R based on exact retest entry price
-                    risk_now = abs(c_now - sl)
-                    if risk_now > 0 and t1 > 0:
-                        item["rr"] = round(abs(t1 - c_now) / risk_now, 2)
-                    triggered.append(item)
-                    pattern_funnel.evict_item("nifty50", item)
-        except Exception as radar_err:
-            logging.debug(f"Radar check error for {sym}: {radar_err}")
-
-    if triggered:
-        logging.info(f"⚡ [RADAR TRIGGERED] Executing {len(triggered)} setup(s) immediately!")
-        execute_highest_rr_trade(kite, triggered)
-    return triggered
+        if triggered:
+            logging.info(f"⚡ [RADAR TRIGGERED] Executing {len(triggered)} setup(s) immediately!")
+            execute_highest_rr_trade(kite, triggered)
+        return triggered
+    finally:
+        _RADAR_ACTIVE.clear()
 
 
 def fast_radar_loop(kite):

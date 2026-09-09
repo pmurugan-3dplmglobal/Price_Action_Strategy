@@ -4,12 +4,38 @@ meta:
   last_updated: '2026-09-09'
   purpose: Active operational tracker for v2.1.0-stable failures, root causes, regressions, and enhancements.
   historical_archive: archive/ISSUE_HISTORY_ARCHIVE.yaml (Preserves 119 resolved legacy issues prior to 2026-09-05)
-  total_active_issues: 27
+  total_active_issues: 28
   archived_issues_summary:
     total_archived: 119
     recent_archived_batch: [FEATURE-031, FEATURE-030, FEATURE-029, ISSUE-084, ISSUE-083, ISSUE-082, ISSUE-081, ISSUE-080, FEATURE-036, FEATURE-035, FEATURE-034, FEATURE-033, ISSUE-054]
     key_archived_families: [ALGO_AUDIT_CVE, QUANT_ENHANCEMENTS, RADAR_LIFECYCLE, VCP_METRICS, SCANNER_DISCOVERY, SECURITY_CONFIG, ZERO_REGRESSION_AUDIT]
 issues:
+- id: FEATURE-046
+  title: Anchor TF Geometry Lifecycle (100-Candle Left-Side Rule & Hard T1/SL Eviction) with Zero-Latency Radar Priority
+  severity: HIGH
+  category: Price Action Geometry, Lifecycle Funnel, Kite API Rate Limiting, Radar Prioritization
+  family: RADAR_LIFECYCLE
+  date_reported: '2026-09-09'
+  symptom: |
+    1. Category B and Category A classification in scan_pattern_lifecycle_stage evaluated A, B, and C on df_entry rather than the higher Anchor TF (df_anchor).
+    2. The 100-candle left-side rule check was omitted from Category B incubation classification.
+    3. Incubating setups that closed past T1 (target reached pre-entry) or breached SL on Anchor TF were not systematically evicted from the radar funnel.
+    4. During the 15-minute background macro scan across 200+ stocks, concurrent candle queries could delay high-priority Fast Radar surveillance checks due to Zerodha Kite API rate limits (3 req/sec).
+  root_cause: |
+    1. scan_pattern_lifecycle_stage iterated over df_entry without enforcing the 100-candle left-side rule on df_anchor.
+    2. Missing hard eviction checks for post-A candles closing past T1 or below SL on the Anchor TF.
+    3. TokenBucketRateLimiter and worker thread pool lacked priority preemption for the 15-second Fast Radar.
+  affected_files:
+  - common/session.py
+  - common/patterns_bull.py
+  - common/patterns_bear.py
+  - Trade_Option/stock_options_trade_engine.py
+  resolution: |
+    1. Enhanced common/session.py with priority rate-limiting in TokenBucketRateLimiter and safe_kite_call(priority=True) for zero-delay radar candle fetches.
+    2. Updated scan_pattern_lifecycle_stage in common/patterns_bull.py and patterns_bear.py to evaluate Anchor A, 100-candle left-side rule, parabolic swings, and B & C formation on df_anchor.
+    3. Implemented Hard Anchor TF Eviction: Immediately discards/evicts any setup where post-A candles close at/past T1 or at/below SL on Anchor TF.
+    4. Added _RADAR_ACTIVE threading synchronization and throttled worker threads in Trade_Option/stock_options_trade_engine.py so the background macro scan immediately yields to Fast Radar checks.
+  status: RESOLVED
 - id: FEATURE-045
   title: 15-Minute Macro Discovery Scan Interval & Scan Tab Ingestion into 15s Fast Radar
   severity: HIGH

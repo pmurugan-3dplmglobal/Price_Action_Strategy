@@ -761,12 +761,13 @@ def scan_pattern_lifecycle_stage(df_entry, df_anchor, anchor_tf="", entry_tf="",
         "BULL_A_Base": "BASE_ABCD"
     }
 
-    latest_close = float(df_entry.iloc[-1]['close'])
+    df_target = df_anchor if (df_anchor is not None and len(df_anchor) >= 8) else df_entry
+    latest_close = float(df_entry.iloc[-1]['close']) if (df_entry is not None and not df_entry.empty) else float(df_target.iloc[-1]['close'])
 
-    # Search backward from newest candles for the most recent valid active Anchor A
-    for a_idx in range(len(df_entry) - 2, max(0, len(df_entry) - 75), -1):
-        a = df_entry.iloc[a_idx]
-        sub_df_direct = df_entry.iloc[: a_idx + 1]
+    # Search backward from newest candles on Anchor TF for the most recent valid active Anchor A
+    for a_idx in range(len(df_target) - 2, max(0, len(df_target) - 75), -1):
+        a = df_target.iloc[a_idx]
+        sub_df_direct = df_target.iloc[: a_idx + 1]
 
         anchor_match = None
         for fn in anchor_funcs:
@@ -785,27 +786,39 @@ def scan_pattern_lifecycle_stage(df_entry, df_anchor, anchor_tf="", entry_tf="",
         pattern_label = short_names.get(anchor_name, "BASE_ABCD")
         a_time_val = str(anchor_match.get("CandleATime") or a.get("date", ""))
 
-        # Guard: Invalidation check — price must not have closed below invalidation post-A
-        after_a = df_entry.iloc[a_idx + 1:]
-        if not after_a.empty and float(after_a['close'].min()) <= invalidation:
-            continue
-        if latest_close <= invalidation:
+        # 1. Left-Side Rule on Anchor TF: No close below Anchor Low in past 100 candles
+        left_df = df_target.iloc[max(0, a_idx - 100) : a_idx]
+        if not left_df.empty and float(left_df['close'].min()) < a_low:
             continue
 
-        # Check Point B
+        t1, t2, t3 = find_profit_targets(df_anchor, benchmark, stop_loss=invalidation)
+        risk = benchmark - invalidation
+        rr = (t1 - benchmark) / risk if (t1 and risk > 0) else 0.0
+
+        # 2. Hard Anchor TF Eviction Rule: Discard if post-A closed <= SL or >= T1
+        after_a = df_target.iloc[a_idx + 1:]
+        if not after_a.empty:
+            if float(after_a['close'].min()) <= invalidation:
+                continue
+            if t1 is not None and float(after_a['close'].max()) >= t1:
+                continue
+            if t2 is not None and float(after_a['close'].max()) >= t2:
+                continue
+        if latest_close <= invalidation:
+            continue
+        if t1 is not None and latest_close >= t1:
+            continue
+
+        # 3. Check Point B on Anchor TF
         b_idx = None
         for j in range(len(after_a)):
             if float(after_a.iloc[j]['close']) > benchmark:
                 b_idx = a_idx + 1 + j
                 break
 
-        t1, t2, t3 = find_profit_targets(df_anchor, benchmark, stop_loss=invalidation)
-        risk = benchmark - invalidation
-        rr = (t1 - benchmark) / risk if (t1 and risk > 0) else 0.0
-
         if b_idx is not None:
-            # Check Point C
-            c_slice = df_entry.iloc[b_idx + 1:]
+            # 4. Check Point C on Anchor TF
+            c_slice = df_target.iloc[b_idx + 1:]
             c_idx = None
             risk_dist = max(0.50, benchmark - a_low)
             max_b_excursion = benchmark + (1.5 * risk_dist)
@@ -828,10 +841,10 @@ def scan_pattern_lifecycle_stage(df_entry, df_anchor, anchor_tf="", entry_tf="",
                     break
 
             if c_idx is not None:
-                # Stage A / A+: Both B and C are formed! Price is currently coiling for D breakout
-                b_row = df_entry.iloc[b_idx]
-                c_row = df_entry.iloc[c_idx]
-                twap_c_info = calculate_twap_c_stability(df_entry.iloc[c_idx:], risk_dist=risk_dist)
+                # Stage A / A+: Both B and C are formed on Anchor TF! Coiling for D breakout
+                b_row = df_target.iloc[b_idx]
+                c_row = df_target.iloc[c_idx]
+                twap_c_info = calculate_twap_c_stability(df_target.iloc[c_idx:], risk_dist=risk_dist)
                 twap_c_stable = bool(twap_c_info.get("twap_stable", False))
                 has_parabolic = bool(
                     (swing_meta.get("swing_waves", 0) >= 2 and swing_meta.get("terminal_base", False))
@@ -872,7 +885,7 @@ def scan_pattern_lifecycle_stage(df_entry, df_anchor, anchor_tf="", entry_tf="",
                     "twap_c_std": twap_c_info.get("twap_std", 0.0)
                 }
 
-        # Stage B: Valid Anchor A formed, waiting for B / C
+        # Stage B: Valid Anchor A formed on Anchor TF with 100-candle rule, waiting for B / C
         dist_pct = round(((benchmark - latest_close) / latest_close) * 100, 2) if latest_close > 0 else 0.0
         return {
             "stage": "STAGE_B_ANCHOR",
@@ -892,8 +905,6 @@ def scan_pattern_lifecycle_stage(df_entry, df_anchor, anchor_tf="", entry_tf="",
             "swing_waves": swing_meta.get("swing_waves", 0),
             "terminal_base": swing_meta.get("terminal_base", False),
             "atr_ratio": vcp_metrics.get("atr_ratio", 1.0),
-            "is_squeeze": vcp_metrics.get("is_squeeze", False),
-            "vcp_tier": vcp_metrics.get("vcp_tier", "NORMAL"),
             "vcp_badge": vcp_metrics.get("vcp_badge", ""),
             "twap_c_stable": False,
             "twap_c_score": 0.0,
