@@ -128,6 +128,7 @@ def scan_index_option_trap(
     candle_2 = df_5m.iloc[-1]  # Reclaim candle
 
     c1_close = float(candle_1['close'])
+    c1_high = float(candle_1['high'])
     c2_open = float(candle_2['open'])
     c2_close = float(candle_2['close'])
     c2_low = float(candle_2['low'])
@@ -146,6 +147,7 @@ def scan_index_option_trap(
 
     raw_sl = min(c1_low, c2_low)
     risk_pts = round(c2_close - raw_sl, 2)
+    safe_entry = max(c1_high, c2_close)
 
     if cond_1 and cond_2 and cond_3:
         if risk_pts <= 0 or risk_pts > max_sl_points:
@@ -165,6 +167,8 @@ def scan_index_option_trap(
             "support_line": round(support_line, 2),
             "sweep_close": round(c1_close, 2),
             "reclaim_close": round(c2_close, 2),
+            "red_high": round(c1_high, 2),
+            "safe_entry": round(safe_entry, 2),
             "plus_di": round(curr_plus_di, 1),
             "minus_di": round(curr_minus_di, 1),
             "adx": round(float(adx.iloc[-1]), 1),

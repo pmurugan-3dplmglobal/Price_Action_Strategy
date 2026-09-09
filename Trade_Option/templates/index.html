@@ -2068,13 +2068,14 @@
                     html += '<p class="empty-state">No Index Option 5M Traps currently detected. Awaiting Support Breakdown Sweep + Immediate Green Reclaim (+DI ≥ 26.0).</p>';
                 } else {
                     html += '<div class="table-responsive"><table class="trade-table"><thead><tr>';
-                    html += '<th>Time</th><th>Contract</th><th>Side</th><th>Support Line</th><th>Sweep Low</th><th>Reclaim Close</th><th>+DI / -DI</th><th>ADX</th><th>Risk (Pts)</th><th>Target 1 (1.5R)</th><th>Target 2 (2.5R)</th><th>Action</th>';
+                    html += '<th>Time</th><th>Contract</th><th>Side</th><th>Support Line</th><th>Sweep Low</th><th>Reclaim Close</th><th>Safe Entry (Red High)</th><th>+DI / -DI</th><th>ADX</th><th>Risk (Pts)</th><th>Target 1 (1.5R)</th><th>Target 2 (2.5R)</th><th>Action</th>';
                     html += '</tr></thead><tbody>';
 
                     indexTraps.forEach(it => {
                         const cnt = it.contract || it.symbol;
                         const risk = parseFloat(it.risk_pts || 0).toFixed(1);
                         const slColor = risk <= 20.0 ? '#3fb950' : '#f85149';
+                        const safeEntry = parseFloat(it.safe_entry || it.reclaim_close || 0).toFixed(2);
                         html += `<tr>
                             <td style="font-size:11px;color:#8b949e">${it.candle_time || '-'}</td>
                             <td style="font-weight:bold;color:#c9d1d9">${cnt}</td>
@@ -2082,6 +2083,7 @@
                             <td style="color:#d29922">₹${parseFloat(it.support_line||0).toFixed(2)}</td>
                             <td style="color:#f85149">₹${parseFloat(it.sweep_close||0).toFixed(2)}</td>
                             <td style="color:#3fb950;font-weight:bold">₹${parseFloat(it.reclaim_close||0).toFixed(2)}</td>
+                            <td style="color:#d29922;font-weight:bold">₹${safeEntry}</td>
                             <td><span style="color:#3fb950;font-weight:bold">${it.plus_di||0}</span> / <span style="color:#f85149">${it.minus_di||0}</span></td>
                             <td style="font-weight:bold;color:#58a6ff">${it.adx||0}</td>
                             <td style="color:${slColor};font-weight:bold">${risk} pts</td>
