@@ -291,13 +291,16 @@ def clear_funnel(engine_name):
         save_funnel_state(engine_name, updated)
         return updated
 
-def purge_invalidated_or_triggered(engine_name, ltp_dict=None, max_runaway_pct=0.05):
+def purge_invalidated_or_triggered(engine_name, ltp_dict=None, max_runaway_pct=None):
     """
     Evicts setups from the funnel that:
-      1. Have achieved Target T1 (LTP >= T1 * 0.995).
-      2. Have run away excessively past Benchmark D-trigger (LTP > BM * (1 + max_runaway_pct)).
-      3. Have breached their Stop-Loss floor (LTP <= SL).
-      4. Are stale setups from prior days that already ran/broke out.
+      1. Have achieved >= 80% of Target T1 (LTP >= t1_80pct).
+         where t1_80pct = BM + 0.80 * (T1 - BM) if T1 > BM > 0 else T1 * 0.80.
+      2. Are stale setups from prior days that already ran/broke out.
+
+    NOTE: Stop-Loss (SL) eviction is strictly evaluated on a Timeframe CLOSING basis
+    in the candle-aware radar loop (run_fast_radar_check / audit_funnel_anchor_closures)
+    to prevent premature eviction on intraday ticks/wicks.
     """
     with _funnel_lock:
         current = load_funnel_state(engine_name)
@@ -323,19 +326,13 @@ def purge_invalidated_or_triggered(engine_name, ltp_dict=None, max_runaway_pct=0
                         break
 
             if live_price is not None and live_price > 0:
-                # 1. Target T1 achieved
-                if t1 > 0 and live_price >= (t1 * 0.995):
-                    logger.info(f"[FUNNEL PURGE: T1 HIT] {cntr or sym} at {live_price:.2f} >= T1 {t1:.2f}. Evicting from funnel.")
-                    return False
-
-                # 2. Runaway breakout past Benchmark
-                if bm > 0 and live_price > (bm * (1.0 + max_runaway_pct)):
-                    logger.info(f"[FUNNEL PURGE: RUNAWAY] {cntr or sym} at {live_price:.2f} > BM {bm:.2f} (+{max_runaway_pct*100:.0f}%). Evicting from funnel.")
-                    return False
-
-                # 3. Stop-Loss floor breached
-                if sl > 0 and live_price <= sl:
-                    logger.info(f"[FUNNEL PURGE: SL BREACH] {cntr or sym} at {live_price:.2f} <= SL {sl:.2f}. Evicting from funnel.")
+                # 1. 80% of Target T1 achieved pre-entry (Do Not Chase / Runaway)
+                t1_80pct = round(bm + 0.80 * (t1 - bm), 2) if (bm > 0 and t1 > bm) else round(t1 * 0.80, 2) if t1 > 0 else 0.0
+                if t1_80pct > 0 and live_price >= t1_80pct:
+                    logger.info(
+                        f"[FUNNEL PURGE: 80% T1 HIT] {cntr or sym} at {live_price:.2f} >= 80% T1 {t1_80pct:.2f} "
+                        f"(T1={t1:.2f}, BM={bm:.2f}). Evicting from funnel."
+                    )
                     return False
 
             # 4. Prior-day stale setup check: If Candle A / Entry Time is from prior session and setup already broke out

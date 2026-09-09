@@ -392,12 +392,31 @@ def run_scan_cycle(kite):
                         TIMEFRAME_ANCHOR
                     )
                     if df_a_check is not None and not df_a_check.empty:
-                        last_a_close = float(df_a_check.iloc[-1]['close'])
+                        last_candle = df_a_check.iloc[-1]
+                        c_dt = get_ist_now(naive=True)
+                        try:
+                            parsed_dt = pd.to_datetime(str(last_candle.get('date', '')))
+                            if hasattr(parsed_dt, 'tz') and parsed_dt.tz is not None:
+                                parsed_dt = parsed_dt.tz_convert('Asia/Kolkata').tz_localize(None)
+                            c_dt = parsed_dt
+                        except Exception:
+                            pass
+                        from timeframe_utils import get_tf_minutes
+                        anchor_mins = get_tf_minutes(TIMEFRAME_ANCHOR)
+                        now_ist = get_ist_now(naive=True)
+                        is_closed_anchor = (now_ist - c_dt).total_seconds() >= (anchor_mins * 60.0)
+
+                        last_a_close = float(last_candle['close'])
+                        t1_80pct = round(bm + 0.80 * (t1 - bm), 2) if (bm > 0 and t1 > bm) else round(t1 * 0.80, 2) if t1 > 0 else 0.0
+
                         if sl > 0 and last_a_close <= sl:
-                            logging.info(f"[ANCHOR TF EVICT: SL BREACH] {sym} ({item.get('contract')}) closed at/below SL on {TIMEFRAME_ANCHOR} ({last_a_close} <= {sl}). Evicting from {pool_key}.")
-                            pattern_funnel.evict_item("nifty50", item)
-                        elif t1 > 0 and last_a_close >= (t1 * 0.995):
-                            logging.info(f"[ANCHOR TF EVICT: T1 HIT] {sym} ({item.get('contract')}) closed at/above T1 on {TIMEFRAME_ANCHOR} ({last_a_close} >= {t1}). Evicting from {pool_key}.")
+                            if is_closed_anchor:
+                                logging.info(f"[ANCHOR TF EVICT: SL BREACH] {sym} ({item.get('contract')}) closed at/below SL on {TIMEFRAME_ANCHOR} ({last_a_close} <= {sl}). Evicting from {pool_key}.")
+                                pattern_funnel.evict_item("nifty50", item)
+                            else:
+                                logging.debug(f"[ANCHOR TF SL WICK HELD] {sym} ({item.get('contract')}) tick at/below SL ({last_a_close} <= {sl}) on forming {TIMEFRAME_ANCHOR} bar. Not evicting.")
+                        elif t1_80pct > 0 and last_a_close >= t1_80pct:
+                            logging.info(f"[ANCHOR TF EVICT: 80% T1 HIT] {sym} ({item.get('contract')}) reached 80% T1 on {TIMEFRAME_ANCHOR} ({last_a_close} >= {t1_80pct:.2f}, T1={t1:.2f}, BM={bm:.2f}). Evicting from {pool_key}.")
                             pattern_funnel.evict_item("nifty50", item)
     except Exception as audit_err:
         logging.debug(f"Anchor TF funnel audit error: {audit_err}")
@@ -784,6 +803,14 @@ def run_fast_radar_check(kite):
                     sl = float(item.get("current_sl") or 0.0)
                     t1 = float(item.get("t1") or 0.0)
 
+                    # Timeframe Maturity Guard (Calculated upfront for candle-close evaluation)
+                    from timeframe_utils import is_live_candle_near_close, get_tf_minutes
+                    item_tf = item.get("timeframe", TIMEFRAME_ENTRY)
+                    tf_mins = get_tf_minutes(item_tf)
+                    now_ist = get_ist_now(naive=True)
+                    is_closed_bar = (now_ist - c_dt).total_seconds() >= (tf_mins * 60.0)
+                    is_80pct_mature = is_live_candle_near_close(candle_date_str, item_tf, completion_pct=0.80)
+
                     # Historical candle from prior session check
                     if c_dt.date() < get_ist_now(naive=True).date():
                         # If prior session setup already hit T1, ran past BM, or breached SL, evict it now
@@ -792,24 +819,21 @@ def run_fast_radar_check(kite):
                             pattern_funnel.evict_item("nifty50", item)
                         continue
 
-                    # Hard Eviction Rule 1: SL breached pre-entry
+                    # Hard Eviction Rule 1: SL breached on TF CLOSING basis
                     if sl > 0 and c_now <= sl:
-                        logging.info(f"[RADAR EVICT: SL BREACH] {sym} ({item.get('contract')}) breached SL floor ({c_now} <= {sl})")
-                        pattern_funnel.evict_item("nifty50", item)
-                        continue
+                        if is_closed_bar:
+                            logging.info(f"[RADAR EVICT: SL CLOSED BREACH] {sym} ({item.get('contract')}) closed at/below SL on {item_tf} ({c_now:.2f} <= {sl:.2f}). Evicting setup.")
+                            pattern_funnel.evict_item("nifty50", item)
+                            continue
+                        else:
+                            logging.debug(f"[RADAR SL WICK HELD] {sym} ({item.get('contract')}) intra-bar tick ({c_now:.2f} <= SL {sl:.2f}) on forming {item_tf} bar. Awaiting bar close.")
+                            continue
 
-                    # Hard Eviction Rule 2: T1 achieved pre-entry (Do Not Chase)
-                    if t1 > 0 and c_now >= (t1 * 0.995):
-                        logging.info(f"[RADAR EVICT: T1 HIT] {sym} ({item.get('contract')}) reached/closed at T1 ({c_now} >= {t1}) before entry. Evicting setup.")
+                    # Hard Eviction Rule 2: 80% T1 achieved pre-entry (Do Not Chase)
+                    t1_80pct = round(bm + 0.80 * (t1 - bm), 2) if (bm > 0 and t1 > bm) else round(t1 * 0.80, 2) if t1 > 0 else 0.0
+                    if t1_80pct > 0 and c_now >= t1_80pct:
+                        logging.info(f"[RADAR EVICT: 80% T1 HIT] {sym} ({item.get('contract')}) reached 80% of T1 target ({c_now:.2f} >= {t1_80pct:.2f}, T1={t1:.2f}, BM={bm:.2f}) before entry. Evicting setup.")
                         pattern_funnel.evict_item("nifty50", item)
-                        continue
-
-                    # Rule 3: Runaway Breakout Guard (LTP > BM + 8% pre-entry)
-                    # Chasing a runaway premium creates massive adverse risk/reward and severe drawdown risk.
-                    # IMPORTANT: Do NOT permanently evict! Put on standby so if it pulls back to Benchmark,
-                    # it can cleanly execute as a POST_D_RETEST trade!
-                    if bm > 0 and c_now > (bm * 1.08):
-                        logging.info(f"[RADAR STANDBY: RUNAWAY] {sym} ({item.get('contract')}) ran away pre-entry ({c_now:.2f} > BM {bm:.2f} +8.0%). Skipping chase; keeping on radar for retest.")
                         continue
 
                     # Trigger 1: Breakout / 80% Early D Trigger
@@ -824,14 +848,6 @@ def run_fast_radar_check(kite):
                             is_retest = True
 
                     if is_breakout or is_retest:
-                        # Check 1: Timeframe Maturity Guard (80% Near-Close or Completed Bar)
-                        from timeframe_utils import is_live_candle_near_close, get_tf_minutes
-                        item_tf = item.get("timeframe", TIMEFRAME_ENTRY)
-                        tf_mins = get_tf_minutes(item_tf)
-                        now_ist = get_ist_now(naive=True)
-                        is_closed_bar = (now_ist - c_dt).total_seconds() >= (tf_mins * 60.0)
-                        is_80pct_mature = is_live_candle_near_close(candle_date_str, item_tf, completion_pct=0.80)
-
                         # For initial breakouts, require 80% bar maturity or bar close to avoid premature wicks
                         if is_breakout and not is_retest:
                             if not (is_80pct_mature or is_closed_bar):

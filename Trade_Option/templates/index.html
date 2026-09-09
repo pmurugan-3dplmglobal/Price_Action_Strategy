@@ -789,10 +789,11 @@
                 const sl = parseFloat(item.current_sl || item.anchor_low || 0);
                 const t1 = parseFloat(item.t1 || 0);
 
+                const t1_80pct = (bm > 0 && t1 > bm) ? (bm + 0.80 * (t1 - bm)) : (t1 * 0.80);
                 const isT1Hit = (t1 > 0 && liveLtp > 0 && liveLtp >= (t1 * 0.995));
-                const isRunaway = (bm > 0 && liveLtp > 0 && liveLtp > (bm * 1.05));
+                const isRunaway = (t1_80pct > 0 && liveLtp > 0 && liveLtp >= t1_80pct);
                 const isSLHit = (sl > 0 && liveLtp > 0 && liveLtp <= sl);
-                return { liveLtp, isT1Hit, isRunaway, isSLHit };
+                return { liveLtp, isT1Hit, isRunaway, isSLHit, t1_80pct };
             }
 
             const raw_a_plus = funnel.category_a_plus || [];
@@ -928,7 +929,7 @@
                             stageBadge = '<span class="badge" style="background:#5c0000;color:#ff7b72;border:1px solid #da3633">🎯 T1 HIT</span>';
                             survStatus = '<span style="color:#f85149;font-size:11px;font-weight:bold">⛔ DO NOT CHASE</span>';
                         } else if (st.isRunaway) {
-                            stageBadge = '<span class="badge" style="background:#5c0000;color:#ff7b72;border:1px solid #da3633">🏃 RUNAWAY</span>';
+                            stageBadge = '<span class="badge" style="background:#5c0000;color:#ff7b72;border:1px solid #da3633">🏃 80% T1 RUNAWAY</span>';
                             survStatus = '<span style="color:#f85149;font-size:11px;font-weight:bold">⛔ OVEREXTENDED</span>';
                         } else if (st.isSLHit) {
                             stageBadge = '<span class="badge" style="background:#21262d;color:#8b949e">SL BREACHED</span>';
@@ -984,7 +985,7 @@
                             stageBadge = '<span class="badge" style="background:#5c0000;color:#ff7b72;border:1px solid #da3633">🎯 T1 HIT</span>';
                             aStatus = '<span style="color:#f85149;font-size:11px;font-weight:bold">⛔ DO NOT CHASE</span>';
                         } else if (st.isRunaway) {
-                            stageBadge = '<span class="badge" style="background:#5c0000;color:#ff7b72;border:1px solid #da3633">🏃 RUNAWAY</span>';
+                            stageBadge = '<span class="badge" style="background:#5c0000;color:#ff7b72;border:1px solid #da3633">🏃 80% T1 RUNAWAY</span>';
                             aStatus = '<span style="color:#f85149;font-size:11px;font-weight:bold">⛔ OVEREXTENDED</span>';
                         } else if (st.isSLHit) {
                             stageBadge = '<span class="badge" style="background:#21262d;color:#8b949e">SL BREACHED</span>';

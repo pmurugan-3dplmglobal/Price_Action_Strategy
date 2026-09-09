@@ -4,12 +4,42 @@ meta:
   last_updated: '2026-09-09'
   purpose: Active operational tracker for v2.1.0-stable failures, root causes, regressions, and enhancements.
   historical_archive: archive/ISSUE_HISTORY_ARCHIVE.yaml (Preserves 119 resolved legacy issues prior to 2026-09-05)
-  total_active_issues: 32
+  total_active_issues: 33
   archived_issues_summary:
     total_archived: 119
     recent_archived_batch: [FEATURE-031, FEATURE-030, FEATURE-029, ISSUE-084, ISSUE-083, ISSUE-082, ISSUE-081, ISSUE-080, FEATURE-036, FEATURE-035, FEATURE-034, FEATURE-033, ISSUE-054]
     key_archived_families: [ALGO_AUDIT_CVE, QUANT_ENHANCEMENTS, RADAR_LIFECYCLE, VCP_METRICS, SCANNER_DISCOVERY, SECURITY_CONFIG, ZERO_REGRESSION_AUDIT]
 issues:
+- id: FEATURE-051
+  title: Setup Funnel Eviction Mandate — 80% Target 1 (T1) Runaway & Stop-Loss (SL) on Timeframe Closing Basis
+  severity: HIGH
+  category: Funnel Lifecycle, Risk Management, Intra-Bar Noise Immunity, Runaway Eviction
+  family: RADAR_LIFECYCLE
+  date_reported: '2026-09-09'
+  symptom: |
+    1. Setups in Category A/A+/B were prematurely evicted on intra-candle wicks or minor tick noise dipping below SL for milliseconds before the bar closed.
+    2. Arbitrary +5% and +8% runaway caps evicted high-conviction breakout setups with substantial remaining R:R (e.g., T1 was 40% away, but setup was evicted at +5%).
+    3. Option Fast Radar loop and UI dashboard displayed conflicting runaway states without adhering to the 80% T1 rule.
+  root_cause: |
+    1. purge_invalidated_or_triggered evaluated live_price <= sl directly from raw tick data without verifying timeframe bar closure.
+    2. stock_options_trade_engine.py evaluated c_now <= sl without checking is_closed_bar on the setup's timeframe.
+    3. Runaway eviction was keyed to an arbitrary +5% or +8% past Benchmark rather than measuring completion percentage towards Target 1.
+  affected_files:
+  - common/pattern_funnel.py
+  - Trade_Option/stock_options_trade_engine.py
+  - Trade_Option/templates/index.html
+  - scratch/run_full_regression_test.py
+  resolution: |
+    1. Updated purge_invalidated_or_triggered in common/pattern_funnel.py:
+       - Runaway eviction only triggers when price completes >= 80% of the journey to Target 1: t1_80pct = BM + 0.80 * (T1 - BM).
+       - Removed tick-level SL eviction; delegated SL eviction strictly to candle-aware timeframe close checks.
+    2. Enhanced run_fast_radar_check and audit_funnel_anchor_closures in Trade_Option/stock_options_trade_engine.py:
+       - Evaluated candle timeframe maturity (is_closed_bar) upfront.
+       - SL eviction only triggers if is_closed_bar and c_now <= sl; intra-bar wicks hold setup on radar with [RADAR SL WICK HELD].
+       - Runaway eviction enforced strictly at c_now >= t1_80pct; eliminated hardcoded +8% chase standby block.
+    3. Updated Trade_Option/templates/index.html evalItemStatus to compute isRunaway at >= 80% T1 with '🏃 80% T1 RUNAWAY' status badge.
+    4. Updated Test 20 in scratch/run_full_regression_test.py to validate 80% T1 threshold and TF closing SL policy.
+  status: RESOLVED
 - id: FEATURE-050
   title: Single-Pass Instrument Synchronization & Fresh Cache Re-Use (< 12h) to Eliminate TimeoutErrors
   severity: MEDIUM

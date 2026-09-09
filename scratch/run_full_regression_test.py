@@ -530,27 +530,27 @@ try:
     summ = pattern_funnel.get_funnel_summary(t_eng)
     assert len(summ["category_a_plus"]) == 0, "Must evict cleanly from all categories"
 
-    # 5. Verify Automated Purge on T1 Hit, Runaway, and SL Breach
+    # 5. Verify Automated Purge on 80% T1 Hit and TF Closing SL Policy
     item_run = {
         "symbol": "RUNSYM", "contract": "RUNSYM26SEP200CE", "side": "CE",
         "benchmark": 200.0, "current_sl": 180.0, "t1": 240.0
     }
+    # 80% T1 = 200 + 0.80 * (240 - 200) = 232.0
     pattern_funnel.promote_item(t_eng, item_run, pattern_funnel.STAGE_A)
     assert len(pattern_funnel.get_funnel_summary(t_eng)["category_a"]) == 1, "Must register RUNSYM"
 
-    # 5a. Purge on T1 Hit
-    pattern_funnel.purge_invalidated_or_triggered(t_eng, ltp_dict={"RUNSYM26SEP200CE": 241.0})
-    assert len(pattern_funnel.get_funnel_summary(t_eng)["category_a"]) == 0, "Must purge setup when LTP >= T1"
-
-    # 5b. Purge on Runaway Breakout (> BM + 5%)
-    pattern_funnel.promote_item(t_eng, item_run, pattern_funnel.STAGE_A)
+    # 5a. Post-breakout below 80% T1 (e.g. LTP = 215.0) must NOT be evicted (valid breakout / retest zone)
     pattern_funnel.purge_invalidated_or_triggered(t_eng, ltp_dict={"RUNSYM26SEP200CE": 215.0})
-    assert len(pattern_funnel.get_funnel_summary(t_eng)["category_a"]) == 0, "Must purge setup when runaway (> BM * 1.05)"
+    assert len(pattern_funnel.get_funnel_summary(t_eng)["category_a"]) == 1, "Must NOT purge setup when LTP < 80% T1 (215.0 < 232.0)"
 
-    # 5c. Purge on SL Breach
+    # 5b. Purge on 80% T1 Hit (LTP = 233.0 >= 232.0)
+    pattern_funnel.purge_invalidated_or_triggered(t_eng, ltp_dict={"RUNSYM26SEP200CE": 233.0})
+    assert len(pattern_funnel.get_funnel_summary(t_eng)["category_a"]) == 0, "Must purge setup when LTP >= 80% T1 (233.0 >= 232.0)"
+
+    # 5c. Tick-level SL dips do NOT purge in purge_invalidated_or_triggered (SL evaluated strictly on TF closing basis)
     pattern_funnel.promote_item(t_eng, item_run, pattern_funnel.STAGE_A)
     pattern_funnel.purge_invalidated_or_triggered(t_eng, ltp_dict={"RUNSYM26SEP200CE": 175.0})
-    assert len(pattern_funnel.get_funnel_summary(t_eng)["category_a"]) == 0, "Must purge setup when LTP <= SL"
+    assert len(pattern_funnel.get_funnel_summary(t_eng)["category_a"]) == 1, "Tick-level SL dip must NOT purge; SL is on TF closing basis"
 
     # Clean up test engine
     pattern_funnel.clear_funnel(t_eng)
