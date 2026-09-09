@@ -1088,7 +1088,7 @@ def api_status():
             "live_execution_index": cached_data["live_execution_index"],
             "executed_exits": cached_data.get("executed_exits", {}),
             "expired_contracts": cached_data.get("expired_contracts", []),
-            "pattern_funnel": pattern_funnel.get_funnel_summary("nifty50")
+            "pattern_funnel": pattern_funnel.get_funnel_summary("nifty50", ltp_dict=cached_data.get("ltp"))
         })
     except Exception as e:
         return jsonify({"error": str(e), "programs": {}}), 500
