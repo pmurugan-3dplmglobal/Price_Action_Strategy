@@ -1061,26 +1061,29 @@ def reconcile_and_cancel_stale_orders(kite, positions_dict=None, position_lock=N
         is_short_stock = (not is_opt) and (direction == "BEAR" or ttype == "SELL")
 
         # Invalidation Condition 1: Target T1 Touched Before Fill
+        # Invariant: Must evaluate live LTP only. Session day_high/day_low from hours before order creation
+        # must NEVER falsely cancel a freshly placed limit order.
         if cancel_target and t1 > 0:
             if is_short_stock:
                 target_thresh = round(t1 * (1.0 + buffer_pct), 2)
-                if (ltp > 0 and ltp <= target_thresh) or (day_low > 0 and day_low <= t1):
-                    cancel_reason = f"Target T1 ({t1:.2f}) touched before fill (LTP {ltp:.2f} <= {target_thresh:.2f}, Low {day_low:.2f})"
+                if ltp > 0 and ltp <= target_thresh:
+                    cancel_reason = f"Target T1 ({t1:.2f}) touched before fill (LTP {ltp:.2f} <= {target_thresh:.2f})"
                     reason_code = "CANCELLED_TARGET_REACHED"
             else:
                 target_thresh = round(t1 * (1.0 - buffer_pct), 2)
-                if (ltp > 0 and ltp >= target_thresh) or (day_high > 0 and day_high >= t1):
-                    cancel_reason = f"Target T1 ({t1:.2f}) touched before fill (LTP {ltp:.2f} >= {target_thresh:.2f}, High {day_high:.2f})"
+                if ltp > 0 and ltp >= target_thresh:
+                    cancel_reason = f"Target T1 ({t1:.2f}) touched before fill (LTP {ltp:.2f} >= {target_thresh:.2f})"
                     reason_code = "CANCELLED_TARGET_REACHED"
 
         # Invalidation Condition 2: Stop Loss Breached Before Fill
+        # Invariant: Must evaluate live LTP only. Pre-entry session day_low/day_high must not falsely cancel order.
         if not cancel_reason and cancel_sl and sl > 0:
             if is_short_stock:
-                if (ltp > 0 and ltp >= sl) or (day_high > 0 and day_high >= sl):
+                if ltp > 0 and ltp >= sl:
                     cancel_reason = f"SL breached before fill (LTP {ltp:.2f} >= SL {sl:.2f})"
                     reason_code = "CANCELLED_SL_BREACHED"
             else:
-                if (ltp > 0 and ltp <= sl) or (day_low > 0 and day_low <= sl):
+                if ltp > 0 and ltp <= sl:
                     cancel_reason = f"SL breached before fill (LTP {ltp:.2f} <= SL {sl:.2f})"
                     reason_code = "CANCELLED_SL_BREACHED"
 
