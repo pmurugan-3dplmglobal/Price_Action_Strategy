@@ -95,7 +95,8 @@ assert callable(resolve_option_spread)
 print(f"DEFENSIVE_IMPORT_OK:{imported_via}")
 '''
         cmd = [sys.executable, "-c", code]
-        res = subprocess.run(cmd, cwd="C:\\", capture_output=True, text=True)
+        temp_cwd = "C:\\" if os.name == "nt" else "/"
+        res = subprocess.run(cmd, cwd=temp_cwd, capture_output=True, text=True)
         self.assertEqual(res.returncode, 0, f"Failed with: {res.stderr}")
         self.assertIn("DEFENSIVE_IMPORT_OK:FALLBACK", res.stdout)
 
