@@ -66,6 +66,7 @@ SCAN_DISPLAY_WEEKLY_FILE = monitor_file("scan_display_stock_weekly.json")
 SCAN_DISPLAY_WEEKLY_BEAR_FILE = monitor_file("scan_display_stock_weekly_bear.json")
 SCAN_DISPLAY_EMA_FILE = monitor_file("scan_display_ema.json")
 SCAN_DISPLAY_EMA_STOCK_FILE = monitor_file("scan_display_ema_stock.json")
+SCAN_DISPLAY_TRAP_ADX = monitor_file("scan_display_trap_adx.json")
 
 # Log files (what the dashboards tail)
 NIFTY50_LOG_FILE = log_file("bull_nifty50_scanner.log")

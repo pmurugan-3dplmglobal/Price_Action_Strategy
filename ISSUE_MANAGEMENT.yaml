@@ -4,12 +4,47 @@ meta:
   last_updated: '2026-09-09'
   purpose: Active operational tracker for v2.1.0-stable failures, root causes, regressions, and enhancements.
   historical_archive: archive/ISSUE_HISTORY_ARCHIVE.yaml (Preserves 119 resolved legacy issues prior to 2026-09-05)
-  total_active_issues: 36
+  total_active_issues: 37
   archived_issues_summary:
     total_archived: 119
     recent_archived_batch: [FEATURE-031, FEATURE-030, FEATURE-029, ISSUE-084, ISSUE-083, ISSUE-082, ISSUE-081, ISSUE-080, FEATURE-036, FEATURE-035, FEATURE-034, FEATURE-033, ISSUE-054]
     key_archived_families: [ALGO_AUDIT_CVE, QUANT_ENHANCEMENTS, RADAR_LIFECYCLE, VCP_METRICS, SCANNER_DISCOVERY, SECURITY_CONFIG, ZERO_REGRESSION_AUDIT]
 issues:
+- id: FEATURE-053
+  title: 5-Minute Trap-ADX Index Strategy, 45-Minute Stock Breakout Scanner, Dedicated UI Tab with 1-Click BUY & Synergy Filter
+  severity: ENHANCEMENT
+  category: Scalping Engine, Liquidity Sweeps, DMI/ADX Momentum, ORB Breakout, Dashboard UI
+  family: QUANT_ENHANCEMENTS
+  date_reported: '2026-09-09'
+  symptom: |
+    Need for a fast-reaction scalping model on 5-minute timeframe to capture institutional liquidity sweeps without waiting for 30-90m A-B-C-D cycles, plus opening range breakouts for equities, complete with manual 1-Click BUY execution and optional momentum synergy filtering in the Datta engine.
+  root_cause: |
+    Feature enhancement based on peer institutional liquidity sweep playbook, DMI +DI >= 26 ignition confirmation, and opening 45-minute high breakouts with tiered stop-loss buffers.
+  affected_files:
+  - common/paths.py
+  - common/trap_adx_engine.py
+  - Trade_Option/app_option_Trade.py
+  - Trade_Option/stock_options_trade_engine.py
+  - Trade_Option/templates/index.html
+  - scratch/test_trap_adx_engine.py
+  fix_applied: |
+    1. common/paths.py: Registered canonical path SCAN_DISPLAY_TRAP_ADX.
+    2. common/trap_adx_engine.py:
+       - Implemented Wilder's DMI (+DI, -DI, ADX) calculation.
+       - Implemented Index 5M Trap scanner: Condition 1 (Sweep below support) -> Condition 2 (Immediate Green Reclaim) -> Condition 3 (+DI >= 26.0 and +DI > -DI), with strict <= 20-point risk cap.
+       - Implemented Stock 45M High Breakout scanner: 09:15-10:00 AM range breakout with price-tiered buffers (<500: 0.60, 500-1000: 1.00, 1000-2000: 2.00, >=2000: 4.00) and no ADX requirement for stocks.
+       - Real-time serialization to SCAN_DISPLAY_TRAP_ADX.
+    3. Trade_Option/app_option_Trade.py: Added /api/trap-adx route, updated /api/buy-scanned-trade to support engine="trap_adx" and record strategy="TRAP_ADX".
+    4. Trade_Option/templates/index.html: Added [⚡ 5M Trap-ADX] tab, Index Traps table, Stock Breakouts table, and [⚡ 1-Click BUY] button calling buyScannedTrade().
+    5. Trade_Option/stock_options_trade_engine.py: Integrated optional Synergy Filter in run_fast_radar_check (+DI >= 26 promotes to T1 Gold; +DI < 20 holds in Cat A).
+    6. scratch/test_trap_adx_engine.py: Created 7 comprehensive unit tests (7/7 PASSED).
+  verification: |
+    1. AST check passed 100% across all modified files.
+    2. test_trap_adx_engine.py: 7/7 PASSED.
+    3. run_full_regression_test.py: 19/19 offline suites passed (including TEST 12 HTML JS syntax check).
+  status: RESOLVED
+  resolution_date: '2026-09-09'
+
 - id: ISSUE-099
   title: Radar Auto-Execution KeyError 'lot_size' Elimination & Fast Radar Robustness
   severity: CRITICAL

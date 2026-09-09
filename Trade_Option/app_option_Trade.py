@@ -94,6 +94,7 @@ TOKEN_FILE = paths.TOKEN_FILE
 CONFIG_FILE = paths.PROGRAM_CONFIG_FILE
 SCAN_DISPLAY_FILE = paths.SCAN_DISPLAY_FILE
 SCAN_DISPLAY_INDEX_FILE = paths.SCAN_DISPLAY_INDEX_FILE
+SCAN_DISPLAY_TRAP_ADX = paths.SCAN_DISPLAY_TRAP_ADX
 POSITIONS_FILE = os.path.join(BASE_DIR, "output", "monitor", "positions.json")
 JOURNAL_FILE = os.path.join(BASE_DIR, "output", "journal.json")
 LOGS_DIR = os.path.join(BASE_DIR, "logs")
@@ -1098,6 +1099,16 @@ def api_pattern_funnel():
     engine = request.args.get("engine", "nifty50")
     return jsonify(pattern_funnel.get_funnel_summary(engine))
 
+@app.route("/api/trap-adx")
+def api_trap_adx():
+    try:
+        if os.path.exists(SCAN_DISPLAY_TRAP_ADX):
+            with open(SCAN_DISPLAY_TRAP_ADX, "r", encoding="utf-8") as f:
+                return jsonify(json.load(f))
+    except Exception as e:
+        logging.warning(f"Error reading SCAN_DISPLAY_TRAP_ADX: {e}")
+    return jsonify({"timestamp": dt.now().strftime("%Y-%m-%d %H:%M:%S"), "index_traps": [], "stock_breakouts": []})
+
 @app.route("/api/watchlist")
 def api_watchlist():
     return jsonify(get_watchlist_data())
@@ -1884,10 +1895,12 @@ def api_buy_scanned_trade():
             try:
                 from portfolio_risk import check_portfolio_risk_caps
                 cfg_all = load_config()
-                cap_amount = float(cfg_all.get(engine, {}).get("capital") or 100000.0)
+                is_index = any(k in str(contract or symbol).upper() for k in ["NIFTY", "BANK", "SENSEX", "MIDCP"])
+                cap_engine = "index" if (engine == "index" or is_index) else "nifty50"
+                cap_amount = float(cfg_all.get(cap_engine, {}).get("capital") or 100000.0)
                 cand_tier = int(data.get("tier") or 2)
                 p_allowed, p_reason, _ = check_portfolio_risk_caps(
-                    engine=engine,
+                    engine=cap_engine,
                     symbol=symbol,
                     candidate_tier=cand_tier,
                     capital=cap_amount,
@@ -1914,7 +1927,7 @@ def api_buy_scanned_trade():
                         price = round(entry_spot * 1.005, 1)
                 
                 from trading_core import INDEX_REGISTRY, STOCK_REGISTRY, get_option_lot_size, check_bid_ask_spread_liquidity
-                registry = INDEX_REGISTRY if engine == "index" else STOCK_REGISTRY
+                registry = INDEX_REGISTRY if (engine == "index" or is_index) else STOCK_REGISTRY
                 lot_size = get_option_lot_size(contract) or registry.get(symbol, {}).get("lot_size", 1)
                 prod = _kite_session.PRODUCT_CNC if exch == "NSE" else _kite_session.PRODUCT_NRML
 
@@ -2028,7 +2041,8 @@ def api_buy_scanned_trade():
             "t2": t2,
             "t3": t3,
             "side": side,
-            "pattern": "1CLICK_BUY",
+            "pattern": data.get("pattern") or ("TRAP_ADX" if engine == "trap_adx" else "1CLICK_BUY"),
+            "strategy": "TRAP_ADX" if engine == "trap_adx" else "DATTA_ABCD",
             "timeframe": tf_param,
             "position_type": "stock" if exch == "NSE" else "option",
             "user_edited": True,

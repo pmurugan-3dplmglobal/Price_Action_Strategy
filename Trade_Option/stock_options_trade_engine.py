@@ -910,6 +910,32 @@ def run_fast_radar_check(kite):
                             except Exception as rvol_err:
                                 logging.debug(f"Spot RVOL check error for {sym}: {rvol_err}")
 
+                        # Check 4: Optional Synergy ADX/DMI Momentum Filter
+                        enable_adx_synergy = bool(item.get("enable_adx_synergy", False))
+                        if not enable_adx_synergy:
+                            try:
+                                opt_cfg = load_config()
+                                enable_adx_synergy = bool(opt_cfg.get("nifty50", {}).get("ENABLE_ADX_SYNERGY_FILTER", False))
+                            except Exception:
+                                pass
+
+                        if enable_adx_synergy:
+                            from trap_adx_engine import calculate_dmi
+                            plus_di, minus_di, adx_val = calculate_dmi(df_latest, period=14)
+                            curr_plus_di = float(plus_di.iloc[-1]) if not plus_di.empty else 0.0
+                            curr_minus_di = float(minus_di.iloc[-1]) if not minus_di.empty else 0.0
+
+                            # Chop Guard: If +DI < 20.0, directional momentum is absent; hold candidate
+                            if curr_plus_di < 20.0 and curr_plus_di <= curr_minus_di:
+                                logging.info(f"🛡️ [SYNERGY ADX CHOP GUARD] {sym} ({item.get('contract')}): +DI {curr_plus_di:.1f} < 20.0 (-DI {curr_minus_di:.1f}). Market lacks directional momentum. Holding in Category A.")
+                                continue
+
+                            # Ignition Booster: If +DI >= 26.0 and +DI > -DI, promote to T1 Gold
+                            if curr_plus_di >= 26.0 and curr_plus_di > curr_minus_di:
+                                item["tier"] = 1
+                                item["tier_label"] = "🥇 T1 Gold (ADX Ignition)"
+                                logging.info(f"🔥 [SYNERGY ADX IGNITION] {sym} ({item.get('contract')}): +DI {curr_plus_di:.1f} >= 26.0! Promoted to 🥇 T1 Gold!")
+
                         if is_retest and not is_breakout:
                             trigger_type = "POST_D_RETEST"
                         elif is_80pct_mature and not is_closed_bar:

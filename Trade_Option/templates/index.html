@@ -24,6 +24,7 @@
             if (tabId === 'scan-tab-left') renderScanTab();
             if (tabId === 'ema-scan-tab') renderEmaScanTab();
             if (tabId === 'watchlist-tab') renderWatchlistTab();
+            if (tabId === 'trap-adx-tab') renderTrapAdxTab();
         }
 
         function switchTab(tabId) {
@@ -2044,6 +2045,100 @@
             }
         }
 
+        async function renderTrapAdxTab() {
+            const body = document.getElementById('trap-adx-body');
+            if (!body) return;
+            try {
+                const res = await fetch('/api/trap-adx');
+                const data = await res.json();
+                const indexTraps = data.index_traps || [];
+                const stockBreakouts = data.stock_breakouts || [];
+                const ts = data.timestamp || '-';
+                const upEl = document.getElementById('trap-adx-last-updated');
+                if (upEl) upEl.textContent = 'Updated: ' + ts;
+
+                let html = '';
+
+                // 1. Index 5M Traps Table
+                html += '<div style="display:flex;align-items:center;justify-content:space-between;padding:4px 10px 8px;">';
+                html += '<span style="font-weight:bold;color:#58a6ff;font-size:12px">⚡ 5-Minute Index Option Traps (Low Sweep + Immediate Green + ADX ≥ 26) (' + indexTraps.length + ')</span>';
+                html += '</div>';
+
+                if (indexTraps.length === 0) {
+                    html += '<p class="empty-state">No Index Option 5M Traps currently detected. Awaiting Support Breakdown Sweep + Immediate Green Reclaim (+DI ≥ 26.0).</p>';
+                } else {
+                    html += '<div class="table-responsive"><table class="trade-table"><thead><tr>';
+                    html += '<th>Time</th><th>Contract</th><th>Side</th><th>Support Line</th><th>Sweep Low</th><th>Reclaim Close</th><th>+DI / -DI</th><th>ADX</th><th>Risk (Pts)</th><th>Target 1 (1.5R)</th><th>Target 2 (2.5R)</th><th>Action</th>';
+                    html += '</tr></thead><tbody>';
+
+                    indexTraps.forEach(it => {
+                        const cnt = it.contract || it.symbol;
+                        const risk = parseFloat(it.risk_pts || 0).toFixed(1);
+                        const slColor = risk <= 20.0 ? '#3fb950' : '#f85149';
+                        html += `<tr>
+                            <td style="font-size:11px;color:#8b949e">${it.candle_time || '-'}</td>
+                            <td style="font-weight:bold;color:#c9d1d9">${cnt}</td>
+                            <td><span style="background:${it.side==='CE'?'#23863633':'#f8514933'};color:${it.side==='CE'?'#3fb950':'#f85149'};padding:2px 6px;border-radius:3px;font-weight:bold">${it.side}</span></td>
+                            <td style="color:#d29922">₹${parseFloat(it.support_line||0).toFixed(2)}</td>
+                            <td style="color:#f85149">₹${parseFloat(it.sweep_close||0).toFixed(2)}</td>
+                            <td style="color:#3fb950;font-weight:bold">₹${parseFloat(it.reclaim_close||0).toFixed(2)}</td>
+                            <td><span style="color:#3fb950;font-weight:bold">${it.plus_di||0}</span> / <span style="color:#f85149">${it.minus_di||0}</span></td>
+                            <td style="font-weight:bold;color:#58a6ff">${it.adx||0}</td>
+                            <td style="color:${slColor};font-weight:bold">${risk} pts</td>
+                            <td style="color:#58a6ff">₹${parseFloat(it.t1||0).toFixed(2)}</td>
+                            <td style="color:#3fb950">₹${parseFloat(it.t2||0).toFixed(2)}</td>
+                            <td>
+                                <button onclick="buyScannedTrade(this, '${it.symbol}', '${cnt}', '${it.side}', ${it.entry_spot}, ${it.current_sl}, ${it.t1}, ${it.t2}, ${it.t3}, 'trap_adx', '5minute', '${it.candle_time}', '${it.candle_time}', ${it.support_line}, ${it.current_sl}, 'BULL')" 
+                                    style="background:#238636;color:#fff;border:1px solid #2ea043;padding:4px 10px;border-radius:4px;font-weight:bold;cursor:pointer;font-size:11px">
+                                    ⚡ 1-Click BUY
+                                </button>
+                            </td>
+                        </tr>`;
+                    });
+                    html += '</tbody></table></div>';
+                }
+
+                // 2. Stock 45M High Breakouts Table
+                html += '<div style="display:flex;align-items:center;justify-content:space-between;padding:16px 10px 8px;">';
+                html += '<span style="font-weight:bold;color:#f0883e;font-size:12px">📈 Stock Option 45-Minute High Breakouts (09:15–10:00 AM Range) (' + stockBreakouts.length + ')</span>';
+                html += '</div>';
+
+                if (stockBreakouts.length === 0) {
+                    html += '<p class="empty-state">No Stock 45M High Breakouts currently active. Awaiting breakout above 45m opening range.</p>';
+                } else {
+                    html += '<div class="table-responsive"><table class="trade-table"><thead><tr>';
+                    html += '<th>Time</th><th>Stock</th><th>Target Option</th><th>45M High</th><th>Spot LTP</th><th>9 EMA Low SL</th><th>Buffer</th><th>Risk Pts</th><th>Target 1</th><th>Action</th>';
+                    html += '</tr></thead><tbody>';
+
+                    stockBreakouts.forEach(sb => {
+                        const cnt = sb.contract || sb.symbol;
+                        html += `<tr>
+                            <td style="font-size:11px;color:#8b949e">${sb.candle_time || '-'}</td>
+                            <td style="font-weight:bold;color:#c9d1d9">${sb.symbol}</td>
+                            <td style="font-weight:bold;color:#58a6ff">${cnt}</td>
+                            <td style="color:#d29922">₹${parseFloat(sb.high_45m||0).toFixed(2)}</td>
+                            <td style="color:#3fb950;font-weight:bold">₹${parseFloat(sb.spot_ltp||0).toFixed(2)}</td>
+                            <td style="color:#f85149">₹${parseFloat(sb.current_sl||0).toFixed(2)}</td>
+                            <td style="color:#8b949e">₹${parseFloat(sb.buffer_applied||0).toFixed(2)}</td>
+                            <td style="font-weight:bold">${parseFloat(sb.risk_pts||0).toFixed(2)} pts</td>
+                            <td style="color:#3fb950">₹${parseFloat(sb.t1||0).toFixed(2)}</td>
+                            <td>
+                                <button onclick="buyScannedTrade(this, '${sb.symbol}', '${cnt}', 'CE', ${sb.entry_spot}, ${sb.current_sl}, ${sb.t1}, ${sb.t2}, ${sb.t3}, 'trap_adx', '5minute', '${sb.candle_time}', '${sb.candle_time}', ${sb.high_45m}, ${sb.current_sl}, 'BULL')" 
+                                    style="background:#238636;color:#fff;border:1px solid #2ea043;padding:4px 10px;border-radius:4px;font-weight:bold;cursor:pointer;font-size:11px">
+                                    ⚡ 1-Click BUY
+                                </button>
+                            </td>
+                        </tr>`;
+                    });
+                    html += '</tbody></table></div>';
+                }
+
+                body.innerHTML = html;
+            } catch(e) {
+                console.error("Trap-ADX render error:", e);
+            }
+        }
+
         async function refreshData() {
             try {
                 const r = await fetch('/api/status');
@@ -2752,6 +2847,7 @@
                 <button class="left-tab-btn" onclick="switchLeftTab('scan-tab-left')">Today's scan</button>
                 <button class="left-tab-btn" onclick="switchLeftTab('ema-scan-tab')">EMA Scan</button>
                 <button class="left-tab-btn" onclick="switchLeftTab('watchlist-tab')">👁️ Watchlist & Learning</button>
+                <button class="left-tab-btn" onclick="switchLeftTab('trap-adx-tab')">⚡ 5M Trap-ADX</button>
             </div>
             <div id="active-pos-tab" class="left-tab-content active">
                 <div class="section-panel">
@@ -2838,6 +2934,17 @@
                         </div>
                     </div>
                     <div id="watchlist-body"><p class="empty-state">No watchlist items yet</p></div>
+                </div>
+            <div id="trap-adx-tab" class="left-tab-content">
+                <div class="section-panel">
+                    <div class="section-header">
+                        <span>⚡ 5-Minute Trap-ADX & 45M Stock Breakout Radar</span>
+                        <div style="display:flex;align-items:center;gap:8px">
+                            <span id="trap-adx-last-updated" style="font-size:11px;color:#8b949e">-</span>
+                            <button class="btn-scan-export" onclick="renderTrapAdxTab()" style="padding:2px 10px;background:#238636;border:1px solid #2ea043;color:#fff;border-radius:4px;font-size:10px;cursor:pointer;font-weight:600">🔄 Refresh Radar</button>
+                        </div>
+                    </div>
+                    <div id="trap-adx-body"><p class="empty-state">Loading 5M Trap-ADX & Stock 45M Breakout radar...</p></div>
                 </div>
             </div>
         </div>
