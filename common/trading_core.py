@@ -145,6 +145,7 @@ from position_monitor import (
     position_lock,
     live_execution_enabled,
     get_option_lot_size,
+    is_contract_held_on_broker,
     contract_is_expired,
     close_stock_position,
     load_executed_exits,

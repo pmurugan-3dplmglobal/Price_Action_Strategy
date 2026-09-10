@@ -77,6 +77,26 @@ def get_option_lot_size(contract):
         logging.warning(f"Lot size lookup failed for {contract}: {e}")
     return None
 
+def is_contract_held_on_broker(kite, contract):
+    """Safely check if contract is currently held on broker with non-zero quantity.
+    
+    Returns (is_held: bool, quantity: int).
+    """
+    if not kite or not contract:
+        return False, 0
+    try:
+        norm = str(contract).replace(" ", "").upper()
+        kp = kite.positions()
+        for p in (kp.get("net", []) or []):
+            tsym = str(p.get("tradingsymbol", "")).replace(" ", "").upper()
+            if tsym == norm:
+                qty = int(p.get("quantity", 0))
+                if abs(qty) > 0:
+                    return True, qty
+    except Exception as e:
+        logging.warning(f"[BROKER_CHECK] Failed to query broker positions for {contract}: {e}")
+    return False, 0
+
 _CONTRACT_EXPIRY_RE = None
 
 def contract_is_expired(contract):

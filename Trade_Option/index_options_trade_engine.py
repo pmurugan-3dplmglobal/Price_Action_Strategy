@@ -330,11 +330,27 @@ def execute_highest_rr_trade(kite, staged):
                     continue
 
                 with position_lock:
-                    if best["symbol"] in ACTIVE_POSITIONS:
-                        logging.info(f"{best['symbol']} already active; evaluating next candidate")
+                    contract_cand = best.get("contract")
+                    sym_cand = best.get("symbol")
+                    if sym_cand in ACTIVE_POSITIONS:
+                        logging.info(f"{sym_cand} already active in ACTIVE_POSITIONS; evaluating next candidate")
                         continue
-                    pos["trade_id"], _created = trade_db.create_trade("index", best["symbol"], {k: v for k, v in pos.items() if k != "trade_id"})
-                    ACTIVE_POSITIONS[best["symbol"]] = pos
+
+                    if trade_db.is_contract_active(contract_cand, "index") or trade_db.is_symbol_active(sym_cand, "index"):
+                        logging.info(f"[DUPLICATE_GUARD] {sym_cand} ({contract_cand}) already active in trade_db; evaluating next candidate")
+                        continue
+
+                    from position_monitor import is_contract_held_on_broker
+                    is_held, held_qty = is_contract_held_on_broker(kite, contract_cand)
+                    if is_held:
+                        logging.info(f"[DUPLICATE_GUARD] Contract {contract_cand} already held on broker (Qty: {held_qty}); evaluating next candidate")
+                        continue
+
+                    pos["trade_id"], _created = trade_db.create_trade("index", sym_cand, {k: v for k, v in pos.items() if k != "trade_id"})
+                    if not _created:
+                        logging.info(f"[DUPLICATE_GUARD] Active trade for {contract_cand} already exists in trade_db (ID: {pos['trade_id']}); evaluating next candidate")
+                        continue
+                    ACTIVE_POSITIONS[sym_cand] = pos
 
             trade_db.record_executed_pattern("index", key, {"contract": best["contract"], "entry": best["entry_spot"]})
             ok = execute_index_entry(kite, pos)
@@ -472,6 +488,22 @@ def main_scan_loop(kite):
             ensure_kite_session(kite)
             load_program_config()
             cycle += 1
+            # Fast sync active trades from SQLite trade_db to catch manual/1-Click entries immediately
+            try:
+                db_active = trade_db.get_active_trades("index")
+                with position_lock:
+                    for at in db_active:
+                        at_sym = at.get("symbol")
+                        if at_sym and at_sym not in ACTIVE_POSITIONS:
+                            pos_rec = {k: v for k, v in at.items() if k not in ("id", "engine", "symbol", "status", "updated_at")}
+                            pos_rec["trade_id"] = at["id"]
+                            pos_rec["entry_spot"] = pos_rec.get("entry_spot") or at.get("entry_spot")
+                            pos_rec["entry_time"] = sanitize_entry_time(pos_rec)
+                            ACTIVE_POSITIONS[at_sym] = pos_rec
+                            logging.info(f"[FAST_DB_SYNC] Incorporated active trade for {at_sym} ({at.get('contract')}) into ACTIVE_POSITIONS")
+            except Exception as db_sync_err:
+                logging.debug(f"Fast DB active sync error: {db_sync_err}")
+
             with position_lock:
                 active = len(ACTIVE_POSITIONS)
                 symbols = list(ACTIVE_POSITIONS.keys())

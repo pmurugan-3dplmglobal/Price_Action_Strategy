@@ -354,6 +354,53 @@ def get_active_trades(engine=None):
     return [_row_to_dict(r) for r in rows]
 
 
+def is_contract_active(contract, engine=None):
+    """Check if a specific contract is currently ACTIVE in SQLite trades DB."""
+    if not contract:
+        return False
+    norm = _normalize_contract(contract)
+    with _get_connection() as conn:
+        if engine:
+            row = conn.execute(
+                "SELECT id FROM trades WHERE status='ACTIVE' AND engine=? AND contract=? LIMIT 1",
+                (engine, norm)
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT id FROM trades WHERE status='ACTIVE' AND contract=? LIMIT 1",
+                (norm,)
+            ).fetchone()
+    return bool(row)
+
+
+def is_symbol_active(symbol, engine=None):
+    """Check if an underlying symbol is currently ACTIVE in SQLite trades DB."""
+    if not symbol:
+        return False
+    sym_clean = str(symbol).strip().upper()
+    with _get_connection() as conn:
+        if engine:
+            row = conn.execute(
+                "SELECT id FROM trades WHERE status='ACTIVE' AND engine=? AND symbol=? LIMIT 1",
+                (engine, sym_clean)
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT id FROM trades WHERE status='ACTIVE' AND symbol=? LIMIT 1",
+                (sym_clean,)
+            ).fetchone()
+    return bool(row)
+
+
+def has_active_trade(contract=None, symbol=None, engine=None):
+    """Check if either contract or symbol has an ACTIVE trade."""
+    if contract and is_contract_active(contract, engine=engine):
+        return True
+    if symbol and is_symbol_active(symbol, engine=engine):
+        return True
+    return False
+
+
 def get_all_trades(engine=None):
     """Return all trades, optionally filtered by engine."""
     with _get_connection() as conn:

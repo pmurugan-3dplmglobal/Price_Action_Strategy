@@ -1387,3 +1387,39 @@ issues:
   status: RESOLVED
   resolution_date: '2026-09-09'
 
+- id: ISSUE-101
+  title: Cross-Process Active Trade Synchronization & Pre-Order Execution Deduplication Guard
+  severity: HIGH
+  category: Execution Invariants, Broker Reconciliation, Order Guard
+  family: EXECUTION_GUARDS
+  date_reported: '2026-09-10'
+  symptom: |
+    A second lot of NIFTY2691523400CE (Order ID 260910190477990, 65 qty @ 154.50) was automatically placed and filled on Kite at 10:36:25 IST, doubling position size to 130 qty despite the 1st lot having been bought via Dashboard 1-Click BUY at 10:02:19 IST (Order ID 260910190357539).
+  root_cause: |
+    Cross-process in-memory desynchronization between Dashboard (`app_option_Trade.py`) and background trade engines (`index_options_trade_engine.py` and `stock_options_trade_engine.py`). Background engines only synced positions from Kite once every 10 cycles (`cycle % 10 == 0`) and did not query SQLite `trade_db` on each cycle or prior to order placement. Furthermore, when `trade_db.create_trade(...)` returned `_created == False` (duplicate active trade), the engine ignored the flag and proceeded with `kite.place_order(...)`.
+  affected_files:
+  - common/trade_db.py
+  - common/position_monitor.py
+  - common/trading_core.py
+  - Trade_Option/index_options_trade_engine.py
+  - Trade_Option/stock_options_trade_engine.py
+  - Trade_Option/app_option_Trade.py
+  - Trade_Stock/blueprints/routes_positions.py
+  fix_applied: |
+    1. common/trade_db.py: Added `is_contract_active(contract, engine=None)`, `is_symbol_active(symbol, engine=None)`, and `has_active_trade(contract, symbol, engine=None)` helpers.
+    2. common/position_monitor.py: Added `is_contract_held_on_broker(kite, contract)` to safely query live Kite net positions and return `(is_held, qty)`. Re-exported in `common/trading_core.py`.
+    3. Trade_Option/index_options_trade_engine.py:
+       - In `execute_highest_rr_trade()`: Added pre-execution guards checking in-memory `ACTIVE_POSITIONS`, `trade_db.is_contract_active()`, `trade_db.is_symbol_active()`, and `is_contract_held_on_broker()`. Aborts execution if `_created == False`.
+       - In main `while True:` loop: Added fast sync from SQLite `trade_db.get_active_trades("index")` on every cycle to immediately incorporate external 1-Click BUY / manual entries.
+    4. Trade_Option/stock_options_trade_engine.py:
+       - In candidate loop and T1 auto-execute: Added checks for `trade_db.is_symbol_active()`, `trade_db.is_contract_active()`, `_created == False`, and `is_contract_held_on_broker()`.
+       - In main `while True:` loop: Added fast sync from SQLite `trade_db.get_active_trades("nifty50")` on every cycle.
+    5. Trade_Option/app_option_Trade.py & Trade_Stock/blueprints/routes_positions.py:
+       - In `/api/buy-scanned-trade`: Added active trade and broker position guards before order placement unless `force=True`, preventing accidental double-clicks from placing duplicate orders.
+  verification: |
+    1. Dedicated unit test suite `scratch/test_duplicate_entry_guard.py`: PASSED (tested active trade query checks, rejection of duplicate active contracts, and broker position check).
+    2. Full regression suite `scratch/run_full_regression_test.py`: 22/22 test suites PASSED with 100% success.
+    3. AST syntax check across all modified files: PASSED.
+  status: RESOLVED
+  resolution_date: '2026-09-10'
+

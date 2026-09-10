@@ -507,7 +507,10 @@ def execute_highest_rr_trade(kite, staged):
 
             with position_lock:
                 if sym in ACTIVE_POSITIONS:
-                    logging.info(f"{sym} already active; evaluating next candidate in pool")
+                    logging.info(f"{sym} already active in ACTIVE_POSITIONS; evaluating next candidate in pool")
+                    continue
+                if trade_db.is_symbol_active(sym, "nifty50"):
+                    logging.info(f"[DUPLICATE_GUARD] {sym} already active in trade_db; evaluating next candidate in pool")
                     continue
 
             cp = best["entry_spot"]
@@ -651,7 +654,14 @@ def execute_highest_rr_trade(kite, staged):
                         pos["leg2_strike"] = spread_info["leg2"]["strike"]
                         pos["leg2_qty"] = lot_sz * pos_size
 
+                    if trade_db.is_contract_active(contract, "nifty50"):
+                        logging.info(f"[DUPLICATE_GUARD] Contract {contract} already active in trade_db; skipping T1 auto-execution")
+                        continue
+
                     pos["trade_id"], _created = trade_db.create_trade("nifty50", sym, {k: v for k, v in pos.items() if k != "trade_id"})
+                    if not _created:
+                        logging.info(f"[DUPLICATE_GUARD] Active trade for {sym} ({contract}) already exists in trade_db (ID: {pos['trade_id']}); skipping T1 auto-execution")
+                        continue
                     ACTIVE_POSITIONS[sym] = pos
                 save_state()
 
@@ -661,6 +671,11 @@ def execute_highest_rr_trade(kite, staged):
             clear_executed_exit(sym)
 
             if live_ok:
+                from position_monitor import is_contract_held_on_broker
+                is_held, held_qty = is_contract_held_on_broker(kite, contract)
+                if is_held:
+                    logging.info(f"[DUPLICATE_GUARD] Contract {contract} already held on broker (Qty: {held_qty}); skipping T1 auto-order placement")
+                    continue
                 try:
                     qty = lot_sz * pos_size
                     qty_slices = slice_quantity_for_freeze(contract, qty)
@@ -1032,6 +1047,22 @@ def main_scan_loop(kite):
             ensure_kite_session(kite)
             load_program_config()
             _sync_counter += 1
+            # Fast sync active trades from SQLite trade_db to catch manual/1-Click entries immediately
+            try:
+                db_active = trade_db.get_active_trades("nifty50")
+                with position_lock:
+                    for at in db_active:
+                        at_sym = at.get("symbol")
+                        if at_sym and at_sym not in ACTIVE_POSITIONS:
+                            pos_rec = {k: v for k, v in at.items() if k not in ("id", "engine", "symbol", "status", "updated_at")}
+                            pos_rec["trade_id"] = at["id"]
+                            pos_rec["entry_spot"] = pos_rec.get("entry_spot") or at.get("entry_spot")
+                            pos_rec["entry_time"] = sanitize_entry_time(pos_rec)
+                            ACTIVE_POSITIONS[at_sym] = pos_rec
+                            logging.info(f"[FAST_DB_SYNC] Incorporated active trade for {at_sym} ({at.get('contract')}) into ACTIVE_POSITIONS")
+            except Exception as db_sync_err:
+                logging.debug(f"Fast DB active sync error: {db_sync_err}")
+
             if _sync_counter % 5 == 0 and not BACKTEST_DATE:
                 shared_sync_kite(kite, STOCK_REGISTRY, ACTIVE_POSITIONS, position_lock, "nifty50", TIMEFRAME_ENTRY, TIMEFRAME_ANCHOR)
             if os.path.exists(SL_TARGET_OVERRIDES_FILE):

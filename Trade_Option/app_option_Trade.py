@@ -1933,6 +1933,24 @@ def api_buy_scanned_trade():
                 prod = _kite_session.PRODUCT_CNC if exch == "NSE" else _kite_session.PRODUCT_NRML
 
                 force_order = bool(data.get("force", False))
+                if not force_order:
+                    try:
+                        import trade_db
+                        from common.position_monitor import is_contract_held_on_broker
+                        if trade_db.is_contract_active(contract):
+                            return jsonify({
+                                "ok": False,
+                                "error": f"Active position already open for {contract} in trade database. Set force=true to add lots."
+                            }), 409
+                        is_held, held_qty = is_contract_held_on_broker(_kite_session, contract)
+                        if is_held:
+                            return jsonify({
+                                "ok": False,
+                                "error": f"Contract {contract} already held on broker (Qty: {held_qty}). Set force=true to add lots."
+                            }), 409
+                    except Exception as dup_check_err:
+                        logging.debug(f"1-Click Buy duplicate check error: {dup_check_err}")
+
                 liq_ok, spread_val, liq_msg, _ = check_bid_ask_spread_liquidity(
                     kite=_kite_session, exchange=exch, contract=contract, max_spread_pct=0.025
                 )
