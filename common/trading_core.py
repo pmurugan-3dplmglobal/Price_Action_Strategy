@@ -65,7 +65,8 @@ from registries import (
     sync_stock_tokens,
     sync_fno_stock_registry,
     match_registry_symbol,
-    extract_underlying_symbol
+    extract_underlying_symbol,
+    resolve_underlying
 )
 
 # ── session ──

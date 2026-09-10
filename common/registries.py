@@ -56,6 +56,25 @@ def match_registry_symbol(registry, tradingsymbol):
         return extracted
     return None
 
+def resolve_underlying(contract_or_symbol, engine="nifty50"):
+    """Return the real underlying registry symbol for a contract string.
+    Falls back to extract_underlying_symbol or raw input if not found.
+    """
+    if not contract_or_symbol:
+        return ""
+    raw = str(contract_or_symbol).strip().upper()
+    reg = INDEX_REGISTRY if engine == "index" else STOCK_REGISTRY
+    for sym in sorted(reg.keys(), key=len, reverse=True):
+        if sym.replace(" ", "").upper() in raw:
+            return sym
+    for sym in sorted(STOCK_REGISTRY.keys(), key=len, reverse=True):
+        if sym.replace(" ", "").upper() in raw:
+            return sym
+    extracted = extract_underlying_symbol(contract_or_symbol)
+    if extracted:
+        return extracted
+    return str(contract_or_symbol).strip()
+
 STOCK_REGISTRY = {
     "ADANIENT": {"token": 6401, "lot_size": 250, "strike_step": 50},
     "ADANIPORTS": {"token": 3861249, "lot_size": 400, "strike_step": 20},

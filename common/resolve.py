@@ -32,6 +32,8 @@ def is_option_contract(contract_str):
         c = c.split(":")[-1]
     return (c.endswith("CE") or c.endswith("PE")) and any(ch.isdigit() for ch in c)
 
+from registries import resolve_underlying, extract_underlying_symbol
+
 from swing_detection import (
     detect_parabolic_multi_swings,
     calculate_option_vwap,
