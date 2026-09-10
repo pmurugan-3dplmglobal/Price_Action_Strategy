@@ -1266,6 +1266,32 @@ def api_toggle_sl_pause():
         logging.warning(f"[SL_MONITOR_TOGGLE] SL Exit Monitor is now {state_label}")
     return jsonify({"ok": True, "pause_sl_monitor": bool(cfg.get("pause_sl_monitor", False))})
 
+@app.route("/api/halt-trading", methods=["POST"])
+def api_halt_trading():
+    try:
+        os.makedirs(paths.INPUT_DIR, exist_ok=True)
+        with open(paths.GLOBAL_HALT_FILE, "w", encoding="utf-8") as f:
+            f.write(f"HALTED_AT={dt.now().isoformat()}\nBY=DASHBOARD_OPTIONS\n")
+        logging.warning("[GLOBAL_HALT] Emergency Trading HALT enabled via API! All new entries blocked.")
+        return jsonify({"ok": True, "halted": True, "message": "Emergency Trading HALT enabled. All new entries blocked."})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+@app.route("/api/resume-trading", methods=["POST"])
+def api_resume_trading():
+    try:
+        if os.path.exists(paths.GLOBAL_HALT_FILE):
+            os.remove(paths.GLOBAL_HALT_FILE)
+        logging.info("[GLOBAL_HALT] Trading resumed via API. New entries permitted.")
+        return jsonify({"ok": True, "halted": False, "message": "Trading resumed. New entries permitted."})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+@app.route("/api/halt-status", methods=["GET"])
+def api_halt_status():
+    from common.position_monitor import is_global_halt
+    return jsonify({"ok": True, "halted": is_global_halt()})
+
 @app.route("/api/scan/clear", methods=["POST"])
 def api_scan_clear():
     now_str = dt.now().strftime("%Y-%m-%d %H:%M:%S")

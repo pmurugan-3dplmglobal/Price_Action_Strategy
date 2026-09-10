@@ -1566,4 +1566,59 @@ issues:
   status: RESOLVED
   resolution_date: '2026-09-10'
 
+- id: ISSUE-104
+  title: P0 Risk Hardening — ATR Option SL Floor, Global HALT Emergency Switch & Engine Drawdown Caps
+  severity: CRITICAL
+  date_logged: '2026-09-10'
+  description: |
+    Comprehensive post-audit analysis of 71 completed trades revealed a -394% cumulative drawdown,
+    0% Tier 1 Gold win rate, 65% stop-loss hit rate, and 72% phantom trade churn. Key structural vulnerabilities:
+    1. Option stop-losses derived purely from raw candle geometry (0.40 - 0.80 pts) were tighter than intraday option noise and bid-ask spread whipsaws, causing premature exits on 13/20 real trades before patterns could develop.
+    2. Lack of an instantaneous file-based emergency kill switch to stop all entries without SSH/systemd service restarts.
+    3. Missing capital specification for the index engine in program_config.json, diluting daily drawdown enforcement.
+    4. Phantom trades with zero PnL from cancelled broker reconciliations distorted daily loss calculations.
+  root_cause: |
+    1. Static tiered buffer formula in `targets.py` did not account for option contract volatility (ATR14).
+    2. No canonical HALT file mechanism existed in `paths.py` and `position_monitor.py`.
+    3. `_load_portfolio_risk_config()` lacked engine-specific daily drawdown resolution.
+    4. `portfolio_risk.py` Rule 3 aggregated all closed trades without filtering phantom zero-PnL broker reconciliations.
+  affected_files:
+  - common/paths.py
+  - common/targets.py
+  - common/trading_core.py
+  - common/portfolio_risk.py
+  - common/position_monitor.py
+  - common/resolve.py
+  - Trade_Option/app_option_Trade.py
+  - Trade_Stock/app_Stock_Trade.py
+  - input/program_config.json
+  - scratch/test_p0_risk_hardening.py
+  fix_applied: |
+    1. common/paths.py:
+       - Defined canonical `GLOBAL_HALT_FILE = input_file("HALT")`.
+    2. common/targets.py & common/trading_core.py:
+       - Implemented `calculate_option_atr_sl(entry_price, geometric_sl, df_candles, atr, multiplier=1.5, side="BULL", max_risk_pct=0.30)` enforcing minimum option breathing room = max(geometric_sl, 1.5 * ATR14), capped at 30% max loss, aligned to 0.05 tick size. Applies ONLY to option contracts (equities remain unaffected).
+    3. common/resolve.py:
+       - Integrated `calculate_option_atr_sl` across CE and PE candidate generation and `derive_sl_targets_for_contract()`, feeding the widened SL to `calculate_position_size()` to automatically reduce position sizing for wider stops.
+    4. common/position_monitor.py:
+       - Implemented `is_global_halt()` checking `paths.GLOBAL_HALT_FILE` or `pause_all_entries: true`.
+       - Integrated `is_global_halt()` into `is_new_entry_allowed()`.
+       - Applied `calculate_option_atr_sl` on unlinked broker recovered option positions.
+    5. common/portfolio_risk.py:
+       - Added Rule 0 Global HALT check in `check_portfolio_risk_caps()`.
+       - Updated `_load_portfolio_risk_config()` to prioritize engine-specific `max_daily_loss_pct` (3.0% for index, 5.0% for stocks).
+       - In Rule 3 daily loss calculation: excluded phantom zero-PnL broker reconciliations and prioritized broker-matched `pnl_inr` when available.
+    6. Trade_Option/app_option_Trade.py & Trade_Stock/app_Stock_Trade.py:
+       - Added REST API endpoints: `/api/halt-trading` (POST), `/api/resume-trading` (POST), and `/api/halt-status` (GET).
+    7. input/program_config.json:
+       - Added explicit `"capital": 100000` and `"max_daily_loss_pct": 3.0` to `"index"` section.
+  verification: |
+    1. Dedicated unit test suite `scratch/test_p0_risk_hardening.py`: 9/9 tests PASSED (100%).
+    2. Full regression suite `scratch/run_full_regression_test.py`: 22/22 suites PASSED (100%).
+    3. AST syntax check across all 8 modified files: PASSED with zero errors.
+    4. Import smoke test: ALL IMPORTS SUCCESSFUL.
+  status: RESOLVED
+  resolution_date: '2026-09-10'
+
+
 

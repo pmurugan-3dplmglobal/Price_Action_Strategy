@@ -18,7 +18,7 @@ import threading
 from datetime import datetime as dt, timedelta, time as datetime_time
 import pandas as pd
 import paths
-from targets import get_sl_buffer_distance
+from targets import get_sl_buffer_distance, calculate_option_atr_sl
 from timeframe_utils import fetch_and_resample_candles, get_ist_now, get_ist_date, get_ist_time
 
 NFO_CACHE_FILE = paths.NFO_CACHE_FILE
@@ -447,6 +447,26 @@ def clear_executed_exit(contract):
         except Exception as e:
             logging.error(f"Failed to clear executed exit for {contract}: {e}")
 
+def is_global_halt():
+    """
+    Global Emergency Halt Switch.
+    Returns True if:
+    1. input/HALT file exists on disk (paths.GLOBAL_HALT_FILE), OR
+    2. pause_all_entries: true in program_config.json.
+    Halts all new trade entries across all engines immediately without process restart.
+    """
+    try:
+        if os.path.exists(paths.GLOBAL_HALT_FILE):
+            return True
+        if os.path.exists(paths.PROGRAM_CONFIG_FILE):
+            with open(paths.PROGRAM_CONFIG_FILE, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+                if bool(cfg.get("pause_all_entries", False)):
+                    return True
+    except Exception:
+        pass
+    return False
+
 def is_market_open():
     """Check if Indian markets (NSE/NFO/BSE/BFO) are currently open (Mon-Fri 09:15 to 15:30 IST)."""
     now = get_ist_now()
@@ -457,6 +477,7 @@ def is_market_open():
 
 def is_new_entry_allowed(live_execution_active=True, is_option=False, is_index=False):
     """Check if new trade entries are allowed.
+    If global HALT is active (via HALT file or config), unconditionally returns False.
     If live_execution_active is False (offline/scan-only/after-market mode), returns True to allow scanning & research anytime.
     If live_execution_active is True, restricts new entries strictly to Mon-Fri:
     - Options opening 60 seconds (09:15:00 - 09:15:59 IST) restricted: 09:16:00 IST start.
@@ -464,6 +485,9 @@ def is_new_entry_allowed(live_execution_active=True, is_option=False, is_index=F
     - Index Options (is_index=True): Hard 13:30:00 IST cutoff! Eliminates late-day expiry chop & EOD square-off traps.
     - Other instruments: 15:20:00 IST cutoff.
     """
+    if is_global_halt():
+        logging.warning("[GLOBAL_HALT] All new trade entries blocked: Emergency HALT trigger active")
+        return False
     if not live_execution_active:
         return True
     now = get_ist_now()
@@ -2194,6 +2218,9 @@ def monitor_all_active_positions(kite, live=True):
                         cand_spot_sl = derived.get("spot_sl")
                         cand_spot_entry = derived.get("spot_entry")
                         cand_spot_token = derived.get("spot_token")
+
+                if is_opt and cand_sl > 0 and broker_avg_p > 0:
+                    cand_sl = calculate_option_atr_sl(entry_price=broker_avg_p, geometric_sl=cand_sl, multiplier=1.5, side="BULL")
 
                 lot_sz = get_option_lot_size(tsym) or 1
                 num_lots = max(1, abs(p_qty) // lot_sz) if (is_opt and lot_sz > 0) else abs(p_qty)

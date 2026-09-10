@@ -18,6 +18,7 @@ import re
 import paths
 from timeframe_utils import get_ist_now
 from registries import get_symbol_sector
+import trade_db
 
 
 def _extract_underlying_symbol(tradingsymbol):
@@ -57,7 +58,7 @@ def _extract_underlying_symbol(tradingsymbol):
     return ts
 
 
-def _load_portfolio_risk_config(config=None, capital=None):
+def _load_portfolio_risk_config(config=None, capital=None, engine=None):
     """Load portfolio risk configuration with safe defaults and dynamic capital scaling."""
     cfg_all = {}
     if os.path.exists(paths.PROGRAM_CONFIG_FILE):
@@ -91,14 +92,18 @@ def _load_portfolio_risk_config(config=None, capital=None):
         calc_max_concurrent = int(raw_max_concurrent or 6)
         calc_max_sector = int(p_cfg.get("max_same_sector_positions", 2))
 
-    # Resolve max_daily_loss_pct with full fallback hierarchy
-    daily_loss = p_cfg.get("max_daily_loss_pct")
+    # Resolve max_daily_loss_pct with full fallback hierarchy (Engine-specific -> Config -> Portfolio -> Default)
+    daily_loss = None
+    if engine and isinstance(cfg_all.get(engine), dict):
+        daily_loss = cfg_all[engine].get("max_daily_loss_pct")
+    if daily_loss is None:
+        daily_loss = p_cfg.get("max_daily_loss_pct")
     if daily_loss is None and isinstance(config, dict):
         daily_loss = config.get("max_daily_loss_pct")
     if daily_loss is None and isinstance(cfg_all.get("portfolio_risk"), dict):
         daily_loss = cfg_all["portfolio_risk"].get("max_daily_loss_pct")
     if daily_loss is None:
-        daily_loss = 5.0
+        daily_loss = 3.0 if (engine == "index") else 5.0
 
     return {
         "enable": enable,
@@ -127,6 +132,16 @@ def check_portfolio_risk_caps(engine, symbol, candidate_tier=2, capital=100000.0
     Returns:
     - (is_allowed: bool, reason: str, details: dict)
     """
+    # ── RULE 0: Emergency Global Trading HALT Check ──
+    try:
+        from position_monitor import is_global_halt
+        if is_global_halt():
+            return False, "GLOBAL_HALT_ACTIVE (All new entries blocked via emergency HALT switch)", {
+                "rule": "global_halt"
+            }
+    except Exception:
+        pass
+
     cap_val = float(capital or 100000.0)
     if cap_val <= 0:
         try:
@@ -137,7 +152,7 @@ def check_portfolio_risk_caps(engine, symbol, candidate_tier=2, capital=100000.0
         except Exception:
             cap_val = 100000.0
 
-    p_cfg = _load_portfolio_risk_config(config, capital=cap_val)
+    p_cfg = _load_portfolio_risk_config(config, capital=cap_val, engine=engine)
     if not p_cfg["enable"]:
         return True, "PORTFOLIO_RISK_GUARD_DISABLED", {}
 
@@ -295,8 +310,16 @@ def check_portfolio_risk_caps(engine, symbol, candidate_tier=2, capital=100000.0
 
             # Closed/completed trades today → realized PnL
             if (today_str in created_at or today_str in exit_time) and status in ["COMPLETED", "SL_HIT", "CLOSED", "TARGET_HIT"]:
-                pnl_pct = float(t.get("pnl_percent") or 0.0)
-                trade_inr_pnl = (pnl_pct / 100.0) * price_basis * lot_sz * pos_sz
+                pnl_pct_raw = t.get("pnl_percent")
+                exit_reason = str(t.get("exit_reason") or t.get("details") or "").upper()
+                # Exclude phantom trades (zero PnL created from unexecuted/cancelled broker reconciliation)
+                if (pnl_pct_raw is None or float(pnl_pct_raw or 0.0) == 0.0) and any(k in exit_reason for k in ["RECONCIL", "NET_QTY_ZERO", "CANCEL", "EXPIRED", "UNFILLED"]):
+                    continue
+                if t.get("pnl_inr") is not None:
+                    trade_inr_pnl = float(t["pnl_inr"])
+                else:
+                    pnl_pct = float(pnl_pct_raw or 0.0)
+                    trade_inr_pnl = (pnl_pct / 100.0) * price_basis * lot_sz * pos_sz
                 today_realized_loss_inr += trade_inr_pnl
 
             # Active trades opened today → unrealized floating PnL

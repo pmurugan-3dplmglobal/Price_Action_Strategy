@@ -228,6 +228,65 @@ def get_sl_buffer_distance(price_level, side="BULL"):
     return round(abs(p - calculate_sl_buffer(p, side=side)), 2)
 
 
+def calculate_option_atr_sl(entry_price, geometric_sl, df_candles=None, atr=None, multiplier=1.5, side="BULL", max_risk_pct=0.30):
+    """
+    ATR-Based Minimum Stop Loss Floor for Option Contracts.
+    Prevents premature stop-outs caused by option premium micro-volatility/spread noise.
+
+    Invariants:
+    - Applied ONLY to option contracts (never cash equities).
+    - Enforces minimum SL risk distance = max(geometric_sl_distance, multiplier * ATR14).
+    - For Long Options (BUY orders, side='BULL'):
+      * SL price = entry_price - effective_risk_distance
+      * Capped at max_risk_pct (default 30% of entry price) to avoid catastrophic loss.
+      * Floored at 0.05 tick size.
+    - Returns rounded to 0.05 tick size.
+    """
+    ep = float(entry_price or 0.0)
+    geo_sl = float(geometric_sl or 0.0)
+    if ep <= 0:
+        return geo_sl
+
+    # Determine ATR14
+    atr_val = 0.0
+    if atr is not None and float(atr) > 0:
+        atr_val = float(atr)
+    elif df_candles is not None and not df_candles.empty and len(df_candles) >= 3:
+        try:
+            highs = df_candles['high'].astype(float)
+            lows = df_candles['low'].astype(float)
+            closes = df_candles['close'].astype(float)
+            prev_closes = closes.shift(1).fillna(closes.iloc[0])
+            tr = pd.concat([highs - lows, (highs - prev_closes).abs(), (lows - prev_closes).abs()], axis=1).max(axis=1)
+            atr_val = float(tr.tail(14).mean()) if len(tr) >= 14 else float(tr.mean())
+        except Exception:
+            atr_val = ep * 0.05
+    else:
+        atr_val = ep * 0.05
+
+    if pd.isna(atr_val) or atr_val <= 0:
+        atr_val = ep * 0.05
+
+    atr_distance = round(atr_val * float(multiplier), 2)
+    geo_distance = abs(ep - geo_sl) if geo_sl > 0 else atr_distance
+
+    # Enforce minimum breathing room: at least multiplier * ATR distance
+    effective_risk_dist = max(geo_distance, atr_distance)
+
+    # Cap maximum risk distance at max_risk_pct (e.g. 30% of premium) to protect against excessive drawdown
+    max_allowed_dist = round(ep * float(max_risk_pct), 2)
+    effective_risk_dist = min(effective_risk_dist, max_allowed_dist)
+
+    # Option buyers are long (CE or PE): SL is below entry premium
+    new_sl = round(round((ep - effective_risk_dist) / 0.05) * 0.05, 2)
+    new_sl = max(0.05, new_sl)
+
+    if geo_sl > 0 and new_sl < geo_sl:
+        logging.debug(f"[ATR_SL_WIDENED] Option SL widened from {geo_sl:.2f} to {new_sl:.2f} (Entry: {ep:.2f}, ATR: {atr_val:.2f}, 1.5xATR: {atr_distance:.2f})")
+
+    return new_sl
+
+
 def check_circuit_and_spread_shield(kite, symbol, exchange="NSE", side="BUY"):
     """
     Circuit Band & Liquidity Safety Shield:

@@ -470,6 +470,9 @@ verification_and_quality_assurance:
   vix_portfolio_suite: "scratch/test_vix_portfolio_volume.py — 47/47 Unit Tests Passing (100% Success Rate)"
   ast_syntax_integrity: "100% Python files parsed with zero syntax errors"
   recent_major_issues_resolved:
+    - id: "ISSUE-104"
+      title: "P0 Risk Hardening — ATR Option SL Floor, Global HALT Emergency Switch & Engine-Specific Drawdown Caps"
+      status: "RESOLVED"
     - id: "ISSUE-103"
       title: "Index Option 13:30 IST Hard Cutoff Guard & Automated 2-Leg Debit Spread Deployment for Theta Decay Shielding"
       status: "RESOLVED"

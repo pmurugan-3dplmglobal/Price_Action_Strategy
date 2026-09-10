@@ -58,7 +58,8 @@ from targets import (
     check_left_side_rule,
     check_left_side_rule_bearish,
     calculate_position_size,
-    calculate_sl_buffer
+    calculate_sl_buffer,
+    calculate_option_atr_sl
 )
 from patterns_bull import (
     find_anchor_bullish_engulfing,
@@ -432,6 +433,9 @@ def derive_sl_targets_for_contract(kite, contract, entry_price, timeframe_entry=
                 risk = round(ep - sl_val, 2)
                 if t1 is None or t1 <= ep:
                     t1 = round(ep + (1.88 * risk), 2)
+
+        if is_opt and sl_val > 0 and ep > 0:
+            sl_val = calculate_option_atr_sl(ep, sl_val, df_candles=df_a if 'df_a' in locals() else None, multiplier=1.5, side="BULL")
 
         # Derive spot token & spot SL for Spot-Anchored SL Guard
         spot_tok = None
@@ -1622,10 +1626,17 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                                 tier_label_ce = "TIER_1_GOLD"
                                 tier_badge_ce = "🥇 T1"
 
+                        effective_sl_ce = calculate_option_atr_sl(
+                            entry_price=result_ce["Close"],
+                            geometric_sl=result_ce["SL"],
+                            df_candles=df_ce_e,
+                            multiplier=1.5,
+                            side="BULL"
+                        )
                         ce_lot = int(ce.get("lot_size") or config.get("lot_size", 1))
                         pos_size = calculate_position_size(
                             spot_price=result_ce["Close"],
-                            stop_loss=result_ce["SL"],
+                            stop_loss=effective_sl_ce,
                             capital=float(cfg_engine.get("capital") or 100000.0),
                             risk_percent=float(cfg_engine.get("MAX_RISK_PERCENT") or 1.0),
                             lot_size=ce_lot,
@@ -1637,7 +1648,8 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                             "symbol": symbol, "contract": ce['tradingsymbol'], "option_token": ce['token'],
                             "index_token": config["token"], "spot_token": config["token"], "spot_entry": current_spot,
                             "spot_sl": spot_sl_ce, "strike": strike, "entry_spot": result_ce["Close"],
-                            "current_sl": result_ce["SL"], "t1": result_ce["T1"], "t2": result_ce["T2"],
+                            "current_sl": effective_sl_ce, "geometric_sl": result_ce["SL"],
+                            "t1": result_ce["T1"], "t2": result_ce["T2"],
                             "t3": result_ce["T3"], "rr": result_ce.get("RR"), "trailing_stage": 0,
                             "lot_size": ce_lot, "position_size": pos_size,
                             "pattern": result_ce["Pattern"], "timeframe": timeframe_entry, "side": "CE",
@@ -1766,10 +1778,17 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                                 tier_label_pe = "TIER_1_GOLD"
                                 tier_badge_pe = "🥇 T1"
 
+                        effective_sl_pe = calculate_option_atr_sl(
+                            entry_price=result_pe["Close"],
+                            geometric_sl=result_pe["SL"],
+                            df_candles=df_pe_e,
+                            multiplier=1.5,
+                            side="BULL"
+                        )
                         pe_lot = int(pe.get("lot_size") or config.get("lot_size", 1))
                         pos_size = calculate_position_size(
                             spot_price=result_pe["Close"],
-                            stop_loss=result_pe["SL"],
+                            stop_loss=effective_sl_pe,
                             capital=float(cfg_engine.get("capital") or 100000.0),
                             risk_percent=float(cfg_engine.get("MAX_RISK_PERCENT") or 1.0),
                             lot_size=pe_lot,
@@ -1781,7 +1800,8 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                             "symbol": symbol, "contract": pe['tradingsymbol'], "option_token": pe['token'],
                             "index_token": config["token"], "spot_token": config["token"], "spot_entry": current_spot,
                             "spot_sl": spot_sl_pe, "strike": strike, "entry_spot": result_pe["Close"],
-                            "current_sl": result_pe["SL"], "t1": result_pe["T1"], "t2": result_pe["T2"],
+                            "current_sl": effective_sl_pe, "geometric_sl": result_pe["SL"],
+                            "t1": result_pe["T1"], "t2": result_pe["T2"],
                             "t3": result_pe["T3"], "rr": result_pe.get("RR"), "trailing_stage": 0,
                             "lot_size": pe_lot, "position_size": pos_size,
                             "pattern": result_pe["Pattern"], "timeframe": timeframe_entry, "side": "PE",

@@ -36,6 +36,7 @@ def export_file(name):
 
 # Shared canonical paths (single source of truth for cross-module files)
 TOKEN_FILE = input_file("kite_access_token.txt")
+GLOBAL_HALT_FILE = input_file("HALT")
 NFO_CACHE_FILE = monitor_file("nfo_instruments_cache.csv")
 SL_TARGET_OVERRIDES_FILE = monitor_file("sl_target_overrides.json")
 EXECUTED_EXITS_FILE = monitor_file("executed_exit_orders.json")
