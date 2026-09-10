@@ -1905,7 +1905,8 @@ def api_buy_scanned_trade():
                     symbol=symbol,
                     candidate_tier=cand_tier,
                     capital=cap_amount,
-                    include_db_trades=True
+                    include_db_trades=True,
+                    kite=_kite_session
                 )
                 if not p_allowed:
                     logging.warning(f"[1-CLICK BUY REJECTED] {symbol} ({contract}): {p_reason}")

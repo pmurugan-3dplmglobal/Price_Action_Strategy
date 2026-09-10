@@ -14,9 +14,47 @@ import json
 import os
 import time
 from datetime import datetime as dt
+import re
 import paths
 from timeframe_utils import get_ist_now
 from registries import get_symbol_sector
+
+
+def _extract_underlying_symbol(tradingsymbol):
+    """
+    Extract underlying symbol from an exchange tradingsymbol (option, future, or equity).
+    E.g.:
+    - 'ADANIENSOL26SEP1440CE' -> 'ADANIENSOL'
+    - 'NIFTY2691523400CE'     -> 'NIFTY'
+    - 'BANKNIFTY26SEP56400CE' -> 'BANKNIFTY'
+    - 'SENSEX2691074700CE'    -> 'SENSEX'
+    - 'INFY'                  -> 'INFY'
+    """
+    if not tradingsymbol:
+        return None
+    ts = str(tradingsymbol).strip().upper()
+
+    # 1. Known index prefixes
+    for idx in ["MIDCPNIFTY", "BANKNIFTY", "FINNIFTY", "NIFTY", "SENSEX", "BANKEX"]:
+        if ts.startswith(idx):
+            return idx
+
+    # 2. Registered equities
+    try:
+        from registries import STOCK_REGISTRY
+        if STOCK_REGISTRY:
+            for reg_sym in sorted(STOCK_REGISTRY.keys(), key=len, reverse=True):
+                if ts.startswith(reg_sym):
+                    return reg_sym
+    except Exception:
+        pass
+
+    # 3. Standard option/future contract format: letters before 2-digit year (e.g. 26)
+    m = re.match(r"^([A-Z&-]+?)\d{2}[A-Z\d]+", ts)
+    if m:
+        return m.group(1)
+
+    return ts
 
 
 def _load_portfolio_risk_config(config=None, capital=None):
@@ -37,14 +75,15 @@ def _load_portfolio_risk_config(config=None, capital=None):
         p_cfg = {}
 
     enable = bool(p_cfg.get("enable", True))
-    dynamic_scaling = bool(p_cfg.get("dynamic_scaling", True))
     raw_max_concurrent = p_cfg.get("max_concurrent_positions")
+    has_explicit_concurrent = raw_max_concurrent not in [None, "auto", 0]
+    dynamic_scaling = bool(p_cfg.get("dynamic_scaling", not has_explicit_concurrent))
     base_per_100k = float(p_cfg.get("base_positions_per_100k", 6.0))
     base_sector_per_100k = float(p_cfg.get("base_sector_positions_per_100k", 2.0))
 
     # Dynamic Capital Scaling Calculation
     effective_cap = float(capital or 100000.0)
-    if dynamic_scaling or raw_max_concurrent in [None, "auto", 0]:
+    if (dynamic_scaling and not has_explicit_concurrent) or (not has_explicit_concurrent):
         # Scale dynamically based on capital (default: 6 per 100k capital, min 2)
         calc_max_concurrent = max(2, int(round((effective_cap / 100000.0) * base_per_100k)))
         calc_max_sector = max(1, int(round((effective_cap / 100000.0) * base_sector_per_100k)))
@@ -71,7 +110,7 @@ def _load_portfolio_risk_config(config=None, capital=None):
     }
 
 
-def check_portfolio_risk_caps(engine, symbol, candidate_tier=2, capital=100000.0, live_positions=None, config=None, include_db_trades=True):
+def check_portfolio_risk_caps(engine, symbol, candidate_tier=2, capital=100000.0, live_positions=None, config=None, include_db_trades=True, kite=None):
     """
     Check if a candidate trade passes all portfolio-level risk limits.
 
@@ -83,6 +122,7 @@ def check_portfolio_risk_caps(engine, symbol, candidate_tier=2, capital=100000.0
     - live_positions: dict or list or None (in-memory active positions if available)
     - config: dict or None (program config overrides)
     - include_db_trades: bool (whether to include active trades from trade_db, default True)
+    - kite: KiteConnect session instance or None (queries live broker positions directly as ground truth)
 
     Returns:
     - (is_allowed: bool, reason: str, details: dict)
@@ -105,68 +145,119 @@ def check_portfolio_risk_caps(engine, symbol, candidate_tier=2, capital=100000.0
     max_daily_loss_pct = p_cfg["max_daily_loss_pct"]
     max_same_sector = p_cfg["max_same_sector_positions"]
 
+    # Normalize candidate symbol
+    candidate_sym = _extract_underlying_symbol(symbol) or str(symbol).strip().upper()
+
     import trade_db
 
-    # 1. Gather all active trades across engines from DB and in-memory
+    # 1. Gather all active trades across engines from Broker, DB and in-memory
     active_symbols = set()
     active_contracts = set()
     sector_counts = {}
 
+    # 1A. Live Broker Ground Truth (Kite net positions)
+    if kite:
+        try:
+            net_pos = kite.positions().get("net", [])
+            for p in net_pos:
+                nq = int(p.get("quantity", 0))
+                if nq != 0:
+                    cnt = str(p.get("tradingsymbol", "")).strip().upper()
+                    if cnt:
+                        active_contracts.add(cnt)
+                        raw_sym = _extract_underlying_symbol(cnt)
+                        if raw_sym:
+                            active_symbols.add(raw_sym)
+                            sec = get_symbol_sector(raw_sym)
+                            sector_counts[sec] = sector_counts.get(sec, 0) + 1
+        except Exception as k_err:
+            logging.warning(f"Portfolio risk: Failed to fetch live broker positions: {k_err}")
+
+    # 1B. SQLite trade_db Active Records
     if include_db_trades:
         active_db_trades = trade_db.get_active_trades(engine=None)
         for t in active_db_trades:
             sym = t.get("symbol")
             cnt = t.get("contract") or sym
             if sym:
-                active_symbols.add(sym)
-                sec = get_symbol_sector(sym)
-                sector_counts[sec] = sector_counts.get(sec, 0) + 1
+                raw_sym = _extract_underlying_symbol(sym) or str(sym).strip().upper()
+                if raw_sym not in active_symbols:
+                    active_symbols.add(raw_sym)
+                    sec = get_symbol_sector(raw_sym)
+                    sector_counts[sec] = sector_counts.get(sec, 0) + 1
             if cnt:
-                active_contracts.add(str(cnt).strip().upper())
+                c_str = str(cnt).strip().upper()
+                active_contracts.add(c_str)
+                raw_sym = _extract_underlying_symbol(c_str)
+                if raw_sym and raw_sym not in active_symbols:
+                    active_symbols.add(raw_sym)
+                    sec = get_symbol_sector(raw_sym)
+                    sector_counts[sec] = sector_counts.get(sec, 0) + 1
 
+    # 1C. In-Memory Process State
     if isinstance(live_positions, dict):
         for k, v in live_positions.items():
             sym = v.get("symbol") or k
             cnt = v.get("contract") or sym
-            if sym and sym not in active_symbols:
-                active_symbols.add(sym)
-                sec = get_symbol_sector(sym)
-                sector_counts[sec] = sector_counts.get(sec, 0) + 1
+            if sym:
+                raw_sym = _extract_underlying_symbol(sym) or str(sym).strip().upper()
+                if raw_sym not in active_symbols:
+                    active_symbols.add(raw_sym)
+                    sec = get_symbol_sector(raw_sym)
+                    sector_counts[sec] = sector_counts.get(sec, 0) + 1
             if cnt:
-                active_contracts.add(str(cnt).strip().upper())
+                c_str = str(cnt).strip().upper()
+                active_contracts.add(c_str)
+                raw_sym = _extract_underlying_symbol(c_str)
+                if raw_sym and raw_sym not in active_symbols:
+                    active_symbols.add(raw_sym)
+                    sec = get_symbol_sector(raw_sym)
+                    sector_counts[sec] = sector_counts.get(sec, 0) + 1
     elif isinstance(live_positions, list):
         for v in live_positions:
             if isinstance(v, dict):
                 sym = v.get("symbol")
                 cnt = v.get("contract") or sym
-                if sym and sym not in active_symbols:
-                    active_symbols.add(sym)
-                    sec = get_symbol_sector(sym)
-                    sector_counts[sec] = sector_counts.get(sec, 0) + 1
+                if sym:
+                    raw_sym = _extract_underlying_symbol(sym) or str(sym).strip().upper()
+                    if raw_sym not in active_symbols:
+                        active_symbols.add(raw_sym)
+                        sec = get_symbol_sector(raw_sym)
+                        sector_counts[sec] = sector_counts.get(sec, 0) + 1
                 if cnt:
-                    active_contracts.add(str(cnt).strip().upper())
+                    c_str = str(cnt).strip().upper()
+                    active_contracts.add(c_str)
+                    raw_sym = _extract_underlying_symbol(c_str)
+                    if raw_sym and raw_sym not in active_symbols:
+                        active_symbols.add(raw_sym)
+                        sec = get_symbol_sector(raw_sym)
+                        sector_counts[sec] = sector_counts.get(sec, 0) + 1
 
-    total_active_count = len(active_contracts) if active_contracts else len(active_symbols)
+    # Count distinct active scripts (underlying symbols) across the entire portfolio
+    total_active_count = len(active_symbols) if active_symbols else len(active_contracts)
 
-    # ── RULE 1: Max Concurrent Positions Cap ──
-    if total_active_count >= max_concurrent:
-        reason = f"MAX_CONCURRENT_POSITIONS_REACHED ({total_active_count}/{max_concurrent} active trades across portfolio [Capital: Rs {cap_val:,.0f}])"
+    # ── RULE 1: Max Concurrent Positions Cap (Evaluated at Script Level) ──
+    # If the candidate is an additional order on an existing held script, don't double count it towards script cap
+    is_new_script = candidate_sym not in active_symbols
+    if is_new_script and total_active_count >= max_concurrent:
+        reason = f"MAX_CONCURRENT_POSITIONS_REACHED ({total_active_count}/{max_concurrent} active scripts across portfolio [Capital: Rs {cap_val:,.0f}])"
         return False, reason, {
             "rule": "max_concurrent_positions",
             "active_count": total_active_count,
+            "active_scripts": list(active_symbols),
             "limit": max_concurrent,
             "capital": cap_val
         }
 
     # ── RULE 2: Max Same-Sector Positions Cap ──
-    candidate_sector = get_symbol_sector(symbol)
+    candidate_sector = get_symbol_sector(candidate_sym)
     current_sector_count = sector_counts.get(candidate_sector, 0)
 
     # Indices (NIFTY/BANKNIFTY) and 'OTHER' are exempt from the strict single-industry limit
     # or treated with a generous cap
     is_exempt_sector = candidate_sector in ["INDICES", "OTHER"]
 
-    if not is_exempt_sector and current_sector_count >= max_same_sector:
+    if not is_exempt_sector and is_new_script and current_sector_count >= max_same_sector:
         reason = f"MAX_SECTOR_POSITIONS_REACHED ({current_sector_count}/{max_same_sector} active in sector '{candidate_sector}')"
         return False, reason, {
             "rule": "max_same_sector_positions",
@@ -216,6 +307,14 @@ def check_portfolio_risk_caps(engine, symbol, candidate_tier=2, capital=100000.0
                     today_unrealized_loss_inr += unrealized_inr
 
     total_daily_pnl_inr = today_realized_loss_inr + today_unrealized_loss_inr
+    if kite:
+        try:
+            net_pos = kite.positions().get("net", [])
+            live_broker_pnl = sum(float(p.get("pnl", 0.0)) for p in net_pos)
+            if live_broker_pnl < 0 and live_broker_pnl < total_daily_pnl_inr:
+                total_daily_pnl_inr = live_broker_pnl
+        except Exception:
+            pass
     cap_val = float(capital or 100000.0)
     max_loss_allowed_inr = -1.0 * (max_daily_loss_pct / 100.0) * cap_val
 

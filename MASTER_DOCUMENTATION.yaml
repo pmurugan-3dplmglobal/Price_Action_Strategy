@@ -36,8 +36,9 @@ meta:
     - Single-Pass Instrument Synchronization & Fresh Cache Re-Use (< 12h) to Eliminate TimeoutErrors (FEATURE-050)
     - Setup Funnel Eviction Mandate — 80% Target 1 (T1) Runaway & Stop-Loss (SL) on Timeframe Closing Basis (FEATURE-051)
     - Phase 1 Hardening: Timeframe Synchronization (15m), Safe Adaptive Breakeven Buffers (get_sl_buffer_distance), and Spacing Normalization (FEATURE-052)
-    - Sys.path Normalization & Debit Spread Import Invariant (ISSUE-098)
     - 5-Minute Trap-ADX Index Strategy, 45-Minute Stock Breakout Scanner, Dedicated UI Tab with 1-Click BUY & Synergy Filter (FEATURE-053)
+    - Oracle Cloud Free Tier Performance Hardening & ZRAM Compressed Swap Tuning (FEATURE-054)
+    - Broker Ground-Truth Portfolio Risk Concurrency Synchronization & DEBIT_SPREAD Execution Mode Harmonization (ISSUE-102)
 
 architecture:
   diagram: |

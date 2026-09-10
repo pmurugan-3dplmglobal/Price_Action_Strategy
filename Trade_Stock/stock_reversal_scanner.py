@@ -325,7 +325,8 @@ def run_scan(kite):
                         engine=PROFILE["config_section"],
                         symbol=symbol,
                         candidate_tier=effective_tier,
-                        live_positions=ACTIVE_POSITIONS
+                        live_positions=ACTIVE_POSITIONS,
+                        kite=kite
                     )
                     result["portfolio_risk_allowed"] = p_allowed
                     result["portfolio_risk_reason"] = p_reason

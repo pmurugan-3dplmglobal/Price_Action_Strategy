@@ -493,7 +493,7 @@ def execute_highest_rr_trade(kite, staged):
     sorted_pool = sorted(candidate_pool, key=_avg_target_rank, reverse=True)
     cfg_eng = load_program_config_for_engine("nifty50")
     exec_mode = str(cfg_eng.get("execution_mode", "AUTO")).upper()
-    use_spread = (exec_mode == "SPREAD_ONLY") or (exec_mode == "AUTO" and TIMEFRAME_ENTRY in ["15minute", "30minute", "60minute", "day"])
+    use_spread = (exec_mode in ["DEBIT_SPREAD", "SPREAD_ONLY"]) or (exec_mode == "AUTO" and TIMEFRAME_ENTRY in ["15minute", "30minute", "60minute", "day"])
 
     for best in sorted_pool:
         try:
@@ -583,7 +583,8 @@ def execute_highest_rr_trade(kite, staged):
                     symbol=sym,
                     candidate_tier=best.get("tier", 1),
                     capital=cap_val,
-                    live_positions=ACTIVE_POSITIONS
+                    live_positions=ACTIVE_POSITIONS,
+                    kite=kite
                 )
                 if not p_ok:
                     logging.info(f"[PORTFOLIO_RISK_CAP] Auto-execution skipped for {sym} ({contract}): {p_msg}; checking next candidate")

@@ -1449,3 +1449,45 @@ issues:
   status: RESOLVED
   resolution_date: '2026-09-10'
 
+- id: ISSUE-102
+  title: Broker Ground-Truth Portfolio Risk Concurrency Synchronization & DEBIT_SPREAD Execution Mode Harmonization
+  severity: HIGH
+  category: Portfolio Risk Governance, Position Limits, Debit Spreads, Execution Mode Alignment
+  family: RISK_PORTFOLIO
+  date_reported: '2026-09-10'
+  symptom: |
+    1. Morning execution fired new buy orders (e.g. INDUSINDBK, TCS) even though the portfolio was already holding the maximum allowed limit of 6 open scripts/positions on Zerodha Kite, resulting in margin shortage rejections.
+    2. Setting `execution_mode: "DEBIT_SPREAD"` in program config failed to trigger the short leg (SELL hedge order), placing naked option buy orders instead.
+  root_cause: |
+    1. Blindness to Broker Ground Truth: `check_portfolio_risk_caps()` in `common/portfolio_risk.py` only inspected SQLite `trade_db` and local engine in-memory state. It never queried `kite.positions()`. Manual chart orders (`Tag: tfc`), cash equities (INFY), and cross-engine trades were uncounted, causing `total_active_count` to evaluate to 0 and approving new orders.
+    2. Sizing by Contracts vs Scripts: `total_active_count` checked `len(active_contracts)` rather than distinct underlying symbols, so multi-leg spreads or multi-strike orders double-counted positions.
+    3. Dynamic Scaling Overwrite: `_load_portfolio_risk_config()` defaulted `dynamic_scaling` to True, overwriting explicit user configuration `max_concurrent_positions: 6`.
+    4. Execution Mode Mismatch: In `stock_options_trade_engine.py` (L496), `use_spread` checked `exec_mode == "SPREAD_ONLY"` while the UI dropdown and config stored `"DEBIT_SPREAD"`. The condition evaluated to False, causing spread resolution to be bypassed and falling back to naked option mode.
+  affected_files:
+  - common/portfolio_risk.py
+  - Trade_Option/stock_options_trade_engine.py
+  - Trade_Option/index_options_trade_engine.py
+  - Trade_Option/app_option_Trade.py
+  - Trade_Stock/app_Stock_Trade.py
+  - Trade_Stock/stock_reversal_scanner.py
+  - scratch/test_portfolio_risk_and_spread_mode.py
+  fix_applied: |
+    1. common/portfolio_risk.py:
+       - Added `_extract_underlying_symbol(tradingsymbol)` to reliably parse underlying tickers from indices, F&O option/future contracts, and cash equities.
+       - Enhanced `check_portfolio_risk_caps()` to accept `kite=None` and directly query live broker net positions (`kite.positions()["net"]`), merging broker-truth positions with SQLite DB and process memory.
+       - Standardized script-level counting: `total_active_count = len(active_symbols)`, ensuring a 2-leg Debit Spread (Long + Short leg) correctly counts as 1 script.
+       - Respected explicit config: Only scales dynamically when `max_concurrent_positions` is unspecified or set to "auto"/0.
+       - Integrated live broker PnL into Rule 3 daily drawdown guard.
+    2. Trade_Option/stock_options_trade_engine.py:
+       - Line 496: Updated `use_spread = (exec_mode in ["DEBIT_SPREAD", "SPREAD_ONLY"]) or (exec_mode == "AUTO" and TIMEFRAME_ENTRY in ["15minute", "30minute", "60minute", "day"])`.
+       - Line 587: Passed `kite=kite` to `check_portfolio_risk_caps()`.
+    3. Trade_Option/index_options_trade_engine.py: Passed `kite=kite` to `check_portfolio_risk_caps()`.
+    4. Trade_Option/app_option_Trade.py: Passed `kite=_kite_session` in `/api/buy-scanned-trade` 1-Click BUY risk check.
+    5. Trade_Stock/app_Stock_Trade.py & Trade_Stock/stock_reversal_scanner.py: Passed `kite` into `check_portfolio_risk_caps()`.
+  verification: |
+    1. Dedicated unit test suite `scratch/test_portfolio_risk_and_spread_mode.py`: 4/4 PASSED (tested symbol extraction, 6-script broker block, debit spread 1-script sizing, and spread mode truth table).
+    2. Full regression test suite `scratch/run_full_regression_test.py`: 22/22 test suites PASSED with 100% success.
+    3. AST syntax check across all modified files: PASSED.
+  status: RESOLVED
+  resolution_date: '2026-09-10'
+

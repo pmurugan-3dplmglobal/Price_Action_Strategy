@@ -323,7 +323,8 @@ def execute_highest_rr_trade(kite, staged):
                     symbol=best["symbol"],
                     candidate_tier=best.get("tier", 1),
                     capital=cap_val,
-                    live_positions=ACTIVE_POSITIONS
+                    live_positions=ACTIVE_POSITIONS,
+                    kite=kite
                 )
                 if not p_ok:
                     logging.info(f"[PORTFOLIO_RISK_CAP] Auto-execution skipped for {best['symbol']} ({best['contract']}): {p_msg}")
