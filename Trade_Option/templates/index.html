@@ -2424,7 +2424,25 @@
             } catch(e) { console.log(e); }
         }
 
-        setInterval(refreshData, {{ refresh * 1000 }});
+        let _activePollTimer = null;
+        const _baseInterval = {{ refresh * 1000 }} || 1000;
+
+        function _schedulePolling(intervalMs) {
+            if (_activePollTimer) clearInterval(_activePollTimer);
+            _activePollTimer = setInterval(refreshData, intervalMs);
+        }
+
+        _schedulePolling(_baseInterval);
+
+        document.addEventListener('visibilitychange', function() {
+            if (document.hidden) {
+                _schedulePolling(5000);
+            } else {
+                _schedulePolling(_baseInterval);
+                refreshData();
+            }
+        });
+
         window.addEventListener('load', () => { refreshData(); });
     </script>
     <style>

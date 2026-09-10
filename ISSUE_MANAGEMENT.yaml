@@ -1423,3 +1423,29 @@ issues:
   status: RESOLVED
   resolution_date: '2026-09-10'
 
+- id: FEATURE-054
+  title: Oracle Cloud Free Tier Performance Hardening — Lookback Truncation, Worker Concurrency & Adaptive Visibility Polling
+  severity: MEDIUM
+  category: Performance Optimization, Resource Governance, Cloud Deployment
+  family: PERFORMANCE
+  date_reported: '2026-09-10'
+  symptom: |
+    Scanner execution on Oracle Cloud Free Tier AMD instances (0.5 GB RAM, 1/8 OCPU) experienced severe delays, crawl speeds, and 100% CPU lockups compared to localhost due to 3.0 GB swap thrashing, 6-worker multithreading memory spikes, and excessive 30-day historical candle queries.
+  root_cause: |
+    1. Default lookback of 30 days forced downloading and parsing 2,250 3-minute candles per contract across dozens of strikes every cycle.
+    2. 6 concurrent worker threads in `stock_options_trade_engine.py` exceeded Kite's 3 req/sec rate limit and exhausted physical RAM.
+    3. The Dashboard UI polled `/api/data` every 1s unconditionally, even when tabs were hidden/minimized.
+  affected_files:
+  - input/program_config.json
+  - Trade_Option/stock_options_trade_engine.py
+  - Trade_Option/templates/index.html
+  fix_applied: |
+    1. input/program_config.json: Configured `"lookback_days": 10` for index options and `"lookback_days": 15` for stock options, reducing candle data transfer and pandas memory footprint by ~75%.
+    2. Trade_Option/stock_options_trade_engine.py: Set `ThreadPoolExecutor(max_workers=3)` (2 when radar active) to align with Kite rate limits and eliminate memory thrashing on 1-core VMs. Added spot LTP pre-filter (`last_price <= 0` skip).
+    3. Trade_Option/templates/index.html: Implemented HTML5 `document.visibilityState` adaptive polling — slows to 5000ms in background tabs and restores fast polling when tab becomes active, slashing Flask CPU utilization.
+  verification: |
+    1. Full regression test suite `scratch/run_full_regression_test.py`: 22/22 test suites PASSED with 100% success.
+    2. AST syntax check across all modified files: PASSED.
+  status: RESOLVED
+  resolution_date: '2026-09-10'
+

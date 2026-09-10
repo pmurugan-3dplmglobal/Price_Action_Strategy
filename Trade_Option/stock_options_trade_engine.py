@@ -62,7 +62,7 @@ from trading_core import (
 )
 
 LIVE_MARKET_DEPLOYMENT = True
-LOOKBACK_DAYS = 30
+LOOKBACK_DAYS = 15
 INITIAL_CAPITAL = 100000.0
 MAX_RISK_PERCENT = 1.0
 TOKEN_FILE = paths.TOKEN_FILE
@@ -343,7 +343,7 @@ def run_scan_cycle(kite):
 
     funnel_summary = pattern_funnel.get_funnel_summary("nifty50")
     radar_active_count = funnel_summary.get("count_a_plus", 0) + funnel_summary.get("count_a", 0)
-    worker_threads = 3 if radar_active_count > 0 else 6
+    worker_threads = 2 if radar_active_count > 0 else 3
     if radar_active_count > 0:
         logging.info(f"[RADAR PRIORITY GATE] {radar_active_count} setup(s) on radar. Throttling macro scan (workers={worker_threads}) to preserve Zerodha Kite rate limits.")
 
@@ -353,9 +353,9 @@ def run_scan_cycle(kite):
             config = STOCK_REGISTRY.get(symbol)
             if not config or not config.get("token"):
                 continue
-            # Note: Do not skip active symbols here; all 200+ F&O stocks are scanned so setups
-            # advance through the funnel and appear on the Scan Tab even if a position is currently held.
             s_ltp = spot_quotes.get(f"NSE:{symbol}", {}).get("last_price")
+            if s_ltp is None or s_ltp <= 0:
+                continue
             futures[pool.submit(_process_stock, kite, symbol, config,
                 from_entry, to_entry, from_anchor, to_anchor,
                 entry_scanners, anchor_scanners, spot_ltp=s_ltp)] = symbol
