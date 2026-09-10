@@ -316,7 +316,7 @@ def purge_invalidated_or_triggered(engine_name, ltp_dict=None, max_runaway_pct=N
             # Resolve live LTP if available
             live_price = None
             if ltp_dict and isinstance(ltp_dict, dict):
-                for k in [cntr, sym, f"NFO:{cntr}", f"NSE:{sym}"]:
+                for k in [cntr, sym, f"NFO:{cntr}", f"NSE:{sym}", f"BFO:{cntr}", f"BSE:{sym}"]:
                     val = ltp_dict.get(k)
                     if isinstance(val, (int, float)) and val > 0:
                         live_price = float(val)
@@ -327,13 +327,24 @@ def purge_invalidated_or_triggered(engine_name, ltp_dict=None, max_runaway_pct=N
 
             if live_price is not None and live_price > 0:
                 # 1. 80% of Target T1 achieved pre-entry (Do Not Chase / Runaway)
-                t1_80pct = round(bm + 0.80 * (t1 - bm), 2) if (bm > 0 and t1 > bm) else round(t1 * 0.80, 2) if t1 > 0 else 0.0
-                if t1_80pct > 0 and live_price >= t1_80pct:
-                    logger.info(
-                        f"[FUNNEL PURGE: 80% T1 HIT] {cntr or sym} at {live_price:.2f} >= 80% T1 {t1_80pct:.2f} "
-                        f"(T1={t1:.2f}, BM={bm:.2f}). Evicting from funnel."
-                    )
-                    return False
+                if t1 > 0:
+                    t1_80pct = round(bm + 0.80 * (t1 - bm), 2) if (bm > 0 and t1 > bm) else round(t1 * 0.80, 2)
+                    if t1_80pct > 0 and live_price >= t1_80pct:
+                        logger.info(
+                            f"[FUNNEL PURGE: 80% T1 HIT] {cntr or sym} at {live_price:.2f} >= 80% T1 {t1_80pct:.2f} "
+                            f"(T1={t1:.2f}, BM={bm:.2f}). Evicting from funnel."
+                        )
+                        return False
+                elif bm > 0 and sl > 0:
+                    # Category B runaway guard when T1 is not set:
+                    est_risk = max(0.5, bm - sl)
+                    est_runaway = max(bm * 1.25, bm + 1.2 * est_risk)
+                    if live_price >= est_runaway:
+                        logger.info(
+                            f"[FUNNEL PURGE: CATEGORY_B RUNAWAY] {cntr or sym} at {live_price:.2f} >= estimated target runaway {est_runaway:.2f} "
+                            f"(BM={bm:.2f}, SL={sl:.2f}). Evicting from funnel."
+                        )
+                        return False
 
             # 4. Prior-day stale setup check: If Candle A / Entry Time is from prior session and setup already broke out
             candle_time_str = item.get("candle_c_time") or item.get("candle_b_time") or item.get("candle_a_time")
@@ -346,6 +357,11 @@ def purge_invalidated_or_triggered(engine_name, ltp_dict=None, max_runaway_pct=N
                             # Prior session setup: If live price is known and at/above BM, it already ran
                             if live_price is not None and bm > 0 and live_price >= bm:
                                 logger.info(f"[FUNNEL PURGE: STALE RUN] {cntr or sym} prior-day {c_date} setup already above BM ({live_price:.2f} >= {bm:.2f}). Evicting.")
+                                return False
+                            # For options, if setup is from a prior day and price has reached near/above BM
+                            is_opt = ("CE" in cntr or "PE" in cntr) and any(ch.isdigit() for ch in cntr)
+                            if is_opt and (today_date - c_date).days >= 1 and live_price is not None and bm > 0 and live_price >= (bm * 0.98):
+                                logger.info(f"[FUNNEL PURGE: STALE OPTION RUN] {cntr} prior-day {c_date} option setup already ran (LTP={live_price:.2f} >= BM={bm:.2f}). Evicting.")
                                 return False
                 except Exception:
                     pass

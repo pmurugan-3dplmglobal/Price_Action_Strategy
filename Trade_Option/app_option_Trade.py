@@ -807,12 +807,13 @@ def refresh_data(single_run=False):
                                     if tid and live_ltp > prev_high:
                                         trade_db.update_trade(tid, {"high_price": live_ltp})
 
-                                    # 3. Trailing SL Stage 1 (T1 Hit OR Gain >= +10% -> Trail SL to Breakeven / Entry)
+                                    # 3. Trailing SL Stage 1 (T1 Hit OR Gain >= +25% -> Trail SL to +10% above Entry)
                                     gain_pct = ((pos_high - effective_entry) / effective_entry * 100) if effective_entry > 0 else 0
                                     t1_hit_cond = (pos_high >= t1_val if (t1_val > 0 and effective_entry > 0 and t1_val > effective_entry) else False)
-                                    if t_stage == 0 and effective_entry > 0 and (t1_hit_cond or gain_pct >= 10.0):
-                                        logging.info(f"[FAILSAFE TRAIL 1] {contract_name} High={pos_high} (Gain: +{gain_pct:.1f}%) -> Trailing SL to Breakeven ({effective_entry})")
-                                        if tid: trade_db.update_trade(tid, {"current_sl": effective_entry, "trailing_stage": 1, "sl_set_time": dt.now().isoformat()})
+                                    if t_stage == 0 and effective_entry > 0 and (t1_hit_cond or gain_pct >= 25.0):
+                                        opt_sl_lock = round(round((effective_entry * 1.10) / 0.05) * 0.05, 2)
+                                        logging.info(f"[FAILSAFE TRAIL 1] {contract_name} High={pos_high} (Gain: +{gain_pct:.1f}%) -> Trailing SL to +10% ({opt_sl_lock})")
+                                        if tid: trade_db.update_trade(tid, {"current_sl": opt_sl_lock, "trailing_stage": 1, "sl_set_time": dt.now().isoformat()})
                                     # 4. Trailing SL Stage 2 (T2 Hit -> Trail SL to T1)
                                     elif t_stage == 1 and t2_val > t1_val and pos_high >= t2_val and t1_val > 0:
                                         logging.info(f"[FAILSAFE TRAIL 2] {contract_name} High={pos_high} >= T2={t2_val} -> Trailing SL to T1 ({t1_val})")

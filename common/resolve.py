@@ -1867,37 +1867,128 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
         for name, scanner in anchor_scanners:
             res_ce = scanner(df_ce_a) if not df_ce_a.empty else None
             if res_ce:
-                logging.info(f"ANCHOR FORMED: {ce['tradingsymbol']} | {res_ce['Pattern']} | Close: {res_ce['Close']:.2f} | SL: {res_ce['SL']:.2f}")
-                b_item = {
-                    "symbol": symbol, "contract": ce['tradingsymbol'], "option_token": ce['token'],
-                    "spot_token": config["token"], "spot_entry": current_spot, "strike": strike,
-                    "entry_spot": res_ce["Close"], "current_sl": res_ce["SL"],
-                    "benchmark": res_ce.get("AnchorHigh", res_ce["Close"]),
-                    "t1": None, "t2": None, "t3": None, "rr": 0.0,
-                    "pattern": res_ce["Pattern"], "side": "CE",
-                    "timeframe": timeframe_anchor, "candle_a_time": str(res_ce.get("CandleATime", "")),
-                    "lot_size": int(ce.get("lot_size") or config.get("lot_size", 1)),
-                    "tier": 3, "tier_label": "TIER_3_MOMENTUM", "tier_badge": "🌱 B",
-                    "stage": pattern_funnel.STAGE_B
-                }
-                pattern_funnel.promote_item(engine_name, b_item, pattern_funnel.STAGE_B)
+                t1_ce, t2_ce, t3_ce = find_profit_targets(df_ce_a, res_ce["Close"], stop_loss=res_ce["SL"])
+                ca_time_ce = str(res_ce.get("CandleATime", ""))
+
+                # Guard 1: Invalidation / Already completed check
+                is_valid_ce = is_anchor_valid_and_active(df_ce_a, ca_time_ce, res_ce["SL"], t1_ce, t2_target=t2_ce, entry_price=res_ce["Close"], side="BULL")
+
+                # Guard 2: Post-anchor candle runaway check (if subsequent candles already reached >= 80% T1 or touched T1)
+                is_runaway_ce = False
+                if t1_ce and t1_ce > res_ce["Close"]:
+                    t1_80_ce = res_ce["Close"] + 0.80 * (t1_ce - res_ce["Close"])
+                    if not df_ce_a.empty and ca_time_ce and "date" in df_ce_a.columns:
+                        post_c = df_ce_a[df_ce_a["date"] > ca_time_ce]
+                        if not post_c.empty and (post_c["high"] >= t1_80_ce).any():
+                            is_runaway_ce = True
+
+                # Guard 3: Stale anchor age / expiry check for options
+                is_stale_expiry_ce = False
+                if len(ca_time_ce) >= 10:
+                    try:
+                        ca_d = dt.strptime(ca_time_ce[:10], "%Y-%m-%d").date()
+                        now_d = get_ist_now(naive=True).date()
+                        days_old = (now_d - ca_d).days
+                        if days_old >= 2:
+                            is_stale_expiry_ce = True
+                        elif days_old >= 1:
+                            opt_exp_ce = str(ce.get("expiry", ""))
+                            if opt_exp_ce:
+                                exp_d = dt.strptime(opt_exp_ce[:10], "%Y-%m-%d").date()
+                                if (exp_d - now_d).days <= 1:
+                                    is_stale_expiry_ce = True
+                            bm_ce = res_ce.get("AnchorHigh", res_ce["Close"])
+                            if not df_ce_a.empty and (float(df_ce_a.iloc[-1]["close"]) >= bm_ce or float(df_ce_a["high"].max()) >= bm_ce):
+                                is_stale_expiry_ce = True
+                    except Exception:
+                        pass
+
+                if not is_valid_ce:
+                    logging.info(f"[ANCHOR EXHAUSTED] {ce['tradingsymbol']} | {res_ce['Pattern']} already completed or invalidated. Skipping Category B promotion.")
+                elif is_runaway_ce:
+                    logging.info(f"[ANCHOR RUNAWAY: 80% T1 HIT] {ce['tradingsymbol']} reached 80% of T1 post-anchor. Skipping Category B promotion.")
+                elif is_stale_expiry_ce:
+                    logging.info(f"[ANCHOR STALE EXPIRY] {ce['tradingsymbol']} prior-day anchor on expiring option already broke out. Skipping Category B promotion.")
+                else:
+                    risk_ce = round(res_ce["Close"] - res_ce["SL"], 2) if (res_ce["Close"] > res_ce["SL"]) else 0.0
+                    rr_ce = round((t1_ce - res_ce["Close"]) / risk_ce, 2) if (t1_ce and risk_ce > 0) else 0.0
+                    logging.info(f"ANCHOR FORMED: {ce['tradingsymbol']} | {res_ce['Pattern']} | Close: {res_ce['Close']:.2f} | SL: {res_ce['SL']:.2f} | T1: {t1_ce}")
+                    b_item = {
+                        "symbol": symbol, "contract": ce['tradingsymbol'], "option_token": ce['token'],
+                        "spot_token": config["token"], "spot_entry": current_spot, "strike": strike,
+                        "entry_spot": res_ce["Close"], "current_sl": res_ce["SL"],
+                        "benchmark": res_ce.get("AnchorHigh", res_ce["Close"]),
+                        "t1": t1_ce, "t2": t2_ce, "t3": t3_ce, "rr": rr_ce,
+                        "pattern": res_ce["Pattern"], "side": "CE",
+                        "timeframe": timeframe_anchor, "candle_a_time": ca_time_ce,
+                        "lot_size": int(ce.get("lot_size") or config.get("lot_size", 1)),
+                        "tier": 3, "tier_label": "TIER_3_MOMENTUM", "tier_badge": "🌱 B",
+                        "stage": pattern_funnel.STAGE_B
+                    }
+                    pattern_funnel.promote_item(engine_name, b_item, pattern_funnel.STAGE_B)
                 continue
+
             res_pe = scanner(df_pe_a) if not df_pe_a.empty else None
             if res_pe:
-                logging.info(f"ANCHOR FORMED: {pe['tradingsymbol']} | {res_pe['Pattern']} | Close: {res_pe['Close']:.2f} | SL: {res_pe['SL']:.2f}")
-                b_item = {
-                    "symbol": symbol, "contract": pe['tradingsymbol'], "option_token": pe['token'],
-                    "spot_token": config["token"], "spot_entry": current_spot, "strike": strike,
-                    "entry_spot": res_pe["Close"], "current_sl": res_pe["SL"],
-                    "benchmark": res_pe.get("AnchorHigh", res_pe["Close"]),
-                    "t1": None, "t2": None, "t3": None, "rr": 0.0,
-                    "pattern": res_pe["Pattern"], "side": "PE",
-                    "timeframe": timeframe_anchor, "candle_a_time": str(res_pe.get("CandleATime", "")),
-                    "lot_size": int(pe.get("lot_size") or config.get("lot_size", 1)),
-                    "tier": 3, "tier_label": "TIER_3_MOMENTUM", "tier_badge": "🌱 B",
-                    "stage": pattern_funnel.STAGE_B
-                }
-                pattern_funnel.promote_item(engine_name, b_item, pattern_funnel.STAGE_B)
+                t1_pe, t2_pe, t3_pe = find_profit_targets(df_pe_a, res_pe["Close"], stop_loss=res_pe["SL"])
+                ca_time_pe = str(res_pe.get("CandleATime", ""))
+
+                # Guard 1: Invalidation / Already completed check
+                is_valid_pe = is_anchor_valid_and_active(df_pe_a, ca_time_pe, res_pe["SL"], t1_pe, t2_target=t2_pe, entry_price=res_pe["Close"], side="BULL")
+
+                # Guard 2: Post-anchor candle runaway check
+                is_runaway_pe = False
+                if t1_pe and t1_pe > res_pe["Close"]:
+                    t1_80_pe = res_pe["Close"] + 0.80 * (t1_pe - res_pe["Close"])
+                    if not df_pe_a.empty and ca_time_pe and "date" in df_pe_a.columns:
+                        post_c = df_pe_a[df_pe_a["date"] > ca_time_pe]
+                        if not post_c.empty and (post_c["high"] >= t1_80_pe).any():
+                            is_runaway_pe = True
+
+                # Guard 3: Stale anchor age / expiry check for options
+                is_stale_expiry_pe = False
+                if len(ca_time_pe) >= 10:
+                    try:
+                        ca_d = dt.strptime(ca_time_pe[:10], "%Y-%m-%d").date()
+                        now_d = get_ist_now(naive=True).date()
+                        days_old = (now_d - ca_d).days
+                        if days_old >= 2:
+                            is_stale_expiry_pe = True
+                        elif days_old >= 1:
+                            opt_exp_pe = str(pe.get("expiry", ""))
+                            if opt_exp_pe:
+                                exp_d = dt.strptime(opt_exp_pe[:10], "%Y-%m-%d").date()
+                                if (exp_d - now_d).days <= 1:
+                                    is_stale_expiry_pe = True
+                            bm_pe = res_pe.get("AnchorHigh", res_pe["Close"])
+                            if not df_pe_a.empty and (float(df_pe_a.iloc[-1]["close"]) >= bm_pe or float(df_pe_a["high"].max()) >= bm_pe):
+                                is_stale_expiry_pe = True
+                    except Exception:
+                        pass
+
+                if not is_valid_pe:
+                    logging.info(f"[ANCHOR EXHAUSTED] {pe['tradingsymbol']} | {res_pe['Pattern']} already completed or invalidated. Skipping Category B promotion.")
+                elif is_runaway_pe:
+                    logging.info(f"[ANCHOR RUNAWAY: 80% T1 HIT] {pe['tradingsymbol']} reached 80% of T1 post-anchor. Skipping Category B promotion.")
+                elif is_stale_expiry_pe:
+                    logging.info(f"[ANCHOR STALE EXPIRY] {pe['tradingsymbol']} prior-day anchor on expiring option already broke out. Skipping Category B promotion.")
+                else:
+                    risk_pe = round(res_pe["Close"] - res_pe["SL"], 2) if (res_pe["Close"] > res_pe["SL"]) else 0.0
+                    rr_pe = round((t1_pe - res_pe["Close"]) / risk_pe, 2) if (t1_pe and risk_pe > 0) else 0.0
+                    logging.info(f"ANCHOR FORMED: {pe['tradingsymbol']} | {res_pe['Pattern']} | Close: {res_pe['Close']:.2f} | SL: {res_pe['SL']:.2f} | T1: {t1_pe}")
+                    b_item = {
+                        "symbol": symbol, "contract": pe['tradingsymbol'], "option_token": pe['token'],
+                        "spot_token": config["token"], "spot_entry": current_spot, "strike": strike,
+                        "entry_spot": res_pe["Close"], "current_sl": res_pe["SL"],
+                        "benchmark": res_pe.get("AnchorHigh", res_pe["Close"]),
+                        "t1": t1_pe, "t2": t2_pe, "t3": t3_pe, "rr": rr_pe,
+                        "pattern": res_pe["Pattern"], "side": "PE",
+                        "timeframe": timeframe_anchor, "candle_a_time": ca_time_pe,
+                        "lot_size": int(pe.get("lot_size") or config.get("lot_size", 1)),
+                        "tier": 3, "tier_label": "TIER_3_MOMENTUM", "tier_badge": "🌱 B",
+                        "stage": pattern_funnel.STAGE_B
+                    }
+                    pattern_funnel.promote_item(engine_name, b_item, pattern_funnel.STAGE_B)
 
     # Layer 2: Dominant Conviction Arbitrage — Select Single Best Setup per Symbol
     if symbol_candidates:

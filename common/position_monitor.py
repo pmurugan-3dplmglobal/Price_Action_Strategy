@@ -1750,19 +1750,40 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
             if pd.isna(atr) or atr <= 0:
                 atr = entry_s * 0.02
 
-            # Feature 5: Positive Breakeven (+BE: Entry + max(buf, 0.5*ATR) for Long, Entry - max(buf, 0.5*ATR) for Short) Triggered when peak gain >= +10%
-            if pos.get("trailing_stage", 0) == 0 and gain_pct >= 10.0 and has_higher_targets:
+            # Feature 5: Trailing Stage 1 (Gain Lock)
+            # - Options: Trigger when peak gain >= +25% -> Trail SL to +10% above Entry (prevents normal 10-25% option noise from slipping good trades)
+            # - Stocks: Trigger when peak gain >= +10% -> Trail SL to +BE (Entry + buffer for Bull, Entry - buffer for Bear)
+            trail_rules = cfg.get("trailing_rules", {}) if isinstance(cfg.get("trailing_rules"), dict) else {}
+            opt_gain_trigger = float(trail_rules.get("option_trail_1_gain_pct", cfg.get("option_trail_1_gain_pct", 25.0)))
+            opt_sl_lock_pct = float(trail_rules.get("option_trail_1_sl_pct", cfg.get("option_trail_1_sl_pct", 10.0)))
+            stock_gain_trigger = float(trail_rules.get("stock_trail_1_gain_pct", cfg.get("stock_trail_1_gain_pct", 10.0)))
+
+            req_gain = stock_gain_trigger if is_stock else opt_gain_trigger
+
+            if pos.get("trailing_stage", 0) == 0 and gain_pct >= req_gain and has_higher_targets:
                 curr_sl = float(pos.get("current_sl") or 0.0)
-                if is_short_stock:
+                if not is_stock:
+                    # Option contract (CE or PE long buyer): lock in +10% gain above entry
+                    sl_offset = entry_s * (opt_sl_lock_pct / 100.0)
+                    opt_target = round(round((entry_s + sl_offset) / 0.05) * 0.05, 2)
+                    new_sl = max(curr_sl, opt_target)
+                    trail_label = f"TRAIL-1 (+{opt_gain_trigger:.0f}% Gain Lock -> +{opt_sl_lock_pct:.0f}% SL)"
+                    log_sl_label = f"SL=+{opt_sl_lock_pct:.0f}% {new_sl:.2f} (+{gain_pct:.1f}% gain locked)"
+                elif is_short_stock:
                     buf_dist = get_sl_buffer_distance(entry_s, side="BEAR")
                     be_offset = max(buf_dist, 0.5 * atr)
                     be_target = round(round((entry_s - be_offset) / 0.05) * 0.05, 2)
                     new_sl = min(curr_sl, be_target) if curr_sl > 0 else be_target
+                    trail_label = "TRAIL-1 (+10% Gain Lock -> +2% BE)"
+                    log_sl_label = f"SL=+BE {new_sl:.2f} (+{gain_pct:.1f}% gain locked)"
                 else:
                     buf_dist = get_sl_buffer_distance(entry_s, side="BULL")
                     be_offset = max(buf_dist, 0.5 * atr)
                     be_target = round(round((entry_s + be_offset) / 0.05) * 0.05, 2)
                     new_sl = max(curr_sl, be_target)
+                    trail_label = "TRAIL-1 (+10% Gain Lock -> +2% BE)"
+                    log_sl_label = f"SL=+BE {new_sl:.2f} (+{gain_pct:.1f}% gain locked)"
+
                 sl_stamp = dt.now().isoformat()
                 with lock:
                     if sym in positions_dict:
@@ -1770,9 +1791,9 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                         positions_dict[sym]["trailing_stage"] = 1
                         positions_dict[sym]["sl_set_time"] = sl_stamp
                 ext_metric = f"Low={lp:.2f}" if is_short_stock else f"High={hp:.2f}"
-                logging.info(f"TRAIL-1 (+10% Gain Lock -> +2% BE) {sym}: {ext_metric} (+{gain_pct:.1f}%) -> SL=+BE ({new_sl:.2f})")
+                logging.info(f"{trail_label} {sym}: {ext_metric} (+{gain_pct:.1f}%) -> SL={new_sl:.2f}")
                 log_fn(sym, pos.get("pattern", ""), timeframe_entry, "TRAIL_BE", "MUTATED",
-                       f"SL=+BE {new_sl:.2f} (+{gain_pct:.1f}% gain locked)",
+                       log_sl_label,
                        entry=entry_s, sl=new_sl, target=t1_val,
                        event_time=last.get('date'))
                 if tid:

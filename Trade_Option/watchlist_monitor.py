@@ -135,7 +135,8 @@ def fetch_watchlist_live_data(kite=None):
         contract = item.get("contract", "").strip().upper()
         base = item.get("base_symbol", "").strip().upper()
         if contract:
-            query_symbols.append(f"NFO:{contract}")
+            c_exch = "BFO" if ("SENSEX" in contract or "BANKEX" in contract) else "NFO"
+            query_symbols.append(f"{c_exch}:{contract}")
         if base:
             if base in ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "SENSEX"]:
                 if base == "SENSEX":
@@ -161,7 +162,8 @@ def fetch_watchlist_live_data(kite=None):
         tag = item.get("tag", "WATCH")
         note = item.get("note", "")
 
-        opt_key = f"NFO:{contract}"
+        c_exch = "BFO" if ("SENSEX" in contract or "BANKEX" in contract) else "NFO"
+        opt_key = f"{c_exch}:{contract}"
         opt_data = quotes.get(opt_key, {})
         opt_ohlc = opt_data.get("ohlc", {})
         opt_ltp = float(opt_data.get("last_price") or 0.0)

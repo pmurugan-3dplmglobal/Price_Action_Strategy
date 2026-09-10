@@ -171,6 +171,16 @@ def export_trades_to_csv(trades, csv_path, scan_slot):
 
     rows = []
     for t in trades:
+        t1_val = float(t.get("t1") or 0.0)
+        high_p = float(t.get("high_price") or 0.0)
+        entry_s = float(t.get("entry_spot") or t.get("entry_price") or 0.0)
+        st_status = t.get("stage_status", "FRESH_ENTRY")
+        if t1_val > 0 and high_p > 0:
+            if high_p >= t1_val * 0.995:
+                st_status = "TARGET_HIT_EXHAUSTED"
+            elif entry_s > 0 and t1_val > entry_s and high_p >= (entry_s + 0.80 * (t1_val - entry_s)):
+                st_status = "RUNAWAY_80PCT"
+
         rows.append({
             "Scan_Time": scan_time,
             "Scan_Slot": scan_slot,
@@ -190,7 +200,7 @@ def export_trades_to_csv(trades, csv_path, scan_slot):
             "RR": t.get("rr", ""),
             "Candle_Time": t.get("entry_time", t.get("CandleTime", "")),
             "Priority": t.get("priority", "HIGH_PRIORITY"),
-            "Stage_Status": t.get("stage_status", "FRESH_ENTRY")
+            "Stage_Status": st_status
         })
 
     df = pd.DataFrame(rows, columns=headers)

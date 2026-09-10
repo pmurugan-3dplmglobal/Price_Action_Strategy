@@ -4,12 +4,57 @@ meta:
   last_updated: '2026-09-09'
   purpose: Active operational tracker for v2.1.0-stable failures, root causes, regressions, and enhancements.
   historical_archive: archive/ISSUE_HISTORY_ARCHIVE.yaml (Preserves 119 resolved legacy issues prior to 2026-09-05)
-  total_active_issues: 37
+  total_active_issues: 38
   archived_issues_summary:
     total_archived: 119
     recent_archived_batch: [FEATURE-031, FEATURE-030, FEATURE-029, ISSUE-084, ISSUE-083, ISSUE-082, ISSUE-081, ISSUE-080, FEATURE-036, FEATURE-035, FEATURE-034, FEATURE-033, ISSUE-054]
     key_archived_families: [ALGO_AUDIT_CVE, QUANT_ENHANCEMENTS, RADAR_LIFECYCLE, VCP_METRICS, SCANNER_DISCOVERY, SECURITY_CONFIG, ZERO_REGRESSION_AUDIT]
 issues:
+- id: ISSUE-100
+  title: Stale & Target-Exhausted Anchor Eviction in Category B Incubator and BFO Exchange Support (SENSEX 74700 PE)
+  severity: HIGH
+  category: Radar Lifecycle, Option Target Eviction, Multi-Exchange Telemetry, Stale Anchor Invalidation
+  family: RADAR_LIFECYCLE
+  date_reported: '2026-09-10'
+  symptom: |
+    Contract SENSEX2691074700PE (SENSEX 10 Sep expiry 74700 PE) continued appearing in active scan lists on September 10th (expiry day), even though its anchor pattern formed on September 8th and already hit and exhausted all targets (rallying from 26 to 219.90, +750%) on September 9th.
+  root_cause: |
+    1. common/resolve.py: Lines 1867-1901 evaluated anchor_scanners on the historical anchor dataframe and detected higher-high candles at the close of Sep 9th, logging ANCHOR FORMED and staging it into Category B with t1: None without calculating targets or checking is_anchor_valid_and_active.
+    2. Category B Target & Runaway Immunity: Because t1 was None, runaway guards (LTP >= 80% T1) in pattern_funnel.py and the dashboard UI could never evaluate, keeping Category B items immune to runaway eviction.
+    3. Missing BFO: Exchange Prefix: SENSEX and BANKEX options trade on BSE (prefix BFO:), but pattern_funnel.py (L319), index.html (L788, L1316), and watchlist_monitor.py (L138, L164) only checked NFO: and NSE:, evaluating live_price to 0 and bypassing all SL and Target eviction rules.
+    4. Expiry-Day Staleness Invariant: On expiry day (10-Sep), prior-day anchors on options that already completed their breakout should be evicted to prevent theta decay traps.
+  affected_files:
+  - common/resolve.py
+  - common/pattern_funnel.py
+  - Trade_Option/templates/index.html
+  - Trade_Option/watchlist_monitor.py
+  - Trade_Option/automated_strategy_exporter.py
+  - scratch/test_stale_anchor_eviction.py
+  fix_applied: |
+    1. common/resolve.py:
+       - In anchor_scanners loop, computed find_profit_targets(df_a, close, sl) and stored t1, t2, t3, rr in b_item.
+       - Added Guard 1: Enforced is_anchor_valid_and_active before Category B promotion.
+       - Added Guard 2: Post-anchor runaway check (discards if subsequent candles reached >= 80% T1).
+       - Added Guard 3: Option anchor freshness guard (discards anchors >= 2 days old, or prior-day anchors on options expiring <= 1 day where price reached benchmark).
+    2. common/pattern_funnel.py:
+       - Added BFO:{cntr} and BSE:{sym} to ltp_dict resolution list.
+       - Added Category B estimated runaway guard when T1 is not set.
+       - Added stale prior-day option anchor eviction in purge_invalidated_or_triggered.
+    3. Trade_Option/templates/index.html:
+       - Added BFO: and BSE: prefixes to evalItemStatus and renderScanTab.
+       - Added Category B runaway evaluation in evalItemStatus.
+    4. Trade_Option/watchlist_monitor.py:
+       - Dynamically selected BFO: prefix for SENSEX/BANKEX contracts.
+    5. Trade_Option/automated_strategy_exporter.py:
+       - Tagged Stage_Status as TARGET_HIT_EXHAUSTED or RUNAWAY_80PCT when price touched target.
+  verification: |
+    1. Added scratch/test_stale_anchor_eviction.py: 3/3 PASSED (BFO quote resolution, Category B runaway, and target exhaustion).
+    2. Tested on real SENSEX2691074700PE 82-candle dataset: successfully suppressed stale/exhausted anchor.
+    3. AST syntax check passed across all modified files.
+    4. Full regression suite (scratch/run_full_regression_test.py): 22/22 test suites PASSED with 100% success.
+  status: RESOLVED
+  resolution_date: '2026-09-10'
+
 - id: FEATURE-053
   title: 5-Minute Trap-ADX Index Strategy, 45-Minute Stock Breakout Scanner, Dedicated UI Tab with 1-Click BUY & Synergy Filter
   severity: ENHANCEMENT
@@ -1315,3 +1360,30 @@ issues:
     AST syntax check on all files: PASSED.
   status: RESOLVED
   resolution_date: '2026-09-06'
+
+- id: ISSUE-092
+  title: Option Trailing Stage 1 Optimization — 25% Gain Threshold with +10% SL Lock
+  severity: MEDIUM
+  category: Strategy Risk, Option Trailing, Execution Invariants
+  family: RISK_MANAGEMENT
+  date_reported: '2026-09-09'
+  symptom: |
+    Active option contracts (e.g. BDL26SEP1240CE) entering Stage 1 trailing at +10% peak gain trailed Stop-Loss to +2% Breakeven (₹27.50 from entry ₹25.75). Normal intraday option premium fluctuations (10%–25% swing) triggered premature candle-close SL exits on high-quality setups before reaching higher targets (T1/T2/T3).
+  root_cause: |
+    A +10% gain trigger in options contracts is within standard bid-ask spread and intraday volatility noise, prematurely tightening the stop to breakeven (+2%) and stopping out winning positions prior to target realization.
+  affected_files:
+  - common/position_monitor.py
+  - Trade_Option/app_option_Trade.py
+  - input/program_config.json
+  fix_applied: |
+    1. common/position_monitor.py: Differentiated Options vs Cash Stocks in Trailing Stage 1 (TRAIL-1). For options, peak gain trigger updated from +10% to +25% (`option_trail_1_gain_pct`: 25.0) and new SL is set to lock in +10% gain above entry (`option_trail_1_sl_pct`: 10.0, snapped to 0.05 tick). Cash equities preserve +10% peak gain -> +BE trailing.
+    2. Trade_Option/app_option_Trade.py: Aligned Option Dashboard failsafe trailing stage 1 to trigger on `gain_pct >= 25.0` and trail SL to `effective_entry * 1.10`.
+    3. input/program_config.json: Added `trailing_rules` configuration block with configurable `option_trail_1_gain_pct`, `option_trail_1_sl_pct`, `stock_trail_1_gain_pct`, and `stock_trail_1_sl_pct`.
+  verification: |
+    1. AST syntax check across all modified files: PASSED.
+    2. Unit verification suite (scratch/test_option_trailing_25pct.py): PASSED (tested 10.7% BDL suppression, 25% trigger, and +10% SL lock).
+    3. Full regression suite (scratch/run_full_regression_test.py): 22/22 test suites PASSED with 100% success.
+    4. Targeted verification suites (test_institutional_enhancements.py, test_parity_alignment.py, test_vcp_metrics.py, test_spread_liquidity_reconciler.py, test_cve_fixes.py, test_vix_portfolio_volume.py): 100% PASS.
+  status: RESOLVED
+  resolution_date: '2026-09-09'
+

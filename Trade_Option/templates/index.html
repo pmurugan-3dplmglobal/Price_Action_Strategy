@@ -785,14 +785,16 @@
             function evalItemStatus(item) {
                 const sym = (item.symbol || '').replace(/\s+/g, '').toUpperCase();
                 const cntr = (item.contract || item.symbol || '').replace(/\s+/g, '').toUpperCase();
-                const liveLtp = parseFloat(ltpMap[cntr] || ltpMap[sym] || ltpMap[`NFO:${cntr}`] || ltpMap[`NSE:${sym}`] || 0);
+                const liveLtp = parseFloat(ltpMap[cntr] || ltpMap[sym] || ltpMap[`NFO:${cntr}`] || ltpMap[`NSE:${sym}`] || ltpMap[`BFO:${cntr}`] || ltpMap[`BSE:${sym}`] || 0);
                 const bm = parseFloat(item.benchmark || 0);
                 const sl = parseFloat(item.current_sl || item.anchor_low || 0);
                 const t1 = parseFloat(item.t1 || 0);
 
                 const t1_80pct = (bm > 0 && t1 > bm) ? (bm + 0.80 * (t1 - bm)) : (t1 * 0.80);
                 const isT1Hit = (t1 > 0 && liveLtp > 0 && liveLtp >= (t1 * 0.995));
-                const isRunaway = (t1_80pct > 0 && liveLtp > 0 && liveLtp >= t1_80pct);
+                const estRisk = (bm > sl && sl > 0) ? Math.max(0.5, bm - sl) : 0;
+                const isRunawayB = (t1 <= 0 && bm > 0 && liveLtp > 0 && estRisk > 0) ? (liveLtp >= (bm + 1.2 * estRisk) || liveLtp >= (bm * 1.25)) : false;
+                const isRunaway = (t1_80pct > 0 && liveLtp > 0 && liveLtp >= t1_80pct) || isRunawayB;
                 const isSLHit = (sl > 0 && liveLtp > 0 && liveLtp <= sl);
                 return { liveLtp, isT1Hit, isRunaway, isSLHit, t1_80pct };
             }
@@ -1313,7 +1315,7 @@
                     if (!key || tradeMap.has(key)) return;
 
                     // Evaluate live price and execution state
-                    const liveLtp = parseFloat(d.ltp[key] || d.ltp[symKey] || d.ltp[t.contract] || d.ltp[t.symbol] || 0);
+                    const liveLtp = parseFloat(d.ltp[key] || d.ltp[symKey] || d.ltp[t.contract] || d.ltp[t.symbol] || d.ltp[`BFO:${key}`] || d.ltp[`BFO:${symKey}`] || d.ltp[`BFO:${t.contract || ''}`] || d.ltp[`NFO:${key}`] || d.ltp[`NFO:${t.contract || ''}`] || 0);
                     const isExpired = expiredSet.has(key) || expiredSet.has(symKey);
                     const isExitDone = Boolean(execExits[key] || execExits[symKey] || execExits[t.contract || '']);
 
