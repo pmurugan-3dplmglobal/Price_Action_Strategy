@@ -39,6 +39,7 @@ meta:
     - 5-Minute Trap-ADX Index Strategy, 45-Minute Stock Breakout Scanner, Dedicated UI Tab with 1-Click BUY & Synergy Filter (FEATURE-053)
     - Oracle Cloud Free Tier Performance Hardening & ZRAM Compressed Swap Tuning (FEATURE-054)
     - Broker Ground-Truth Portfolio Risk Concurrency Synchronization & DEBIT_SPREAD Execution Mode Harmonization (ISSUE-102)
+    - Always-Live Risk Guardian Decoupling, Auto SQLite Broker Recovery Persistence, Multi-Lot 50% T1 Scale-Out, and Intraday Theta Stagnation Guard (ISSUE-101)
 
 architecture:
   diagram: |

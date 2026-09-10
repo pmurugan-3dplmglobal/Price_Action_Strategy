@@ -10,6 +10,42 @@ meta:
     recent_archived_batch: [FEATURE-031, FEATURE-030, FEATURE-029, ISSUE-084, ISSUE-083, ISSUE-082, ISSUE-081, ISSUE-080, FEATURE-036, FEATURE-035, FEATURE-034, FEATURE-033, ISSUE-054]
     key_archived_families: [ALGO_AUDIT_CVE, QUANT_ENHANCEMENTS, RADAR_LIFECYCLE, VCP_METRICS, SCANNER_DISCOVERY, SECURITY_CONFIG, ZERO_REGRESSION_AUDIT]
 issues:
+- id: ISSUE-101
+  title: Always-Live Risk Guardian Decoupling, Auto SQLite Broker Recovery Persistence, Multi-Lot 50% T1 Scale-Out, and Intraday Theta Stagnation Guard
+  severity: HIGH
+  category: Execution Safety, Risk Management, Position Monitor, Broker Sync, Minervini Scale-Out, Theta Decay
+  family: EXECUTION_INTEGRITY
+  date_reported: '2026-09-10'
+  symptom: |
+    1. During NIFTY2691523400CE trade, when the position monitor evaluated an exit, it logged [BACKTEST EXIT] and simulated the exit in trade_journal.csv without placing real SELL orders on Zerodha Kite because the engine was running without the manual live-execution entry flag, leaving 130 real lots open and vulnerable on the exchange.
+    2. Because unlinked broker positions were not persisted into trades.sqlite3, monitor_all_active_positions recreated the in-memory dictionary every 2 seconds, repeatedly resetting trailing_stage to 0 and calculating multi-lot slice quantities with raw contract count instead of lot size (130 * 65 = 4225 qty).
+    3. Position gained +19.0% (₹152.68 -> ₹181.75 at T1) but round-tripped into a loss due to afternoon theta decay and absence of partial profit booking and trailing breakeven enforcement.
+  root_cause: |
+    1. Couled Entry and Exit Execution: close_position() and close_stock_position() checked live_market before verifying live held quantity on Kite. When live_market was False, they defaulted to simulated paper mode even when real broker contracts were actively held in the Kite account.
+    2. Missing DB Persistence for Broker Recovery: monitor_all_active_positions() discovered unlinked broker positions but failed to call trade_db.create_trade(), causing in-memory state amnesia on every loop iteration.
+    3. Position Size Lot Unit Discrepancy: broker recovery set position_size = abs(p_qty) instead of num_lots (p_qty // lot_size), causing tranche slice math to multiply quantity by lot size.
+    4. Theta Decay on Intraday Stagnation: Holding long options through 12:30-14:00 IST on low-volatility compression days without tightening stops allowed premium erosion to turn winning setups into drawdowns.
+  affected_files:
+  - common/position_monitor.py
+  - input/program_config.json
+  - ISSUE_MANAGEMENT.yaml
+  - MASTER_DOCUMENTATION.yaml
+  - scratch/test_always_live_guardian.py
+  fix_applied: |
+    1. Always-Live Risk Guardian: Decoupled entry gating from exit execution. If kite session is connected and live_held > 0 in kite.positions(), close_position() and close_stock_position() automatically promote live_market = True, ensuring live market orders are ALWAYS routed to the exchange to protect real capital.
+    2. Auto SQLite Persistence: Unlinked broker positions discovered by monitor_all_active_positions() are immediately persisted into trades.sqlite3 with valid trade IDs, normalized lot-based position_size, and derived SL/targets, preserving trailing_stage and current_sl across scan cycles.
+    3. Minervini 50% T1 Partial Scale-Out: Fixed multi-lot tranche calculation (half_lots = total_qty // lot_sz // 2). When holding >= 2 lots and T1 is hit, books 50% cash profit immediately, deducts remaining quantity in SQLite, marks t1_booked = True, and trails remaining runner lots to Entry + Buffer (Breakeven).
+    4. Option Trail 1 Gain Trigger Default: Lowered default option_trail_1_gain_pct from 25.0% to 18.0% in program_config.json and position_monitor.py, locking +10% gain once an option reaches +18%.
+    5. Intraday Theta Stagnation Guard (12:30 IST Rule): For intraday options held >= 60m at >= 12:30 IST with stagnant PnL (-7% to +8%), automatically ratchets SL up to Entry - 10% floor to cut off afternoon theta decay bleed.
+  verification: |
+    1. Created scratch/test_always_live_guardian.py verifying:
+       - Real broker contracts held on Kite auto-promote to LIVE exit orders (4/4 PASSED).
+       - Multi-lot 50% scale-out accurately computes 65 qty slice for 130 qty NIFTY (PASSED).
+       - Option trail 1 gain trigger defaults to 18.0% Minervini threshold (PASSED).
+    2. Ran full regression suite (scratch/run_full_regression_test.py): 22/22 test suites PASSED with 100% success.
+  status: RESOLVED
+  resolution_date: '2026-09-10'
+
 - id: ISSUE-100
   title: Stale & Target-Exhausted Anchor Eviction in Category B Incubator and BFO Exchange Support (SENSEX 74700 PE)
   severity: HIGH

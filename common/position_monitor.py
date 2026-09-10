@@ -187,7 +187,11 @@ def close_stock_position(kite, pos, live_market=True, product=None, qty_override
     is_short = side_str in ["SELL", "PE", "BEAR"] or dir_str == "BEAR" or (str(pos.get("product") or "").upper() == "MIS" and side_str in ["SELL", "BEAR"])
     live_held = None
 
-    if kite and live_market:
+    # ALWAYS-LIVE RISK GUARDIAN INVARIANT:
+    # If a live Kite session is connected and real broker shares are held,
+    # the exit MUST ALWAYS route live to the exchange!
+    # Paper mode is strictly for scanner auto-entries, NEVER for abandoning risk management on real capital.
+    if kite:
         try:
             net_positions = kite.positions().get("net", [])
             for p in net_positions:
@@ -198,8 +202,10 @@ def close_stock_position(kite, pos, live_market=True, product=None, qty_override
                         product = prod
                     if live_held < 0:
                         is_short = True
+                        live_market = True  # Real short position held on broker: FORCE LIVE EXIT
                     elif live_held > 0:
                         is_short = False
+                        live_market = True  # Real long position held on broker: FORCE LIVE EXIT
                     break
         except Exception as p_err:
             logging.warning(f"Could not verify live net quantity for stock {contract}: {p_err}")
@@ -527,7 +533,11 @@ def close_position(kite, pos, live_market=True, product=None, qty_override=None,
     qty = qty_override if qty_override is not None else (pos.get("quantity") or (get_option_lot_size(contract) or pos.get("lot_size", 1)) * pos.get("position_size", 1))
 
     # Live position quantity verification & already-closed guard
-    if kite and live_market:
+    # ALWAYS-LIVE RISK GUARDIAN INVARIANT:
+    # If a live Kite session is connected and real broker contracts are held (live_held > 0),
+    # the exit MUST ALWAYS route live to the exchange!
+    # Paper mode is strictly for scanner auto-entries, NEVER for abandoning risk management on real capital.
+    if kite:
         try:
             net_positions = kite.positions().get("net", [])
             for p in net_positions:
@@ -538,6 +548,7 @@ def close_position(kite, pos, live_market=True, product=None, qty_override=None,
                         save_executed_exit(contract, "ALREADY_CLOSED", {"status": "ZERO_QTY"})
                         return {"success": True, "order_id": "ALREADY_CLOSED", "status": "ZERO_QTY"}
                     qty = min(qty, live_held)
+                    live_market = True  # Real broker contracts detected: auto-promote to LIVE exit
                     break
         except Exception as p_err:
             logging.warning(f"Could not verify live net quantity for {contract}: {p_err}")
@@ -1469,6 +1480,38 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
             is_before_failsafe = now_time_str < failsafe_start_str
             is_start_failsafe = failsafe_start_str <= now_time_str <= fs_end_str
 
+            # ── INTRADAY THETA STAGNATION GUARD (12:30 IST RULE) ──
+            # For intraday options (3m, 5m, 15m), holding stagnant trades through mid-day (12:30 - 14:30)
+            # bleeds premium to severe theta decay even if spot is flat.
+            # If position held > 60m, time is >= 12:30 IST, and PnL is stagnant (-7.0% <= curr_pnl_pct <= 8.0%),
+            # tighten SL to Entry - 10% floor to prevent afternoon decay plunge.
+            theta_stagnation_enabled = cfg.get("enable_theta_stagnation_guard", True) if isinstance(cfg, dict) else True
+            if theta_stagnation_enabled and not is_stock and is_short_tf and now_time_str >= "12:30" and now_time_str < "14:30":
+                if pos.get("trailing_stage", 0) == 0 and not pos.get("theta_stagnation_tightened"):
+                    entry_time_str = str(pos.get("entry_time") or "")
+                    held_mins = 0
+                    if entry_time_str:
+                        try:
+                            et_c = entry_time_str.split("+")[0].replace("T", " ")
+                            held_mins = (get_ist_now() - dt.fromisoformat(et_c)).total_seconds() / 60.0
+                        except Exception:
+                            pass
+                    if held_mins >= 60.0:
+                        entry_s = float(pos.get("entry_spot") or pos.get("entry_price") or 0.0)
+                        curr_p = live_ltp if live_ltp > 0 else (cp if cp > 0 else entry_s)
+                        curr_pnl = ((curr_p - entry_s) / entry_s * 100) if entry_s > 0 else 0.0
+                        if -7.0 <= curr_pnl <= 8.0:
+                            tight_sl = round(round((entry_s * 0.90) / 0.05) * 0.05, 2)
+                            curr_sl = float(pos.get("current_sl") or 0.0)
+                            if tight_sl > curr_sl:
+                                with lock:
+                                    if sym in positions_dict:
+                                        positions_dict[sym]["current_sl"] = tight_sl
+                                        positions_dict[sym]["theta_stagnation_tightened"] = True
+                                logging.info(f"[THETA_STAGNATION_GUARD] {sym} held for {held_mins:.0f}m at {now_time_str} IST with flat PnL ({curr_pnl:.1f}%). Tightened SL from {curr_sl:.2f} -> {tight_sl:.2f} (-10% cap) to protect against afternoon decay.")
+                                if tid:
+                                    trade_db.update_trade(tid, {"current_sl": tight_sl, "theta_stagnation_tightened": True})
+
             # ── STALE / OUTLIER ENTRY PRICE GUARD ──
             # Prevent false emergency SL triggers when entry_spot or current_sl has an extreme data mismatch vs live LTP
             # (e.g. BSE entry 12.0 with SL 1.0 when live option market is trading at 0.60, or stale DB entry 110 vs live 28).
@@ -1771,10 +1814,10 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                 atr = entry_s * 0.02
 
             # Feature 5: Trailing Stage 1 (Gain Lock)
-            # - Options: Trigger when peak gain >= +25% -> Trail SL to +10% above Entry (prevents normal 10-25% option noise from slipping good trades)
+            # - Options: Trigger when peak gain >= +18% (Minervini rule) -> Trail SL to +10% above Entry (prevents normal option noise from slipping good trades)
             # - Stocks: Trigger when peak gain >= +10% -> Trail SL to +BE (Entry + buffer for Bull, Entry - buffer for Bear)
             trail_rules = cfg.get("trailing_rules", {}) if isinstance(cfg.get("trailing_rules"), dict) else {}
-            opt_gain_trigger = float(trail_rules.get("option_trail_1_gain_pct", cfg.get("option_trail_1_gain_pct", 25.0)))
+            opt_gain_trigger = float(trail_rules.get("option_trail_1_gain_pct", cfg.get("option_trail_1_gain_pct", 18.0)))
             opt_sl_lock_pct = float(trail_rules.get("option_trail_1_sl_pct", cfg.get("option_trail_1_sl_pct", 10.0)))
             stock_gain_trigger = float(trail_rules.get("stock_trail_1_gain_pct", cfg.get("stock_trail_1_gain_pct", 10.0)))
 
@@ -1854,23 +1897,25 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                         logging.critical(f"[EXIT_T1 FAILED] T1 exit order for {sym} failed or pending ({exit_res}). Retaining in memory for retry.")
                     continue
                 elif pos.get("trailing_stage", 0) == 0:
-                    pos_size = int(pos.get("position_size", 1))
+                    lot_sz = get_option_lot_size(pos.get("contract","")) or pos.get("lot_size", 1) or 1
+                    raw_pos_size = int(pos.get("position_size", 1))
+                    raw_qty = int(pos.get("quantity") or 0)
+                    total_qty = raw_qty if raw_qty > 0 else (raw_pos_size * lot_sz if not is_stock else raw_pos_size)
+                    num_lots = max(1, total_qty // lot_sz) if not is_stock else total_qty
                     tranche_mode = cfg.get("tranche_mode", True) if isinstance(cfg, dict) else True
                     # 2-Tranche Model: If holding >= 2 lots/units, book 50% profit at T1 and ride runner
-                    if tranche_mode and pos_size >= 2:
-                        half_size = pos_size // 2
-                        lot_sz = get_option_lot_size(pos.get("contract","")) or pos.get("lot_size", 1)
-                        partial_qty = half_size * lot_sz if not is_stock else half_size
-                        logging.info(f"[TRANCHE_1_EXIT] Booking 50% partial profit ({half_size} lots / {partial_qty} qty) at T1 ({t1_val:.2f}) for {sym}. Remaining {pos_size - half_size} lots will ride to T2/T3 with BE SL.")
+                    if tranche_mode and num_lots >= 2:
+                        half_lots = num_lots // 2
+                        partial_qty = half_lots * lot_sz if not is_stock else half_lots
+                        remaining_qty = total_qty - partial_qty
+                        remaining_lots = num_lots - half_lots
+                        logging.info(f"[TRANCHE_1_EXIT] Booking 50% partial profit ({half_lots} lots / {partial_qty} qty) at T1 ({t1_val:.2f}) for {sym}. Remaining {remaining_lots} lots ({remaining_qty} qty) will ride to T2/T3 with BE SL.")
                         if is_stock:
                             exit_res = close_stock_position(kite, pos, live, product_type, qty_override=partial_qty)
                         else:
                             exit_res = close_position(kite, pos, live, product_type, qty_override=partial_qty)
                         
-                        exit_ok = True
-                        if live and kite:
-                            exit_ok = bool(exit_res and exit_res.get("success"))
-
+                        exit_ok = bool(exit_res and exit_res.get("success"))
                         if exit_ok:
                             if is_short_stock:
                                 buf_dist = get_sl_buffer_distance(entry_s, side="BEAR")
@@ -1884,22 +1929,26 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                                 partial_pnl = ((t1_val - entry_s) / entry_s * 100) if entry_s else 0
                             with lock:
                                 if sym in positions_dict:
-                                    positions_dict[sym]["position_size"] = pos_size - half_size
+                                    positions_dict[sym]["position_size"] = remaining_lots
+                                    positions_dict[sym]["quantity"] = remaining_qty
                                     positions_dict[sym]["current_sl"] = be_sl
                                     positions_dict[sym]["trailing_stage"] = 1
+                                    positions_dict[sym]["t1_booked"] = True
                                     positions_dict[sym]["sl_set_time"] = dt.now().isoformat()
                             log_fn(sym, pos.get("pattern", ""), pos_tf, "EXIT_T1_PARTIAL", "PARTIAL",
-                                   f"T1 Banked 50% @ {t1_val:.2f} | Runner SL=+BE ({be_sl:.2f})",
+                                   f"T1 Banked 50% ({partial_qty} qty) @ {t1_val:.2f} | Runner SL=+BE ({be_sl:.2f})",
                                    partial_pnl,
                                    entry=entry_s, sl=be_sl, target=t2_val or t3_val,
                                    event_time=last.get('date'))
                             if tid:
                                 trade_db.update_trade(tid, {
-                                    "position_size": pos_size - half_size,
+                                    "position_size": remaining_lots,
+                                    "quantity": remaining_qty,
                                     "trailing_stage": 1,
+                                    "t1_booked": True,
                                     "current_sl": be_sl,
                                     "sl_set_time": dt.now().isoformat(),
-                                    "details": f"T1 50% Banked @ {t1_val:.2f} | Runner active"
+                                    "details": f"T1 50% Banked ({partial_qty} qty) @ {t1_val:.2f} | Runner active ({remaining_qty} qty)"
                                 })
                         else:
                             logging.critical(f"[TRANCHE_1_EXIT FAILED] Partial exit order for {sym} failed ({exit_res}). Preserving full position.")
@@ -2130,11 +2179,14 @@ def monitor_all_active_positions(kite, live=True):
                         cand_spot_entry = derived.get("spot_entry")
                         cand_spot_token = derived.get("spot_token")
 
+                lot_sz = get_option_lot_size(tsym) or 1
+                num_lots = max(1, abs(p_qty) // lot_sz) if (is_opt and lot_sz > 0) else abs(p_qty)
                 broker_pos_dict = {
                     "contract": tsym,
                     "symbol": tsym,
                     "quantity": abs(p_qty),
-                    "position_size": abs(p_qty),
+                    "position_size": num_lots,
+                    "lot_size": lot_sz,
                     "entry_spot": broker_avg_p,
                     "entry_price": broker_avg_p,
                     "current_sl": cand_sl,
@@ -2152,6 +2204,18 @@ def monitor_all_active_positions(kite, live=True):
                     "product": p.get("product", "MIS" if is_short_eq else "CNC"),
                     "source": "kite"
                 }
+
+                # Persist unlinked broker position directly into SQLite to preserve state across ticks/restarts
+                try:
+                    from resolve import resolve_underlying
+                    underlying_sym = resolve_underlying(tsym, eng_type)
+                    tid, _created = trade_db.create_trade(eng_type, underlying_sym, broker_pos_dict)
+                    if tid:
+                        broker_pos_dict["id"] = tid
+                        logging.info(f"[BROKER_RECOVERY_PERSIST] Persisted unlinked broker position {tsym} (Trade #{tid}) into trades.sqlite3")
+                except Exception as p_err:
+                    logging.warning(f"Could not persist broker position {tsym} into DB: {p_err}")
+
                 if is_index and is_opt:
                     index_positions[tsym] = broker_pos_dict
                 elif is_opt:
