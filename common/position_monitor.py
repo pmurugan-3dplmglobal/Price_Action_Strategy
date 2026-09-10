@@ -455,12 +455,14 @@ def is_market_open():
     t_now = now.time()
     return datetime_time(9, 15) <= t_now <= datetime_time(15, 30)
 
-def is_new_entry_allowed(live_execution_active=True, is_option=False):
+def is_new_entry_allowed(live_execution_active=True, is_option=False, is_index=False):
     """Check if new trade entries are allowed.
     If live_execution_active is False (offline/scan-only/after-market mode), returns True to allow scanning & research anytime.
-    If live_execution_active is True, restricts new entries strictly to Mon-Fri 09:15 to 15:20 IST.
-    For Options (is_option=True), opening 60 seconds (09:15:00 - 09:15:59 IST) suffer severe unformed spread distortion;
-    entries are restricted strictly from 09:16:00 to 15:20:00 IST.
+    If live_execution_active is True, restricts new entries strictly to Mon-Fri:
+    - Options opening 60 seconds (09:15:00 - 09:15:59 IST) restricted: 09:16:00 IST start.
+    - Cash equities / normal: 09:15:00 IST start.
+    - Index Options (is_index=True): Hard 13:30:00 IST cutoff! Eliminates late-day expiry chop & EOD square-off traps.
+    - Other instruments: 15:20:00 IST cutoff.
     """
     if not live_execution_active:
         return True
@@ -469,7 +471,8 @@ def is_new_entry_allowed(live_execution_active=True, is_option=False):
         return False
     t_now = now.time()
     start_time = datetime_time(9, 16) if is_option else datetime_time(9, 15)
-    return start_time <= t_now <= datetime_time(15, 20)
+    end_time = datetime_time(13, 30) if is_index else datetime_time(15, 20)
+    return start_time <= t_now <= end_time
 
 def get_exchange_freeze_limit(symbol_or_contract: str) -> int:
     """Returns the NSE/BSE exchange freeze limit for options and index contracts."""
@@ -711,41 +714,44 @@ def close_position(kite, pos, live_market=True, product=None, qty_override=None,
             save_executed_exit(contract, oid, {"type": "LIMIT", "price": price, "qty": qty, "order_ids": placed_oids})
         logging.info(f"Closed {contract} with Marketable LIMIT order price {price} on exchange {target_exch} (Orders: {placed_oids}, Total Qty: {qty})")
 
-        # Spread Exit: If 2-leg Debit Spread, cover the short leg concurrently
-        if pos.get("position_type") == "option_spread" and pos.get("leg2_contract"):
-            leg2_c = pos.get("leg2_contract")
-            leg2_qty = pos.get("leg2_qty") or qty
-            leg2_already_closed = False
-            if kite and live_market:
-                try:
-                    for p in kite.positions().get("net", []):
-                        if p.get("tradingsymbol") == leg2_c:
-                            live_short_qty = int(p.get("quantity", 0))
-                            if live_short_qty >= 0:
-                                leg2_already_closed = True
-                                logging.info(f"[SPREAD EXIT] Short leg {leg2_c} already covered on Kite (Qty: {live_short_qty}). Skipping duplicate order.")
-                            else:
-                                leg2_qty = min(leg2_qty, abs(live_short_qty))
-                            break
-                except Exception as leg2_check_err:
-                    logging.warning(f"Could not verify live net quantity for leg2 {leg2_c}: {leg2_check_err}")
+        # Helper to ensure short leg is covered on any successful primary exit
+        def _cover_spread_leg2():
+            if pos.get("position_type") == "option_spread" and pos.get("leg2_contract"):
+                leg2_c = pos.get("leg2_contract")
+                leg2_qty = pos.get("leg2_qty") or qty
+                leg2_already_closed = False
+                if kite and live_market:
+                    try:
+                        for p in kite.positions().get("net", []):
+                            if p.get("tradingsymbol") == leg2_c:
+                                live_short_qty = int(p.get("quantity", 0))
+                                if live_short_qty >= 0:
+                                    leg2_already_closed = True
+                                    logging.info(f"[SPREAD EXIT] Short leg {leg2_c} already covered on Kite (Qty: {live_short_qty}). Skipping duplicate order.")
+                                else:
+                                    leg2_qty = min(leg2_qty, abs(live_short_qty))
+                                break
+                    except Exception as leg2_check_err:
+                        logging.warning(f"Could not verify live net quantity for leg2 {leg2_c}: {leg2_check_err}")
 
-            if not leg2_already_closed:
-                try:
-                    leg2_slices = slice_quantity_for_freeze(leg2_c, leg2_qty)
-                    leg2_oids = []
-                    for l2_s_qty in leg2_slices:
-                        oid_leg2 = kite.place_order(
-                            variety=kite.VARIETY_REGULAR, tradingsymbol=leg2_c,
-                            exchange=target_exch, transaction_type=kite.TRANSACTION_TYPE_BUY,
-                            quantity=l2_s_qty, order_type=kite.ORDER_TYPE_MARKET,
-                            product=target_product
-                        )
-                        leg2_oids.append(str(oid_leg2))
-                    save_executed_exit(leg2_c, leg2_oids[0], {"type": "SPREAD_LEG2_EXIT", "qty": leg2_qty, "order_ids": leg2_oids})
-                    logging.info(f"[SPREAD EXIT] Covered short leg {leg2_c} (Orders: {leg2_oids}, Qty: {leg2_qty})")
-                except Exception as leg2_err:
-                    logging.error(f"[SPREAD EXIT ERROR] Failed to exit short leg {leg2_c}: {leg2_err}")
+                if not leg2_already_closed:
+                    try:
+                        leg2_slices = slice_quantity_for_freeze(leg2_c, leg2_qty)
+                        leg2_oids = []
+                        for l2_s_qty in leg2_slices:
+                            oid_leg2 = kite.place_order(
+                                variety=kite.VARIETY_REGULAR, tradingsymbol=leg2_c,
+                                exchange=target_exch, transaction_type=kite.TRANSACTION_TYPE_BUY,
+                                quantity=l2_s_qty, order_type=kite.ORDER_TYPE_MARKET,
+                                product=target_product
+                            )
+                            leg2_oids.append(str(oid_leg2))
+                        save_executed_exit(leg2_c, leg2_oids[0], {"type": "SPREAD_LEG2_EXIT", "qty": leg2_qty, "order_ids": leg2_oids})
+                        logging.info(f"[SPREAD EXIT] Covered short leg {leg2_c} (Orders: {leg2_oids}, Qty: {leg2_qty})")
+                    except Exception as leg2_err:
+                        logging.error(f"[SPREAD EXIT ERROR] Failed to exit short leg {leg2_c}: {leg2_err}")
+
+        _cover_spread_leg2()
         return {"success": True, "order_id": str(oid), "type": "LIMIT", "price": price, "qty": qty, "order_ids": placed_oids}
     except Exception as primary_err:
         logging.warning(f"Primary LIMIT exit with {target_product} on {target_exch} failed for {contract}: {primary_err}. Retrying with aggressive limit fallback...")
@@ -764,6 +770,11 @@ def close_position(kite, pos, live_market=True, product=None, qty_override=None,
             if not qty_override:
                 save_executed_exit(contract, oid, {"type": "LIMIT_FALLBACK", "price": fallback_price, "qty": qty, "order_ids": placed_fallback_oids})
             logging.info(f"Fallback Marketable LIMIT exit SUCCESS for {contract} on exchange {target_exch} at price {fallback_price} (Orders: {placed_fallback_oids})")
+            if 'pos' in locals() and pos.get("position_type") == "option_spread":
+                try:
+                    _cover_spread_leg2()
+                except Exception as cov_err:
+                    logging.error(f"Fallback spread leg2 cover error: {cov_err}")
             return {"success": True, "order_id": str(oid), "type": "LIMIT_FALLBACK", "price": fallback_price, "qty": qty, "order_ids": placed_fallback_oids}
         except Exception as m_err:
             try:
@@ -780,6 +791,11 @@ def close_position(kite, pos, live_market=True, product=None, qty_override=None,
                 if not qty_override:
                     save_executed_exit(contract, oid, {"type": "MARKET_EMERGENCY", "qty": qty, "order_ids": placed_m_oids})
                 logging.info(f"Emergency MARKET exit SUCCESS for {contract} on exchange {target_exch} (Orders: {placed_m_oids})")
+                if 'pos' in locals() and pos.get("position_type") == "option_spread":
+                    try:
+                        _cover_spread_leg2()
+                    except Exception as cov_err:
+                        logging.error(f"Emergency spread leg2 cover error: {cov_err}")
                 return {"success": True, "order_id": str(oid), "type": "MARKET_EMERGENCY", "qty": qty, "order_ids": placed_m_oids}
             except Exception as m_final_err:
                 save_executed_exit(contract, "REJECTED_ERROR", {"error": str(m_final_err)})

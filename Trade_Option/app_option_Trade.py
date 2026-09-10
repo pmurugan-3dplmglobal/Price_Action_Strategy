@@ -1934,6 +1934,54 @@ def api_buy_scanned_trade():
                 prod = _kite_session.PRODUCT_CNC if exch == "NSE" else _kite_session.PRODUCT_NRML
 
                 force_order = bool(data.get("force", False))
+
+                # ── 13:30 IST Hard Cutoff Guard for Index Options ──
+                from trading_core import is_market_open, is_option_contract
+                from common.position_monitor import is_new_entry_allowed
+                market_open = is_market_open()
+                is_opt = is_option_contract(contract) or exch != "NSE"
+                if is_index and market_open and not force_order:
+                    if not is_new_entry_allowed(live_execution_active=True, is_option=is_opt, is_index=True):
+                        return jsonify({
+                            "ok": False,
+                            "error": "Index Option Entry Cutoff: All new index option entries are blocked after 13:30 IST to prevent late-day expiry chop and EOD traps. Set force=true if you explicitly wish to override."
+                        }), 400
+
+                # ── 2-Leg Debit Spread Resolution for Index Option Trades ──
+                spread_info = None
+                leg2_order_id = None
+                if is_index:
+                    try:
+                        cfg_idx = cfg_all.get("index", {}) if 'cfg_all' in locals() else load_config().get("index", {})
+                        exec_mode = str(cfg_idx.get("execution_mode", "DEBIT_SPREAD")).upper()
+                        if exec_mode in ["DEBIT_SPREAD", "SPREAD_ONLY", "AUTO"]:
+                            try:
+                                from common.position_monitor import _get_nfo_cache
+                                from common.resolve import resolve_option_spread
+                            except ModuleNotFoundError:
+                                from position_monitor import _get_nfo_cache
+                                from resolve import resolve_option_spread
+                            nfo_df = _get_nfo_cache()
+                            cp = float(entry_spot or ltp or 0.0)
+                            strike_step = INDEX_REGISTRY.get(symbol, {}).get("strike_step", 50)
+                            dir_calc = data.get("direction") or ("BULL" if side == "CE" else "BEAR")
+                            spread_info = resolve_option_spread(
+                                nfo_instruments=nfo_df,
+                                base_symbol=symbol,
+                                spot_price=cp,
+                                step_size=strike_step,
+                                direction=dir_calc,
+                                target_price=t1 if t1 > 0 else None
+                            )
+                            if spread_info:
+                                contract = spread_info["leg1"]["contract"]
+                                c_str = str(contract).upper()
+                                exch = "BFO" if ("SENSEX" in c_str or "BSE" in c_str) else "NFO"
+                                lot_size = get_option_lot_size(contract) or registry.get(symbol, {}).get("lot_size", 1)
+                                logging.info(f"[1-CLICK BUY DEBIT SPREAD RESOLVED] {symbol}: Leg 1 (Long)={contract} | Leg 2 (Short)={spread_info['leg2']['contract']}")
+                    except Exception as sp_resolve_err:
+                        logging.warning(f"1-Click Buy index spread resolution error: {sp_resolve_err}")
+
                 if not force_order:
                     try:
                         import trade_db
@@ -1959,9 +2007,6 @@ def api_buy_scanned_trade():
                     logging.warning(f"[1-CLICK BUY LIQUIDITY WARNING] {contract}: {liq_msg}")
                     return jsonify({"ok": False, "error": f"Liquidity Trap Alert: {liq_msg}"}), 400
                 
-                from trading_core import is_market_open, is_option_contract
-                market_open = is_market_open()
-                is_opt = is_option_contract(contract) or exch != "NSE"
                 if not market_open and is_opt:
                     return jsonify({
                         "ok": False,
@@ -2004,6 +2049,38 @@ def api_buy_scanned_trade():
                         logging.info(f"[1-CLICK BUY] Placed After Market Order (AMO) for {contract} on {exch} (Order ID: {order_id})")
                     else:
                         raise first_err
+
+                # Leg 2 Execution for Debit Spread (Sell OTM Short Leg)
+                if spread_info and _kite_session:
+                    try:
+                        leg2_c = spread_info["leg2"]["contract"]
+                        leg2_exch = "BFO" if ("SENSEX" in leg2_c.upper() or "BSE" in leg2_c.upper()) else "NFO"
+                        leg2_q_key = f"{leg2_exch}:{leg2_c}"
+                        leg2_q = _kite_session.quote([leg2_q_key])
+                        leg2_depth = leg2_q.get(leg2_q_key, {}).get("depth", {}).get("buy", [])
+                        leg2_bid = float(leg2_depth[0]["price"]) if (leg2_depth and len(leg2_depth) > 0 and leg2_depth[0].get("price", 0) > 0) else float(leg2_q.get(leg2_q_key, {}).get("last_price", 0))
+                        leg2_limit = round(leg2_bid * 0.995, 1) if leg2_bid > 0 else 0
+                        leg2_otype = _kite_session.ORDER_TYPE_LIMIT if leg2_limit > 0 else _kite_session.ORDER_TYPE_MARKET
+
+                        from common.position_monitor import slice_quantity_for_freeze
+                        leg2_slices = slice_quantity_for_freeze(leg2_c, lot_size)
+                        leg2_placed = []
+                        for l2_qty in leg2_slices:
+                            oid2 = _kite_session.place_order(
+                                variety=order_variety,
+                                tradingsymbol=leg2_c,
+                                exchange=leg2_exch,
+                                transaction_type=_kite_session.TRANSACTION_TYPE_SELL,
+                                quantity=l2_qty,
+                                order_type=leg2_otype,
+                                price=leg2_limit if leg2_limit > 0 else None,
+                                product=prod
+                            )
+                            leg2_placed.append(str(oid2))
+                        leg2_order_id = leg2_placed[0]
+                        logging.info(f"[1-CLICK BUY DEBIT SPREAD] Leg 2 (Short OTM) placed for {leg2_c} TotalQty={lot_size} @ {leg2_limit} (Orders: {leg2_placed})")
+                    except Exception as leg2_err:
+                        logging.error(f"[1-CLICK BUY DEBIT SPREAD ERROR] Failed to place Leg 2 ({spread_info.get('leg2', {}).get('contract')}): {leg2_err}")
             except Exception as k_err:
                 logging.warning(f"[1-CLICK BUY KITE ORDER WARNING] {contract}: {k_err}")
                 err_msg = str(k_err)
@@ -2064,10 +2141,18 @@ def api_buy_scanned_trade():
             "pattern": data.get("pattern") or ("TRAP_ADX" if engine == "trap_adx" else "1CLICK_BUY"),
             "strategy": "TRAP_ADX" if engine == "trap_adx" else "DATTA_ABCD",
             "timeframe": tf_param,
-            "position_type": "stock" if exch == "NSE" else "option",
+            "position_type": "option_spread" if spread_info else ("stock" if exch == "NSE" else "option"),
             "user_edited": True,
             "entry_time": dt.now().isoformat()
         }
+        if spread_info:
+            trade_data["spread_type"] = spread_info["spread_type"]
+            trade_data["leg2_contract"] = spread_info["leg2"]["contract"]
+            trade_data["leg2_token"] = spread_info["leg2"]["token"]
+            trade_data["leg2_strike"] = spread_info["leg2"]["strike"]
+            trade_data["leg2_qty"] = lot_size
+            if leg2_order_id:
+                trade_data["leg2_order_id"] = leg2_order_id
         if candle_a_time:
             trade_data["candle_a_time"] = candle_a_time
             trade_data["CandleATime"] = candle_a_time

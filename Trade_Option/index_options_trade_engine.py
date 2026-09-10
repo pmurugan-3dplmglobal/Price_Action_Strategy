@@ -279,6 +279,41 @@ def execute_index_entry(kite, pos):
         if pos.get("trade_id"):
             trade_db.update_trade(pos["trade_id"], {"order_id": primary_oid, "order_status": "OPEN"})
         logging.info(f"Index Entry BUY LIMIT placed for {pos['contract']} TotalQty={total_qty} @ {price} (Orders: {placed_oids})")
+
+        # Leg 2 Execution for Debit Spread (Sell OTM Short Leg)
+        if pos.get("position_type") == "option_spread" and pos.get("leg2_contract"):
+            leg2_c = pos["leg2_contract"]
+            try:
+                leg2_q_key = f"{target_exch}:{leg2_c}"
+                leg2_q = kite.quote([leg2_q_key])
+                leg2_depth = leg2_q.get(leg2_q_key, {}).get("depth", {}).get("buy", [])
+                leg2_bid = float(leg2_depth[0]["price"]) if (leg2_depth and len(leg2_depth) > 0 and leg2_depth[0].get("price", 0) > 0) else float(leg2_q.get(leg2_q_key, {}).get("last_price", 0))
+                leg2_limit = round(leg2_bid * 0.995, 1) if leg2_bid > 0 else 0
+                leg2_otype = kite.ORDER_TYPE_LIMIT if leg2_limit > 0 else kite.ORDER_TYPE_MARKET
+
+                leg2_slices = slice_quantity_for_freeze(leg2_c, total_qty)
+                leg2_placed = []
+                for l2_qty in leg2_slices:
+                    oid2 = kite.place_order(
+                        variety=kite.VARIETY_REGULAR, tradingsymbol=leg2_c,
+                        exchange=target_exch, transaction_type=kite.TRANSACTION_TYPE_SELL,
+                        quantity=l2_qty, order_type=leg2_otype,
+                        price=leg2_limit if leg2_limit > 0 else None,
+                        product=kite.PRODUCT_NRML
+                    )
+                    leg2_placed.append(str(oid2))
+                pos["leg2_order_id"] = leg2_placed[0]
+                pos["leg2_order_ids"] = leg2_placed
+                if sym and sym in ACTIVE_POSITIONS:
+                    with position_lock:
+                        ACTIVE_POSITIONS[sym]["leg2_order_id"] = leg2_placed[0]
+                        ACTIVE_POSITIONS[sym]["leg2_order_ids"] = leg2_placed
+                if pos.get("trade_id"):
+                    trade_db.update_trade(pos["trade_id"], {"leg2_order_id": leg2_placed[0], "leg2_order_ids": leg2_placed})
+                logging.info(f"[INDEX DEBIT SPREAD] Leg 2 (Short OTM) placed for {leg2_c} TotalQty={total_qty} @ {leg2_limit} (Orders: {leg2_placed})")
+            except Exception as leg2_err:
+                logging.error(f"[INDEX DEBIT SPREAD ERROR] Failed to place Leg 2 ({leg2_c}): {leg2_err}")
+
         return True
     except Exception as e:
         logging.error(f"Entry failed for {pos['contract']}: {e}")
@@ -296,7 +331,14 @@ def execute_highest_rr_trade(kite, staged):
     if not staged:
         return
     sorted_staged = sorted(staged, key=lambda t: (t.get("t3") or t.get("t1") or 0) - t.get("entry_spot", 0), reverse=True)
-    live_ok = LIVE_MARKET_DEPLOYMENT and live_execution_enabled(LIVE_EXECUTION_FLAG) and is_new_entry_allowed(live_execution_active=True, is_option=True)
+    live_ok = LIVE_MARKET_DEPLOYMENT and live_execution_enabled(LIVE_EXECUTION_FLAG) and is_new_entry_allowed(live_execution_active=True, is_option=True, is_index=True)
+    if LIVE_MARKET_DEPLOYMENT and live_execution_enabled(LIVE_EXECUTION_FLAG) and not is_new_entry_allowed(live_execution_active=True, is_option=True, is_index=True):
+        logging.info("[INDEX_CUTOFF_GUARD] New index trade entries blocked after 13:30 IST. Skipping cycle execution.")
+        return
+
+    cfg_eng = load_program_config_for_engine("index")
+    exec_mode = str(cfg_eng.get("execution_mode", "DEBIT_SPREAD")).upper()
+    use_spread = (exec_mode in ["DEBIT_SPREAD", "SPREAD_ONLY", "AUTO"])
 
     for best in sorted_staged:
         key = f"{best['symbol']}|{best['pattern']}|{best['side']}|{best.get('strike', '')}"
@@ -308,6 +350,44 @@ def execute_highest_rr_trade(kite, staged):
             pos = best.copy()
             pos["entry_time"] = dt.now().isoformat()
             pos.setdefault("position_type", "option")
+
+            # ── 2-Leg Debit Spread Resolution (Neutralizes Theta Decay) ──
+            spread_info = None
+            if use_spread:
+                try:
+                    try:
+                        from common.position_monitor import _get_nfo_cache
+                        from common.resolve import resolve_option_spread
+                    except ModuleNotFoundError:
+                        from position_monitor import _get_nfo_cache
+                        from resolve import resolve_option_spread
+                    nfo_df = _get_nfo_cache()
+                    sym = best["symbol"]
+                    cp = float(best.get("spot_entry") or best.get("entry_spot") or 0.0)
+                    strike_step = INDEX_REGISTRY.get(sym, {}).get("strike_step", 50)
+                    spread_info = resolve_option_spread(
+                        nfo_instruments=nfo_df,
+                        base_symbol=sym,
+                        spot_price=cp,
+                        step_size=strike_step,
+                        direction=best.get("direction", "BULL"),
+                        target_price=best.get("t1")
+                    )
+                    if spread_info:
+                        pos["contract"] = spread_info["leg1"]["contract"]
+                        pos["option_token"] = spread_info["leg1"]["token"]
+                        pos["strike"] = spread_info["leg1"]["strike"]
+                        pos["position_type"] = "option_spread"
+                        pos["spread_type"] = spread_info["spread_type"]
+                        pos["leg2_contract"] = spread_info["leg2"]["contract"]
+                        pos["leg2_token"] = spread_info["leg2"]["token"]
+                        pos["leg2_strike"] = spread_info["leg2"]["strike"]
+                        lot_sz_val = pos.get("lot_size") or get_option_lot_size(pos["contract"]) or INDEX_REGISTRY.get(sym, {}).get("lot_size", 1)
+                        pos["leg2_qty"] = int(pos.get("position_size", 1)) * int(lot_sz_val)
+                        logging.info(f"[INDEX DEBIT SPREAD RESOLVED] {sym}: Leg 1 (Long)={pos['contract']} @ {pos['strike']} | Leg 2 (Short)={spread_info['leg2']['contract']} @ {spread_info['leg2']['strike']}")
+                except Exception as spread_err:
+                    logging.warning(f"Index spread resolution fallback to naked for {best.get('symbol')}: {spread_err}")
+
             if live_ok:
                 from vix_guard import evaluate_vix_regime
                 vix_ok, vix_msg, _ = evaluate_vix_regime(kite, tier_val=best.get("tier", 1))
@@ -316,7 +396,6 @@ def execute_highest_rr_trade(kite, staged):
                     continue
 
                 from portfolio_risk import check_portfolio_risk_caps
-                cfg_eng = load_program_config_for_engine("index")
                 cap_val = float(cfg_eng.get("capital") or 100000.0)
                 p_ok, p_msg, _ = check_portfolio_risk_caps(
                     engine="index",
@@ -331,7 +410,7 @@ def execute_highest_rr_trade(kite, staged):
                     continue
 
                 with position_lock:
-                    contract_cand = best.get("contract")
+                    contract_cand = pos.get("contract") or best.get("contract")
                     sym_cand = best.get("symbol")
                     if sym_cand in ACTIVE_POSITIONS:
                         logging.info(f"{sym_cand} already active in ACTIVE_POSITIONS; evaluating next candidate")
@@ -353,7 +432,7 @@ def execute_highest_rr_trade(kite, staged):
                         continue
                     ACTIVE_POSITIONS[sym_cand] = pos
 
-            trade_db.record_executed_pattern("index", key, {"contract": best["contract"], "entry": best["entry_spot"]})
+            trade_db.record_executed_pattern("index", key, {"contract": pos.get("contract", best.get("contract")), "entry": best["entry_spot"]})
             ok = execute_index_entry(kite, pos)
             if not ok:
                 if live_ok:

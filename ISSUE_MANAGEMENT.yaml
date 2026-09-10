@@ -1527,3 +1527,43 @@ issues:
   status: RESOLVED
   resolution_date: '2026-09-10'
 
+- id: ISSUE-103
+  title: Index Option 13:30 IST Hard Cutoff Guard & Automated 2-Leg Debit Spread Deployment for Theta Decay Shielding
+  severity: CRITICAL
+  category: Strategy Risk, Index Execution, Theta Protection, Expiry Chop Elimination
+  family: RISK_INDEX_SPREAD
+  date_reported: '2026-09-10'
+  symptom: |
+    1. Severe theta decay on index options: Buying naked index options (e.g. NIFTY 23400 CE @ 152.68, SENSEX 74700 CE @ 202.10) resulted in substantial losses (-₹8,149 net) even during intraday sideways consolidation and late-day spot pullbacks because time decay rapidly destroyed option extrinsic premium.
+    2. Late-day index entries (e.g. SENSEX 74700 CE entered at 14:52 PM) suffered from afternoon chop and auto-square-off traps at 15:15 PM, leaving no runway for directional continuation.
+  root_cause: |
+    1. `is_new_entry_allowed()` in `common/position_monitor.py` applied a blanket 15:20 IST entry cutoff for all instruments without distinguishing index derivatives from cash equities or stock options.
+    2. `Trade_Option/index_options_trade_engine.py` only placed single-leg BUY orders for naked index options, exposing capital to uncapped theta bleeding during sideways consolidation.
+    3. `Trade_Option/app_option_Trade.py` 1-Click Buy API placed single-leg naked option orders for index contracts without 13:30 cutoff checks or 2-leg spread hedging.
+  affected_files:
+  - common/position_monitor.py
+  - Trade_Option/index_options_trade_engine.py
+  - Trade_Option/app_option_Trade.py
+  - input/program_config.json
+  - scratch/test_index_spread_and_cutoff.py
+  fix_applied: |
+    1. common/position_monitor.py:
+       - Extended `is_new_entry_allowed(live_execution_active=True, is_option=False, is_index=False)` with a dedicated `is_index=True` guard. Enforces a strict 13:30:00 IST entry cutoff for index options while preserving 15:20:00 IST cutoff for equities and stock options.
+       - Enforced spread exit short leg coverage across all exit paths (`LIMIT`, `LIMIT_FALLBACK`, `MARKET_EMERGENCY`) via helper `_cover_spread_leg2()`.
+    2. Trade_Option/index_options_trade_engine.py:
+       - Evaluated `is_new_entry_allowed(..., is_index=True)`. Returns early and logs `[INDEX_CUTOFF_GUARD]` if scan cycle occurs after 13:30 IST.
+       - Integrated `resolve_option_spread()`: Automatically constructs 2-leg Debit Spreads (Buy ATM Leg 1 + Sell OTM Leg 2) for NIFTY, BANKNIFTY, and SENSEX when `execution_mode` is `DEBIT_SPREAD`, `SPREAD_ONLY`, or `AUTO`.
+       - In `execute_index_entry()`: Places Leg 2 Short order via `kite.place_order(transaction_type=kite.TRANSACTION_TYPE_SELL, product=kite.PRODUCT_NRML)` and tracks `leg2_order_id` in SQLite `trade_db`.
+    3. Trade_Option/app_option_Trade.py:
+       - In `/api/buy-scanned-trade`: Enforced 13:30 IST cutoff guard for index contracts unless explicitly overridden via `force=true`.
+       - Resolved 2-leg Debit Spread and executed Leg 2 SELL order concurrently when index option 1-Click Buy triggers with `use_spread`.
+    4. input/program_config.json:
+       - Set `"index": { "execution_mode": "DEBIT_SPREAD" }`.
+  verification: |
+    1. Dedicated unit test suite `scratch/test_index_spread_and_cutoff.py`: 2/2 PASSED (validated 13:30 cutoff boundary, stock vs index divergence, and Bull Call Spread / Bear Put Spread strike selection).
+    2. Full regression test suite `scratch/run_full_regression_test.py`: 22/22 test suites PASSED with 100% success.
+    3. AST syntax check across all modified files: PASSED.
+  status: RESOLVED
+  resolution_date: '2026-09-10'
+
+
