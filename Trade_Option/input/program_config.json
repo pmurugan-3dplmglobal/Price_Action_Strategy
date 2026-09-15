@@ -11,7 +11,15 @@
     "swing_min_waves": 3,
     "strict_macro_gate": true,
     "enable_spot_sl_guard": true,
-    "tranche_mode": true
+    "tranche_mode": true,
+    "single_lot_target_mode": "EXIT_AT_T1",
+    "max_option_loss_pct": 22.0,
+    "trailing_rules": {
+      "option_trail_1_gain_pct": 12.0,
+      "option_trail_1_sl_pct": 3.0,
+      "option_trail_2_gain_pct": 18.0,
+      "option_trail_2_sl_pct": 10.0
+    }
   },
   "ema_engine": {
     "timeframe": "1d",
@@ -27,7 +35,15 @@
     "swing_min_waves": 3,
     "strict_macro_gate": true,
     "enable_spot_sl_guard": true,
-    "tranche_mode": true
+    "tranche_mode": true,
+    "single_lot_target_mode": "EXIT_AT_T1",
+    "max_option_loss_pct": 22.0,
+    "trailing_rules": {
+      "option_trail_1_gain_pct": 12.0,
+      "option_trail_1_sl_pct": 3.0,
+      "option_trail_2_gain_pct": 18.0,
+      "option_trail_2_sl_pct": 10.0
+    }
   },
   "bear_trade": {
     "product_type": "CNC",

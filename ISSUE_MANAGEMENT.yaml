@@ -4,12 +4,48 @@ meta:
   last_updated: '2026-09-15'
   purpose: Active operational tracker for v2.1.0-stable failures, root causes, regressions, and enhancements.
   historical_archive: archive/ISSUE_HISTORY_ARCHIVE.yaml (Preserves 119 resolved legacy issues prior to 2026-09-05)
-  total_active_issues: 40
+  total_active_issues: 41
   archived_issues_summary:
     total_archived: 119
     recent_archived_batch: [FEATURE-031, FEATURE-030, FEATURE-029, ISSUE-084, ISSUE-083, ISSUE-082, ISSUE-081, ISSUE-080, FEATURE-036, FEATURE-035, FEATURE-034, FEATURE-033, ISSUE-054]
     key_archived_families: [ALGO_AUDIT_CVE, QUANT_ENHANCEMENTS, RADAR_LIFECYCLE, VCP_METRICS, SCANNER_DISCOVERY, SECURITY_CONFIG, ZERO_REGRESSION_AUDIT]
 issues:
+- id: FEATURE-042
+  title: Profit Harvesting, 2-Tier Trailing Ratchet, 22% Hard Loss Cap & Bearish Universe Expansion
+  severity: ENHANCEMENT
+  category: Profit Harvesting, Trailing Stop-Loss, Emergency Hard Cap, Risk Governance, Single-Lot Execution
+  family: RISK_GOVERNANCE
+  date_reported: '2026-09-15'
+  symptom: |
+    Empirical audit of trades_db.json and journal_trades_db.json revealed:
+    1. 20% win rate on tracked exits with planned R:R of 2.33:1 collapsing to -0.49R achieved, because single-lot positions hitting T1 (+20% to +30%) banked zero profit and held for T2/T3, frequently giving back all gains on pullbacks.
+    2. Severe -35% to -38% option drawdowns occurred (e.g. NIFTY ID 583 -38.11%) because max_option_loss_pct defaulted to 35.0% and SPOT_SL_GUARD suppressed exits down to -35%.
+    3. Trailing trigger at +18% allowed intraday option surges of +12% to +16% to retrace without locking in profit.
+    4. 88.9% CE directional bias due to restricted bear_trade universe in stock scanner.
+  root_cause: |
+    1. position_monitor.py required >= 2 lots for tranche profit booking, while 1-lot positions were forced to hold to breakeven. Furthermore, earlier gain trailing set trailing_stage = 1, prematurely blocking subsequent T1 checks.
+    2. max_option_loss_pct was unconfigured in program_config.json, defaulting to 35.0%.
+    3. Trailing Stage 1 only had a single wide threshold (+18%).
+    4. Trade_Stock/input/program_config.json set bear_trade target_index to NIFTY_MIDCAP_100 instead of FNO_ALL.
+  affected_files:
+  - common/position_monitor.py
+  - common/trade_db.py
+  - Trade_Option/input/program_config.json
+  - Trade_Stock/input/program_config.json
+  - scratch/test_profit_harvesting_and_guards.py
+  fix_applied: |
+    1. Implemented single_lot_target_mode: 'EXIT_AT_T1' in position_monitor.py, allowing 1-lot positions to bank 100% profit at T1 while reserving multi-target runners for >= 2 lots.
+    2. Decoupled T1 profit booking from trailing_stage by checking 'not pos.get("t1_booked", False)'.
+    3. Lowered option emergency loss cap to 22.0% across position_monitor.py and program_config.json.
+    4. Added 2-tier trailing ratchet for options (+12% gain locks +3% SL, +18% gain upgrades to +10% SL).
+    5. Expanded bear_trade universe in Trade_Stock to FNO_ALL with PRODUCT_MIS for short selling.
+    6. Added get_trade_statistics() to trade_db.py to segment pure algorithmic vs discretionary performance.
+  verification: |
+    1. Unit tests in scratch/test_profit_harvesting_and_guards.py passed 5/5.
+    2. Master regression suite scratch/run_full_regression_test.py passed all 19 offline unit & invariant tests.
+  status: RESOLVED
+  resolution_date: '2026-09-15'
+
 - id: FEATURE-041
   title: Dynamic Opening Volume, RVOL & Funnel Incubation Priority Scan Queue
   severity: ENHANCEMENT

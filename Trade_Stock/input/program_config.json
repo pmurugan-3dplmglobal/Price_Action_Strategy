@@ -11,7 +11,12 @@
     "swing_min_waves": 3,
     "strict_macro_gate": true,
     "enable_spot_sl_guard": true,
-    "tranche_mode": true
+    "tranche_mode": true,
+    "single_lot_target_mode": "EXIT_AT_T1",
+    "trailing_rules": {
+      "stock_trail_1_gain_pct": 8.0,
+      "stock_trail_1_sl_pct": 2.0
+    }
   },
   "ema_engine": {
     "timeframe": "1d",
@@ -27,21 +32,26 @@
     "swing_min_waves": 3,
     "strict_macro_gate": true,
     "enable_spot_sl_guard": true,
-    "tranche_mode": true
+    "tranche_mode": true,
+    "single_lot_target_mode": "EXIT_AT_T1"
   },
   "bear_trade": {
-    "product_type": "CNC",
-    "target_index": "NIFTY_MIDCAP_100",
+    "product_type": "MIS",
+    "target_universe": "FNO_ALL",
+    "target_index": "FNO_ALL",
     "timeframe": "day",
     "enable_swing_filter": true,
-    "swing_min_waves": 2
+    "swing_min_waves": 2,
+    "single_lot_target_mode": "EXIT_AT_T1"
   },
   "daily": {
     "product_type": "CNC",
-    "target_index": "NIFTY_MIDCAP_100",
+    "target_universe": "FNO_ALL",
+    "target_index": "FNO_ALL",
     "timeframe": "day",
     "enable_swing_filter": true,
-    "swing_min_waves": 2
+    "swing_min_waves": 2,
+    "single_lot_target_mode": "EXIT_AT_T1"
   },
   "swing_leg_config": {
     "default": 3,

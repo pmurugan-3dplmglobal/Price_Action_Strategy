@@ -241,6 +241,9 @@ def create_trade(engine, symbol, data, allow_duplicate=False):
             now = time.strftime("%Y-%m-%d %H:%M:%S")
             trade = {"id": tid, "engine": engine, "symbol": symbol, "status": "ACTIVE", "created_at": now}
             trade.update(data)
+            if "execution_type" not in trade:
+                pat = str(trade.get("pattern", "")).upper()
+                trade["execution_type"] = "USER_OVERRIDE" if ("OVERRIDE" in pat or "MANUAL" in pat) else "ALGO_TRIGGER"
             conn.execute(
                 "INSERT INTO trades (id, engine, symbol, contract, status, data_json, created_at, updated_at) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -416,6 +419,39 @@ def get_completed_trades():
     with _get_connection() as conn:
         rows = conn.execute("SELECT * FROM trades WHERE status != 'ACTIVE'").fetchall()
     return [_row_to_dict(r) for r in rows]
+
+
+def get_trade_statistics():
+    """Compute segmented performance analytics for completed trades.
+    Returns dictionary with overall, algo_pure, and discretionary stats.
+    """
+    trades = get_completed_trades()
+
+    def _calc_stats(t_list):
+        with_pnl = [t for t in t_list if t.get("pnl_percent") is not None]
+        wins = [t for t in with_pnl if float(t.get("pnl_percent") or 0.0) > 0]
+        losses = [t for t in with_pnl if float(t.get("pnl_percent") or 0.0) <= 0]
+        total_pnl = sum(float(t.get("pnl_percent") or 0.0) for t in with_pnl)
+        avg_pnl = round(total_pnl / len(with_pnl), 2) if with_pnl else 0.0
+        win_rate = round(len(wins) / len(with_pnl) * 100, 1) if with_pnl else 0.0
+        return {
+            "total_trades": len(t_list),
+            "tracked_trades": len(with_pnl),
+            "wins": len(wins),
+            "losses": len(losses),
+            "win_rate_pct": win_rate,
+            "avg_pnl_pct": avg_pnl,
+            "total_pnl_pct": round(total_pnl, 2)
+        }
+
+    algo_trades = [t for t in trades if t.get("execution_type") == "ALGO_TRIGGER" or ("OVERRIDE" not in str(t.get("pattern", "")).upper() and "MANUAL" not in str(t.get("pattern", "")).upper())]
+    disc_trades = [t for t in trades if t.get("execution_type") == "USER_OVERRIDE" or ("OVERRIDE" in str(t.get("pattern", "")).upper() or "MANUAL" in str(t.get("pattern", "")).upper())]
+
+    return {
+        "overall": _calc_stats(trades),
+        "algo_pure": _calc_stats(algo_trades),
+        "discretionary": _calc_stats(disc_trades)
+    }
 
 
 def get_trade(trade_id):

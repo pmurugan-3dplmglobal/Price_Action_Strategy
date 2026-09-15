@@ -1353,7 +1353,7 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                 entry_s = float(pos.get("entry_spot") or pos.get("entry_price") or 0.0)
                 current_sl = float(pos.get("current_sl", 0))
                 if live_ltp > 0 and entry_s > 0:
-                    max_loss_pct = float(cfg.get("max_option_loss_pct", 35.0)) / 100.0 if not is_stock else 0.08
+                    max_loss_pct = float(cfg.get("max_option_loss_pct", 22.0)) / 100.0 if not is_stock else 0.08
                     if is_short_stock:
                         hard_max_sl = round(entry_s * (1.0 + max_loss_pct), 2)
                         is_breached = (live_ltp >= hard_max_sl) or (current_sl > 0 and live_ltp >= current_sl * 1.05)
@@ -1578,7 +1578,7 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                         if is_fresh_fill:
                             logging.info(f"[FRESH_FILL_SPREAD_GUARD] Suppressed morning circuit breaker for {sym}: Trade entered {secs_since_entry:.0f}s ago (<120s cooldown).")
                         elif entry_s > 0 and live_ltp > 0 and not is_outlier_entry:
-                            opt_loss_cap = float(cfg.get("max_option_loss_pct", 40.0)) / 100.0 if not is_stock else 0.15
+                            opt_loss_cap = float(cfg.get("max_option_loss_pct", 25.0)) / 100.0 if not is_stock else 0.15
                             if is_short_stock and live_ltp >= (entry_s * 1.15):
                                 sl_hit = True
                                 rise_pct = (live_ltp - entry_s) / entry_s * 100.0
@@ -1687,11 +1687,11 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                             sl_reason = f"EMERGENCY_HARD_SL (LTP {live_ltp:.2f} <= {emergency_threshold:.2f})"
                             cp = live_ltp
 
-            # 2b) Hard Max-Loss Circuit Shield (Default 15% Cap on Entry Price for Options, 8% for Stocks)
+            # 2b) Hard Max-Loss Circuit Shield (Default 22% Cap on Entry Price for Options, 8% for Stocks)
             # SUBORDINATE INVARIANT: The structural Anchor SL, UI Override SL, or Trailed SL (current_sl) ALWAYS takes higher precedence.
-            # A fixed 15% mathematical loss threshold must NEVER preempt a valid wider Anchor SL or a custom UI/Trailed SL.
+            # A fixed 22% mathematical loss threshold must NEVER preempt a valid wider Anchor SL or a custom UI/Trailed SL.
             # It acts solely as a last-resort safety net when no valid current_sl exists (current_sl <= 0) or when current_sl is also in breach.
-            max_loss_pct = float(cfg.get("max_option_loss_pct", 15)) / 100.0 if not is_stock else 0.08
+            max_loss_pct = float(cfg.get("max_option_loss_pct", 22.0)) / 100.0 if not is_stock else 0.08
             if is_short_stock:
                 hard_max_sl_threshold = round(entry_s * (1.0 + max_loss_pct), 2) if entry_s > 0 else 0.0
                 has_active_sl = current_sl > 0 and current_sl > entry_s
@@ -1756,10 +1756,11 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
 
                         side_str = str(pos.get("side", "CE")).upper()
                         is_bull = side_str in ["CE", "BUY", "BULL"]
-                        # Catastrophic option emergency cap: If option drops beyond opt_emergency_cap (35%), exit regardless of spot
+                        # Catastrophic option emergency cap: If option drops beyond opt_emergency_cap (22%), exit regardless of spot
                         # BUT do NOT trigger catastrophic override if trade is a fresh fill (<120s) to allow opening spread to settle
-                        opt_emergency_cap = float(cfg.get("max_option_loss_pct", 35.0)) / 100.0
-                        is_catastrophic_opt = (entry_s > 0 and live_ltp > 0 and live_ltp <= (entry_s * (1.0 - opt_emergency_cap)) and not is_fresh_fill and not is_outlier_entry)
+                        opt_emergency_cap = float(cfg.get("max_option_loss_pct", 22.0)) / 100.0
+                        curr_opt_p = live_ltp if live_ltp > 0 else cp
+                        is_catastrophic_opt = (entry_s > 0 and curr_opt_p > 0 and curr_opt_p <= (entry_s * (1.0 - opt_emergency_cap)) and not is_fresh_fill and not is_outlier_entry)
 
                         if is_bull and live_spot > spot_sl and not is_catastrophic_opt:
                             logging.info(f"[SPOT_SL_GUARD] Suppressed premature option SL exit for {sym} ({pos.get('contract')}): Option LTP {live_ltp:.2f} tripped SL, but Underlying Spot ({live_spot:.2f}) is strictly holding above support ({spot_sl:.2f}).")
@@ -1773,8 +1774,9 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                         cached_spot = float(pos.get("last_known_spot") or pos.get("spot_entry") or 0.0)
                         side_str = str(pos.get("side", "CE")).upper()
                         is_bull = side_str in ["CE", "BUY", "BULL"]
-                        opt_emergency_cap = float(cfg.get("max_option_loss_pct", 35.0)) / 100.0
-                        is_catastrophic_opt = (entry_s > 0 and live_ltp > 0 and live_ltp <= (entry_s * (1.0 - opt_emergency_cap)) and not is_fresh_fill and not is_outlier_entry)
+                        opt_emergency_cap = float(cfg.get("max_option_loss_pct", 22.0)) / 100.0
+                        curr_opt_p = live_ltp if live_ltp > 0 else cp
+                        is_catastrophic_opt = (entry_s > 0 and curr_opt_p > 0 and curr_opt_p <= (entry_s * (1.0 - opt_emergency_cap)) and not is_fresh_fill and not is_outlier_entry)
                         if cached_spot > 0 and not is_catastrophic_opt:
                             if is_bull and cached_spot > spot_sl:
                                 logging.info(f"[SPOT_SL_GUARD FAILSAFE] API query error ({s_err}) for {sym}; last known spot ({cached_spot:.2f}) is holding above support ({spot_sl:.2f}). Suppressing premature option SL exit.")
@@ -1854,37 +1856,42 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                 atr = entry_s * 0.02
 
             # Feature 5: Trailing Stage 1 (Gain Lock)
-            # - Options: Trigger when peak gain >= +18% (Minervini rule) -> Trail SL to +10% above Entry (prevents normal option noise from slipping good trades)
-            # - Stocks: Trigger when peak gain >= +10% -> Trail SL to +BE (Entry + buffer for Bull, Entry - buffer for Bear)
+            # - Options: Trigger 1 when peak gain >= +12% -> Trail SL to Entry + 3% (or BE buffer)
+            #            Trigger 2 when peak gain >= +18% -> Trail SL to Entry + 10% (Minervini rule)
+            # - Stocks: Trigger when peak gain >= +8% / +10% -> Trail SL to +BE (Entry + buffer for Bull, Entry - buffer for Bear)
             trail_rules = cfg.get("trailing_rules", {}) if isinstance(cfg.get("trailing_rules"), dict) else {}
-            opt_gain_trigger = float(trail_rules.get("option_trail_1_gain_pct", cfg.get("option_trail_1_gain_pct", 18.0)))
-            opt_sl_lock_pct = float(trail_rules.get("option_trail_1_sl_pct", cfg.get("option_trail_1_sl_pct", 10.0)))
-            stock_gain_trigger = float(trail_rules.get("stock_trail_1_gain_pct", cfg.get("stock_trail_1_gain_pct", 10.0)))
+            opt_gain_trigger = float(trail_rules.get("option_trail_1_gain_pct", cfg.get("option_trail_1_gain_pct", 12.0)))
+            opt_sl_lock_pct = float(trail_rules.get("option_trail_1_sl_pct", cfg.get("option_trail_1_sl_pct", 3.0)))
+            opt_gain_trigger_2 = float(trail_rules.get("option_trail_2_gain_pct", cfg.get("option_trail_2_gain_pct", 18.0)))
+            opt_sl_lock_pct_2 = float(trail_rules.get("option_trail_2_sl_pct", cfg.get("option_trail_2_sl_pct", 10.0)))
+            stock_gain_trigger = float(trail_rules.get("stock_trail_1_gain_pct", cfg.get("stock_trail_1_gain_pct", 8.0)))
 
             req_gain = stock_gain_trigger if is_stock else opt_gain_trigger
 
             if pos.get("trailing_stage", 0) == 0 and gain_pct >= req_gain and has_higher_targets:
                 curr_sl = float(pos.get("current_sl") or 0.0)
                 if not is_stock:
-                    # Option contract (CE or PE long buyer): lock in +10% gain above entry
-                    sl_offset = entry_s * (opt_sl_lock_pct / 100.0)
+                    # Choose whether Tier 1 (+12% -> +3%) or Tier 2 (+18% -> +10%)
+                    active_sl_pct = opt_sl_lock_pct_2 if gain_pct >= opt_gain_trigger_2 else opt_sl_lock_pct
+                    active_trigger = opt_gain_trigger_2 if gain_pct >= opt_gain_trigger_2 else opt_gain_trigger
+                    sl_offset = entry_s * (active_sl_pct / 100.0)
                     opt_target = round(round((entry_s + sl_offset) / 0.05) * 0.05, 2)
                     new_sl = max(curr_sl, opt_target)
-                    trail_label = f"TRAIL-1 (+{opt_gain_trigger:.0f}% Gain Lock -> +{opt_sl_lock_pct:.0f}% SL)"
-                    log_sl_label = f"SL=+{opt_sl_lock_pct:.0f}% {new_sl:.2f} (+{gain_pct:.1f}% gain locked)"
+                    trail_label = f"TRAIL-1 (+{active_trigger:.0f}% Gain Lock -> +{active_sl_pct:.0f}% SL)"
+                    log_sl_label = f"SL=+{active_sl_pct:.0f}% {new_sl:.2f} (+{gain_pct:.1f}% gain locked)"
                 elif is_short_stock:
                     buf_dist = get_sl_buffer_distance(entry_s, side="BEAR")
                     be_offset = max(buf_dist, 0.5 * atr)
                     be_target = round(round((entry_s - be_offset) / 0.05) * 0.05, 2)
                     new_sl = min(curr_sl, be_target) if curr_sl > 0 else be_target
-                    trail_label = "TRAIL-1 (+10% Gain Lock -> +2% BE)"
+                    trail_label = "TRAIL-1 (+8% Gain Lock -> +2% BE)"
                     log_sl_label = f"SL=+BE {new_sl:.2f} (+{gain_pct:.1f}% gain locked)"
                 else:
                     buf_dist = get_sl_buffer_distance(entry_s, side="BULL")
                     be_offset = max(buf_dist, 0.5 * atr)
                     be_target = round(round((entry_s + be_offset) / 0.05) * 0.05, 2)
                     new_sl = max(curr_sl, be_target)
-                    trail_label = "TRAIL-1 (+10% Gain Lock -> +2% BE)"
+                    trail_label = "TRAIL-1 (+8% Gain Lock -> +2% BE)"
                     log_sl_label = f"SL=+BE {new_sl:.2f} (+{gain_pct:.1f}% gain locked)"
 
                 sl_stamp = dt.now().isoformat()
@@ -1901,6 +1908,25 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                        event_time=last.get('date'))
                 if tid:
                     trade_db.update_trade(tid, {"trailing_stage": 1, "current_sl": new_sl, "sl_set_time": sl_stamp})
+
+            # Upgrade Trailing Stage 1 if position extends from +12% to +18%:
+            elif not is_stock and pos.get("trailing_stage", 0) == 1 and gain_pct >= opt_gain_trigger_2:
+                curr_sl = float(pos.get("current_sl") or 0.0)
+                sl_offset_2 = entry_s * (opt_sl_lock_pct_2 / 100.0)
+                opt_target_2 = round(round((entry_s + sl_offset_2) / 0.05) * 0.05, 2)
+                if opt_target_2 > curr_sl:
+                    sl_stamp = dt.now().isoformat()
+                    with lock:
+                        if sym in positions_dict:
+                            positions_dict[sym]["current_sl"] = opt_target_2
+                            positions_dict[sym]["sl_set_time"] = sl_stamp
+                    logging.info(f"TRAIL-1 UPGRADE {sym}: High={hp:.2f} (+{gain_pct:.1f}%) -> SL={opt_target_2:.2f} (+{opt_sl_lock_pct_2:.0f}% SL locked)")
+                    log_fn(sym, pos.get("pattern", ""), timeframe_entry, "TRAIL_UPGRADE", "MUTATED",
+                           f"SL=+{opt_sl_lock_pct_2:.0f}% {opt_target_2:.2f} (+{gain_pct:.1f}% locked)",
+                           entry=entry_s, sl=opt_target_2, target=t1_val or t2_val,
+                           event_time=last.get('date'))
+                    if tid:
+                        trade_db.update_trade(tid, {"current_sl": opt_target_2, "sl_set_time": sl_stamp})
 
             t1_hit = ((lp <= (t1_val + buf_t1)) if is_short_stock else (hp >= (t1_val - buf_t1))) if (t1_val is not None and t1_val > 0) else False
             if t1_val and t1_hit:
@@ -1936,7 +1962,7 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                     else:
                         logging.critical(f"[EXIT_T1 FAILED] T1 exit order for {sym} failed or pending ({exit_res}). Retaining in memory for retry.")
                     continue
-                elif pos.get("trailing_stage", 0) == 0:
+                elif not pos.get("t1_booked", False):
                     lot_sz = get_option_lot_size(pos.get("contract","")) or pos.get("lot_size", 1) or 1
                     raw_pos_size = int(pos.get("position_size", 1))
                     raw_qty = int(pos.get("quantity") or 0)
@@ -1993,31 +2019,64 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                         else:
                             logging.critical(f"[TRANCHE_1_EXIT FAILED] Partial exit order for {sym} failed ({exit_res}). Preserving full position.")
                     else:
-                        # Single-lot trailing to Positive Breakeven
-                        curr_sl = float(pos.get("current_sl") or 0.0)
-                        if is_short_stock:
-                            buf_dist = get_sl_buffer_distance(entry_s, side="BEAR")
-                            be_offset = max(buf_dist, 0.5 * atr)
-                            be_sl = round(round((entry_s - be_offset) / 0.05) * 0.05, 2)
-                            new_sl = min(curr_sl, be_sl) if curr_sl > 0 else be_sl
+                        single_lot_mode = str(cfg.get("single_lot_target_mode", "EXIT_AT_T1") if isinstance(cfg, dict) else "EXIT_AT_T1").upper()
+                        if single_lot_mode in ["EXIT_AT_T1", "BANK_T1", "FULL_EXIT_T1"]:
+                            reached_val = lp if is_short_stock else hp
+                            logging.info(f"T1 SINGLE-LOT FULL EXIT (Bank Profit @ T1): {sym} reached {reached_val:.2f} (Target: {t1_val:.2f}, Buffer: {buf_t1:.2f})")
+                            if is_stock:
+                                exit_res = close_stock_position(kite, pos, live, product_type)
+                            else:
+                                exit_res = close_position(kite, pos, live, product_type)
+                            
+                            exit_ok = True
+                            if live and kite:
+                                exit_ok = bool(exit_res and exit_res.get("success"))
+
+                            if exit_ok:
+                                exit_price = live_ltp if live_ltp > 0 else (cp if cp > 0 else t1_val)
+                                pnl = ((entry_s - exit_price) / entry_s * 100) if is_short_stock else (((exit_price - entry_s) / entry_s * 100) if entry_s else 0)
+                                log_fn(sym, pos.get("pattern", ""), pos_tf, "EXIT_T1_BANKED", "CLOSED",
+                                        f"T1 Banked 100% ({t1_val:.2f}) [Single-Lot Policy]", pnl,
+                                        entry=entry_s, sl=pos.get("current_sl", ""), target=t1_val,
+                                        event_time=last.get('date'))
+                                det_str = f"T1 100% banked (Single-Lot @ {exit_price:.2f})"
+                                if tid:
+                                    trade_db.update_trade(tid, {
+                                        "status": "TARGET_HIT",
+                                        "exit_time": dt.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                        "pnl_percent": round(pnl, 2),
+                                        "details": det_str
+                                    })
+                                to_clear.append(sym)
+                            else:
+                                logging.critical(f"[EXIT_T1_BANKED FAILED] Single-lot T1 exit order for {sym} failed. Retaining in memory for retry.")
+                            continue
                         else:
-                            buf_dist = get_sl_buffer_distance(entry_s, side="BULL")
-                            be_offset = max(buf_dist, 0.5 * atr)
-                            be_sl = round(round((entry_s + be_offset) / 0.05) * 0.05, 2)
-                            new_sl = max(curr_sl, be_sl)
-                        sl_stamp = dt.now().isoformat()
-                        with lock:
-                            if sym in positions_dict:
-                                positions_dict[sym]["current_sl"] = new_sl
-                                positions_dict[sym]["trailing_stage"] = 1
-                                positions_dict[sym]["sl_set_time"] = sl_stamp
-                        logging.info(f"TRAIL-1 {sym}: SL=+BE ({new_sl:.2f})")
-                        log_fn(sym, pos.get("pattern", ""), timeframe_entry, "TRAIL_BE", "MUTATED",
-                               f"SL=+BE {new_sl:.2f}",
-                               entry=entry_s, sl=new_sl, target=t1_val,
-                               event_time=last.get('date'))
-                        if tid:
-                            trade_db.update_trade(tid, {"trailing_stage": 1, "current_sl": new_sl, "sl_set_time": sl_stamp})
+                            # Single-lot trailing to Positive Breakeven (when single_lot_target_mode == 'TRAIL_BE')
+                            curr_sl = float(pos.get("current_sl") or 0.0)
+                            if is_short_stock:
+                                buf_dist = get_sl_buffer_distance(entry_s, side="BEAR")
+                                be_offset = max(buf_dist, 0.5 * atr)
+                                be_sl = round(round((entry_s - be_offset) / 0.05) * 0.05, 2)
+                                new_sl = min(curr_sl, be_sl) if curr_sl > 0 else be_sl
+                            else:
+                                buf_dist = get_sl_buffer_distance(entry_s, side="BULL")
+                                be_offset = max(buf_dist, 0.5 * atr)
+                                be_sl = round(round((entry_s + be_offset) / 0.05) * 0.05, 2)
+                                new_sl = max(curr_sl, be_sl)
+                            sl_stamp = dt.now().isoformat()
+                            with lock:
+                                if sym in positions_dict:
+                                    positions_dict[sym]["current_sl"] = new_sl
+                                    positions_dict[sym]["trailing_stage"] = 1
+                                    positions_dict[sym]["sl_set_time"] = sl_stamp
+                            logging.info(f"TRAIL-1 {sym}: SL=+BE ({new_sl:.2f})")
+                            log_fn(sym, pos.get("pattern", ""), timeframe_entry, "TRAIL_BE", "MUTATED",
+                                   f"SL=+BE {new_sl:.2f}",
+                                   entry=entry_s, sl=new_sl, target=t1_val,
+                                   event_time=last.get('date'))
+                            if tid:
+                                trade_db.update_trade(tid, {"trailing_stage": 1, "current_sl": new_sl, "sl_set_time": sl_stamp})
 
             t2_hit = ((lp <= (t2_val + buf_t2)) if is_short_stock else (hp >= (t2_val - buf_t2))) if (t2_val is not None and t2_val > 0) else False
             if pos.get("trailing_stage", 0) == 1 and t2_val and t2_hit:
