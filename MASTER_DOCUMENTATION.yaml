@@ -172,11 +172,21 @@ engines:
 
   case_e_stock_ema:
     id: "ema_engine"
-    name: "Stock EMA Engine (13 EMA / 44 EMA Crossover)"
+    name: "Datta Dual-Timeframe Hierarchical EMA Engine (Daily Close > EMA -> 1-Hour Close > EMA)"
     file: "common/ema_engine.py"
     asset_class: "STOCK_OPTION / STOCK_SPOT"
-    side: "BULL / BEAR"
-    instruments: "Nifty 50 Constituent Stocks & Options"
+    side: "BULL"
+    instruments: "210 NSE F&O Constituent Stocks & Options"
+    architecture:
+      step1_daily_gate: "Firstly close ABV EMA on Day basis (d_close > d_ema13 or d_close > d_ema44). Fail-fast immediate rejection if false (zero 1-hour API calls)."
+      step2_1hour_gate: "Then close ABV 1 hrs (h_close > h_ema13 or h_close > h_ema44). Rejected if false."
+      trigger_classification:
+        bull_13_44_cross: "1-hour 13 EMA crossed above 44 EMA with Day close above EMA."
+        bull_ema_cross: "1-hour candle freshly crossed above both 13 and 44 EMAs with Day close above EMA."
+        bull_ema_on_13: "1-hour pullback bounced & held 13 EMA support (lower wick >= 40% or green candle) with Day confirmed."
+        bull_ema_on_44: "1-hour pullback bounced & held 44 EMA support (lower wick >= 40% or green candle) with Day confirmed."
+        bull_day_1h_ema_confirmed: "Dual Day & 1-Hour close above EMA baseline confirmation."
+      risk_and_targets: "SL = min(44 EMA on 1H, lowest low of last 3 1H candles). T1 = 1.5R, T2 = 2.5R, T3 = 3.5R."
     defaults: {timeframe: "1d", fast_ema: 13, slow_ema: 44, scan_interval: 300}
 
 backtest_suite:

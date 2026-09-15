@@ -129,14 +129,148 @@ def calculate_ema(df, period):
         return pd.Series([0] * len(df) if df is not None else [])
     return df['close'].ewm(span=period, adjust=False).mean()
 
-def run_ema_scan_symbol(kite, symbol, info, timeframe="1d", fast_period=13, slow_period=44):
+def detect_datta_dual_tf_ema_pattern(kite, symbol, info, fast_period=13, slow_period=44):
+    """
+    Datta Harale Dual-Timeframe Hierarchical EMA Strategy Engine:
+      1. Step 1 (Daily 1d): 'Firstly close ABV ema On day basis'
+         - Must close ABOVE EMA (d_close > d_ema13 or d_close > d_ema44).
+         - If false: Disqualified immediately (zero 1-hour API calls, fail-fast protection).
+      2. Step 2 (1-Hour 60m): 'Then close ABV 1 hrs That is criteria'
+         - Must also close ABOVE EMA (h_close > h_ema13 or h_close > h_ema44).
+         - If false: Disqualified.
+      3. Classify Setup Trigger on 1-Hour:
+         - BULL_13_44_CROSS: 1-hour 13 EMA crossed above 44 EMA (Day confirmed)
+         - BULL_EMA_CROSS: 1-hour candle freshly crossed above 13/44 EMA (Day confirmed)
+         - BULL_EMA_ON_13: 1-hour pullback bounced & held 13 EMA support (Day confirmed)
+         - BULL_EMA_ON_44: 1-hour pullback bounced & held 44 EMA support (Day confirmed)
+         - BULL_DAY_1H_EMA_CONFIRMED: Dual Day & 1-Hr close above EMA
+    """
     try:
-        token = info.get("token", 0)
+        token = info.get("token", 0) if isinstance(info, dict) else 0
         if not token:
             return None
 
-        # Fetch candles (days based on timeframe)
-        days = 60 if timeframe in ['1d', 'day'] else 15
+        to_date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        # Step 1: Daily Timeframe Check ("Firstly close ABV ema On day basis")
+        from_date_day = (datetime.datetime.now() - datetime.timedelta(days=75)).strftime("%Y-%m-%d 09:15:00")
+        df_day = fetch_and_resample_candles(kite, token, from_date_day, to_date, "1d")
+        if df_day is None or df_day.empty or len(df_day) < slow_period + 2:
+            return None
+
+        df_day['ema13'] = calculate_ema(df_day, fast_period)
+        df_day['ema44'] = calculate_ema(df_day, slow_period)
+
+        d_curr = df_day.iloc[-1]
+        d_close = float(d_curr['close'])
+        d_ema13 = float(d_curr['ema13'])
+        d_ema44 = float(d_curr['ema44'])
+
+        # Daily Criteria: Must close above EMA (13 or 44)
+        day_above_ema = (d_close > d_ema13) or (d_close > d_ema44)
+        if not day_above_ema:
+            return None  # Disqualified: Failed Step 1 (Day close ABV EMA) - zero 1H API calls
+
+        # Step 2: 1-Hour Timeframe Check ("Then close ABV 1 hrs That is criteria")
+        from_date_1h = (datetime.datetime.now() - datetime.timedelta(days=30)).strftime("%Y-%m-%d 09:15:00")
+        df_1h = fetch_and_resample_candles(kite, token, from_date_1h, to_date, "60minute")
+        if df_1h is None or df_1h.empty or len(df_1h) < slow_period + 2:
+            return None
+
+        df_1h['ema13'] = calculate_ema(df_1h, fast_period)
+        df_1h['ema44'] = calculate_ema(df_1h, slow_period)
+
+        h_curr = df_1h.iloc[-1]
+        h_prev = df_1h.iloc[-2]
+
+        h_close = float(h_curr['close'])
+        h_open = float(h_curr['open'])
+        h_high = float(h_curr['high'])
+        h_low = float(h_curr['low'])
+        h_ema13 = float(h_curr['ema13'])
+        h_ema44 = float(h_curr['ema44'])
+
+        p_close = float(h_prev['close'])
+        p_ema13 = float(h_prev['ema13'])
+        p_ema44 = float(h_prev['ema44'])
+
+        # 1-Hour Criteria: Must close above EMA
+        h1_above_ema = (h_close > h_ema13) or (h_close > h_ema44)
+        if not h1_above_ema:
+            return None  # Disqualified: Failed Step 2 (1-Hr close ABV EMA)
+
+        # Classify Setup Trigger on 1-Hour
+        pattern = None
+        is_13_44_cross = (h_ema13 > h_ema44) and (p_ema13 <= p_ema44)
+        if is_13_44_cross and h_close >= h_ema44:
+            pattern = "BULL_13_44_CROSS"
+        elif (h_close > h_ema13) and (h_close > h_ema44) and ((p_close <= p_ema13) or (p_close <= p_ema44)):
+            pattern = "BULL_EMA_CROSS"
+        elif h_close >= h_ema44 and (h_low <= h_ema13 * 1.003) and (h_close >= h_ema13 * 0.997):
+            rng = max(0.01, h_high - h_low)
+            lower_wick = min(h_open, h_close) - h_low
+            if h_close >= h_open or (lower_wick / rng) >= 0.40:
+                pattern = "BULL_EMA_ON_13"
+        elif (h_low <= h_ema44 * 1.003) and (h_close >= h_ema44 * 0.997):
+            rng = max(0.01, h_high - h_low)
+            lower_wick = min(h_open, h_close) - h_low
+            if h_close >= h_open or (lower_wick / rng) >= 0.40:
+                pattern = "BULL_EMA_ON_44"
+        else:
+            pattern = "BULL_DAY_1H_EMA_CONFIRMED"
+
+        # Stop Loss: min(44 EMA on 1H, lowest low of last 3 1H candles)
+        sl_price = min(h_ema44, float(df_1h['low'].iloc[-3:].min()))
+        if sl_price >= h_close:
+            sl_price = round(h_close * 0.98, 2)
+
+        risk = h_close - sl_price
+        t1 = round(h_close + (1.5 * risk), 2)
+        t2 = round(h_close + (2.5 * risk), 2)
+        t3 = round(h_close + (3.5 * risk), 2)
+
+        ts_val = h_curr.get('date') if isinstance(h_curr, pd.Series) and 'date' in h_curr else getattr(h_curr, 'name', None)
+        ts_str = str(ts_val) if ts_val is not None else time.strftime("%Y-%m-%d %H:%M:%S")
+        ts_clean = ts_str.replace("T", " ").split("+")[0]
+
+        return {
+            "symbol": symbol,
+            "spot_price": round(h_close, 2),
+            "sl": round(sl_price, 2),
+            "t1": round(t1, 2),
+            "t2": round(t2, 2),
+            "t3": round(t3, 2),
+            "rr": 1.5,
+            "ema13": round(h_ema13, 2),
+            "ema44": round(h_ema44, 2),
+            "day_close": round(d_close, 2),
+            "day_ema13": round(d_ema13, 2),
+            "day_ema44": round(d_ema44, 2),
+            "entry_time": ts_clean,
+            "candle_a_time": ts_clean,
+            "pattern": pattern,
+            "timeframe": "BOTH_1D_1HR"
+        }
+    except Exception as e:
+        logger.warning(f"Datta Dual-TF EMA Scan skipped for {symbol}: {e}")
+        return None
+
+def run_ema_scan_symbol(kite, symbol, info, timeframe="1d", fast_period=13, slow_period=44):
+    """
+    Evaluates 13 EMA & 44 EMA setups for a given equity symbol via Zerodha Kite Connect.
+    Supports single-timeframe and Datta Dual-Timeframe (Day close ABV EMA -> 1Hr close ABV EMA).
+    """
+    clean_tf = str(timeframe).strip().upper()
+    if clean_tf in ["1D", "DAY", "DAILY", "D", "BOTH_1D_1HR", "1D_AND_60M", "ALL_TF", "DATTA_DAY_1HR"]:
+        return detect_datta_dual_tf_ema_pattern(kite, symbol, info, fast_period=fast_period, slow_period=slow_period)
+
+    try:
+        token = info.get("token", 0) if isinstance(info, dict) else 0
+        if not token:
+            return None
+
+        tf_lower = str(timeframe).lower()
+        days = 30 if tf_lower in ['60minute', '60min', '1hr', '1h', '60m', '4hr', '4h'] else 15
         to_date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         from_date = (datetime.datetime.now() - datetime.timedelta(days=days)).strftime("%Y-%m-%d 09:15:00")
         
@@ -151,6 +285,9 @@ def run_ema_scan_symbol(kite, symbol, info, timeframe="1d", fast_period=13, slow
         prev = df.iloc[-2]
 
         c_close = float(curr['close'])
+        c_open = float(curr['open'])
+        c_high = float(curr['high'])
+        c_low = float(curr['low'])
         c_ema13 = float(curr['ema13'])
         c_ema44 = float(curr['ema44'])
 
@@ -158,22 +295,35 @@ def run_ema_scan_symbol(kite, symbol, info, timeframe="1d", fast_period=13, slow
         p_ema13 = float(prev['ema13'])
         p_ema44 = float(prev['ema44'])
 
-        # Bullish Condition: Trading above both EMAs AND fresh crossover from previous candle
-        is_above = (c_close > c_ema13) and (c_close > c_ema44)
-        is_fresh_cross = (p_close <= p_ema13) or (p_close <= p_ema44)
+        pattern = None
+        is_13_44_cross = (c_ema13 > c_ema44) and (p_ema13 <= p_ema44)
+        if is_13_44_cross and c_close >= c_ema44:
+            pattern = "BULL_13_44_CROSS"
+        elif (c_close > c_ema13) and (c_close > c_ema44) and ((p_close <= p_ema13) or (p_close <= p_ema44)):
+            pattern = "BULL_EMA_CROSS"
+        elif c_close >= c_ema44 and (c_low <= c_ema13 * 1.003) and (c_close >= c_ema13 * 0.997):
+            rng = max(0.01, c_high - c_low)
+            lower_wick = min(c_open, c_close) - c_low
+            if c_close >= c_open or (lower_wick / rng) >= 0.40:
+                pattern = "BULL_EMA_ON_13"
+        elif (c_low <= c_ema44 * 1.003) and (c_close >= c_ema44 * 0.997):
+            rng = max(0.01, c_high - c_low)
+            lower_wick = min(c_open, c_close) - c_low
+            if c_close >= c_open or (lower_wick / rng) >= 0.40:
+                pattern = "BULL_EMA_ON_44"
 
-        if not (is_above and is_fresh_cross):
+        if not pattern:
             return None
 
         # SL at 44 EMA (or recent 3-candle low if lower)
         sl_price = min(c_ema44, float(df['low'].iloc[-3:].min()))
         if sl_price >= c_close:
-            sl_price = c_close * 0.98  # Fallback 2% SL buffer
+            sl_price = round(c_close * 0.98, 2)  # Fallback 2% SL buffer
 
         risk = c_close - sl_price
-        t1 = c_close + (1.5 * risk)
-        t2 = c_close + (2.5 * risk)
-        t3 = c_close + (3.5 * risk)
+        t1 = round(c_close + (1.5 * risk), 2)
+        t2 = round(c_close + (2.5 * risk), 2)
+        t3 = round(c_close + (3.5 * risk), 2)
 
         ts_val = curr.get('date') if isinstance(curr, pd.Series) and 'date' in curr else getattr(curr, 'name', None)
         ts_str = str(ts_val) if ts_val is not None else time.strftime("%Y-%m-%d %H:%M:%S")
@@ -191,7 +341,7 @@ def run_ema_scan_symbol(kite, symbol, info, timeframe="1d", fast_period=13, slow
             "ema44": round(c_ema44, 2),
             "entry_time": ts_clean,
             "candle_a_time": ts_clean,
-            "pattern": "BULL_EMA_CROSS",
+            "pattern": pattern,
             "timeframe": timeframe
         }
     except Exception as e:
@@ -274,11 +424,16 @@ def execute_ema_scan_cycle(timeframe="1d", is_options_mode=True, target_universe
                     "rr": 1.5,
                     "candle_a_time": setup["candle_a_time"],
                     "entry_time": setup["entry_time"],
-                    "pattern": "BULL_EMA_CROSS",
+                    "pattern": setup.get("pattern", "BULL_EMA_CROSS"),
+                    "day_close": setup.get("day_close"),
+                    "day_ema13": setup.get("day_ema13"),
+                    "day_ema44": setup.get("day_ema44"),
+                    "ema13": setup.get("ema13"),
+                    "ema44": setup.get("ema44"),
                     "carry_forward": False,
                     "lot_size": lot_size,
                     "engine": "ema_engine",
-                    "timeframe": timeframe
+                    "timeframe": setup.get("timeframe", timeframe)
                 })
             else:
                 results.append({
@@ -294,10 +449,15 @@ def execute_ema_scan_cycle(timeframe="1d", is_options_mode=True, target_universe
                     "rr": setup["rr"],
                     "candle_a_time": setup["candle_a_time"],
                     "entry_time": setup["entry_time"],
-                    "pattern": "BULL_EMA_CROSS",
+                    "pattern": setup.get("pattern", "BULL_EMA_CROSS"),
+                    "day_close": setup.get("day_close"),
+                    "day_ema13": setup.get("day_ema13"),
+                    "day_ema44": setup.get("day_ema44"),
+                    "ema13": setup.get("ema13"),
+                    "ema44": setup.get("ema44"),
                     "carry_forward": False,
                     "engine": "ema_engine",
-                    "timeframe": timeframe
+                    "timeframe": setup.get("timeframe", timeframe)
                 })
 
         # Save scan display file (accumulate today's setups across cycles so the scan

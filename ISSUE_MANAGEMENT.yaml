@@ -1,15 +1,45 @@
 meta:
   system: Price Action Unified Strategy System
   version: v2.1.0-stable
-  last_updated: '2026-09-09'
+  last_updated: '2026-09-15'
   purpose: Active operational tracker for v2.1.0-stable failures, root causes, regressions, and enhancements.
   historical_archive: archive/ISSUE_HISTORY_ARCHIVE.yaml (Preserves 119 resolved legacy issues prior to 2026-09-05)
-  total_active_issues: 38
+  total_active_issues: 39
   archived_issues_summary:
     total_archived: 119
     recent_archived_batch: [FEATURE-031, FEATURE-030, FEATURE-029, ISSUE-084, ISSUE-083, ISSUE-082, ISSUE-081, ISSUE-080, FEATURE-036, FEATURE-035, FEATURE-034, FEATURE-033, ISSUE-054]
     key_archived_families: [ALGO_AUDIT_CVE, QUANT_ENHANCEMENTS, RADAR_LIFECYCLE, VCP_METRICS, SCANNER_DISCOVERY, SECURITY_CONFIG, ZERO_REGRESSION_AUDIT]
 issues:
+- id: FEATURE-040
+  title: Datta Dual-Timeframe Hierarchical EMA Strategy Engine Implementation
+  severity: ENHANCEMENT
+  category: EMA Strategy Engine, Dual Timeframe, Multi-TF Confluence, Trend Filtering
+  family: STRATEGY_ENHANCEMENT
+  date_reported: '2026-09-15'
+  symptom: |
+    The EMA engine previously executed a single-timeframe crossover scan on whatever timeframe was configured. Per Datta Harale's hierarchical price action rulebook, equities must strictly satisfy a two-step hierarchical validation: Step 1 (Daily close > EMA) fail-fast rejection, followed by Step 2 (1-Hour close > EMA) trigger confirmation.
+  root_cause: |
+    common/ema_engine.py lacked the dual-timeframe verification chain and only performed single-timeframe crossover checks on df.iloc[-1] vs df.iloc[-2].
+  affected_files:
+  - common/ema_engine.py
+  - ISSUE_MANAGEMENT.yaml
+  - MASTER_DOCUMENTATION.yaml
+  - scratch/test_datta_dual_tf_ema.py
+  fix_applied: |
+    1. Implemented detect_datta_dual_tf_ema_pattern(kite, symbol, info, fast_period=13, slow_period=44) in common/ema_engine.py:
+       - Step 1 (Daily 1d): 'Firstly close ABV ema On day basis'. Rejects symbol immediately if d_close <= d_ema13 and d_close <= d_ema44, skipping 1-hour candle fetch to conserve Zerodha API rate limits.
+       - Step 2 (1-Hour 60m): 'Then close ABV 1 hrs That is criteria'. Rejects symbol if h_close <= h_ema13 and h_close <= h_ema44.
+       - Trigger Classification: Classifies setups into BULL_13_44_CROSS, BULL_EMA_CROSS, BULL_EMA_ON_13, BULL_EMA_ON_44, or BULL_DAY_1H_EMA_CONFIRMED.
+       - Stop Loss & Targets: Sets SL to min(44 EMA on 1H, 3-candle low on 1H), and targets T1=1.5R, T2=2.5R, T3=3.5R.
+    2. Updated run_ema_scan_symbol() to route '1d', 'day', 'BOTH_1D_1HR', 'DATTA_DAY_1HR' seamlessly through detect_datta_dual_tf_ema_pattern while retaining single intraday TF fallback.
+    3. In execute_ema_scan_cycle(), preserved dynamic setup['pattern'], setup['timeframe'], and propagated day_close, day_ema13, day_ema44, ema13, ema44 into staged trades for both Options and Stock modes.
+  verification: |
+    1. Created scratch/test_datta_dual_tf_ema.py: 5/5 unit tests passed covering fail-fast daily disqualification, 1-hour disqualification, dual-TF qualification, routing, and Options/Stock parity.
+    2. Master regression suite (scratch/run_full_regression_test.py): 19/19 offline tests passed.
+    3. AST syntax check passed.
+  status: RESOLVED
+  resolution_date: '2026-09-15'
+
 - id: ISSUE-103
   title: Debit Spread Direction Inversion (PE to CE) & Leg 2 Failure Rollback Elimination
   severity: CRITICAL
