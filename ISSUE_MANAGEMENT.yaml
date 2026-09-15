@@ -10,6 +10,36 @@ meta:
     recent_archived_batch: [FEATURE-031, FEATURE-030, FEATURE-029, ISSUE-084, ISSUE-083, ISSUE-082, ISSUE-081, ISSUE-080, FEATURE-036, FEATURE-035, FEATURE-034, FEATURE-033, ISSUE-054]
     key_archived_families: [ALGO_AUDIT_CVE, QUANT_ENHANCEMENTS, RADAR_LIFECYCLE, VCP_METRICS, SCANNER_DISCOVERY, SECURITY_CONFIG, ZERO_REGRESSION_AUDIT]
 issues:
+- id: ISSUE-102
+  title: Premature Radar Funnel Eviction on Order Gate Rejection & Liquidity Re-evaluation Retention
+  severity: HIGH
+  category: Radar Automation, Funnel Lifecycle, Liquidity Gate, Head-of-Line Starvation
+  family: RADAR_LIFECYCLE
+  date_reported: '2026-09-15'
+  symptom: |
+    During live fast radar surveillance on 2026-09-15 03:51 UTC (09:21 AM IST), ADANIGREEN (ADANIGREEN26SEP1260CE) triggered on POST_D_RETEST at LTP=50.00 vs BM=50.45. Auto-execution was rejected by the Liquidity Gate because the order book spread was 3.60% (Bid=48.4, Ask=50.2) > 2.0% limit. However, the candidate was immediately dropped from the 15-second fast radar loop and was not evaluated when price hovered in range at 46-50.
+  root_cause: |
+    1. Trade_Option/stock_options_trade_engine.py: Line 971 called pattern_funnel.evict_item("nifty50", item) immediately upon trigger inside run_fast_radar_check(), BEFORE execute_highest_rr_trade() verified whether order placement would succeed.
+    2. When execute_highest_rr_trade() deferred or rejected the setup due to transient spread > max_spread_pct, the candidate was already evicted from pattern_funnel and starved from re-surveillance until the 15-minute scheduled discovery cycle.
+    3. Missing journal rate-limiting for recurring gate rejections: Repeated evaluations during transient spread widening risked flooding trade_journal.csv.
+  affected_files:
+  - Trade_Option/stock_options_trade_engine.py
+  - ISSUE_MANAGEMENT.yaml
+  fix_applied: |
+    1. Removed premature eviction pattern_funnel.evict_item("nifty50", item) from run_fast_radar_check() trigger block. Candidates remain in pattern_funnel during fast surveillance if pre-order gates (Liquidity spread, Overpay VWAP, Portfolio Risk) defer immediate execution.
+    2. Enforced clean single-point eviction in execute_highest_rr_trade() ONLY upon successful trade creation into ACTIVE_POSITIONS and SQLite DB (Line 670), or via the established hard eviction guards (80% T1 hit / Anchor SL candle close).
+    3. Added _LAST_LIQ_WARN dictionary to throttle spread rejection warnings and trade_journal.csv writes to a clean 60-second window per contract while actively holding the candidate in radar.
+  verification: |
+    1. AST syntax check passed 100% on stock_options_trade_engine.py.
+    2. Import smoke test passed for all core modules.
+    3. Regression suite (scratch/run_full_regression_test.py): 19/19 offline suites passed.
+    4. Institutional enhancements (scratch/test_institutional_enhancements.py): 5/5 passed.
+    5. Spread liquidity reconciler (scratch/test_spread_liquidity_reconciler.py): 7/7 passed.
+    6. VCP metrics (scratch/test_vcp_metrics.py): 4/4 passed.
+    7. VIX & portfolio volume suite (scratch/test_vix_portfolio_volume.py): 47/47 passed.
+  status: RESOLVED
+  resolution_date: '2026-09-15'
+
 - id: ISSUE-101
   title: Always-Live Risk Guardian Decoupling, Auto SQLite Broker Recovery Persistence, Multi-Lot 50% T1 Scale-Out, and Intraday Theta Stagnation Guard
   severity: HIGH

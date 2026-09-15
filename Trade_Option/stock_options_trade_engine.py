@@ -84,6 +84,7 @@ LIVE_EXECUTION_FLAG = paths.NIFTY50_LIVE_FLAG
 SCAN_DISPLAY_FILE = paths.SCAN_DISPLAY_FILE
 SL_TARGET_OVERRIDES_FILE = paths.SL_TARGET_OVERRIDES_FILE
 _RADAR_ACTIVE = threading.Event()
+_LAST_LIQ_WARN = {}
 
 class FlushFileHandler(logging.FileHandler):
     def emit(self, record):
@@ -600,10 +601,15 @@ def execute_highest_rr_trade(kite, staged):
                     max_spread_pct=max_spread
                 )
                 if not liq_ok:
-                    logging.warning(f"[LIQUIDITY_GATE] Auto-execution rejected for {sym} ({contract}): {liq_msg}; checking next candidate")
-                    log_to_journal(sym, best["pattern"], TIMEFRAME_ENTRY, "SKIP_ILLIQUID_SPREAD", "REJECTED",
-                                   liq_msg, entry=limit_price, sl=best["current_sl"], target=best["t1"],
-                                   event_time=best.get("entry_time"))
+                    now_epoch = time.time()
+                    if now_epoch - _LAST_LIQ_WARN.get(contract, 0) >= 60.0:
+                        _LAST_LIQ_WARN[contract] = now_epoch
+                        logging.warning(f"[LIQUIDITY_GATE] Auto-execution rejected for {sym} ({contract}): {liq_msg}; holding candidate in radar")
+                        log_to_journal(sym, best["pattern"], TIMEFRAME_ENTRY, "SKIP_ILLIQUID_SPREAD", "REJECTED",
+                                       liq_msg, entry=limit_price, sl=best["current_sl"], target=best["t1"],
+                                       event_time=best.get("entry_time"))
+                    else:
+                        logging.debug(f"[LIQUIDITY_GATE] Re-evaluating {sym} ({contract}): spread still wide ({spread_val * 100:.2f}%); holding in radar")
                     continue
 
                 # Stage 0.5: Option Contract VWAP Overpay Guard
@@ -968,7 +974,10 @@ def run_fast_radar_check(kite):
                         if risk_now > 0 and t1 > 0:
                             item["rr"] = round(abs(t1 - c_now) / risk_now, 2)
                         triggered.append(item)
-                        pattern_funnel.evict_item("nifty50", item)
+                        # NOTE: Candidate is retained in pattern_funnel so it remains in fast surveillance
+                        # if gates (liquidity spread, overpay VWAP, portfolio caps) defer immediate execution.
+                        # Eviction is handled cleanly in execute_highest_rr_trade() upon successful trade creation,
+                        # or by hard eviction rules (80% T1 hit / Anchor SL close).
             except Exception as radar_err:
                 logging.debug(f"Radar check error for {sym}: {radar_err}")
 
