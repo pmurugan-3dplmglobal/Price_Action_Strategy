@@ -2344,7 +2344,7 @@ def resolve_option_strikes(nfo_instruments, base_symbol, spot_price, step_size, 
     return out
 
 
-def resolve_option_spread(nfo_instruments, base_symbol, spot_price, step_size, direction="BULL", target_price=None, spread_width_steps=2):
+def resolve_option_spread(nfo_instruments, base_symbol, spot_price, step_size, direction="BULL", target_price=None, spread_width_steps=2, side=None):
     """
     Resolve a 2-leg Debit Spread to neutralize theta decay during intraday consolidation:
     - BULL (Bull Call Spread): Buy ATM CE (Leg 1) + Sell OTM CE (Leg 2 at/near Target T1)
@@ -2353,8 +2353,21 @@ def resolve_option_spread(nfo_instruments, base_symbol, spot_price, step_size, d
     if nfo_instruments is None or (hasattr(nfo_instruments, "empty") and nfo_instruments.empty):
         return None
 
-    is_bull = str(direction).upper().startswith("BULL")
-    opt_type = "CE" if is_bull else "PE"
+    # Determine Call vs Put spread based on explicit 'side' first, then 'direction'
+    side_val = str(side or "").strip().upper()
+    dir_val = str(direction or "").strip().upper()
+    if side_val in ["PE", "PUT"]:
+        is_bull = False
+        opt_type = "PE"
+    elif side_val in ["CE", "CALL"]:
+        is_bull = True
+        opt_type = "CE"
+    elif dir_val in ["PE", "BEAR", "SHORT", "SELL"]:
+        is_bull = False
+        opt_type = "PE"
+    else:
+        is_bull = True
+        opt_type = "CE"
     atm_strike = int(round(spot_price / step_size) * step_size)
 
     # Determine desired short leg strike

@@ -533,13 +533,16 @@ def execute_highest_rr_trade(kite, staged):
                         from position_monitor import _get_nfo_cache
                         from resolve import resolve_option_spread
                     nfo_df = _get_nfo_cache()
+                    cand_side = str(best.get("side", "CE")).upper()
+                    cand_dir = "BEAR" if cand_side == "PE" else "BULL"
                     spread_info = resolve_option_spread(
                         nfo_instruments=nfo_df,
                         base_symbol=sym,
                         spot_price=cp,
                         step_size=strike_step,
-                        direction=best.get("direction", "BULL"),
-                        target_price=best.get("t1")
+                        direction=cand_dir,
+                        target_price=best.get("t1"),
+                        side=cand_side
                     )
                     if spread_info:
                         contract = spread_info["leg1"]["contract"]
@@ -722,6 +725,17 @@ def execute_highest_rr_trade(kite, staged):
                             logging.info(f"[DEBIT SPREAD SHORT LEG] Placed {leg2_c} TotalQty={qty} (Orders: {leg2_placed})")
                         except Exception as leg2_err:
                             logging.error(f"[DEBIT SPREAD SHORT LEG FAILED] {spread_info['leg2']['contract']}: {leg2_err}")
+                            # ROLLBACK GUARD: Cancel Leg 1 order slices to prevent unhedged naked exposure
+                            for o_to_cancel in placed_order_ids:
+                                try:
+                                    kite.cancel_order(variety=kite.VARIETY_REGULAR, order_id=o_to_cancel)
+                                    logging.warning(f"[DEBIT SPREAD ROLLBACK] Cancelled Leg 1 order {o_to_cancel} because Leg 2 failed: {leg2_err}")
+                                except Exception as c_err:
+                                    logging.error(f"[DEBIT SPREAD ROLLBACK ERROR] Could not cancel Leg 1 order {o_to_cancel}: {c_err}")
+                            with position_lock:
+                                ACTIVE_POSITIONS.pop(sym, None)
+                            save_state()
+                            continue
 
                     log_to_journal(sym, best["pattern"], TIMEFRAME_ENTRY, "BUY", "SUCCESS",
                                    f"Order: {oid}, Qty: {qty}, {opt_type}@{target_strike} @ Benchmark Limit={limit_price} (🥇 T1 Gold)", entry=limit_price, sl=best["current_sl"], target=best["t1"], rr=avg_rr,

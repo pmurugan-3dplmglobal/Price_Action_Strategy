@@ -10,6 +10,36 @@ meta:
     recent_archived_batch: [FEATURE-031, FEATURE-030, FEATURE-029, ISSUE-084, ISSUE-083, ISSUE-082, ISSUE-081, ISSUE-080, FEATURE-036, FEATURE-035, FEATURE-034, FEATURE-033, ISSUE-054]
     key_archived_families: [ALGO_AUDIT_CVE, QUANT_ENHANCEMENTS, RADAR_LIFECYCLE, VCP_METRICS, SCANNER_DISCOVERY, SECURITY_CONFIG, ZERO_REGRESSION_AUDIT]
 issues:
+- id: ISSUE-103
+  title: Debit Spread Direction Inversion (PE to CE) & Leg 2 Failure Rollback Elimination
+  severity: CRITICAL
+  category: Order Execution, Debit Spreads, Option Greeks, Risk Management, Atomicity
+  family: EXECUTION_INTEGRITY
+  date_reported: '2026-09-15'
+  symptom: |
+    At 09:48:07 AM IST on 2026-09-15, the index options engine selected MIDCPNIFTY26SEP14600PE (MacroBias: PE, direction: BULL pattern breakout on PE chart). During 2-leg debit spread resolution, the engine resolved MIDCPNIFTY26SEP14575CE (Long Leg 1) + MIDCPNIFTY26SEP14625CE (Short Leg 2) — purchasing Call options during a falling market. Furthermore, Kite rejected Leg 2 (SELL) due to naked margin rules, but the engine failed to cancel Leg 1 (BUY LIMIT), leaving the account holding an unintended, unhedged naked long Call (MIDCPNIFTY 14575 CE @ 158.80) that filled at 09:52:54.
+  root_cause: |
+    1. common/resolve.py: resolve_option_spread() mapped direction.startswith("BULL") to opt_type = "CE" without checking contract side ("PE" vs "CE"). Because all price action breakouts (including Put option rallies) evaluate direction: "BULL", PE setups were inverted into Bull Call Spreads.
+    2. Trade_Option/index_options_trade_engine.py & stock_options_trade_engine.py: Passed direction=best.get("direction", "BULL") instead of evaluating contract side.
+    3. Missing Leg 2 Atomicity Rollback: When Leg 2 (short leg) placement threw an exception or was rejected by broker RMS, execute_index_entry() and execute_highest_rr_trade() logged an error but returned True, leaving resting Leg 1 Limit orders active on the exchange.
+  affected_files:
+  - common/resolve.py
+  - Trade_Option/index_options_trade_engine.py
+  - Trade_Option/stock_options_trade_engine.py
+  - ISSUE_MANAGEMENT.yaml
+  - scratch/test_spread_direction_fix.py
+  fix_applied: |
+    1. common/resolve.py: Added side parameter to resolve_option_spread() with strict priority: if side=="PE" or direction in ["PE", "BEAR"], resolves BEAR_PUT_SPREAD with opt_type="PE"; if side=="CE" or direction in ["CE", "BULL"], resolves BULL_CALL_SPREAD with opt_type="CE".
+    2. index_options_trade_engine.py & stock_options_trade_engine.py: Derived cand_dir = "BEAR" if side=="PE" else "BULL" and passed both direction and side to resolve_option_spread(). Also safely resolved live underlying index spot price via Kite quote.
+    3. Atomic Rollback on Leg 2 Failure: In both options engines, if Leg 2 placement throws an exception or is rejected, immediately iterates placed Leg 1 order IDs and calls kite.cancel_order() to cancel resting limit orders, pops position from ACTIVE_POSITIONS, and aborts execution to prevent unhedged naked exposure.
+  verification: |
+    1. Created scratch/test_spread_direction_fix.py: 3/3 passed verifying PE setups resolve BEAR_PUT_SPREAD with PE contracts and CE setups resolve BULL_CALL_SPREAD with CE contracts.
+    2. AST syntax check passed on all 3 modified files.
+    3. Regression test suite (scratch/run_full_regression_test.py): 19/19 offline suites passed.
+    4. Spread liquidity reconciler suite (scratch/test_spread_liquidity_reconciler.py): 7/7 passed.
+  status: RESOLVED
+  resolution_date: '2026-09-15'
+
 - id: ISSUE-102
   title: Premature Radar Funnel Eviction on Order Gate Rejection & Liquidity Re-evaluation Retention
   severity: HIGH

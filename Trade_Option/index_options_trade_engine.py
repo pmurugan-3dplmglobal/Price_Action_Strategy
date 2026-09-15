@@ -313,6 +313,19 @@ def execute_index_entry(kite, pos):
                 logging.info(f"[INDEX DEBIT SPREAD] Leg 2 (Short OTM) placed for {leg2_c} TotalQty={total_qty} @ {leg2_limit} (Orders: {leg2_placed})")
             except Exception as leg2_err:
                 logging.error(f"[INDEX DEBIT SPREAD ERROR] Failed to place Leg 2 ({leg2_c}): {leg2_err}")
+                # ROLLBACK GUARD: If Leg 2 fails, immediately cancel Leg 1 resting orders to prevent naked unhedged exposure
+                for o_to_cancel in placed_oids:
+                    try:
+                        kite.cancel_order(variety=kite.VARIETY_REGULAR, order_id=o_to_cancel)
+                        logging.warning(f"[DEBIT SPREAD ROLLBACK] Cancelled Leg 1 order {o_to_cancel} because Leg 2 failed: {leg2_err}")
+                    except Exception as c_err:
+                        logging.error(f"[DEBIT SPREAD ROLLBACK ERROR] Could not cancel Leg 1 order {o_to_cancel}: {c_err}")
+                if sym and sym in ACTIVE_POSITIONS:
+                    with position_lock:
+                        ACTIVE_POSITIONS.pop(sym, None)
+                if pos.get("trade_id"):
+                    trade_db.update_trade(pos["trade_id"], {"status": "FAILED", "updated_at": dt.now().strftime("%Y-%m-%d %H:%M:%S")})
+                return False
 
         return True
     except Exception as e:
@@ -363,15 +376,31 @@ def execute_highest_rr_trade(kite, staged):
                         from resolve import resolve_option_spread
                     nfo_df = _get_nfo_cache()
                     sym = best["symbol"]
-                    cp = float(best.get("spot_entry") or best.get("entry_spot") or 0.0)
+                    cand_side = str(best.get("side", "CE")).upper()
+                    cand_dir = "BEAR" if cand_side == "PE" else "BULL"
+                    cp = float(best.get("spot_entry") or 0.0)
+                    if cp <= 0:
+                        reg_entry = INDEX_REGISTRY.get(sym, {})
+                        spot_ts = reg_entry.get("tradingsymbol")
+                        exch_prefix = "BSE" if sym == "SENSEX" else "NSE"
+                        if spot_ts and kite:
+                            try:
+                                q_spot = kite.quote([f"{exch_prefix}:{spot_ts}"])
+                                cp = float(q_spot.get(f"{exch_prefix}:{spot_ts}", {}).get("last_price", 0.0))
+                            except Exception:
+                                cp = 0.0
+                    if cp <= 0:
+                        cp = float(best.get("strike") or best.get("entry_spot") or 0.0)
+
                     strike_step = INDEX_REGISTRY.get(sym, {}).get("strike_step", 50)
                     spread_info = resolve_option_spread(
                         nfo_instruments=nfo_df,
                         base_symbol=sym,
                         spot_price=cp,
                         step_size=strike_step,
-                        direction=best.get("direction", "BULL"),
-                        target_price=best.get("t1")
+                        direction=cand_dir,
+                        target_price=best.get("t1"),
+                        side=cand_side
                     )
                     if spread_info:
                         pos["contract"] = spread_info["leg1"]["contract"]
