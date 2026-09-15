@@ -319,26 +319,72 @@ def run_scan_cycle(kite):
 
     from equity_universe import NIFTY50_SYMBOLS, INDICES_REGISTRY_MAP
     if TARGET_UNIVERSE == "NIFTY50":
-        scan_order = sorted([s for s in STOCK_REGISTRY.keys() if s in NIFTY50_SYMBOLS])
+        base_symbols = sorted([s for s in STOCK_REGISTRY.keys() if s in NIFTY50_SYMBOLS])
     elif TARGET_UNIVERSE in INDICES_REGISTRY_MAP:
         univ_syms = set(INDICES_REGISTRY_MAP[TARGET_UNIVERSE])
-        scan_order = sorted([s for s in STOCK_REGISTRY.keys() if s in univ_syms])
+        base_symbols = sorted([s for s in STOCK_REGISTRY.keys() if s in univ_syms])
     else:
-        scan_order = sorted(STOCK_REGISTRY.keys())
+        base_symbols = sorted(STOCK_REGISTRY.keys())
 
-    # Bulk pre-fetch all spot LTPs in 1 single API call (eliminates 200+ serial network roundtrips)
+    # Bulk pre-fetch all spot quotes (LTP, Volume, OHLC) in batches of 100
     spot_quotes = {}
     if kite:
-        try:
-            spot_query = [f"NSE:{s}" for s in scan_order]
-            # Chunk in batches of 200 if necessary
-            for chunk_start in range(0, len(spot_query), 200):
-                chunk = spot_query[chunk_start : chunk_start + 200]
-                q_res = safe_kite_call(kite.ltp, chunk)
+        spot_query = [f"NSE:{s}" for s in base_symbols]
+        for chunk_start in range(0, len(spot_query), 100):
+            chunk = spot_query[chunk_start : chunk_start + 100]
+            try:
+                q_res = safe_kite_call(kite.quote, chunk)
                 if q_res and isinstance(q_res, dict):
                     spot_quotes.update(q_res)
-        except Exception as ltp_err:
-            logging.debug(f"Bulk spot quote fetch error: {ltp_err}")
+            except Exception as q_err:
+                logging.debug(f"Chunk quote fetch error, falling back to LTP: {q_err}")
+                try:
+                    ltp_res = safe_kite_call(kite.ltp, chunk)
+                    if ltp_res and isinstance(ltp_res, dict):
+                        spot_quotes.update(ltp_res)
+                except Exception as ltp_err:
+                    logging.debug(f"Chunk LTP fallback error: {ltp_err}")
+
+    # Identify Incubating Symbols from Pattern Funnel (Category A+, A, B)
+    incubating_syms = set()
+    try:
+        current_funnel = pattern_funnel.load_funnel_state("nifty50")
+        for pool in ["category_a_plus", "category_a", "category_b"]:
+            for item in current_funnel.get(pool, []):
+                sym = item.get("symbol")
+                if sym:
+                    incubating_syms.add(sym)
+    except Exception as fn_err:
+        logging.debug(f"Funnel priority check error: {fn_err}")
+
+    # Dynamic Scan Priority Scoring:
+    # 1. Funnel Incubating Setups (Category A+/A/B): +10,000 pts (Scan immediately)
+    # 2. Intraday % Change Velocity: + (abs_pct_change * 100 pts)
+    # 3. Traded Turnover Liquidity: + min(Turnover_Cr * 5.0, 500 pts)
+    def _compute_scan_priority(sym):
+        score = 0.0
+        if sym in incubating_syms:
+            score += 10000.0
+
+        q = spot_quotes.get(f"NSE:{sym}", {})
+        lp = float(q.get("last_price") or 0.0)
+        ohlc = q.get("ohlc") or {}
+        prev_close = float(ohlc.get("close") or 0.0)
+        vol = float(q.get("volume") or 0.0)
+
+        if prev_close > 0 and lp > 0:
+            pct_change = abs(lp - prev_close) / prev_close * 100.0
+            score += pct_change * 100.0
+
+        turnover_cr = (vol * lp) / 1e7
+        score += min(turnover_cr * 5.0, 500.0)
+        return score
+
+    # Sort descending by priority score; tie-break alphabetically
+    scan_order = sorted(base_symbols, key=lambda s: (-_compute_scan_priority(s), s))
+    if scan_order:
+        top_preview = ", ".join([f"{s}({_compute_scan_priority(s):.0f}pts)" for s in scan_order[:6]])
+        logging.info(f"[PRIORITY SCAN ORDER] Evaluated {len(scan_order)} stocks. Top priority: {top_preview}")
 
     temp_stored_trades = []
 

@@ -4,12 +4,41 @@ meta:
   last_updated: '2026-09-15'
   purpose: Active operational tracker for v2.1.0-stable failures, root causes, regressions, and enhancements.
   historical_archive: archive/ISSUE_HISTORY_ARCHIVE.yaml (Preserves 119 resolved legacy issues prior to 2026-09-05)
-  total_active_issues: 39
+  total_active_issues: 40
   archived_issues_summary:
     total_archived: 119
     recent_archived_batch: [FEATURE-031, FEATURE-030, FEATURE-029, ISSUE-084, ISSUE-083, ISSUE-082, ISSUE-081, ISSUE-080, FEATURE-036, FEATURE-035, FEATURE-034, FEATURE-033, ISSUE-054]
     key_archived_families: [ALGO_AUDIT_CVE, QUANT_ENHANCEMENTS, RADAR_LIFECYCLE, VCP_METRICS, SCANNER_DISCOVERY, SECURITY_CONFIG, ZERO_REGRESSION_AUDIT]
 issues:
+- id: FEATURE-041
+  title: Dynamic Opening Volume, RVOL & Funnel Incubation Priority Scan Queue
+  severity: ENHANCEMENT
+  category: Scanner Architecture, Rate Limit Preservation, Funnel Incubation, RVOL Momentum, Opening Bell Discovery
+  family: SCANNER_PERFORMANCE
+  date_reported: '2026-09-15'
+  symptom: |
+    High-momentum opening runners such as ASTRAL26SEP1400PE (+45%) and ATHERENERG26SEP1660PE (+63%) were only first evaluated 31 to 33 minutes after market open (09:46:36 and 09:48:47 IST). By the time the scanner reached them, LTP had already traversed > 95% of the distance to T1, triggering hard eviction under the 80% T1 rule ('Do Not Chase').
+  root_cause: |
+    Trade_Option/stock_options_trade_engine.py sorted all 210+ F&O stocks alphabetically ('sorted(STOCK_REGISTRY.keys())'). Because the macro scan throttles to 2-3 worker threads to respect Zerodha Kite rate limits (3 req/sec), evaluating preceding 'A' stocks serially took over 30 minutes, causing late discovery of explosive opening runners.
+  affected_files:
+  - Trade_Option/stock_options_trade_engine.py
+  - ISSUE_MANAGEMENT.yaml
+  - MASTER_DOCUMENTATION.yaml
+  - scratch/test_scan_priority.py
+  fix_applied: |
+    1. Replaced static alphabetical sorting with a Dynamic Scan Priority Scoring queue:
+       - Tier 1 Priority (+10,000 pts): Setups currently incubating in pattern_funnel (Category A+, A, or B) are evaluated first to catch imminent coiling triggers immediately.
+       - Tier 2 Velocity Priority (+100 pts per 1% change): Computes absolute intraday price percent change from previous close using bulk quotes.
+       - Tier 3 Liquidity Priority (+5 pts per Cr turnover, capped at 500 pts): Factors institutional volume footprints (e.g. ATHERENERG 492K shares).
+    2. Optimized Spot Quote Bulk Fetch: Upgraded from sequential ltp calls to bulk kite.quote batches of 100 instruments with automatic kite.ltp fallback, fetching all 210 equities in ~2 seconds.
+    3. Alphabetical tie-breaker preserved for neutral/flat stocks outside market hours.
+  verification: |
+    1. Unit test scratch/test_scan_priority.py passed: Verified incubating setups rank #1, high volume runners (ATHERENERG, ASTRAL) rank next, and flat stocks rank last.
+    2. AST syntax check passed.
+    3. Full regression test suite (scratch/run_full_regression_test.py) passed all 19 offline unit & invariant tests.
+  status: RESOLVED
+  resolution_date: '2026-09-15'
+
 - id: FEATURE-040
   title: Datta Dual-Timeframe Hierarchical EMA Strategy Engine Implementation
   severity: ENHANCEMENT
