@@ -162,6 +162,78 @@ def contract_is_expired(contract):
                         continue
     return False
 
+
+def get_contract_days_to_expiry(contract):
+    """Return number of calendar days until contract expiry, or None if unknown.
+    
+    Returns:
+        int: Days until expiry (0 = expires today, negative = expired).
+        None: If expiry date could not be parsed.
+    """
+    if not contract:
+        return None
+    c = str(contract).strip().upper()
+    if ":" in c:
+        c = c.split(":")[-1]
+    today = get_ist_date()
+    try:
+        df = _get_nfo_cache()
+        if not df.empty:
+            row = df[df['tradingsymbol'] == c]
+            if not row.empty:
+                exp_str = str(row.iloc[0]['expiry'])
+                exp_date = pd.to_datetime(exp_str).date()
+                return (exp_date - today).days
+    except Exception as e:
+        logging.debug(f"Expiry cache lookup failed for {c}: {e}")
+
+    # Standard monthly contract pattern (e.g. HINDZINC26SEP560CE)
+    _MONTH_MAP = {'JAN': 1, 'FEB': 2, 'MAR': 3, 'APR': 4, 'MAY': 5, 'JUN': 6, 'JUL': 7, 'AUG': 8, 'SEP': 9, 'OCT': 10, 'NOV': 11, 'DEC': 12}
+    import re, calendar
+    m_mon = re.search(r"(\d{2})(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)(\d+)(CE|PE)$", c)
+    if m_mon:
+        try:
+            yy = int("20" + m_mon.group(1))
+            mon_str = m_mon.group(2)
+            month_num = _MONTH_MAP[mon_str]
+            month_cal = calendar.monthcalendar(yy, month_num)
+            thursdays = [week[calendar.THURSDAY] for week in month_cal if week[calendar.THURSDAY] != 0]
+            if thursdays:
+                last_thursday = dt(yy, month_num, thursdays[-1]).date()
+                return (last_thursday - today).days
+        except Exception:
+            pass
+
+    # Weekly date pattern (Standard NSE NFO format: e.g. NIFTY2692423500CE or NIFTY26O0823500CE)
+    _WEEKLY_MON_MAP = {'1': 1, '2': 2, '3': 3, '4': 4, '5': 5, '6': 6, '7': 7, '8': 8, '9': 9, 'O': 10, 'N': 11, 'D': 12}
+    m_nse_weekly = re.search(r"(\d{2})([1-9OND])(\d{2})(\d+)(CE|PE)$", c)
+    if m_nse_weekly:
+        try:
+            yy = int("20" + m_nse_weekly.group(1))
+            mm = _WEEKLY_MON_MAP[m_nse_weekly.group(2)]
+            dd = int(m_nse_weekly.group(3))
+            if 1 <= dd <= 31:
+                exp_date = dt(yy, mm, dd).date()
+                return (exp_date - today).days
+        except Exception:
+            pass
+
+    # 2-digit month weekly fallback (e.g. NIFTY26092423500CE)
+    m_weekly2 = re.search(r"(\d{2})(\d{2})(\d{2})(\d+)(CE|PE)$", c)
+    if m_weekly2:
+        try:
+            yy = int("20" + m_weekly2.group(1))
+            mm = int(m_weekly2.group(2))
+            dd = int(m_weekly2.group(3))
+            if 1 <= mm <= 12 and 1 <= dd <= 31:
+                exp_date = dt(yy, mm, dd).date()
+                return (exp_date - today).days
+        except Exception:
+            pass
+
+    return None
+
+
 def close_stock_position(kite, pos, live_market=True, product=None, qty_override=None, live=None, product_type=None):
     if live is not None:
         live_market = live
@@ -1458,37 +1530,64 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                 squareoff_reason = ""
                 day_name = "Thursday" if is_thursday else "Friday"
 
-                if is_short_tf or is_index_contract:
+                # ── Expiry Horizon & Contract Classification (ISSUE-060) ──
+                dte = get_contract_days_to_expiry(contract)
+                is_expiring_today = (dte is not None and dte <= 0)
+                is_near_expiry = (dte is not None and dte <= 1)
+
+                if is_index_contract and is_expiring_today:
+                    # True weekly index option expiring today: Must square off to eliminate zero-day expiration!
                     should_squareoff = True
-                    squareoff_reason = f"{day_name} 15:15 EOD Index/Intraday Auto-Squareoff [{'WEEKLY_THETA_GUARD' if is_thursday else 'WEEKEND_DECAY_GUARD'}]"
+                    squareoff_reason = f"{day_name} 15:15 EOD Expiring Index Option Auto-Squareoff [ZERO_DAY_EXPIRY]"
+                elif is_thursday and not is_near_expiry:
+                    # Monthly Stock Option or Deferred Expiry on Thursday:
+                    # Tomorrow is Friday (normal trading session) and contract has days to expiry.
+                    # Exempt from Thursday stagnant square-off! Only square off if SL breached.
+                    logging.info(f"[THU 15:15 EXEMPT] {sym} ({contract}): DTE={dte} days. Thursday is not expiry; exempt from stagnant square-off.")
+                    should_squareoff = False
+                elif is_short_tf and is_near_expiry:
+                    should_squareoff = True
+                    squareoff_reason = f"{day_name} 15:15 EOD Short-TF Auto-Squareoff [{'WEEKLY_THETA_GUARD' if is_thursday else 'WEEKEND_DECAY_GUARD'}]"
                 else:
-                    # Stock Option: Apply Intelligent Carry Gate
+                    # Stock Option / Multi-Day Carry Evaluation
                     is_runner_be = int(pos.get("trailing_stage") or 0) >= 1
                     is_solid_profit = curr_pnl_pct >= float(cfg.get("friday_min_profit_pct", 2.0))
                     
-                    # Check if fresh afternoon entry (e.g. entered after 13:30 on Friday)
+                    # Check if fresh afternoon entry (e.g. entered after 13:00 on Friday)
                     is_fresh_pm = False
                     pos_et = str(pos.get("entry_time") or "")
                     if pos_et:
                         try:
                             et_clean = pos_et.split("+")[0].replace("T", " ")
                             et_obj = dt.fromisoformat(et_clean)
-                            if et_obj.date() == now_dt.date() and et_obj.strftime("%H:%M") >= "13:30":
+                            if et_obj.date() == now_dt.date() and et_obj.strftime("%H:%M") >= "13:00":
                                 is_fresh_pm = True
                         except Exception:
                             pass
                     
                     is_tier1_gold = (int(pos.get("tier") or 0) == 1) or ("GOLD" in str(pos.get("tier_label", "")).upper())
+                    has_long_runway = (dte is not None and dte >= 5)
 
-                    # Qualified to hold?
-                    qualified_to_hold = is_runner_be or is_solid_profit or (is_fresh_pm and curr_pnl_pct >= 0.0) or (is_tier1_gold and curr_pnl_pct >= 0.0)
+                    # Qualified to hold over weekend / near-expiry:
+                    # 1. Runner on house money (trailing_stage >= 1)
+                    # 2. Solid profit >= 2.0%
+                    # 3. Fresh afternoon entry with mild drawdown (>= -3.0%)
+                    # 4. Tier 1 Gold setup with healthy structural support (down < 5.0% and SL unbreached)
+                    # 5. Monthly contract with >= 5 DTE and down < 5.0%
+                    qualified_to_hold = (
+                        is_runner_be or
+                        is_solid_profit or
+                        (is_fresh_pm and curr_pnl_pct >= -3.0) or
+                        (is_tier1_gold and curr_pnl_pct >= -5.0) or
+                        (has_long_runway and curr_pnl_pct >= -5.0)
+                    )
 
                     if not qualified_to_hold:
                         should_squareoff = True
-                        squareoff_reason = f"{day_name} 15:15 EOD Stagnant Square-off [THETA_PROTECTION] (PnL {curr_pnl_pct:.2f}% < +2.0%, T1 untouched)"
+                        squareoff_reason = f"{day_name} 15:15 EOD Stagnant Square-off [THETA_PROTECTION] (PnL {curr_pnl_pct:.2f}% < +2.0%, T1 untouched, DTE={dte})"
                     else:
-                        hold_tag = "RUNNER_BE" if is_runner_be else ("PROFIT_CUSHION" if is_solid_profit else ("FRESH_PM_ENTRY" if is_fresh_pm else "TIER_1_GOLD_ACCUMULATION"))
-                        logging.info(f"[{day_name.upper()} 15:15 CARRY APPROVED] Holding {sym} ({contract}) into next session: Tag={hold_tag} | PnL {curr_pnl_pct:.2f}% | Entry {entry_s:.2f} -> LTP {curr_p:.2f}")
+                        hold_tag = "RUNNER_BE" if is_runner_be else ("PROFIT_CUSHION" if is_solid_profit else ("FRESH_PM_ENTRY" if is_fresh_pm else ("TIER_1_GOLD" if is_tier1_gold else f"MONTHLY_RUNWAY_DTE_{dte}")))
+                        logging.info(f"[{day_name.upper()} 15:15 CARRY APPROVED] Holding {sym} ({contract}) into next session: Tag={hold_tag} | PnL {curr_pnl_pct:.2f}% | DTE={dte} | Entry {entry_s:.2f} -> LTP {curr_p:.2f}")
 
                 if should_squareoff:
                     logging.info(f"[{day_name.upper()} 15:15 EOD SQUAREOFF] Closing {sym} ({contract}) | {squareoff_reason}")

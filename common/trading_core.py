@@ -149,6 +149,7 @@ from position_monitor import (
     get_option_lot_size,
     is_contract_held_on_broker,
     contract_is_expired,
+    get_contract_days_to_expiry,
     close_stock_position,
     load_executed_exits,
     save_executed_exit,

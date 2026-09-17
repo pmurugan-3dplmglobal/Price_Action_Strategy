@@ -4,12 +4,44 @@ meta:
   last_updated: '2026-09-17'
   purpose: Active operational tracker for v2.1.0-stable failures, root causes, regressions, and enhancements.
   historical_archive: archive/ISSUE_HISTORY_ARCHIVE.yaml (Preserves 119 resolved legacy issues prior to 2026-09-05)
-  total_active_issues: 42
+  total_active_issues: 43
   archived_issues_summary:
     total_archived: 119
     recent_archived_batch: [FEATURE-031, FEATURE-030, FEATURE-029, ISSUE-084, ISSUE-083, ISSUE-082, ISSUE-081, ISSUE-080, FEATURE-036, FEATURE-035, FEATURE-034, FEATURE-033, ISSUE-054]
     key_archived_families: [ALGO_AUDIT_CVE, QUANT_ENHANCEMENTS, RADAR_LIFECYCLE, VCP_METRICS, SCANNER_DISCOVERY, SECURITY_CONFIG, ZERO_REGRESSION_AUDIT]
 issues:
+- id: ISSUE-060
+  title: Smart Thursday EOD Theta Guard, Late-Day Runway Guard & Morning Institutional Radar
+  severity: HIGH
+  category: Expiry Horizon, EOD Square-Off, Option Greeks, Runway Protection, Institutional Surge
+  family: RISK_GOVERNANCE
+  date_reported: '2026-09-17'
+  symptom: |
+    1. During live market trading on 2026-09-17 (Thursday), all 4 active stock option trades (HINDZINC, KEI, GODREJCP, HINDALCO) were prematurely liquidated at 15:15 IST with reason 'Thursday 15:15 EOD Stagnant Square-off [THETA_PROTECTION] (PnL < +2.0%, T1 untouched)'.
+    2. None of the trades had breached Stop-Loss, and all were monthly contracts (26-SEP series) with 7-9 days remaining to expiry. Because NSE stock options have no weekly expiries, Thursday was an ordinary trading session, not an expiry zero-day collapse. Force-closing them resulted in a -2,065 INR loss on trades that were geometrically intact (e.g. HINDZINC was dumped at 19.10 and closed at 20.05).
+    3. Late-day 30m option breakouts entered after 13:00 IST had insufficient runway (< 2 hours) before 15:15 EOD square-off.
+    4. The engine lacked a dedicated morning institutional surge gate (09:15 - 10:30 AM) verifying Spot VWAP hold and Opening RVOL >= 2.0x.
+  root_cause: |
+    1. position_monitor.py treated Thursday identical to zero-day expiry for all options, failing to distinguish weekly index contracts from monthly stock options with multi-day runway (DTE > 1).
+    2. No late-day runway guard existed to block near-term expiry intraday options entered late in the session.
+    3. The fast radar loop did not gate morning breakouts against Spot intraday VWAP or elevate opening RVOL leaders.
+  affected_files:
+  - common/position_monitor.py
+  - common/trading_core.py
+  - Trade_Option/stock_options_trade_engine.py
+  - scratch/test_smart_eod_and_institutional_radar.py
+  fix_applied: |
+    1. Added get_contract_days_to_expiry(contract) helper parsing authoritative NFO cache and NSE monthly/weekly symbology.
+    2. Smartened Thursday 15:15 EOD square-off: Monthly stock options with DTE > 1 are exempt from Thursday stagnant square-off (only zero-day options with DTE <= 0 are force-closed).
+    3. Upgraded Friday carry gate: Tier 1 Gold monthly options with healthy structure (down < 5.0% and SL unbreached) and DTE >= 5 are permitted to carry over the weekend.
+    4. Added Late-Day Runway Guard: Suppresses fresh breakouts for near-term contracts (DTE <= 2) after 13:00 IST.
+    5. Added Morning Institutional Surge Gate (09:15 - 10:30 AM): Requires Spot >= VWAP (rejects below-VWAP chop) and automatically promotes setups with Opening RVOL >= 2.0x to 🥇 T1 Gold (Inst Surge).
+  verification: |
+    1. scratch/test_smart_eod_and_institutional_radar.py passed 6/6 (100% SUCCESS).
+    2. scratch/run_full_regression_test.py passed all 19 offline logic and invariant tests.
+  status: RESOLVED
+  resolution_date: '2026-09-17'
+
 - id: ISSUE-059
   title: Order-Fill Race Condition Grace Window & Universal IST Timezone Normalization
   severity: HIGH

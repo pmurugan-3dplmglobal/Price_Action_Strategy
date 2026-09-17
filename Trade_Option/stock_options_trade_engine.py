@@ -944,6 +944,18 @@ def run_fast_radar_check(kite):
                             is_retest = True
 
                     if is_breakout or is_retest:
+                        # ── Late-Day Runway Guard (ISSUE-060) ─────────────────
+                        # For 30m option trades, breakouts after 13:00 IST have less than 2-2.5 hours before 15:15 EOD square-off.
+                        # If a contract has near-term expiry (DTE <= 2) and is not approved for multi-day carry, suppress late entry.
+                        time_now_str = now_ist.strftime("%H:%M")
+                        from position_monitor import get_contract_days_to_expiry
+                        c_name = item.get("contract")
+                        c_dte = get_contract_days_to_expiry(c_name)
+                        if time_now_str >= "13:00" and c_dte is not None and c_dte <= 2:
+                            logging.info(f"⏳ [RUNWAY GUARD] {sym} ({c_name}): Time {time_now_str} >= 13:00 IST with DTE={c_dte} <= 2. "
+                                         f"Insufficient runway before 15:15 EOD square-off. Skipping late-day entry.")
+                            continue
+
                         # For initial breakouts, require 80% bar maturity or bar close to avoid premature wicks
                         if is_breakout and not is_retest:
                             if not (is_80pct_mature or is_closed_bar):
@@ -964,7 +976,7 @@ def run_fast_radar_check(kite):
                             logging.info(f"[RADAR OVERPAY GUARD] {sym} ({item.get('contract')}) stretched {stretch_pct:.1f}% > 25% above VWAP ({opt_vwap}). Skipping entry.")
                             continue
 
-                        # Check 3: Spot Institutional Relative Volume (RVOL) Confluence
+                        # Check 3: Spot Institutional Relative Volume (RVOL) & Morning VWAP Confluence
                         spot_tok = item.get("spot_token")
                         if not spot_tok:
                             from registries import STOCK_REGISTRY
@@ -974,6 +986,20 @@ def run_fast_radar_check(kite):
                         
                         if spot_tok:
                             try:
+                                # Fetch spot quote to check Intraday VWAP & turnover
+                                spot_quote = safe_kite_call(kite.quote, [f"NSE:{sym}"]) or {}
+                                q_data = spot_quote.get(f"NSE:{sym}", {}) if isinstance(spot_quote, dict) else {}
+                                spot_ltp = float(q_data.get("last_price") or 0.0)
+                                spot_vwap = float(q_data.get("average_price") or 0.0)
+
+                                # ── MORNING INSTITUTIONAL SURGE GATE (09:15 - 10:30 IST) ──
+                                is_morning_window = ("09:15" <= time_now_str <= "10:30")
+                                if is_morning_window and spot_vwap > 0 and spot_ltp > 0:
+                                    if spot_ltp < (spot_vwap * 0.997):
+                                        logging.info(f"🛡️ [MORNING VWAP REJECT] {sym}: Spot {spot_ltp:.2f} < VWAP {spot_vwap:.2f} "
+                                                     f"during morning window ({time_now_str}). Lacks institutional buying support. Holding candidate.")
+                                        continue
+
                                 df_spot_rvol = safe_kite_call(
                                     fetch_and_resample_candles,
                                     kite, spot_tok,
@@ -984,11 +1010,20 @@ def run_fast_radar_check(kite):
                                 )
                                 if df_spot_rvol is not None and len(df_spot_rvol) >= 5:
                                     from rvol_calculator import calculate_rvol
-                                    rvol_spot = calculate_rvol(df_spot_rvol, tf_is_daily=True)
-                                    if rvol_spot.get("badge") != "NORMAL":
-                                        item["spot_rvol_badge"] = rvol_spot.get("badge")
-                                        item["spot_rvol_projected"] = rvol_spot.get("rvol_projected")
-                                        logging.info(f"🔥 [SPOT RVOL CONFLUENCE] {sym}: Underlying has {rvol_spot.get('badge')} (Projected {rvol_spot.get('rvol_projected')}x) backing option breakout!")
+                                    rvol_spot = calculate_rvol(df_spot_rvol, tf_is_daily=True, current_time=now_ist)
+                                    proj_rvol = float(rvol_spot.get("rvol_projected", 1.0) or 1.0)
+                                    item["spot_rvol_badge"] = rvol_spot.get("badge")
+                                    item["spot_rvol_projected"] = proj_rvol
+
+                                    # Institutional Volume Surge (RVOL >= 2.0x with Spot > VWAP) -> Promote to T1 Gold!
+                                    if proj_rvol >= 2.0 and (spot_vwap == 0 or spot_ltp >= spot_vwap):
+                                        item["tier"] = 1
+                                        item["tier_label"] = f"🥇 T1 Gold (Inst Surge {proj_rvol:.1f}x)"
+                                        item["inst_surge"] = True
+                                        logging.info(f"🏛️ [INSTITUTIONAL OPENING SURGE CONFIRMED] {sym} ({item.get('contract')}): "
+                                                     f"Spot {spot_ltp:.2f} >= VWAP {spot_vwap:.2f} & RVOL {proj_rvol:.1f}x! Promoted to 🥇 T1 Gold!")
+                                    elif rvol_spot.get("badge") != "NORMAL":
+                                        logging.info(f"🔥 [SPOT RVOL CONFLUENCE] {sym}: Underlying has {rvol_spot.get('badge')} (Projected {proj_rvol:.1f}x) backing option breakout!")
                             except Exception as rvol_err:
                                 logging.debug(f"Spot RVOL check error for {sym}: {rvol_err}")
 
