@@ -1,15 +1,40 @@
 meta:
   system: Price Action Unified Strategy System
   version: v2.1.0-stable
-  last_updated: '2026-09-15'
+  last_updated: '2026-09-17'
   purpose: Active operational tracker for v2.1.0-stable failures, root causes, regressions, and enhancements.
   historical_archive: archive/ISSUE_HISTORY_ARCHIVE.yaml (Preserves 119 resolved legacy issues prior to 2026-09-05)
-  total_active_issues: 41
+  total_active_issues: 42
   archived_issues_summary:
     total_archived: 119
     recent_archived_batch: [FEATURE-031, FEATURE-030, FEATURE-029, ISSUE-084, ISSUE-083, ISSUE-082, ISSUE-081, ISSUE-080, FEATURE-036, FEATURE-035, FEATURE-034, FEATURE-033, ISSUE-054]
     key_archived_families: [ALGO_AUDIT_CVE, QUANT_ENHANCEMENTS, RADAR_LIFECYCLE, VCP_METRICS, SCANNER_DISCOVERY, SECURITY_CONFIG, ZERO_REGRESSION_AUDIT]
 issues:
+- id: ISSUE-059
+  title: Order-Fill Race Condition Grace Window & Universal IST Timezone Normalization
+  severity: HIGH
+  category: Trade Lifecycle, Broker Reconciliation, Timezone Parity, Order Fulfillment Grace Window
+  family: TRADE_DB_INTEGRITY
+  date_reported: '2026-09-17'
+  symptom: |
+    1. During live market hours on 2026-09-17, newly triggered algo limit orders (e.g. HINDZINC ID:950, KEI ID:956) were prematurely marked 'COMPLETED' with reason 'BROKER_NET_QTY_ZERO_RECONCILED' within 6 seconds of trade creation, before the exchange limit order could fill. When the order filled 7 seconds later, the engine had to resurrect them as duplicate trades (ID:951, ID:957).
+    2. On Linux Cloud VMs (Oracle Cloud VM1) where OS timezone is UTC/GMT (+00:00), trade_db recorded created_at in UTC (06:33:07) while exit_time and reconcile_broker_live_positions used get_ist_now() in IST (12:03:07). This 5.5-hour skew distorted duration metrics, journal date filters, and age checks.
+  root_cause: |
+    1. reconcile_broker_live_positions() had no grace period for freshly created trades. When a trade was inserted into SQLite as ACTIVE, the resting limit buy order had not yet filled on Kite (net_qty = 0). If the 10-second polling loop ran in that 6-second window, it immediately closed the trade as zero-qty.
+    2. trade_db.py used raw time.strftime("%Y-%m-%d %H:%M:%S") in 9 places instead of get_ist_now().strftime(), binding timestamps to host OS timezone rather than Indian market time.
+  affected_files:
+  - common/trade_db.py
+  - scratch/test_stale_order_invalidation.py
+  fix_applied: |
+    1. Added a 120-second Order-Fill Grace Window in reconcile_broker_live_positions(): trades created < 120s ago are skipped, allowing adequate time for network transit, exchange order book matching, and ledger refresh.
+    2. Added an order_status guard: trades with DB order_status in ('OPEN', 'TRIGGER PENDING', 'PENDING_SUBMISSION', 'AMO_SUBMITTED') are shielded from zero-qty reconciliation.
+    3. Replaced all 9 time.strftime() calls in trade_db.py with get_ist_now().strftime(), guaranteeing 100% IST timestamp uniformity across all environments.
+  verification: |
+    1. Unit tests in scratch/test_stale_order_invalidation.py expanded from 5 to 7 tests (Test 6: 120s Grace Window, Test 7: DB Order-Status Guard) - 7/7 PASSED (100%).
+    2. Full regression suite scratch/run_full_regression_test.py passed all 19 offline logic, DB invariant, and parity tests.
+  status: RESOLVED
+  resolution_date: '2026-09-17'
+
 - id: FEATURE-042
   title: Profit Harvesting, 2-Tier Trailing Ratchet, 22% Hard Loss Cap & Bearish Universe Expansion
   severity: ENHANCEMENT

@@ -203,11 +203,11 @@ def _sync_tab_databases():
         active = get_active_trades()
         completed = get_completed_trades()
         _write_json(ACTIVE_POSITIONS_DB, {
-            "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "updated_at": get_ist_now().strftime("%Y-%m-%d %H:%M:%S"),
             "positions": active
         })
         _write_json(JOURNAL_TRADES_DB, {
-            "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "updated_at": get_ist_now().strftime("%Y-%m-%d %H:%M:%S"),
             "journal_entries": completed
         })
     except Exception as e:
@@ -238,7 +238,7 @@ def create_trade(engine, symbol, data, allow_duplicate=False):
             # Get next ID
             max_row = conn.execute("SELECT MAX(id) as m FROM trades").fetchone()
             tid = (max_row["m"] or 0) + 1
-            now = time.strftime("%Y-%m-%d %H:%M:%S")
+            now = get_ist_now().strftime("%Y-%m-%d %H:%M:%S")
             trade = {"id": tid, "engine": engine, "symbol": symbol, "status": "ACTIVE", "created_at": now}
             trade.update(data)
             if "execution_type" not in trade:
@@ -263,7 +263,7 @@ def update_trade(trade_id, updates):
                 return
             trade = json.loads(row["data_json"])
             trade.update(updates)
-            now = time.strftime("%Y-%m-%d %H:%M:%S")
+            now = get_ist_now().strftime("%Y-%m-%d %H:%M:%S")
             trade["updated_at"] = now
             new_status = trade.get("status", "ACTIVE")
             conn.execute(
@@ -295,7 +295,7 @@ def update_trade_status(trade_id, status, exit_price=None, exit_reason=None, det
     if details:
         updates["details"] = details
     updates.update(extra)
-    updates.setdefault("exit_time", time.strftime("%Y-%m-%d %H:%M:%S"))
+    updates.setdefault("exit_time", get_ist_now().strftime("%Y-%m-%d %H:%M:%S"))
     update_trade(trade_id, updates)
 
 def update_self_learning_lesson(trade_id, lesson_text):
@@ -311,7 +311,7 @@ def update_self_learning_lesson(trade_id, lesson_text):
                 real_id = row["id"]
                 data = _row_to_dict(row)
                 data["self_learning_lesson"] = str(lesson_text).strip()
-                data["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+                data["updated_at"] = get_ist_now().strftime("%Y-%m-%d %H:%M:%S")
                 conn.execute(
                     "UPDATE trades SET data_json=?, updated_at=? WHERE id=?",
                     (json.dumps(data), data["updated_at"], real_id)
@@ -581,7 +581,7 @@ def reconcile_with_executed_exits(exit_orders):
                 exit_price=entry.get("details", {}).get("price") if isinstance(entry.get("details"), dict) else None,
                 exit_reason="EXECUTED_EXIT_ORDER",
                 details="Closed: executed exit order detected",
-                exit_time=(exit_ts.strftime("%Y-%m-%d %H:%M:%S") if exit_ts else time.strftime("%Y-%m-%d %H:%M:%S"))
+                exit_time=(exit_ts.strftime("%Y-%m-%d %H:%M:%S") if exit_ts else get_ist_now().strftime("%Y-%m-%d %H:%M:%S"))
             )
         except Exception as e:
             logging.warning(f"[trade_db] reconcile exit close failed for {contract}: {e}")
@@ -620,6 +620,9 @@ def reconcile_broker_live_positions(kite):
 
     reconciled = 0
     now_str = get_ist_now().strftime("%Y-%m-%d %H:%M:%S")
+    now_dt = get_ist_now().replace(tzinfo=None)
+    _FILL_GRACE_SECONDS = 120  # Allow 120s for limit orders to transit network, queue on exchange, and fill
+
     for t in get_active_trades():
         contract = _normalize_contract(t.get("contract") or t.get("symbol"))
         if not contract:
@@ -628,6 +631,28 @@ def reconcile_broker_live_positions(kite):
             # Contract has an active OPEN / TRIGGER PENDING order on Kite (e.g. pending limit entry).
             # Do NOT treat as closed zero-qty position; StaleOrderManager will evaluate invalidation/TTL!
             continue
+
+        # ── Order-Fill Grace Window (ISSUE-059) ──────────────────────
+        # Newly created trades need time for:  create_trade() → kite.place_order() → exchange match → kite.positions() refresh
+        # Without this grace period, the reconciler sees net_qty=0 (order not yet filled) and prematurely archives the trade.
+        created_dt = _parse_dt_flexible(t.get("created_at") or t.get("entry_time"))
+        if created_dt is not None:
+            age_sec = (now_dt - created_dt.replace(tzinfo=None)).total_seconds()
+            if 0 <= age_sec < _FILL_GRACE_SECONDS:
+                logging.debug(f"[trade_db] Skipping reconciliation for Trade #{t.get('id')} {contract}: "
+                              f"created {age_sec:.0f}s ago (grace window {_FILL_GRACE_SECONDS}s)")
+                continue
+
+        # ── Order-Status Guard ───────────────────────────────────────
+        # If the trade's DB-level order_status indicates a pending/open order that wasn't captured
+        # in the Kite orders() snapshot (e.g. AMO submitted, or orders() API call failed above),
+        # do NOT reconcile it as zero-qty.
+        db_order_status = str(t.get("order_status") or "").upper()
+        if db_order_status in ("OPEN", "TRIGGER PENDING", "PENDING_SUBMISSION", "AMO_SUBMITTED"):
+            logging.debug(f"[trade_db] Skipping reconciliation for Trade #{t.get('id')} {contract}: "
+                          f"order_status={db_order_status}")
+            continue
+
         p_info = net_pos.get(contract) or day_pos.get(contract)
         net_qty = int(p_info.get("quantity", 0)) if p_info else 0
 
@@ -800,7 +825,7 @@ def record_executed_pattern(engine, key, info=None):
         if not isinstance(db, dict):
             db = {}
         db.setdefault(engine, {})
-        db[engine][key] = info or {"executed_at": time.strftime("%Y-%m-%d %H:%M:%S")}
+        db[engine][key] = info or {"executed_at": get_ist_now().strftime("%Y-%m-%d %H:%M:%S")}
         _write_json(EXECUTED_STORE_FILE, db)
 
 
@@ -818,7 +843,7 @@ def clear_executed_pattern(engine, key):
 def mark_order_cancelled_by_contract_or_oid(contract, oid=None, reason_code="CANCELLED", details=None):
     """Mark active trade as CANCELLED by tradingsymbol/contract or order_id."""
     clean_c = _normalize_contract(contract)
-    now_str = time.strftime("%Y-%m-%d %H:%M:%S")
+    now_str = get_ist_now().strftime("%Y-%m-%d %H:%M:%S")
     reconciled = 0
     with _DB_LOCK:
         with _get_connection() as conn:

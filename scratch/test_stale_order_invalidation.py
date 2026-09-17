@@ -49,7 +49,7 @@ class MockKite:
 
 def run_tests():
     passed = 0
-    total = 5
+    total = 7
 
     # ─────────────────────────────────────────────────────────────
     # TEST 1: Target T1 Touched Before Fill Invalidation
@@ -270,6 +270,67 @@ def run_tests():
 
     # Clean up test trade
     trade_db.remove_trades([tid])
+
+    # ─────────────────────────────────────────────────────────────
+    # TEST 6: Order-Fill Grace Window (120s) — ISSUE-059
+    # ─────────────────────────────────────────────────────────────
+    print("\n--- Test 6: Order-Fill Grace Window (120s) ---")
+    # Simulate a freshly-created trade (created_at = now - 10 seconds)
+    from timeframe_utils import get_ist_now
+    fresh_now = get_ist_now().strftime("%Y-%m-%d %H:%M:%S")
+    tid6, _ = trade_db.create_trade("nifty50", "TATAPOWER", {
+        "contract": "TATAPOWER24SEP460CE",
+        "entry_spot": 12.50,
+        "current_sl": 9.00,
+        "t1": 18.00,
+        "status": "ACTIVE",
+        "created_at": fresh_now,  # Just created — within grace window
+    }, allow_duplicate=True)
+
+    mock_kite6 = MockKite(
+        orders=[],  # No open orders on Kite (order submitted but not yet visible / already matched)
+        positions={"net": [{"tradingsymbol": "TATAPOWER24SEP460CE", "quantity": 0}]}  # Not filled yet
+    )
+    reconciled6 = trade_db.reconcile_broker_live_positions(mock_kite6)
+    t6_after = trade_db.get_trade(tid6)
+    assert t6_after is not None and t6_after.get("status") == "ACTIVE", \
+        f"Expected trade #{tid6} to remain ACTIVE (grace window), got {t6_after.get('status') if t6_after else None}"
+    print("[PASS] Test 6 Passed: reconcile_broker_live_positions preserved ACTIVE trade within 120s grace window.")
+    passed += 1
+
+    # Clean up
+    trade_db.remove_trades([tid6])
+
+    # ─────────────────────────────────────────────────────────────
+    # TEST 7: DB Order-Status Guard — ISSUE-059
+    # ─────────────────────────────────────────────────────────────
+    print("\n--- Test 7: DB Order-Status Guard ---")
+    # Simulate an older trade (created 5 minutes ago — beyond grace window)
+    # but with order_status = "OPEN" in DB
+    old_time = (get_ist_now() - timedelta(minutes=5)).strftime("%Y-%m-%d %H:%M:%S")
+    tid7, _ = trade_db.create_trade("nifty50", "BHEL", {
+        "contract": "BHEL24SEP300CE",
+        "entry_spot": 8.00,
+        "current_sl": 6.00,
+        "t1": 12.00,
+        "status": "ACTIVE",
+        "created_at": old_time,
+        "order_status": "OPEN",  # Limit order resting on exchange
+    }, allow_duplicate=True)
+
+    mock_kite7 = MockKite(
+        orders=[],  # Kite orders() API returned empty (API failure or stale snapshot)
+        positions={"net": [{"tradingsymbol": "BHEL24SEP300CE", "quantity": 0}]}
+    )
+    reconciled7 = trade_db.reconcile_broker_live_positions(mock_kite7)
+    t7_after = trade_db.get_trade(tid7)
+    assert t7_after is not None and t7_after.get("status") == "ACTIVE", \
+        f"Expected trade #{tid7} to remain ACTIVE (order_status=OPEN guard), got {t7_after.get('status') if t7_after else None}"
+    print("[PASS] Test 7 Passed: reconcile_broker_live_positions preserved ACTIVE trade with DB order_status=OPEN.")
+    passed += 1
+
+    # Clean up
+    trade_db.remove_trades([tid7])
 
     print(f"\n==========================================")
     print(f"Stale Order Invalidation Suite: {passed}/{total} PASSED (100% SUCCESS)")
