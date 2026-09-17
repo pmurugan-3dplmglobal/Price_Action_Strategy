@@ -944,17 +944,7 @@ def run_fast_radar_check(kite):
                             is_retest = True
 
                     if is_breakout or is_retest:
-                        # ── Late-Day Runway Guard (ISSUE-060) ─────────────────
-                        # For 30m option trades, breakouts after 13:00 IST have less than 2-2.5 hours before 15:15 EOD square-off.
-                        # If a contract has near-term expiry (DTE <= 2) and is not approved for multi-day carry, suppress late entry.
                         time_now_str = now_ist.strftime("%H:%M")
-                        from position_monitor import get_contract_days_to_expiry
-                        c_name = item.get("contract")
-                        c_dte = get_contract_days_to_expiry(c_name)
-                        if time_now_str >= "13:00" and c_dte is not None and c_dte <= 2:
-                            logging.info(f"⏳ [RUNWAY GUARD] {sym} ({c_name}): Time {time_now_str} >= 13:00 IST with DTE={c_dte} <= 2. "
-                                         f"Insufficient runway before 15:15 EOD square-off. Skipping late-day entry.")
-                            continue
 
                         # For initial breakouts, require 80% bar maturity or bar close to avoid premature wicks
                         if is_breakout and not is_retest:

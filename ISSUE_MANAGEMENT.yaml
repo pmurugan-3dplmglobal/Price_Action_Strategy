@@ -34,7 +34,7 @@ issues:
     1. Added get_contract_days_to_expiry(contract) helper parsing authoritative NFO cache and NSE monthly/weekly symbology.
     2. Smartened Thursday 15:15 EOD square-off: Monthly stock options with DTE > 1 are exempt from Thursday stagnant square-off (only zero-day options with DTE <= 0 are force-closed).
     3. Upgraded Friday carry gate: Tier 1 Gold monthly options with healthy structure (down < 5.0% and SL unbreached) and DTE >= 5 are permitted to carry over the weekend.
-    4. Added Late-Day Runway Guard: Suppresses fresh breakouts for near-term contracts (DTE <= 2) after 13:00 IST.
+    4. Retained Late-Day Entry Freedom: Good trades formed after 13:00 IST are permitted to execute freely, with downstream lifecycle governed by the intelligent DTE-aware expiry guard rather than arbitrary entry time blocks.
     5. Added Morning Institutional Surge Gate (09:15 - 10:30 AM): Requires Spot >= VWAP (rejects below-VWAP chop) and automatically promotes setups with Opening RVOL >= 2.0x to 🥇 T1 Gold (Inst Surge).
   verification: |
     1. scratch/test_smart_eod_and_institutional_radar.py passed 6/6 (100% SUCCESS).
