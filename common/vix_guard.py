@@ -2,10 +2,12 @@
 vix_guard.py — India VIX Macro Regime Guard.
 
 Monitors India VIX (NSE:INDIA VIX / token 264969) to govern trade entries:
-- Normal Regime (VIX <= 20.0): All valid trade setups (T1 Gold, T2 Core, T3 Momentum) are allowed.
+- Extreme Regime (VIX > 25.0): Circuit-risk/event volatility — all new trade entries are blocked.
 - Elevated Regime (20.0 < VIX <= 25.0): High-volatility market — only Tier 1 Gold setups are permitted.
   Tier 2 and Tier 3 setups are suppressed to avoid whipsaws.
-- Extreme Regime (VIX > 25.0): Circuit-risk/event volatility — all new trade entries are blocked.
+- Normal Regime (11.5 <= VIX <= 20.0): All valid trade setups (T1 Gold, T2 Core, T3 Momentum) are allowed.
+- Compressed Low-VIX Regime (VIX < 11.5): Theta drag floor — only Tier 1 Gold setups are permitted.
+  Tier 2 and Tier 3 setups are suppressed due to stagnant premium velocity and severe theta erosion.
 
 Includes a thread-safe 60-second in-memory TTL cache to avoid redundant Kite API calls.
 """
@@ -83,6 +85,25 @@ def evaluate_vix_regime(kite=None, tier_val=2, config=None, vix_value=None, **kw
     elif "tier" in kwargs:
         tier_val = kwargs["tier"]
 
+    # Robust tier normalization (handles 1, "1", "🥇 T1", "TIER_1_GOLD", etc.)
+    resolved_tier = 2
+    if tier_val is not None:
+        if isinstance(tier_val, (int, float)):
+            resolved_tier = int(tier_val)
+        else:
+            ts = str(tier_val).strip().upper()
+            if "1" in ts or "GOLD" in ts:
+                resolved_tier = 1
+            elif "3" in ts or "MOMENTUM" in ts:
+                resolved_tier = 3
+            elif "2" in ts or "CORE" in ts:
+                resolved_tier = 2
+            else:
+                try:
+                    resolved_tier = int(float(ts))
+                except Exception:
+                    resolved_tier = 2
+
     if config is None:
         try:
             if os.path.exists(paths.PROGRAM_CONFIG_FILE):
@@ -102,13 +123,14 @@ def evaluate_vix_regime(kite=None, tier_val=2, config=None, vix_value=None, **kw
 
     t2_t3_cutoff = float(vix_cfg.get("t2_t3_cutoff", 20.0))
     extreme_cutoff = float(vix_cfg.get("extreme_cutoff", 25.0))
+    low_vix_floor = float(vix_cfg.get("low_vix_floor", 11.5))
 
     if vix_value is not None:
         vix_val = float(vix_value)
     else:
         vix_val = get_india_vix(kite)
 
-    fail_open = bool(vix_cfg.get("fail_open", True))
+    fail_open = bool(vix_cfg.get("fail_open", False))
 
     if vix_val is None or vix_val <= 0:
         if not fail_open:
@@ -122,10 +144,17 @@ def evaluate_vix_regime(kite=None, tier_val=2, config=None, vix_value=None, **kw
 
     # Case 2: High Volatility Regime (20.0 < VIX <= 25.0) -> Allow only Tier 1 Gold
     if vix_val > t2_t3_cutoff:
-        if int(tier_val or 2) <= 1:
+        if resolved_tier <= 1:
             return True, f"HIGH_VIX_TIER1_APPROVED (VIX {vix_val:.2f} > {t2_t3_cutoff:.1f}, Tier 1 Gold exempt)", vix_val
         else:
             return False, f"HIGH_VIX_T2_T3_SUPPRESSED (VIX {vix_val:.2f} > {t2_t3_cutoff:.1f} requires Tier 1 Gold)", vix_val
 
-    # Case 3: Normal Regime (VIX <= 20.0) -> All tiers allowed
-    return True, f"NORMAL_VIX_REGIME (VIX {vix_val:.2f} <= {t2_t3_cutoff:.1f})", vix_val
+    # Case 3: Compressed Low-VIX Regime (VIX < 11.5) -> Theta Drag Floor: Only Tier 1 Gold allowed
+    if vix_val < low_vix_floor:
+        if resolved_tier <= 1:
+            return True, f"LOW_VIX_TIER1_APPROVED (VIX {vix_val:.2f} < {low_vix_floor:.1f}, Tier 1 Gold permitted under theta drag floor)", vix_val
+        else:
+            return False, f"LOW_VIX_THETA_FLOOR_SUPPRESSED (VIX {vix_val:.2f} < {low_vix_floor:.1f} compresses option premium velocity; Tier 2/3 suppressed)", vix_val
+
+    # Case 4: Normal Regime (11.5 <= VIX <= 20.0) -> All tiers allowed
+    return True, f"NORMAL_VIX_REGIME ({low_vix_floor:.1f} <= VIX {vix_val:.2f} <= {t2_t3_cutoff:.1f})", vix_val

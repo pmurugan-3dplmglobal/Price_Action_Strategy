@@ -50,7 +50,8 @@ from trading_core import (
     match_registry_symbol,
     get_option_lot_size,
     clear_executed_exit,
-    slice_quantity_for_freeze
+    slice_quantity_for_freeze,
+    calculate_position_size
 )
 
 LIVE_MARKET_DEPLOYMENT = True
@@ -255,7 +256,12 @@ def execute_index_entry(kite, pos):
             logging.warning(f"[LIQUIDITY_GATE] Entry rejected for {pos['contract']}: {liq_msg}")
             return False
 
-        total_qty = lot_sz * pos["position_size"]
+        pos_size = int(pos.get("position_size", 0))
+        total_qty = lot_sz * pos_size
+        if pos_size <= 0 or total_qty <= 0:
+            logging.warning(f"[ZERO_QTY_GUARD] Skipping index order placement for {pos.get('contract')}: position_size={pos_size} or total_qty={total_qty} <= 0")
+            return False
+
         qty_slices = slice_quantity_for_freeze(pos["contract"], total_qty)
         placed_oids = []
         for s_qty in qty_slices:
@@ -359,6 +365,41 @@ def execute_highest_rr_trade(kite, staged):
             logging.info(f"Candidate trade {key} already executed; evaluating next candidate")
             continue
 
+        sym = best.get("symbol", "")
+        contract_cand = best.get("contract", "")
+        lot_sz = int(best.get("lot_size") or (get_option_lot_size(contract_cand) if contract_cand else None) or INDEX_REGISTRY.get(sym, {}).get("lot_size", 1) or 1)
+        raw_pos_size = best.get("position_size")
+        if raw_pos_size is None:
+            raw_pos_size = calculate_position_size(
+                spot_price=float(best.get("entry_spot") or 0.0),
+                stop_loss=float(best.get("current_sl") or 0.0),
+                capital=float(cfg_eng.get("capital") or 100000.0),
+                risk_percent=float(cfg_eng.get("MAX_RISK_PERCENT") or 1.0),
+                lot_size=lot_sz,
+                is_option=True,
+                tier=best.get("tier", 1),
+                allow_zero=True
+            )
+        pos_size = int(raw_pos_size or 0)
+        best["position_size"] = pos_size
+        if pos_size <= 0:
+            logging.warning(f"[RISK_BUDGET_EXCEEDED] Trade rejected for {best.get('symbol')} ({best.get('contract')}): Position size is 0 lots (Risk per lot exceeds capital budget).")
+            continue
+
+        # 12:30 IST 0DTE Index Cutoff Guard
+        contract_cand = best.get("contract")
+        try:
+            from position_monitor import get_contract_days_to_expiry
+        except ModuleNotFoundError:
+            from common.position_monitor import get_contract_days_to_expiry
+        dte_cand = get_contract_days_to_expiry(contract_cand) if contract_cand else None
+        if dte_cand is not None and dte_cand <= 0:
+            from datetime import time as dt_time
+            from trading_core import get_ist_now
+            if get_ist_now().time() >= dt_time(12, 30):
+                logging.info(f"[0DTE_CUTOFF_EXCEEDED] 0DTE Index setup {contract_cand} rejected: Current IST time {get_ist_now().strftime('%H:%M:%S')} >= 12:30 IST cutoff.")
+                continue
+
         if live_ok or BACKTEST_DATE is not None:
             pos = best.copy()
             pos["entry_time"] = dt.now().isoformat()
@@ -455,6 +496,7 @@ def execute_highest_rr_trade(kite, staged):
                         logging.info(f"[DUPLICATE_GUARD] Contract {contract_cand} already held on broker (Qty: {held_qty}); evaluating next candidate")
                         continue
 
+                    pos["entry_time"] = dt.now().strftime("%Y-%m-%d %H:%M:%S")
                     pos["trade_id"], _created = trade_db.create_trade("index", sym_cand, {k: v for k, v in pos.items() if k != "trade_id"})
                     if not _created:
                         logging.info(f"[DUPLICATE_GUARD] Active trade for {contract_cand} already exists in trade_db (ID: {pos['trade_id']}); evaluating next candidate")

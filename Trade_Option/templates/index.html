@@ -531,7 +531,7 @@
             }
         }
 
-        async function buyScannedTrade(btnEl, symbol, contract, side, entry, sl, t1, t2, t3, engine, timeframe, candle_a_time, entry_time, benchmark, anchor_floor, direction) {
+        async function buyScannedTrade(btnEl, symbol, contract, side, entry, sl, t1, t2, t3, engine, timeframe, candle_a_time, entry_time, benchmark, anchor_floor, direction, tier) {
             const dispName = contract || symbol;
             if (!confirm(`Confirm 1-Click BUY for ${dispName}?`)) return;
             if (btnEl) {
@@ -543,7 +543,7 @@
                 const r = await fetch('/api/buy-scanned-trade', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({symbol, contract, side, entry_spot: entry, current_sl: sl, t1, t2, t3, engine, timeframe, candle_a_time, entry_time, benchmark, anchor_floor, direction})
+                    body: JSON.stringify({symbol, contract, side, entry_spot: entry, current_sl: sl, t1, t2, t3, engine, timeframe, candle_a_time, entry_time, benchmark, anchor_floor, direction, tier: tier || 2})
                 });
                 const d = await r.json();
                 if (d.ok) {
@@ -1230,7 +1230,7 @@
                 } else if (isBought) {
                     actCell = '<td style="text-align:center"><button disabled class="btn-bought" style="background:#238636;color:#ffffff;border:none;padding:4px 10px;border-radius:4px;font-weight:bold;cursor:not-allowed;font-size:11px">BOUGHT</button></td>';
                 } else {
-                    actCell = `<td style="text-align:center"><button class="btn-buy" onclick="buyScannedTrade(this, '${t.symbol||''}', '${t.contract||''}', '${t.side||'CE'}', ${t.entry_spot||0}, ${t.current_sl||t.sl||0}, ${t.t1||0}, ${t.t2||0}, ${t.t3||0}, '${eng}', '${t.timeframe||''}', '${(t.candle_a_time||'').replace(/'/g,"")}', '${(t.entry_time||'').replace(/'/g,"")}', ${t.benchmark||0}, ${t.anchor_floor||0}, '${t.direction||'BULL'}')" style="background:#2ea043;color:#ffffff;border:none;padding:4px 12px;border-radius:4px;font-weight:bold;cursor:pointer;font-size:11px">BUY</button></td>`;
+                    actCell = `<td style="text-align:center"><button class="btn-buy" onclick="buyScannedTrade(this, '${t.symbol||''}', '${t.contract||''}', '${t.side||'CE'}', ${t.entry_spot||0}, ${t.current_sl||t.sl||0}, ${t.t1||0}, ${t.t2||0}, ${t.t3||0}, '${eng}', '${t.timeframe||''}', '${(t.candle_a_time||'').replace(/'/g,"")}', '${(t.entry_time||'').replace(/'/g,"")}', ${t.benchmark||0}, ${t.anchor_floor||0}, '${t.direction||'BULL'}', ${t.tier || 2})" style="background:#2ea043;color:#ffffff;border:none;padding:4px 12px;border-radius:4px;font-weight:bold;cursor:pointer;font-size:11px">BUY</button></td>`;
                 }
 
                 let tierBadge = '';

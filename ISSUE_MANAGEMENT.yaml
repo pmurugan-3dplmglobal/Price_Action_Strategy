@@ -1832,5 +1832,82 @@ issues:
   status: RESOLVED
   resolution_date: '2026-09-10'
 
+- id: ISSUE-061
+  title: "Profitability Enhancement & Execution Realignment (Negative Expectancy Reversal)"
+  category: PERFORMANCE_EXPECTANCY
+  severity: HIGH
+  affected_files:
+    - common/targets.py
+    - common/trading_core.py
+    - common/resolve.py
+    - common/position_monitor.py
+    - Trade_Option/stock_options_trade_engine.py
+    - Trade_Option/index_options_trade_engine.py
+    - Trade_Option/templates/index.html
+    - common/liquidity_guard.py
+    - common/vix_guard.py
+    - Trade_Option/app_option_Trade.py
+    - Trade_Option/input/program_config.json
+    - scratch/test_profitability_enhancements.py
+  root_cause: |
+    Comprehensive trading audit across 71 closed trades revealed negative expectancy (-18.67% average trade loss)
+    caused by five primary structural execution failure modes:
+    1. Target Derivation Mismatch: Option targets were derived from historical option chart wicks or +20% arbitrary targets, creating unreachable targets and holding through theta decay.
+    2. Zero-Lot Risk Budget Blindness: Position sizing forced 1 lot even when 1 lot risk exceeded account risk budget by 5x-10x.
+    3. Premature Stop-Outs: Option ATR SL was too narrow (1.5x ATR with no floor), tripping before structural spot thesis invalidated.
+    4. Single-Lot Target Inflexibility: 0DTE/weekly options gave back gains instead of banking profits at T1, while single-target setups were excluded from trailing ratchet.
+    5. Illiquidity & Theta Trapping: Late 0DTE entries (>12:30 IST), low-VIX theta compression (<11.5), and thin books (< lot size) caused severe execution slippage.
+  fix_applied: |
+    1. common/targets.py & common/trading_core.py:
+       - Decoupled options from sub-₹300 cash equity heuristic using `is_option_contract()`.
+       - Implemented DTE-adaptive option target derivation (`calculate_option_profit_targets`):
+         * 0DTE (dte <= 0): T1 = Entry + 1.5 * Risk, T2 = Entry + 2.5 * Risk, T3 = Entry + 3.5 * Risk.
+         * Short-Term (1 <= dte <= 5): T1 = Entry + 2.0 * Risk, T2 = Entry + 3.0 * Risk, T3 = Entry + 4.0 * Risk.
+         * Monthly (dte > 5): T1 = Entry + 2.5 * Risk, T2 = Entry + 3.5 * Risk, T3 = Entry + 5.0 * Risk.
+       - Decoupled cash equities: fallback T1 set to 1.5 * Risk (eliminating arbitrary +20% targets).
+       - Added option contract delegation to `find_profit_targets_bearish`.
+       - Widened option ATR SL in `calculate_option_atr_sl()`: default multiplier=2.0, enforced 8.0% minimum floor distance (`max(effective_dist, entry * 0.08)`), default max_risk_pct=0.28.
+       - Enhanced `calculate_position_size()` with `allow_zero` and `min_lots`: returns 0 lots when `allow_zero=True` and risk exceeds risk budget, while preserving legacy 1-lot default for backward compatibility.
+    2. common/resolve.py:
+       - In `resolve_option_strikes()`: for 0DTE (dte <= 0), restricted offsets strictly to ATM and 1-step ITM ([0, -1] for CE, [0, 1] for PE), auto-detects DTE from instruments when dte is None, added `allow_otm=True` for multi-leg debit spreads, and recorded `strike_offset`.
+       - In `scan_symbol()` & candidate resolution: hard-blocked 0DTE options with premium < ₹40, enforced 12:30 IST 0DTE index cutoff, used 2.0x ATR SL and DTE-adaptive targets, and exported `spot_t1`.
+    3. common/position_monitor.py:
+       - Removed `and has_higher_targets` condition at line 1970, enabling trailing ratchet (+12% -> +3%, +18% -> +10%) on single-target setups.
+       - Implemented `SPOT_TARGET_GUARD`: triggers option T1 exit when underlying spot reaches `spot_t1` to combat theta drag when option premium lags.
+       - Fixed loop re-entry bug by setting `t1_booked = True` and recording in `trade_db` when single-lot transitions to `TRAIL_BE`.
+       - Used actual live fill price (`exit_price`) rather than theoretical `t1_val` in tranche partial exit PnL calculation.
+       - Horizon-adaptive single-lot policy: forces `EXIT_AT_T1` when dte <= 2; sets `TRAIL_BE` when dte > 5.
+       - Synchronized emergency loss cap from 22.0% to 28.0% across all circuits and in `program_config.json`.
+       - Included `spot_t1` and 2.0x multiplier in broker recovery.
+    4. Trade_Option/stock_options_trade_engine.py & index_options_trade_engine.py:
+       - Added zero-lot safety guards: verify `pos_size > 0` and `total_qty > 0` before placing Kite orders and creating trades; logs `[RISK_BUDGET_EXCEEDED]`.
+       - Added NoneType safe calculation for candidate `position_size` in `index_options_trade_engine.py`.
+       - Synchronized `entry_time` with `created_at` timestamp right before `trade_db.create_trade`.
+       - Enforced 12:30 IST 0DTE cutoff guard in index options engine.
+    5. common/liquidity_guard.py:
+       - Dynamically scaled `min_depth_qty` to `max(lot_size, 50)` when lot size is available/resolvable, falling back to 1 for mock/synthetic test contracts.
+    6. common/vix_guard.py:
+       - Changed default `fail_open` from True to False.
+       - Added robust string parsing for tier badges (e.g. '🥇 T1', 'TIER_1_GOLD').
+       - Implemented Low-VIX Theta Floor (< 11.5): restricts new entries to Tier 1 Gold setups only; suppresses Tier 2 Core and Tier 3 Momentum.
+    7. Trade_Option/app_option_Trade.py & templates/index.html:
+       - Integrated `evaluate_vix_regime()` check in `/api/buy-scanned-trade` with tier auto-detection from scan display cache.
+       - Enforced 12:30 IST 0DTE index cutoff and ₹40 floor on 0DTE options in 1-Click Buy route.
+       - Passed `lot_size` to `check_bid_ask_spread_liquidity` in 1-Click Buy.
+       - Updated `buyScannedTrade` in `index.html` to pass `t.tier`.
+  verification: |
+    1. Dedicated unit test suite `scratch/test_profitability_enhancements.py`: 15/15 tests PASSED (100%).
+    2. Master regression suite `scratch/run_full_regression_test.py`: 22/22 suites PASSED (100%).
+    3. Institutional enhancements suite `scratch/test_institutional_enhancements.py`: 5/5 tests PASSED (100%).
+    4. Spread, liquidity & reconciler suite `scratch/test_spread_liquidity_reconciler.py`: 7/7 tests PASSED (100%).
+    5. VIX, portfolio & volume suite `scratch/test_vix_portfolio_volume.py`: 47/47 tests PASSED (100%).
+    6. Parity alignment suite `scratch/test_parity_alignment.py`: 4/4 tests PASSED (100%).
+    7. VCP metrics suite `scratch/test_vcp_metrics.py`: 4/4 tests PASSED (100%).
+    8. CVE fixes suite `scratch/test_cve_fixes.py`: 5/5 tests PASSED (100%).
+    9. AST syntax checks across all touched files: 100% PASSED with zero errors.
+  status: RESOLVED
+  resolution_date: '2026-09-18'
+
+
 
 

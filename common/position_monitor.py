@@ -1425,7 +1425,7 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                 entry_s = float(pos.get("entry_spot") or pos.get("entry_price") or 0.0)
                 current_sl = float(pos.get("current_sl", 0))
                 if live_ltp > 0 and entry_s > 0:
-                    max_loss_pct = float(cfg.get("max_option_loss_pct", 22.0)) / 100.0 if not is_stock else 0.08
+                    max_loss_pct = float(cfg.get("max_option_loss_pct", 28.0)) / 100.0 if not is_stock else 0.08
                     if is_short_stock:
                         hard_max_sl = round(entry_s * (1.0 + max_loss_pct), 2)
                         is_breached = (live_ltp >= hard_max_sl) or (current_sl > 0 and live_ltp >= current_sl * 1.05)
@@ -1677,7 +1677,7 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                         if is_fresh_fill:
                             logging.info(f"[FRESH_FILL_SPREAD_GUARD] Suppressed morning circuit breaker for {sym}: Trade entered {secs_since_entry:.0f}s ago (<120s cooldown).")
                         elif entry_s > 0 and live_ltp > 0 and not is_outlier_entry:
-                            opt_loss_cap = float(cfg.get("max_option_loss_pct", 25.0)) / 100.0 if not is_stock else 0.15
+                            opt_loss_cap = float(cfg.get("max_option_loss_pct", 28.0)) / 100.0 if not is_stock else 0.15
                             if is_short_stock and live_ltp >= (entry_s * 1.15):
                                 sl_hit = True
                                 rise_pct = (live_ltp - entry_s) / entry_s * 100.0
@@ -1790,7 +1790,7 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
             # SUBORDINATE INVARIANT: The structural Anchor SL, UI Override SL, or Trailed SL (current_sl) ALWAYS takes higher precedence.
             # A fixed 22% mathematical loss threshold must NEVER preempt a valid wider Anchor SL or a custom UI/Trailed SL.
             # It acts solely as a last-resort safety net when no valid current_sl exists (current_sl <= 0) or when current_sl is also in breach.
-            max_loss_pct = float(cfg.get("max_option_loss_pct", 22.0)) / 100.0 if not is_stock else 0.08
+            max_loss_pct = float(cfg.get("max_option_loss_pct", 28.0)) / 100.0 if not is_stock else 0.08
             if is_short_stock:
                 hard_max_sl_threshold = round(entry_s * (1.0 + max_loss_pct), 2) if entry_s > 0 else 0.0
                 has_active_sl = current_sl > 0 and current_sl > entry_s
@@ -1855,9 +1855,9 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
 
                         side_str = str(pos.get("side", "CE")).upper()
                         is_bull = side_str in ["CE", "BUY", "BULL"]
-                        # Catastrophic option emergency cap: If option drops beyond opt_emergency_cap (22%), exit regardless of spot
+                        # Catastrophic option emergency cap: If option drops beyond opt_emergency_cap (28%), exit regardless of spot
                         # BUT do NOT trigger catastrophic override if trade is a fresh fill (<120s) to allow opening spread to settle
-                        opt_emergency_cap = float(cfg.get("max_option_loss_pct", 22.0)) / 100.0
+                        opt_emergency_cap = float(cfg.get("max_option_loss_pct", 28.0)) / 100.0
                         curr_opt_p = live_ltp if live_ltp > 0 else cp
                         is_catastrophic_opt = (entry_s > 0 and curr_opt_p > 0 and curr_opt_p <= (entry_s * (1.0 - opt_emergency_cap)) and not is_fresh_fill and not is_outlier_entry)
 
@@ -1873,7 +1873,7 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                         cached_spot = float(pos.get("last_known_spot") or pos.get("spot_entry") or 0.0)
                         side_str = str(pos.get("side", "CE")).upper()
                         is_bull = side_str in ["CE", "BUY", "BULL"]
-                        opt_emergency_cap = float(cfg.get("max_option_loss_pct", 22.0)) / 100.0
+                        opt_emergency_cap = float(cfg.get("max_option_loss_pct", 28.0)) / 100.0
                         curr_opt_p = live_ltp if live_ltp > 0 else cp
                         is_catastrophic_opt = (entry_s > 0 and curr_opt_p > 0 and curr_opt_p <= (entry_s * (1.0 - opt_emergency_cap)) and not is_fresh_fill and not is_outlier_entry)
                         if cached_spot > 0 and not is_catastrophic_opt:
@@ -1967,7 +1967,7 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
 
             req_gain = stock_gain_trigger if is_stock else opt_gain_trigger
 
-            if pos.get("trailing_stage", 0) == 0 and gain_pct >= req_gain and has_higher_targets:
+            if pos.get("trailing_stage", 0) == 0 and gain_pct >= req_gain:
                 curr_sl = float(pos.get("current_sl") or 0.0)
                 if not is_stock:
                     # Choose whether Tier 1 (+12% -> +3%) or Tier 2 (+18% -> +10%)
@@ -2028,6 +2028,51 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                         trade_db.update_trade(tid, {"current_sl": opt_target_2, "sl_set_time": sl_stamp})
 
             t1_hit = ((lp <= (t1_val + buf_t1)) if is_short_stock else (hp >= (t1_val - buf_t1))) if (t1_val is not None and t1_val > 0) else False
+
+            # SPOT_TARGET_GUARD for Options:
+            # If underlying spot reaches spot_t1, trigger T1 exit to combat theta drag even if option premium lags
+            if not is_stock and not t1_hit:
+                spot_t1 = float(pos.get("spot_t1") or 0.0)
+                if spot_t1 > 0:
+                    side_str = str(pos.get("side", "CE")).upper()
+                    is_bull = side_str in ["CE", "BUY", "BULL"]
+                    curr_spot = float(pos.get("last_known_spot") or 0.0)
+                    if curr_spot <= 0 and kite:
+                        spot_tok = pos.get("spot_token") or pos.get("index_token") or pos.get("underlying_token")
+                        if not spot_tok:
+                            try:
+                                from registries import STOCK_REGISTRY, INDEX_REGISTRY
+                            except ImportError:
+                                try:
+                                    from common.registries import STOCK_REGISTRY, INDEX_REGISTRY
+                                except ImportError:
+                                    STOCK_REGISTRY, INDEX_REGISTRY = {}, {}
+                            reg_entry = STOCK_REGISTRY.get(sym) or INDEX_REGISTRY.get(sym)
+                            if isinstance(reg_entry, dict):
+                                spot_tok = reg_entry.get("token")
+                            elif isinstance(reg_entry, int):
+                                spot_tok = reg_entry
+                        if spot_tok:
+                            try:
+                                sq = kite.ltp([spot_tok])
+                                if sq:
+                                    curr_spot = float(list(sq.values())[0]["last_price"])
+                                    if curr_spot > 0:
+                                        pos["last_known_spot"] = curr_spot
+                            except Exception:
+                                pass
+                    if curr_spot > 0:
+                        if is_bull and curr_spot >= spot_t1:
+                            t1_hit = True
+                            if not t1_val or t1_val <= 0:
+                                t1_val = live_ltp if live_ltp > 0 else cp
+                            logging.info(f"[SPOT_TARGET_GUARD] Option T1 triggered for {sym} ({pos.get('contract')}) via Underlying Spot Target Reached (Spot: {curr_spot:.2f} >= Spot T1: {spot_t1:.2f})")
+                        elif (not is_bull) and curr_spot <= spot_t1:
+                            t1_hit = True
+                            if not t1_val or t1_val <= 0:
+                                t1_val = live_ltp if live_ltp > 0 else cp
+                            logging.info(f"[SPOT_TARGET_GUARD] Option PE T1 triggered for {sym} ({pos.get('contract')}) via Underlying Spot Target Reached (Spot: {curr_spot:.2f} <= Spot T1: {spot_t1:.2f})")
+
             if t1_val and t1_hit:
                 # RULE: If T2 or T3 is NOT available, exit 100% at T1 (early exit threshold)!
                 if not has_higher_targets:
@@ -2082,16 +2127,17 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                         
                         exit_ok = bool(exit_res and exit_res.get("success"))
                         if exit_ok:
+                            exit_price = live_ltp if live_ltp > 0 else (cp if cp > 0 else t1_val)
                             if is_short_stock:
                                 buf_dist = get_sl_buffer_distance(entry_s, side="BEAR")
                                 be_offset = max(buf_dist, 0.5 * atr)
                                 be_sl = round(round((entry_s - be_offset) / 0.05) * 0.05, 2)
-                                partial_pnl = ((entry_s - t1_val) / entry_s * 100) if entry_s else 0
+                                partial_pnl = ((entry_s - exit_price) / entry_s * 100) if entry_s else 0
                             else:
                                 buf_dist = get_sl_buffer_distance(entry_s, side="BULL")
                                 be_offset = max(buf_dist, 0.5 * atr)
                                 be_sl = round(round((entry_s + be_offset) / 0.05) * 0.05, 2)
-                                partial_pnl = ((t1_val - entry_s) / entry_s * 100) if entry_s else 0
+                                partial_pnl = ((exit_price - entry_s) / entry_s * 100) if entry_s else 0
                             with lock:
                                 if sym in positions_dict:
                                     positions_dict[sym]["position_size"] = remaining_lots
@@ -2100,8 +2146,9 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                                     positions_dict[sym]["trailing_stage"] = 1
                                     positions_dict[sym]["t1_booked"] = True
                                     positions_dict[sym]["sl_set_time"] = dt.now().isoformat()
+                            pos["t1_booked"] = True
                             log_fn(sym, pos.get("pattern", ""), pos_tf, "EXIT_T1_PARTIAL", "PARTIAL",
-                                   f"T1 Banked 50% ({partial_qty} qty) @ {t1_val:.2f} | Runner SL=+BE ({be_sl:.2f})",
+                                   f"T1 Banked 50% ({partial_qty} qty) @ {exit_price:.2f} | Runner SL=+BE ({be_sl:.2f})",
                                    partial_pnl,
                                    entry=entry_s, sl=be_sl, target=t2_val or t3_val,
                                    event_time=last.get('date'))
@@ -2113,12 +2160,23 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                                     "t1_booked": True,
                                     "current_sl": be_sl,
                                     "sl_set_time": dt.now().isoformat(),
-                                    "details": f"T1 50% Banked ({partial_qty} qty) @ {t1_val:.2f} | Runner active ({remaining_qty} qty)"
+                                    "details": f"T1 50% Banked ({partial_qty} qty) @ {exit_price:.2f} | Runner active ({remaining_qty} qty)"
                                 })
                         else:
                             logging.critical(f"[TRANCHE_1_EXIT FAILED] Partial exit order for {sym} failed ({exit_res}). Preserving full position.")
                     else:
                         single_lot_mode = str(cfg.get("single_lot_target_mode", "EXIT_AT_T1") if isinstance(cfg, dict) else "EXIT_AT_T1").upper()
+                        if not is_stock:
+                            contract_name = pos.get("contract") or pos.get("symbol") or sym
+                            dte = get_contract_days_to_expiry(contract_name)
+                            if dte is not None:
+                                if dte <= 2:
+                                    single_lot_mode = "EXIT_AT_T1"
+                                    logging.info(f"[SINGLE_LOT_POLICY] Contract {contract_name} has DTE={dte} <= 2. Forcing EXIT_AT_T1 to lock profit against theta decay.")
+                                elif dte > 5 and single_lot_mode == "EXIT_AT_T1":
+                                    single_lot_mode = "TRAIL_BE"
+                                    logging.info(f"[SINGLE_LOT_POLICY] Monthly Contract {contract_name} has DTE={dte} > 5. Setting TRAIL_BE to let winner run to T2/T3.")
+
                         if single_lot_mode in ["EXIT_AT_T1", "BANK_T1", "FULL_EXIT_T1"]:
                             reached_val = lp if is_short_stock else hp
                             logging.info(f"T1 SINGLE-LOT FULL EXIT (Bank Profit @ T1): {sym} reached {reached_val:.2f} (Target: {t1_val:.2f}, Buffer: {buf_t1:.2f})")
@@ -2168,14 +2226,16 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                                 if sym in positions_dict:
                                     positions_dict[sym]["current_sl"] = new_sl
                                     positions_dict[sym]["trailing_stage"] = 1
+                                    positions_dict[sym]["t1_booked"] = True
                                     positions_dict[sym]["sl_set_time"] = sl_stamp
+                            pos["t1_booked"] = True
                             logging.info(f"TRAIL-1 {sym}: SL=+BE ({new_sl:.2f})")
                             log_fn(sym, pos.get("pattern", ""), timeframe_entry, "TRAIL_BE", "MUTATED",
                                    f"SL=+BE {new_sl:.2f}",
                                    entry=entry_s, sl=new_sl, target=t1_val,
                                    event_time=last.get('date'))
                             if tid:
-                                trade_db.update_trade(tid, {"trailing_stage": 1, "current_sl": new_sl, "sl_set_time": sl_stamp})
+                                trade_db.update_trade(tid, {"trailing_stage": 1, "t1_booked": True, "current_sl": new_sl, "sl_set_time": sl_stamp})
 
             t2_hit = ((lp <= (t2_val + buf_t2)) if is_short_stock else (hp >= (t2_val - buf_t2))) if (t2_val is not None and t2_val > 0) else False
             if pos.get("trailing_stage", 0) == 1 and t2_val and t2_hit:
@@ -2352,6 +2412,7 @@ def monitor_all_active_positions(kite, live=True):
                 cand_spot_sl = sl_info.get("spot_sl") if sl_info else None
                 cand_spot_entry = sl_info.get("spot_entry") if sl_info else None
                 cand_spot_token = sl_info.get("spot_token") if sl_info else None
+                cand_spot_t1 = sl_info.get("spot_t1") if sl_info else None
 
                 sl_invalid = False
                 if broker_avg_p > 0 and cand_sl > 0:
@@ -2376,9 +2437,10 @@ def monitor_all_active_positions(kite, live=True):
                         cand_spot_sl = derived.get("spot_sl")
                         cand_spot_entry = derived.get("spot_entry")
                         cand_spot_token = derived.get("spot_token")
+                        cand_spot_t1 = derived.get("spot_t1")
 
                 if is_opt and cand_sl > 0 and broker_avg_p > 0:
-                    cand_sl = calculate_option_atr_sl(entry_price=broker_avg_p, geometric_sl=cand_sl, multiplier=1.5, side="BULL")
+                    cand_sl = calculate_option_atr_sl(entry_price=broker_avg_p, geometric_sl=cand_sl, multiplier=2.0, side="BULL")
 
                 lot_sz = get_option_lot_size(tsym) or 1
                 num_lots = max(1, abs(p_qty) // lot_sz) if (is_opt and lot_sz > 0) else abs(p_qty)
@@ -2397,6 +2459,7 @@ def monitor_all_active_positions(kite, live=True):
                     "spot_sl": cand_spot_sl,
                     "spot_entry": cand_spot_entry,
                     "spot_token": cand_spot_token,
+                    "spot_t1": cand_spot_t1,
                     "trailing_stage": int(sl_info.get("trailing_stage") or 0) if sl_info else 0,
                     "pattern": cand_pat,
                     "position_type": "option" if is_opt else "stock",

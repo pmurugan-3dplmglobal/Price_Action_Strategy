@@ -55,6 +55,7 @@ from display_writer import clean_timestamp
 from targets import (
     find_profit_targets,
     find_profit_targets_bearish,
+    calculate_option_profit_targets,
     check_left_side_rule,
     check_left_side_rule_bearish,
     calculate_position_size,
@@ -435,11 +436,24 @@ def derive_sl_targets_for_contract(kite, contract, entry_price, timeframe_entry=
                     t1 = round(ep + (1.88 * risk), 2)
 
         if is_opt and sl_val > 0 and ep > 0:
-            sl_val = calculate_option_atr_sl(ep, sl_val, df_candles=df_a if 'df_a' in locals() else None, multiplier=1.5, side="BULL")
+            sl_val = calculate_option_atr_sl(ep, sl_val, df_candles=df_a if 'df_a' in locals() and df_a is not None else None, multiplier=2.0, side="BULL")
+            # 0DTE Hard Floor Warning
+            try:
+                from position_monitor import get_contract_days_to_expiry
+            except ImportError:
+                try:
+                    from common.position_monitor import get_contract_days_to_expiry
+                except ImportError:
+                    get_contract_days_to_expiry = None
+            dte_val = get_contract_days_to_expiry(contract_str) if get_contract_days_to_expiry else None
+            if dte_val is not None and dte_val <= 0 and ep < 40.0:
+                logging.warning(f"[0DTE_PREMIUM_FLOOR] Option {contract_str} premium ₹{ep:.2f} < ₹40.00 minimum floor on 0DTE.")
+            t1, t2, t3 = calculate_option_profit_targets(ep, sl_val, dte=dte_val)
 
-        # Derive spot token & spot SL for Spot-Anchored SL Guard
+        # Derive spot token & spot SL/Target for Spot-Anchored SL Guard & Spot-Target Exit Guard
         spot_tok = None
         spot_sl = None
+        spot_t1 = None
         spot_entry = None
         if kite and contract_str and not is_bear_equity:
             try:
@@ -461,9 +475,11 @@ def derive_sl_targets_for_contract(kite, contract, entry_price, timeframe_entry=
                         if "PE" in contract_str:
                             spot_high_10 = float(df_spot['high'].iloc[-10:].max())
                             spot_sl = calculate_sl_buffer(spot_high_10, side="BEAR")
+                            spot_t1, _, _ = find_profit_targets_bearish(df_spot, spot_entry if spot_entry else float(df_spot.iloc[-1]['close']), stop_loss=spot_sl)
                         else:
                             spot_low_10 = float(df_spot['low'].iloc[-10:].min())
                             spot_sl = calculate_sl_buffer(spot_low_10, side="BULL")
+                            spot_t1, _, _ = find_profit_targets(df_spot, spot_entry if spot_entry else float(df_spot.iloc[-1]['close']), stop_loss=spot_sl)
             except Exception as s_derive_err:
                 logging.debug(f"Spot derivation error for {contract}: {s_derive_err}")
 
@@ -488,6 +504,7 @@ def derive_sl_targets_for_contract(kite, contract, entry_price, timeframe_entry=
             "entry_time": now_iso,
             "spot_token": spot_tok,
             "spot_sl": spot_sl,
+            "spot_t1": spot_t1,
             "spot_entry": spot_entry
         }
     except Exception as e:
@@ -507,7 +524,8 @@ def derive_sl_targets_for_contract(kite, contract, entry_price, timeframe_entry=
                     "direction": "BEAR",
                     "side": "BEAR",
                     "pattern": "FALLBACK_10PCT_MANUAL_BEAR",
-                    "entry_time": now_iso
+                    "entry_time": now_iso,
+                    "spot_t1": None
                 }
             else:
                 if is_opt:
@@ -520,16 +538,31 @@ def derive_sl_targets_for_contract(kite, contract, entry_price, timeframe_entry=
                 sl_val = round(ep * 0.90, 2)
                 risk = round(ep - sl_val, 2)
                 now_iso = dt.now().isoformat()
+                if is_opt:
+                    try:
+                        from position_monitor import get_contract_days_to_expiry
+                    except ImportError:
+                        try:
+                            from common.position_monitor import get_contract_days_to_expiry
+                        except ImportError:
+                            get_contract_days_to_expiry = None
+                    dte_val = get_contract_days_to_expiry(contract_str) if get_contract_days_to_expiry else None
+                    t1, t2, t3 = calculate_option_profit_targets(ep, sl_val, dte=dte_val)
+                else:
+                    t1 = round(ep + 1.88 * risk, 2)
+                    t2 = round(ep + 2.50 * risk, 2)
+                    t3 = round(ep + 3.50 * risk, 2)
                 return {
                     "entry_price": round(ep, 2),
                     "current_sl": sl_val,
-                    "t1": round(ep + 1.88 * risk, 2),
-                    "t2": round(ep + 2.50 * risk, 2),
-                    "t3": round(ep + 3.50 * risk, 2),
+                    "t1": t1,
+                    "t2": t2,
+                    "t3": t3,
                     "direction": ret_dir,
                     "side": ret_side,
                     "pattern": "FALLBACK_10PCT_MANUAL",
-                    "entry_time": now_iso
+                    "entry_time": now_iso,
+                    "spot_t1": None
                 }
         return None
 
@@ -656,6 +689,7 @@ def lookup_scan_sl_target(contract, symbol, engine, kite=None, entry_price=0, ti
                     "lot_size": best_db.get("lot_size"),
                     "spot_token": best_db.get("spot_token") or best_db.get("index_token"),
                     "spot_sl": best_db.get("spot_sl"),
+                    "spot_t1": best_db.get("spot_t1"),
                     "spot_entry": best_db.get("spot_entry"),
                     "tier": best_db.get("tier", 2),
                     "tier_label": best_db.get("tier_label", "TIER_2_CORE"),
@@ -714,6 +748,7 @@ def lookup_scan_sl_target(contract, symbol, engine, kite=None, entry_price=0, ti
                                 "lot_size": trade.get("lot_size"),
                                 "spot_token": trade.get("spot_token") or trade.get("index_token"),
                                 "spot_sl": trade.get("spot_sl"),
+                                "spot_t1": trade.get("spot_t1"),
                                 "spot_entry": trade.get("spot_entry"),
                                 "tier": trade.get("tier", 2),
                                 "tier_label": trade.get("tier_label", "TIER_2_CORE"),
@@ -757,6 +792,7 @@ def lookup_scan_sl_target(contract, symbol, engine, kite=None, entry_price=0, ti
                                 "lot_size": best_t.get("lot_size"),
                                 "spot_token": best_t.get("spot_token") or best_t.get("index_token"),
                                 "spot_sl": best_t.get("spot_sl"),
+                                "spot_t1": best_t.get("spot_t1"),
                                 "spot_entry": best_t.get("spot_entry"),
                                 "tier": best_t.get("tier", 2),
                                 "tier_label": best_t.get("tier_label", "TIER_2_CORE"),
@@ -874,6 +910,7 @@ def write_scan_display_data(staged, active, display_file, engine_name=None):
                 "vcp_badge": t.get("vcp_badge", ""),
                 "spot_token": t.get("spot_token") or t.get("index_token"),
                 "spot_sl": t.get("spot_sl"),
+                "spot_t1": t.get("spot_t1"),
                 "spot_entry": t.get("spot_entry"),
                 "spot_vwap": float(t.get("spot_vwap", 0.0)),
                 "vwap": t.get("vwap", 0.0),
@@ -1491,10 +1528,34 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
     spot_high_10 = float(df_spot['high'].iloc[-10:].max()) if df_spot is not None and not df_spot.empty else (current_spot * 1.02 if current_spot > 0 else 0.0)
     spot_sl_ce = calculate_sl_buffer(spot_low_10, side="BULL") if spot_low_10 > 0 else 0.0
     spot_sl_pe = calculate_sl_buffer(spot_high_10, side="BEAR") if spot_high_10 > 0 else 0.0
+    spot_t1_ce = None
+    spot_t1_pe = None
+    if df_spot is not None and len(df_spot) >= 5 and current_spot > 0:
+        try:
+            spot_t1_ce, _, _ = find_profit_targets(df_spot, current_spot, stop_loss=spot_sl_ce)
+            spot_t1_pe, _, _ = find_profit_targets_bearish(df_spot, current_spot, stop_loss=spot_sl_pe)
+        except Exception as st_err:
+            logging.debug(f"Spot targets calculation error for {symbol}: {st_err}")
+
+    is_index_sym = symbol.strip().upper() in ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "SENSEX", "BANKEX"]
 
     for strike in sorted(set(ce_map) & set(pe_map)):
         ce = ce_map[strike]
         pe = pe_map[strike]
+
+        # 0DTE Index 12:30 IST Cutoff Guard
+        if is_index_sym and get_ist_now().time() >= datetime_time(12, 30):
+            try:
+                from position_monitor import get_contract_days_to_expiry
+            except ImportError:
+                try:
+                    from common.position_monitor import get_contract_days_to_expiry
+                except ImportError:
+                    get_contract_days_to_expiry = None
+            dte_chk = get_contract_days_to_expiry(ce['tradingsymbol']) if get_contract_days_to_expiry else None
+            if dte_chk is not None and dte_chk <= 0:
+                logging.info(f"[0DTE_CUTOFF] {symbol}: 0DTE index option entry cutoff reached (12:30 IST). Skipping strike {strike}.")
+                continue
         same_tf = timeframe_entry == timeframe_anchor and from_entry == from_anchor and to_entry == to_anchor
         dfs = {}
         try:
@@ -1598,6 +1659,19 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                                 logging.info(f"CE SKIP {ce['tradingsymbol']}: Anchor A ({a_dt_str}) preceded terminal swing base ({term_dt_str})")
                                 continue
 
+                        # 0DTE Hard Floor: reject premium < ₹40.00 when dte <= 0
+                        try:
+                            from position_monitor import get_contract_days_to_expiry
+                        except ImportError:
+                            try:
+                                from common.position_monitor import get_contract_days_to_expiry
+                            except ImportError:
+                                get_contract_days_to_expiry = None
+                        dte_ce = get_contract_days_to_expiry(ce['tradingsymbol']) if get_contract_days_to_expiry else None
+                        if dte_ce is not None and dte_ce <= 0 and float(result_ce["Close"]) < 40.0:
+                            logging.info(f"[0DTE_PREMIUM_FLOOR] CE SKIP {ce['tradingsymbol']}: Premium ₹{result_ce['Close']:.2f} < ₹40.00 minimum floor on 0DTE.")
+                            continue
+
                         if result_ce["Close"] < 300 and result_ce["T1"] > result_ce["Close"] * 5:
                             log_fn(ce['tradingsymbol'], result_ce["Pattern"], timeframe_entry,
                                    "SCAN_MATCH", "NO_TARGETS", "Stale ITM regime targets",
@@ -1630,8 +1704,14 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                             entry_price=result_ce["Close"],
                             geometric_sl=result_ce["SL"],
                             df_candles=df_ce_e,
-                            multiplier=1.5,
+                            multiplier=2.0,
                             side="BULL"
+                        )
+                        opt_t1_ce, opt_t2_ce, opt_t3_ce = calculate_option_profit_targets(
+                            entry_premium=result_ce["Close"],
+                            sl_price=effective_sl_ce,
+                            dte=dte_ce,
+                            spot_t1=spot_t1_ce
                         )
                         ce_lot = int(ce.get("lot_size") or config.get("lot_size", 1))
                         pos_size = calculate_position_size(
@@ -1641,16 +1721,17 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                             risk_percent=float(cfg_engine.get("MAX_RISK_PERCENT") or 1.0),
                             lot_size=ce_lot,
                             is_option=True,
-                            tier=tier_ce
+                            tier=tier_ce,
+                            allow_zero=True
                         )
 
                         trade_data = {
                             "symbol": symbol, "contract": ce['tradingsymbol'], "option_token": ce['token'],
                             "index_token": config["token"], "spot_token": config["token"], "spot_entry": current_spot,
-                            "spot_sl": spot_sl_ce, "strike": strike, "entry_spot": result_ce["Close"],
+                            "spot_sl": spot_sl_ce, "spot_t1": spot_t1_ce, "strike": strike, "entry_spot": result_ce["Close"],
                             "current_sl": effective_sl_ce, "geometric_sl": result_ce["SL"],
-                            "t1": result_ce["T1"], "t2": result_ce["T2"],
-                            "t3": result_ce["T3"], "rr": result_ce.get("RR"), "trailing_stage": 0,
+                            "t1": opt_t1_ce, "t2": opt_t2_ce,
+                            "t3": opt_t3_ce, "rr": result_ce.get("RR"), "trailing_stage": 0,
                             "lot_size": ce_lot, "position_size": pos_size,
                             "pattern": result_ce["Pattern"], "timeframe": timeframe_entry, "side": "CE",
                             "strike_step": config["strike_step"], "entry_time": candle_time,
@@ -1684,6 +1765,16 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                         try:
                             stage_ce = scan_pattern_lifecycle_stage(df_ce_e, df_ce_a, anchor_tf=timeframe_anchor, entry_tf=timeframe_entry, is_option=True)
                             if stage_ce and stage_ce.get("stage") in ["STAGE_A_PLUS_READY", "STAGE_A_READY", "STAGE_B_ANCHOR"]:
+                                try:
+                                    from position_monitor import get_contract_days_to_expiry
+                                except ImportError:
+                                    try:
+                                        from common.position_monitor import get_contract_days_to_expiry
+                                    except ImportError:
+                                        get_contract_days_to_expiry = None
+                                dte_ce_f = get_contract_days_to_expiry(ce['tradingsymbol']) if get_contract_days_to_expiry else None
+                                if dte_ce_f is not None and dte_ce_f <= 0 and float(stage_ce.get("close", 0.0)) < 40.0:
+                                    continue
                                 f_stage = pattern_funnel.STAGE_A_PLUS if stage_ce["stage"] == "STAGE_A_PLUS_READY" else (pattern_funnel.STAGE_A if stage_ce["stage"] == "STAGE_A_READY" else pattern_funnel.STAGE_B)
                                 spot_conf_ce_f, spot_conf_type_ce_f = evaluate_spot_confluence("CE", False, current_spot, spot_vwap, spot_sl_ce, spot_ema_bull)
                                 f_tier_ce = int(stage_ce.get("tier", 2))
@@ -1701,6 +1792,7 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                                 funnel_item = {
                                     "symbol": symbol, "contract": ce['tradingsymbol'], "option_token": ce['token'],
                                     "spot_token": config["token"], "spot_entry": current_spot, "strike": strike,
+                                    "spot_sl": spot_sl_ce, "spot_t1": spot_t1_ce,
                                     "entry_spot": stage_ce.get("close", 0.0), "current_sl": stage_ce.get("sl", 0.0),
                                     "benchmark": stage_ce.get("benchmark", 0.0), "c_low": stage_ce.get("c_low"),
                                     "dist_to_trigger_pct": stage_ce.get("dist_to_trigger_pct", 0.0),
@@ -1750,6 +1842,19 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                                 logging.info(f"PE SKIP {pe['tradingsymbol']}: Anchor A ({a_dt_str}) preceded terminal swing base ({term_dt_str})")
                                 continue
 
+                        # 0DTE Hard Floor: reject premium < ₹40.00 when dte <= 0
+                        try:
+                            from position_monitor import get_contract_days_to_expiry
+                        except ImportError:
+                            try:
+                                from common.position_monitor import get_contract_days_to_expiry
+                            except ImportError:
+                                get_contract_days_to_expiry = None
+                        dte_pe = get_contract_days_to_expiry(pe['tradingsymbol']) if get_contract_days_to_expiry else None
+                        if dte_pe is not None and dte_pe <= 0 and float(result_pe["Close"]) < 40.0:
+                            logging.info(f"[0DTE_PREMIUM_FLOOR] PE SKIP {pe['tradingsymbol']}: Premium ₹{result_pe['Close']:.2f} < ₹40.00 minimum floor on 0DTE.")
+                            continue
+
                         if result_pe["Close"] < 300 and result_pe["T1"] > result_pe["Close"] * 5:
                             log_fn(pe['tradingsymbol'], result_pe["Pattern"], timeframe_entry,
                                    "SCAN_MATCH", "NO_TARGETS", "Stale ITM regime targets",
@@ -1782,8 +1887,14 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                             entry_price=result_pe["Close"],
                             geometric_sl=result_pe["SL"],
                             df_candles=df_pe_e,
-                            multiplier=1.5,
+                            multiplier=2.0,
                             side="BULL"
+                        )
+                        opt_t1_pe, opt_t2_pe, opt_t3_pe = calculate_option_profit_targets(
+                            entry_premium=result_pe["Close"],
+                            sl_price=effective_sl_pe,
+                            dte=dte_pe,
+                            spot_t1=spot_t1_pe
                         )
                         pe_lot = int(pe.get("lot_size") or config.get("lot_size", 1))
                         pos_size = calculate_position_size(
@@ -1793,16 +1904,17 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                             risk_percent=float(cfg_engine.get("MAX_RISK_PERCENT") or 1.0),
                             lot_size=pe_lot,
                             is_option=True,
-                            tier=tier_pe
+                            tier=tier_pe,
+                            allow_zero=True
                         )
 
                         trade_data = {
                             "symbol": symbol, "contract": pe['tradingsymbol'], "option_token": pe['token'],
                             "index_token": config["token"], "spot_token": config["token"], "spot_entry": current_spot,
-                            "spot_sl": spot_sl_pe, "strike": strike, "entry_spot": result_pe["Close"],
+                            "spot_sl": spot_sl_pe, "spot_t1": spot_t1_pe, "strike": strike, "entry_spot": result_pe["Close"],
                             "current_sl": effective_sl_pe, "geometric_sl": result_pe["SL"],
-                            "t1": result_pe["T1"], "t2": result_pe["T2"],
-                            "t3": result_pe["T3"], "rr": result_pe.get("RR"), "trailing_stage": 0,
+                            "t1": opt_t1_pe, "t2": opt_t2_pe,
+                            "t3": opt_t3_pe, "rr": result_pe.get("RR"), "trailing_stage": 0,
                             "lot_size": pe_lot, "position_size": pos_size,
                             "pattern": result_pe["Pattern"], "timeframe": timeframe_entry, "side": "PE",
                             "strike_step": config["strike_step"], "entry_time": candle_time,
@@ -1836,6 +1948,16 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                         try:
                             stage_pe = scan_pattern_lifecycle_stage(df_pe_e, df_pe_a, anchor_tf=timeframe_anchor, entry_tf=timeframe_entry, is_option=True)
                             if stage_pe and stage_pe.get("stage") in ["STAGE_A_PLUS_READY", "STAGE_A_READY", "STAGE_B_ANCHOR"]:
+                                try:
+                                    from position_monitor import get_contract_days_to_expiry
+                                except ImportError:
+                                    try:
+                                        from common.position_monitor import get_contract_days_to_expiry
+                                    except ImportError:
+                                        get_contract_days_to_expiry = None
+                                dte_pe_f = get_contract_days_to_expiry(pe['tradingsymbol']) if get_contract_days_to_expiry else None
+                                if dte_pe_f is not None and dte_pe_f <= 0 and float(stage_pe.get("close", 0.0)) < 40.0:
+                                    continue
                                 f_stage = pattern_funnel.STAGE_A_PLUS if stage_pe["stage"] == "STAGE_A_PLUS_READY" else (pattern_funnel.STAGE_A if stage_pe["stage"] == "STAGE_A_READY" else pattern_funnel.STAGE_B)
                                 spot_conf_pe_f, spot_conf_type_pe_f = evaluate_spot_confluence("PE", False, current_spot, spot_vwap, spot_sl_pe, spot_ema_bear)
                                 f_tier_pe = int(stage_pe.get("tier", 2))
@@ -1853,6 +1975,7 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                                 funnel_item = {
                                     "symbol": symbol, "contract": pe['tradingsymbol'], "option_token": pe['token'],
                                     "spot_token": config["token"], "spot_entry": current_spot, "strike": strike,
+                                    "spot_sl": spot_sl_pe, "spot_t1": spot_t1_pe,
                                     "entry_spot": stage_pe.get("close", 0.0), "current_sl": stage_pe.get("sl", 0.0),
                                     "benchmark": stage_pe.get("benchmark", 0.0), "c_low": stage_pe.get("c_low"),
                                     "dist_to_trigger_pct": stage_pe.get("dist_to_trigger_pct", 0.0),
@@ -2284,8 +2407,11 @@ def simulate_trade_outcome(kite, trade, target_date, resolve_token_fn=None):
         return {"result": None, "detail": str(e), "entry_time": None, "exit_time": None, "pnl_pct": None}
 
 
-def resolve_option_strikes(nfo_instruments, base_symbol, spot_price, step_size, option_type, n_range=0):
-    """Return ATM strike plus n_range strikes ITM/OTM. nfo_instruments can be None for derived calls."""
+def resolve_option_strikes(nfo_instruments, base_symbol, spot_price, step_size, option_type, n_range=0, dte=None, allow_otm=False):
+    """Return ATM strike plus n_range strikes ITM/OTM. nfo_instruments can be None for derived calls.
+    For 0DTE (dte <= 0) naked buying, restricts strikes strictly to ATM or 1-step ITM (offsets [0, -1] for CE, [0, 1] for PE).
+    When allow_otm=True (e.g. for multi-leg debit spreads), permits OTM strikes up to n_range.
+    """
     if nfo_instruments is None:
         return []
     if nfo_instruments is None or nfo_instruments.empty or 'name' not in nfo_instruments.columns:
@@ -2293,7 +2419,33 @@ def resolve_option_strikes(nfo_instruments, base_symbol, spot_price, step_size, 
     atm = int(round(spot_price / step_size) * step_size)
     out = []
     seen = set()
-    for offset in range(-n_range, n_range + 1):
+
+    # If dte is not explicitly provided, auto-detect from nfo_instruments for base_symbol
+    if dte is None and nfo_instruments is not None and not nfo_instruments.empty and 'expiry' in nfo_instruments.columns:
+        try:
+            today = get_ist_date()
+            base_df = nfo_instruments[nfo_instruments['name'] == base_symbol.strip().upper()]
+            if not base_df.empty:
+                exp_series = pd.to_datetime(base_df['expiry']).dt.date
+                valid_exp = exp_series[exp_series >= today].sort_values()
+                if not valid_exp.empty:
+                    dte = (valid_exp.iloc[0] - today).days
+        except Exception:
+            pass
+
+    # 0DTE Strike Discipline for Naked Buying: Strictly ATM (offset 0) or 1-step ITM (offset -1 for CE, +1 for PE)
+    if not allow_otm and dte is not None and dte <= 0:
+        opt_t = str(option_type).upper()
+        if opt_t == "CE":
+            offsets = [0, -1]
+        elif opt_t == "PE":
+            offsets = [0, 1]
+        else:
+            offsets = [0, -1]
+    else:
+        offsets = list(range(-n_range, n_range + 1))
+
+    for offset in offsets:
         strike = atm + offset * step_size
         if strike in seen:
             continue
@@ -2337,7 +2489,13 @@ def resolve_option_strikes(nfo_instruments, base_symbol, spot_price, step_size, 
             else:
                 continue
             c_lot = int(c['lot_size']) if 'lot_size' in c and pd.notna(c['lot_size']) else None
-            out.append({"strike": strike, "token": int(c['instrument_token']), "tradingsymbol": c['tradingsymbol'], "lot_size": c_lot})
+            out.append({
+                "strike": strike,
+                "token": int(c['instrument_token']),
+                "tradingsymbol": c['tradingsymbol'],
+                "lot_size": c_lot,
+                "strike_offset": offset
+            })
         except Exception as e:
             logging.error(f"Strike resolution error for {base_symbol} {option_type} @ {strike}: {e}")
             continue
@@ -2389,7 +2547,7 @@ def resolve_option_spread(nfo_instruments, base_symbol, spot_price, step_size, d
     step_offset = abs(int(round((target_strike - atm_strike) / step_size)))
     n_range = max(3, step_offset + 1)
 
-    strikes_pool = resolve_option_strikes(nfo_instruments, base_symbol, spot_price, step_size, opt_type, n_range=n_range)
+    strikes_pool = resolve_option_strikes(nfo_instruments, base_symbol, spot_price, step_size, opt_type, n_range=n_range, allow_otm=True)
     if not strikes_pool:
         return None
 

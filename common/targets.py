@@ -20,13 +20,59 @@ def check_left_side_rule(df, anchor_low, setup_count=0, skip_adjacent=0, lookbac
 # Alias for backward compatibility
 check_left_side = check_left_side_rule
 
-def find_profit_targets(df_hist, entry_close, stop_loss=None):
+def is_option_contract(contract_str):
+    """
+    Determine if a symbol/contract represents an Option contract (e.g. NIFTY24SEP25000CE, INFY24SEP1500PE).
+    Cash equities (e.g. PETRONET, PEL, PERSISTENT, HDFCBANK, CENTRALBK) return False.
+    """
+    if not contract_str:
+        return False
+    c = str(contract_str).strip().upper()
+    if ":" in c:
+        c = c.split(":")[-1]
+    return (c.endswith("CE") or c.endswith("PE")) and any(ch.isdigit() for ch in c)
+
+
+def calculate_option_profit_targets(entry_premium, sl_price, dte=None, spot_t1=None):
+    """
+    DTE-Adaptive Option Profit Target Calculation.
+    Decoupled from stale historical option charts. Derived adaptively from initial risk (R) and Days-To-Expiry:
+    - 0DTE (dte <= 0): T1 = Entry + 1.5 * Risk
+    - Short-Term (1 <= dte <= 5): T1 = Entry + 2.0 * Risk
+    - Monthly (dte > 5 or None): T1 = Entry + 2.5 * Risk
+    """
+    ep = float(entry_premium or 0.0)
+    sl = float(sl_price or 0.0)
+    risk = round(abs(ep - sl), 2) if (sl > 0 and ep > sl) else max(round(ep * 0.08, 2), 1.0)
+
+    if dte is not None and dte <= 0:
+        t1 = round(ep + 1.5 * risk, 2)
+        t2 = round(ep + 2.5 * risk, 2)
+        t3 = round(ep + 3.5 * risk, 2)
+    elif dte is not None and 1 <= dte <= 5:
+        t1 = round(ep + 2.0 * risk, 2)
+        t2 = round(ep + 3.0 * risk, 2)
+        t3 = round(ep + 4.0 * risk, 2)
+    else:
+        # Monthly (dte > 5 or default when dte not specified)
+        t1 = round(ep + 2.5 * risk, 2)
+        t2 = round(ep + 3.5 * risk, 2)
+        t3 = round(ep + 5.0 * risk, 2)
+
+    return t1, t2, t3
+
+
+def find_profit_targets(df_hist, entry_close, stop_loss=None, symbol=None, dte=None, is_option=None):
     """
     Timeframe & Asset class adaptive profit target finder.
-    Handles Intraday Options (1m, 3m, 5m, 15m, 30m, 60m) AND Daily/Weekly/Monthly Stock & Index charts.
-    - Daily/Weekly/Monthly TFs: Scans up to 730 days (2 years) to extract major 52-week & multi-month swing highs.
-    - Intraday Option TFs: Scans active 30 days window to ignore ancient decaying option contract highs.
+    Handles Intraday Options (via DTE-adaptive risk multiplier) AND Daily/Weekly/Monthly Stock & Index charts.
+    - Options: Decoupled from stale option chart wicks, uses DTE-adaptive risk multiples.
+    - Cash Equities: Retains structural 5-bar swing high pivots, with realistic fallback spacing (1.5x Risk).
     """
+    is_opt = is_option if is_option is not None else (is_option_contract(symbol) if symbol else False)
+    if is_opt:
+        return calculate_option_profit_targets(entry_close, stop_loss, dte=dte)
+
     if df_hist is None or len(df_hist) < 3:
         return None, None, None
 
@@ -82,11 +128,7 @@ def find_profit_targets(df_hist, entry_close, stop_loss=None):
     # 5. Dynamic target cap & minimum start relative to entry price & asset type
     risk = (entry_close - stop_loss) if (stop_loss and stop_loss < entry_close) else max(atr * 1.5, entry_close * 0.03)
 
-    if entry_close < 300:  # Option contract premium
-        max_target_cap = max(entry_close * 3.5, entry_close + 15 * atr)
-        min_target_start = max(entry_close * 1.20, entry_close + 1.5 * risk)
-        step_tol = 0.04
-    elif is_higher_tf:     # Daily/Weekly/Monthly Stock or Index (allows major 52-week peaks)
+    if is_higher_tf:     # Daily/Weekly/Monthly Stock or Index (allows major 52-week peaks)
         max_target_cap = max(entry_close * 2.0, entry_close + 20 * atr)
         min_target_start = max(entry_close * 1.03, entry_close + 1.5 * risk)
         step_tol = 0.03
@@ -135,9 +177,9 @@ def find_profit_targets(df_hist, entry_close, stop_loss=None):
     t3 = clustered[2] if len(clustered) >= 3 else None
 
     # Strict Negation Theory Rule: T1, T2, T3 are strictly based on non-negated chart swing pivots.
-    # If a 2nd or 3rd non-negated swing level does not exist on the chart, keep T2/T3 as None (N/A).
+    # For cash equities, fallback T1 is entry + 1.5 * risk (not +20%).
     if t1 is None:
-        t1 = round(entry_close + max(1.5 * risk, entry_close * 0.20), 2)
+        t1 = round(entry_close + 1.5 * risk, 2)
 
     if t2 is not None and t2 <= t1 * (1 + step_tol):
         t2 = round(t1 * (1 + step_tol * 2), 2)
@@ -146,7 +188,7 @@ def find_profit_targets(df_hist, entry_close, stop_loss=None):
 
     return t1, t2, t3
 
-def calculate_position_size(spot_price, stop_loss, capital=100000.0, risk_percent=1.0, lot_size=1, is_option=False, tier=1):
+def calculate_position_size(spot_price, stop_loss, capital=100000.0, risk_percent=1.0, lot_size=1, is_option=False, tier=1, allow_zero=False, min_lots=1):
     """
     Fixed-fractional position sizing with Conviction-Weighted Tier Scaling:
     - Sizing scaled by Setup Tier (Conviction Weighting):
@@ -156,13 +198,14 @@ def calculate_position_size(spot_price, stop_loss, capital=100000.0, risk_percen
     - For Cash Equities: units = max_risk_amount / abs(entry - sl)
     - For Options: lots = min(max_risk_amount / risk_per_lot, max_capital_lots)
       where max_capital_lots caps capital deployed in a single option to 25% of account.
+    - Zero-lot sizing (allow_zero=True or min_lots=0): returns 0 if max_risk_amount < risk_per_lot.
     """
     try:
         sp = float(spot_price or 0.0)
         sl = float(stop_loss or 0.0)
         risk_per_unit = abs(sp - sl)
         if risk_per_unit <= 0:
-            return 1
+            return 0 if (allow_zero or min_lots == 0) else 1
         cap_base = float(capital or 100000.0)
         tier_val = int(tier or 1)
         tier_multiplier = 1.0 if tier_val == 1 else (0.70 if tier_val == 2 else 0.50)
@@ -170,22 +213,26 @@ def calculate_position_size(spot_price, stop_loss, capital=100000.0, risk_percen
         risk_pct = float(risk_percent or 1.0)
         max_risk_amount = cap * (risk_pct / 100.0)
 
-        if is_option and int(lot_size or 1) > 1:
-            lot_sz = int(lot_size)
+        if is_option:
+            lot_sz = max(1, int(lot_size or 1))
             risk_per_lot = max(0.50, risk_per_unit) * lot_sz
-            max_lots_risk = max(1, int(max_risk_amount / risk_per_lot))
+            if (allow_zero or min_lots == 0) and max_risk_amount < risk_per_lot:
+                return 0
+            base_min_lots = 0 if (allow_zero or min_lots == 0) else max(1, int(min_lots))
+            max_lots_risk = max(base_min_lots, int(max_risk_amount / risk_per_lot))
             # Capital ceiling: max 25% of capital deployed into a single option strike
             opt_premium = max(1.0, sp)
-            max_lots_capital = max(1, int((cap * 0.25) / (opt_premium * lot_sz)))
+            max_lots_capital = max(base_min_lots, int((cap * 0.25) / (opt_premium * lot_sz)))
             return min(max_lots_risk, max_lots_capital)
         else:
             units = int(max_risk_amount / risk_per_unit)
             # Capital ceiling for Cash Equities: max 100% of capital deployed to a single stock
             # to prevent runaway leverage when stop-loss is very close to entry.
-            max_units_capital = max(1, int(cap / max(1.0, sp)))
-            return max(1, min(units, max_units_capital))
+            base_min_units = 0 if (allow_zero or min_lots == 0) else 1
+            max_units_capital = max(base_min_units, int(cap / max(1.0, sp)))
+            return max(base_min_units, min(units, max_units_capital))
     except Exception:
-        return 1
+        return 0 if (is_option and (allow_zero or min_lots == 0)) else (0 if is_option else 1)
 
 def calculate_sl_buffer(price_level, side="BULL"):
     """
@@ -228,17 +275,17 @@ def get_sl_buffer_distance(price_level, side="BULL"):
     return round(abs(p - calculate_sl_buffer(p, side=side)), 2)
 
 
-def calculate_option_atr_sl(entry_price, geometric_sl, df_candles=None, atr=None, multiplier=1.5, side="BULL", max_risk_pct=0.30):
+def calculate_option_atr_sl(entry_price, geometric_sl, df_candles=None, atr=None, multiplier=2.0, side="BULL", max_risk_pct=0.28):
     """
     ATR-Based Minimum Stop Loss Floor for Option Contracts.
     Prevents premature stop-outs caused by option premium micro-volatility/spread noise.
 
     Invariants:
     - Applied ONLY to option contracts (never cash equities).
-    - Enforces minimum SL risk distance = max(geometric_sl_distance, multiplier * ATR14).
+    - Enforces minimum SL risk distance = max(geometric_sl_distance, multiplier * ATR14, 8% entry floor).
     - For Long Options (BUY orders, side='BULL'):
       * SL price = entry_price - effective_risk_distance
-      * Capped at max_risk_pct (default 30% of entry price) to avoid catastrophic loss.
+      * Capped at max_risk_pct (default 28% of entry price) to avoid catastrophic loss.
       * Floored at 0.05 tick size.
     - Returns rounded to 0.05 tick size.
     """
@@ -273,7 +320,10 @@ def calculate_option_atr_sl(entry_price, geometric_sl, df_candles=None, atr=None
     # Enforce minimum breathing room: at least multiplier * ATR distance
     effective_risk_dist = max(geo_distance, atr_distance)
 
-    # Cap maximum risk distance at max_risk_pct (e.g. 30% of premium) to protect against excessive drawdown
+    # Enforce 8.0% minimum floor distance
+    effective_risk_dist = max(effective_risk_dist, ep * 0.08)
+
+    # Cap maximum risk distance at max_risk_pct (default 28% of premium) to protect against excessive drawdown
     max_allowed_dist = round(ep * float(max_risk_pct), 2)
     effective_risk_dist = min(effective_risk_dist, max_allowed_dist)
 
@@ -282,7 +332,7 @@ def calculate_option_atr_sl(entry_price, geometric_sl, df_candles=None, atr=None
     new_sl = max(0.05, new_sl)
 
     if geo_sl > 0 and new_sl < geo_sl:
-        logging.debug(f"[ATR_SL_WIDENED] Option SL widened from {geo_sl:.2f} to {new_sl:.2f} (Entry: {ep:.2f}, ATR: {atr_val:.2f}, 1.5xATR: {atr_distance:.2f})")
+        logging.debug(f"[ATR_SL_WIDENED] Option SL widened from {geo_sl:.2f} to {new_sl:.2f} (Entry: {ep:.2f}, ATR: {atr_val:.2f}, {multiplier}xATR: {atr_distance:.2f})")
 
     return new_sl
 
@@ -344,7 +394,7 @@ def check_left_side_rule_bearish(df, anchor_high, setup_count=0, skip_adjacent=0
 
 check_left_side_bearish = check_left_side_rule_bearish
 
-def find_profit_targets_bearish(df_hist, entry_close, stop_loss=None):
+def find_profit_targets_bearish(df_hist, entry_close, stop_loss=None, symbol=None, dte=None, is_option=None):
     """
     Timeframe & Asset class adaptive profit target finder for BEARISH / Short setups.
     Scans historical 5-bar swing low support pivots below entry_close.
@@ -352,6 +402,10 @@ def find_profit_targets_bearish(df_hist, entry_close, stop_loss=None):
     A swing low support S is NEGATED if subsequent price closed below S prior to entry.
     Extracts non-negated support levels and sorts them descending (T1 is nearest support below entry).
     """
+    is_opt = is_option if is_option is not None else (is_option_contract(symbol) if symbol else False)
+    if is_opt:
+        return calculate_option_profit_targets(entry_close, stop_loss, dte=dte)
+
     if df_hist is None or len(df_hist) < 3:
         return None, None, None
 
@@ -396,11 +450,7 @@ def find_profit_targets_bearish(df_hist, entry_close, stop_loss=None):
 
     risk = (stop_loss - entry_close) if (stop_loss and stop_loss > entry_close) else max(atr * 1.5, entry_close * 0.03)
 
-    if entry_close < 300:
-        max_target_cap = max(entry_close * 0.3, entry_close - 15 * atr)
-        min_target_start = min(entry_close * 0.80, entry_close - 1.5 * risk)
-        step_tol = 0.04
-    elif is_higher_tf:
+    if is_higher_tf:
         max_target_cap = max(entry_close * 0.5, entry_close - 20 * atr)
         min_target_start = min(entry_close * 0.97, entry_close - 1.5 * risk)
         step_tol = 0.03
@@ -446,9 +496,9 @@ def find_profit_targets_bearish(df_hist, entry_close, stop_loss=None):
     t3 = clustered[2] if len(clustered) >= 3 else None
 
     # Strict Negation Theory Rule: T1, T2, T3 are strictly based on non-negated chart swing pivots.
-    # If a 2nd or 3rd non-negated swing level does not exist on the chart, keep T2/T3 as None (N/A).
+    # For cash equities, fallback T1 is entry - 1.5 * risk.
     if t1 is None:
-        t1 = round(entry_close - max(1.5 * risk, entry_close * 0.05), 2)
+        t1 = round(entry_close - 1.5 * risk, 2)
 
     if t2 is not None and t2 >= t1 * (1 - step_tol):
         t2 = round(t1 * (1 - step_tol * 2), 2)

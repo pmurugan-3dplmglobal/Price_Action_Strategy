@@ -613,8 +613,13 @@ def execute_highest_rr_trade(kite, staged):
                 risk_percent=float(cfg_eng.get("MAX_RISK_PERCENT") or 1.0),
                 lot_size=lot_sz,
                 is_option=True,
-                tier=best.get("tier", 1)
+                tier=best.get("tier", 1),
+                allow_zero=True
             ))
+
+            if pos_size <= 0:
+                logging.warning(f"[RISK_BUDGET_EXCEEDED] Trade rejected for {sym} ({contract}): Position size is 0 lots (Risk per lot exceeds capital risk budget).")
+                continue
 
             benchmark_val = float(best.get("benchmark") or cp)
             limit_price = round(benchmark_val * 1.005, 1) if benchmark_val > 0 else round(cp * 1.005, 1)
@@ -734,6 +739,9 @@ def execute_highest_rr_trade(kite, staged):
                     continue
                 try:
                     qty = lot_sz * pos_size
+                    if qty <= 0:
+                        logging.warning(f"[ZERO_QTY_GUARD] Skipping order placement for {sym} ({contract}): computed quantity {qty} <= 0")
+                        continue
                     qty_slices = slice_quantity_for_freeze(contract, qty)
                     placed_oids = []
                     for s_qty in qty_slices:

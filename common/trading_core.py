@@ -86,6 +86,8 @@ from session import (
 from targets import (
     find_profit_targets,
     find_profit_targets_bearish,
+    calculate_option_profit_targets,
+    calculate_position_size,
     check_left_side_rule,
     check_left_side_rule_bearish,
     check_left_side,

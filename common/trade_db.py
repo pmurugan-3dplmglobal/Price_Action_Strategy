@@ -241,6 +241,8 @@ def create_trade(engine, symbol, data, allow_duplicate=False):
             now = get_ist_now().strftime("%Y-%m-%d %H:%M:%S")
             trade = {"id": tid, "engine": engine, "symbol": symbol, "status": "ACTIVE", "created_at": now}
             trade.update(data)
+            if not trade.get("entry_time"):
+                trade["entry_time"] = now
             if "execution_type" not in trade:
                 pat = str(trade.get("pattern", "")).upper()
                 trade["execution_type"] = "USER_OVERRIDE" if ("OVERRIDE" in pat or "MANUAL" in pat) else "ALGO_TRIGGER"

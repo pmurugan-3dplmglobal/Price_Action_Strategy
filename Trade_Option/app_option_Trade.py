@@ -1918,6 +1918,29 @@ def api_buy_scanned_trade():
                 logging.warning(f"1-Click Buy auto-init kite session failed: {init_err}")
 
         if _kite_session:
+            force_order = bool(data.get("force", False))
+
+            # ── VIX Macro Regime Gate Check ──
+            if not force_order:
+                try:
+                    from vix_guard import evaluate_vix_regime
+                    cand_tier = data.get("tier")
+                    if cand_tier is None:
+                        for eng_k in ["nifty50", "index"]:
+                            eng_cands = cached_data.get("scan_display", {}).get(eng_k, {}).get("staged_trades", [])
+                            for sc in eng_cands:
+                                if sc.get("contract") == contract or sc.get("symbol") == symbol:
+                                    cand_tier = sc.get("tier")
+                                    break
+                            if cand_tier is not None:
+                                break
+                    vix_ok, vix_reason, _ = evaluate_vix_regime(_kite_session, tier_val=cand_tier or 2)
+                    if not vix_ok:
+                        logging.warning(f"[1-CLICK BUY REJECTED] {symbol} ({contract}): {vix_reason}")
+                        return jsonify({"ok": False, "error": f"VIX Regime Gate: {vix_reason}. Set force=true to override."}), 400
+                except Exception as vix_err:
+                    logging.warning(f"VIX regime check error in 1-Click Buy: {vix_err}")
+
             # ── Portfolio Risk & Sector Caps Enforcement ──
             try:
                 from portfolio_risk import check_portfolio_risk_caps
@@ -1934,7 +1957,7 @@ def api_buy_scanned_trade():
                     include_db_trades=True,
                     kite=_kite_session
                 )
-                if not p_allowed:
+                if not p_allowed and not force_order:
                     logging.warning(f"[1-CLICK BUY REJECTED] {symbol} ({contract}): {p_reason}")
                     return jsonify({"ok": False, "error": f"Portfolio Risk Guard: {p_reason}"}), 400
             except Exception as p_err:
@@ -1963,7 +1986,7 @@ def api_buy_scanned_trade():
 
                 # ── 13:30 IST Hard Cutoff Guard for Index Options ──
                 from trading_core import is_market_open, is_option_contract
-                from common.position_monitor import is_new_entry_allowed
+                from common.position_monitor import is_new_entry_allowed, get_contract_days_to_expiry
                 market_open = is_market_open()
                 is_opt = is_option_contract(contract) or exch != "NSE"
                 if is_index and market_open and not force_order:
@@ -1971,6 +1994,25 @@ def api_buy_scanned_trade():
                         return jsonify({
                             "ok": False,
                             "error": "Index Option Entry Cutoff: All new index option entries are blocked after 13:30 IST to prevent late-day expiry chop and EOD traps. Set force=true if you explicitly wish to override."
+                        }), 400
+
+                # ── 0DTE Expiry Rules (12:30 Cutoff & ₹40 Floor) ──
+                dte_contract = get_contract_days_to_expiry(contract) if is_opt else None
+                if is_opt and dte_contract is not None and dte_contract <= 0 and not force_order:
+                    if is_index and market_open:
+                        from datetime import time as dt_time
+                        from trading_core import get_ist_now
+                        if get_ist_now().time() >= dt_time(12, 30):
+                            return jsonify({
+                                "ok": False,
+                                "error": f"0DTE Index Cutoff: 0DTE index option entries are blocked after 12:30 IST ({get_ist_now().strftime('%H:%M:%S')}) to prevent rapid expiry decay. Set force=true to override."
+                            }), 400
+
+                    chk_p = float(price or ltp or entry_spot or 0.0)
+                    if chk_p < 40.0:
+                        return jsonify({
+                            "ok": False,
+                            "error": f"0DTE Option Premium Floor: Option premium ₹{chk_p:.2f} < ₹40.00 minimum floor on 0DTE. Low-premium 0DTE options suffer severe gamma traps and theta crush. Set force=true to override."
                         }), 400
 
                 # ── 2-Leg Debit Spread Resolution for Index Option Trades ──
@@ -2027,7 +2069,7 @@ def api_buy_scanned_trade():
                         logging.debug(f"1-Click Buy duplicate check error: {dup_check_err}")
 
                 liq_ok, spread_val, liq_msg, _ = check_bid_ask_spread_liquidity(
-                    kite=_kite_session, exchange=exch, contract=contract, max_spread_pct=0.025
+                    kite=_kite_session, exchange=exch, contract=contract, max_spread_pct=0.025, lot_size=lot_size
                 )
                 if not liq_ok and not force_order:
                     logging.warning(f"[1-CLICK BUY LIQUIDITY WARNING] {contract}: {liq_msg}")

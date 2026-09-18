@@ -25,8 +25,9 @@ def check_bid_ask_spread_liquidity(
     exchange: str,
     contract: str,
     max_spread_pct: float = 0.02,
-    min_depth_qty: int = 1,
-    bypass_when_closed: bool = True
+    min_depth_qty: int = None,
+    bypass_when_closed: bool = True,
+    lot_size: int = None
 ):
     """
     Evaluates bid-ask spread liquidity for an option or equity contract before order routing.
@@ -36,8 +37,9 @@ def check_bid_ask_spread_liquidity(
         exchange: Exchange code ('NFO', 'NSE', 'BFO', 'BSE').
         contract: Trading symbol (e.g. 'NIFTY26SEP24500CE', 'RELIANCE').
         max_spread_pct: Maximum allowable (Ask - Bid) / LTP ratio (default 0.02 = 2.0%).
-        min_depth_qty: Minimum cumulative shares/units on top 5 bid/ask depth (default 1).
+        min_depth_qty: Minimum cumulative shares/units on top 5 bid/ask depth (defaults to max(lot_size, 50)).
         bypass_when_closed: When market is closed and off-hours testing or AMO, permit bypass.
+        lot_size: Optional contract lot size. If not provided, dynamically resolved.
 
     Returns:
         tuple: (is_liquid: bool, spread_pct: float, reason: str, details: dict)
@@ -94,9 +96,31 @@ def check_bid_ask_spread_liquidity(
             "timestamp": datetime.now().isoformat()
         }
 
+        # Resolve dynamic minimum depth quantity: max(lot_size, 50) when available
+        if min_depth_qty is not None:
+            effective_min_depth = int(min_depth_qty)
+        else:
+            resolved_lot = lot_size
+            if resolved_lot is None:
+                try:
+                    try:
+                        from common.trading_core import get_option_lot_size
+                    except ImportError:
+                        from trading_core import get_option_lot_size
+                    resolved_lot = get_option_lot_size(contract)
+                except Exception:
+                    resolved_lot = None
+
+            if resolved_lot is not None and int(resolved_lot) > 0:
+                effective_min_depth = max(int(resolved_lot), 50)
+            else:
+                effective_min_depth = 1
+
+        details["min_depth_qty"] = effective_min_depth
+
         # Check Depth Quantity
-        if bid_qty < min_depth_qty or ask_qty < min_depth_qty:
-            msg = f"Insufficient market depth for {contract} (Bid Qty={bid_qty}, Ask Qty={ask_qty} < min {min_depth_qty})"
+        if bid_qty < effective_min_depth or ask_qty < effective_min_depth:
+            msg = f"Insufficient market depth for {contract} (Bid Qty={bid_qty}, Ask Qty={ask_qty} < min {effective_min_depth})"
             logging.warning(f"[LIQUIDITY_GATE] {msg}")
             return False, spread_ratio, msg, details
 
