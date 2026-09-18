@@ -98,10 +98,12 @@ class TestCandidateDispatchPriority(unittest.TestCase):
 
         with patch.object(sote, "LIVE_MARKET_DEPLOYMENT", False):
             with patch.object(sote, "BACKTEST_DATE", None):
-                with patch.object(sote, "log_to_journal") as mock_journal:
-                    sote.execute_highest_rr_trade(mock_kite, staged)
-                    for call_args in mock_journal.call_args_list:
-                        executed_syms.append(call_args[0][0])
+                with patch.object(sote.trade_db, "is_pattern_executed", return_value=False):
+                    with patch.object(sote.trade_db, "is_symbol_active", return_value=False):
+                        with patch.object(sote, "log_to_journal") as mock_journal:
+                            sote.execute_highest_rr_trade(mock_kite, staged)
+                            for call_args in mock_journal.call_args_list:
+                                executed_syms.append(call_args[0][0])
 
         self.assertIn("M&M", executed_syms, "Tier 2 setup M&M must be executed when Tier 1 fails sizing!")
 
