@@ -512,6 +512,29 @@ def _avg_target_rank(trade):
 
     return max(0.0, base_rr + spot_bonus + vcp_bonus - vwap_penalty)
 
+def _parse_candidate_tier(cand, default=2):
+    """
+    Safely extract integer tier (1, 2, or 3) from candidate dict regardless of type
+    (handles None, int, or string representations like 'TIER_1_GOLD', '🥇 T1', 'TIER_2_CORE', '🥈 T2').
+    """
+    if not isinstance(cand, dict):
+        return default
+    raw_tier = cand.get("tier")
+    if raw_tier is not None:
+        try:
+            return int(raw_tier)
+        except (ValueError, TypeError):
+            pass
+    t_str = str(raw_tier or cand.get("tier_badge") or cand.get("tier_label") or "").upper()
+    if "1" in t_str or "GOLD" in t_str or "T1" in t_str:
+        return 1
+    elif "2" in t_str or "CORE" in t_str or "T2" in t_str:
+        return 2
+    elif "3" in t_str or "MOMENTUM" in t_str or "T3" in t_str:
+        return 3
+    return default
+
+
 def execute_highest_rr_trade(kite, staged):
     """After a scan cycle, filter ONLY Tier 1 (🥇 T1 Gold) candidates, pick best by avg RR and execute (if live) at Benchmark limit price."""
     if not staged:
@@ -519,16 +542,21 @@ def execute_highest_rr_trade(kite, staged):
 
     live_ok = LIVE_MARKET_DEPLOYMENT and live_execution_enabled(LIVE_EXECUTION_FLAG) and is_new_entry_allowed(live_execution_active=True, is_option=True)
 
-    # Tier 1 Gold Candidates (Priority 1)
-    t1_candidates = [
-        t for t in staged
-        if int(t.get("tier", 2)) == 1 or "T1" in str(t.get("tier_badge", "")) or "GOLD" in str(t.get("tier_label", ""))
-    ]
-    # Tier 2 Core Candidates (Priority 2)
-    t2_candidates = [
-        t for t in staged
-        if int(t.get("tier", 2)) == 2 or "T2" in str(t.get("tier_badge", "")) or "CORE" in str(t.get("tier_label", ""))
-    ]
+    # Prioritized Candidate Pools: Tier 1 Gold (Priority 1) and Tier 2 Core (Priority 2)
+    t1_candidates = []
+    t2_candidates = []
+    seen_cand_ids = set()
+    for t in staged:
+        if not isinstance(t, dict):
+            continue
+        c_tier = _parse_candidate_tier(t, default=2)
+        c_id = id(t)
+        if c_tier == 1:
+            t1_candidates.append(t)
+            seen_cand_ids.add(c_id)
+        elif c_tier == 2 and c_id not in seen_cand_ids:
+            t2_candidates.append(t)
+            seen_cand_ids.add(c_id)
 
     # Prioritized combined candidate pool: Tier 1 Gold evaluated first; if all T1 candidates
     # fail pre-order gates or sizing, immediately evaluate Tier 2 Core candidates in the exact same cycle.
@@ -549,7 +577,8 @@ def execute_highest_rr_trade(kite, staged):
             sym = best["symbol"]
             side = best.get("side", "CE")
             strike = best.get("strike", "")
-            key = f"{sym}|{best['pattern']}|{side}|{strike}"
+            pattern_name = best.get("pattern", "")
+            key = f"{sym}|{pattern_name}|{side}|{strike}"
             if trade_db.is_pattern_executed("nifty50", key):
                 logging.info(f"Candidate {key} already executed; evaluating next candidate in pool")
                 continue
@@ -610,6 +639,7 @@ def execute_highest_rr_trade(kite, staged):
             lot_sz = int(best.get("lot_size") or (get_option_lot_size(contract) if contract else None) or STOCK_REGISTRY.get(sym, {}).get("lot_size", 1) or 1)
             allow_conviction = bool(cfg_eng.get("allow_single_lot_conviction", True))
             max_single_risk = float(cfg_eng.get("max_single_lot_risk_pct", 5.0))
+            c_tier = _parse_candidate_tier(best, default=1)
             pos_size = int(best.get("position_size") or calculate_position_size(
                 spot_price=cp,
                 stop_loss=best["current_sl"],
@@ -617,7 +647,7 @@ def execute_highest_rr_trade(kite, staged):
                 risk_percent=float(cfg_eng.get("MAX_RISK_PERCENT") or 1.0),
                 lot_size=lot_sz,
                 is_option=True,
-                tier=best.get("tier", 1),
+                tier=c_tier,
                 allow_zero=True,
                 allow_single_lot_conviction=allow_conviction,
                 max_single_lot_risk_pct=max_single_risk
@@ -632,7 +662,7 @@ def execute_highest_rr_trade(kite, staged):
 
             if live_ok:
                 from vix_guard import evaluate_vix_regime
-                vix_ok, vix_msg, _ = evaluate_vix_regime(kite, tier_val=best.get("tier", 1))
+                vix_ok, vix_msg, _ = evaluate_vix_regime(kite, tier_val=c_tier)
                 if not vix_ok:
                     logging.info(f"[VIX_REGIME_GATE] Auto-execution skipped for {sym} ({contract}): {vix_msg}; checking next candidate")
                     continue
@@ -642,7 +672,7 @@ def execute_highest_rr_trade(kite, staged):
                 p_ok, p_msg, _ = check_portfolio_risk_caps(
                     engine="nifty50",
                     symbol=sym,
-                    candidate_tier=best.get("tier", 1),
+                    candidate_tier=c_tier,
                     capital=cap_val,
                     live_positions=ACTIVE_POSITIONS,
                     kite=kite
@@ -654,7 +684,7 @@ def execute_highest_rr_trade(kite, staged):
                 from liquidity_guard import check_bid_ask_spread_liquidity
                 cfg_liq = cfg_eng.get("liquidity_gate", {})
                 base_max_spread = float(cfg_liq.get("max_spread_pct", 0.02))
-                cand_tier = int(best.get("tier", 2) or 2)
+                cand_tier = c_tier
                 is_high_conviction = (
                     cand_tier in [1, 2]
                     or "T1" in str(best.get("tier_badge", ""))
@@ -727,9 +757,9 @@ def execute_highest_rr_trade(kite, staged):
                         "spot_sl": best.get("spot_sl"),
                         "entry_time": dt.now().isoformat(),
                         "position_type": "option_spread" if spread_info else "option",
-                        "tier": best.get("tier", 1),
-                        "tier_label": best.get("tier_label", "TIER_1_GOLD"),
-                        "tier_badge": best.get("tier_badge", "🥇 T1")
+                        "tier": c_tier,
+                        "tier_label": best.get("tier_label") or ("TIER_1_GOLD" if c_tier == 1 else "TIER_2_CORE"),
+                        "tier_badge": best.get("tier_badge") or ("🥇 T1" if c_tier == 1 else "🥈 T2")
                     }
                     if spread_info:
                         pos["spread_type"] = spread_info["spread_type"]
@@ -776,8 +806,8 @@ def execute_highest_rr_trade(kite, staged):
                         )
                         placed_oids.append(str(s_oid))
                     oid = placed_oids[0]
-                    c_badge = best.get("tier_badge", "🥇 T1" if int(best.get("tier", 1)) == 1 else "🥈 T2")
-                    c_label = best.get("tier_label", "TIER_1_GOLD" if int(best.get("tier", 1)) == 1 else "TIER_2_CORE")
+                    c_badge = best.get("tier_badge") or ("🥇 T1" if c_tier == 1 else "🥈 T2")
+                    c_label = best.get("tier_label") or ("TIER_1_GOLD" if c_tier == 1 else "TIER_2_CORE")
                     logging.info(f"{c_badge} AUTO-EXECUTE BUY LIMIT: {contract} TotalQty={qty} @ Benchmark Limit Price={limit_price} (Orders: {placed_oids})")
                     with position_lock:
                         if sym in ACTIVE_POSITIONS:
@@ -905,7 +935,7 @@ def run_fast_radar_check(kite):
 
         # Prioritize: Tier 1 Gold first, then highest R:R
         def _radar_priority(x):
-            tier_val = int(x.get("tier", 2))
+            tier_val = _parse_candidate_tier(x, default=2)
             rr_val = float(x.get("rr", 0.0) or 0.0)
             return (-tier_val, rr_val)
 
@@ -919,18 +949,7 @@ def run_fast_radar_check(kite):
                     continue
 
             # Evaluate item setup date against today's date, evicting stale prior-day setups cleanly before Kite API calls
-            item_date = None
-            for d_field in ["date", "candle_c_time", "candle_b_time", "candle_a_time", "entry_time", "promoted_at", "created_at"]:
-                v_date = item.get(d_field)
-                if v_date:
-                    try:
-                        clean_dt = clean_timestamp(str(v_date).strip())
-                        if len(clean_dt) >= 10 and clean_dt[4] == '-' and clean_dt[7] == '-':
-                            item_date = clean_dt[:10]
-                            break
-                    except Exception:
-                        pass
-
+            item_date = pattern_funnel._get_item_date_str(item)
             if item_date and item_date < today_str:
                 logging.info(f"[RADAR EVICT: STALE PRIOR-DAY ITEM] {sym} ({item.get('contract')}) setup date {item_date} is prior to {today_str}. Evicting cleanly.")
                 pattern_funnel.evict_item("nifty50", item)
@@ -1050,7 +1069,8 @@ def run_fast_radar_check(kite):
                                 is_morning_window = ("09:15" <= time_now_str <= "10:30")
                                 side_val = str(item.get("side", "CE")).upper()
                                 dir_val = str(item.get("direction", "BULL")).upper()
-                                is_pe = (side_val == "PE" or dir_val == "BEAR")
+                                c_str = str(item.get("contract", "")).upper()
+                                is_pe = (side_val == "PE" or dir_val == "BEAR" or c_str.endswith("PE"))
 
                                 if is_morning_window and spot_vwap > 0 and spot_ltp > 0:
                                     if not is_pe and spot_ltp < (spot_vwap * 0.997):
@@ -1082,6 +1102,7 @@ def run_fast_radar_check(kite):
                                     if proj_rvol >= 2.0 and vwap_aligned:
                                         item["tier"] = 1
                                         item["tier_label"] = f"🥇 T1 Gold (Inst Surge {proj_rvol:.1f}x)"
+                                        item["tier_badge"] = "🥇 T1"
                                         item["inst_surge"] = True
                                         op_str = "<=" if is_pe else ">="
                                         logging.info(f"🏛️ [INSTITUTIONAL OPENING SURGE CONFIRMED] {sym} ({item.get('contract')}): "

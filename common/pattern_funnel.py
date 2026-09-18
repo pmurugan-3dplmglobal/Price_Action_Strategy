@@ -49,7 +49,10 @@ def _get_item_date_str(item):
         v = item.get(k)
         if v:
             try:
-                clean = clean_timestamp(str(v).strip())
+                if hasattr(v, "strftime"):
+                    return v.strftime("%Y-%m-%d")
+                s_v = str(v).strip().replace('/', '-')
+                clean = clean_timestamp(s_v)
                 if len(clean) >= 10 and clean[4] == '-' and clean[7] == '-':
                     return clean[:10]
             except Exception:

@@ -212,13 +212,15 @@ def calculate_position_size(spot_price, stop_loss, capital=100000.0, risk_percen
         if risk_per_unit <= 0:
             return 0 if (allow_zero or min_lots == 0) else 1
         cap_base = float(capital or 100000.0)
+        if cap_base <= 0:
+            cap_base = 100000.0
         try:
             tier_val = int(tier or 1)
         except (ValueError, TypeError):
             t_str = str(tier or "").upper()
-            if "1" in t_str or "GOLD" in t_str:
+            if "1" in t_str or "GOLD" in t_str or "T1" in t_str:
                 tier_val = 1
-            elif "2" in t_str or "CORE" in t_str:
+            elif "2" in t_str or "CORE" in t_str or "T2" in t_str:
                 tier_val = 2
             else:
                 tier_val = 3
@@ -232,19 +234,20 @@ def calculate_position_size(spot_price, stop_loss, capital=100000.0, risk_percen
             risk_per_lot = max(0.50, risk_per_unit) * lot_sz
             opt_premium = max(1.0, sp)
             capital_outlay_1lot = opt_premium * lot_sz
+            account_cap_25pct = cap_base * 0.25
             max_capital_cap = cap * 0.25
 
             raw_lots = int(max_risk_amount / risk_per_lot)
 
             # High-Conviction 1-Lot Floor for indivisible F&O contracts:
             # High-beta market leaders may have 1-lot risk (₹1,500-₹5,000) exceeding 1% risk budget.
-            # If allow_single_lot_conviction is True, tier is 1 or 2, capital outlay <= 25% cap,
+            # If allow_single_lot_conviction is True, tier is 1 or 2, capital outlay <= 25% account capital ceiling,
             # and risk per lot <= max_single_lot_risk_pct (default 5% of account capital), floor to 1 lot.
             is_high_conviction = (tier_val in [1, 2])
             max_single_lot_risk = cap_base * (float(max_single_lot_risk_pct) / 100.0)
 
             if raw_lots == 0 and allow_single_lot_conviction and is_high_conviction:
-                if capital_outlay_1lot <= max_capital_cap and risk_per_lot <= max_single_lot_risk:
+                if capital_outlay_1lot <= account_cap_25pct and risk_per_lot <= max_single_lot_risk:
                     raw_lots = 1
 
             if (allow_zero or min_lots == 0) and raw_lots == 0:
@@ -252,7 +255,9 @@ def calculate_position_size(spot_price, stop_loss, capital=100000.0, risk_percen
 
             base_min_lots = 0 if (allow_zero or min_lots == 0) else max(1, int(min_lots))
             max_lots_risk = max(base_min_lots, raw_lots)
-            max_lots_capital = max(base_min_lots, int(max_capital_cap / capital_outlay_1lot))
+            # Capital ceiling: max 25% of account capital deployed into a single option strike
+            effective_cap = account_cap_25pct if (allow_single_lot_conviction and is_high_conviction) else max_capital_cap
+            max_lots_capital = max(base_min_lots, int(effective_cap / capital_outlay_1lot))
             return min(max_lots_risk, max_lots_capital)
         else:
             units = int(max_risk_amount / risk_per_unit)
