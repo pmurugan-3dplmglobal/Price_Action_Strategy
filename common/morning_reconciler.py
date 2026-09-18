@@ -23,11 +23,13 @@ try:
     from session import load_kite_session, safe_kite_call
     from position_monitor import is_market_open, close_position, close_stock_position
     import trade_db
+    import pattern_funnel
 except ImportError:
     from common import paths
     from common.session import load_kite_session, safe_kite_call
     from common.position_monitor import is_market_open, close_position, close_stock_position
     from common import trade_db
+    from common import pattern_funnel
 
 PREFLIGHT_STATUS_FILE = os.path.join(paths.MONITOR_DIR, "preflight_status.json")
 
@@ -51,6 +53,12 @@ def run_preflight_reconciliation(kite=None, engines=("nifty50", "index", "daily"
     logging.info("=" * 70)
     logging.info(f"[09:16 PRE-FLIGHT] Starting Morning State Audit for {today_str}...")
     logging.info("=" * 70)
+
+    # 0. Purge stale prior-day pattern funnel incubation setups
+    try:
+        pattern_funnel.purge_stale_prior_day_setups(today_str=today_str)
+    except Exception as funnel_err:
+        logging.warning(f"[09:16 PRE-FLIGHT] Funnel morning purge failed: {funnel_err}")
 
     # 1. Initialize Kite Session if not provided
     if kite is None:

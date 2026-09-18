@@ -137,7 +137,8 @@ from pattern_funnel import (
     evict_item,
     clear_funnel,
     get_funnel_summary,
-    purge_invalidated_or_triggered
+    purge_invalidated_or_triggered,
+    purge_stale_prior_day_setups
 )
 
 # ── position_monitor ──

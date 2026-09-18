@@ -85,6 +85,7 @@ SCAN_DISPLAY_FILE = paths.SCAN_DISPLAY_FILE
 SL_TARGET_OVERRIDES_FILE = paths.SL_TARGET_OVERRIDES_FILE
 _RADAR_ACTIVE = threading.Event()
 _LAST_LIQ_WARN = {}
+_LAST_FUNNEL_CLEANUP_DATE = None
 
 class FlushFileHandler(logging.FileHandler):
     def emit(self, record):
@@ -529,15 +530,16 @@ def execute_highest_rr_trade(kite, staged):
         if int(t.get("tier", 2)) == 2 or "T2" in str(t.get("tier_badge", "")) or "CORE" in str(t.get("tier_label", ""))
     ]
 
-    if t1_candidates:
-        candidate_pool = t1_candidates
-    elif t2_candidates:
-        candidate_pool = t2_candidates
-    else:
+    # Prioritized combined candidate pool: Tier 1 Gold evaluated first; if all T1 candidates
+    # fail pre-order gates or sizing, immediately evaluate Tier 2 Core candidates in the exact same cycle.
+    t1_sorted = sorted(t1_candidates, key=_avg_target_rank, reverse=True)
+    t2_sorted = sorted(t2_candidates, key=_avg_target_rank, reverse=True)
+    sorted_pool = t1_sorted + t2_sorted
+
+    if not sorted_pool:
         if live_ok:
             logging.info("Auto-execution skipped: No 🥇 Tier 1 (Gold) or 🥈 Tier 2 (Core) candidates found in current cycle.")
         return
-    sorted_pool = sorted(candidate_pool, key=_avg_target_rank, reverse=True)
     cfg_eng = load_program_config_for_engine("nifty50")
     exec_mode = str(cfg_eng.get("execution_mode", "AUTO")).upper()
     use_spread = (exec_mode in ["DEBIT_SPREAD", "SPREAD_ONLY"]) or (exec_mode == "AUTO" and TIMEFRAME_ENTRY in ["15minute", "30minute", "60minute", "day"])
@@ -606,6 +608,8 @@ def execute_highest_rr_trade(kite, staged):
                 option_token = _resolve_option_token(contract)
 
             lot_sz = int(best.get("lot_size") or (get_option_lot_size(contract) if contract else None) or STOCK_REGISTRY.get(sym, {}).get("lot_size", 1) or 1)
+            allow_conviction = bool(cfg_eng.get("allow_single_lot_conviction", True))
+            max_single_risk = float(cfg_eng.get("max_single_lot_risk_pct", 5.0))
             pos_size = int(best.get("position_size") or calculate_position_size(
                 spot_price=cp,
                 stop_loss=best["current_sl"],
@@ -614,7 +618,9 @@ def execute_highest_rr_trade(kite, staged):
                 lot_size=lot_sz,
                 is_option=True,
                 tier=best.get("tier", 1),
-                allow_zero=True
+                allow_zero=True,
+                allow_single_lot_conviction=allow_conviction,
+                max_single_lot_risk_pct=max_single_risk
             ))
 
             if pos_size <= 0:
@@ -647,7 +653,24 @@ def execute_highest_rr_trade(kite, staged):
 
                 from liquidity_guard import check_bid_ask_spread_liquidity
                 cfg_liq = cfg_eng.get("liquidity_gate", {})
-                max_spread = float(cfg_liq.get("max_spread_pct", 0.02))
+                base_max_spread = float(cfg_liq.get("max_spread_pct", 0.02))
+                cand_tier = int(best.get("tier", 2) or 2)
+                is_high_conviction = (
+                    cand_tier in [1, 2]
+                    or "T1" in str(best.get("tier_badge", ""))
+                    or "T2" in str(best.get("tier_badge", ""))
+                    or "GOLD" in str(best.get("tier_label", ""))
+                    or "CORE" in str(best.get("tier_label", ""))
+                )
+                if is_high_conviction:
+                    # Adaptive Spread Tolerance for High-Conviction Setups:
+                    # High-conviction setups utilize smart pegged limit order routing (passive mid-price peg).
+                    # Allow up to 2.5% - 3.0% spread tolerance (default 0.03 / 3.0%) so leaders like TITAN (2.06%)
+                    # are not starved over narrow basis points.
+                    max_spread = float(cfg_liq.get("max_spread_pct_high_conviction", max(base_max_spread, 0.03)))
+                else:
+                    max_spread = base_max_spread
+
                 liq_ok, spread_val, liq_msg, depth_details = check_bid_ask_spread_liquidity(
                     kite=kite,
                     exchange=kite.EXCHANGE_NFO,
@@ -716,12 +739,12 @@ def execute_highest_rr_trade(kite, staged):
                         pos["leg2_qty"] = lot_sz * pos_size
 
                     if trade_db.is_contract_active(contract, "nifty50"):
-                        logging.info(f"[DUPLICATE_GUARD] Contract {contract} already active in trade_db; skipping T1 auto-execution")
+                        logging.info(f"[DUPLICATE_GUARD] Contract {contract} already active in trade_db; skipping candidate auto-execution")
                         continue
 
                     pos["trade_id"], _created = trade_db.create_trade("nifty50", sym, {k: v for k, v in pos.items() if k != "trade_id"})
                     if not _created:
-                        logging.info(f"[DUPLICATE_GUARD] Active trade for {sym} ({contract}) already exists in trade_db (ID: {pos['trade_id']}); skipping T1 auto-execution")
+                        logging.info(f"[DUPLICATE_GUARD] Active trade for {sym} ({contract}) already exists in trade_db (ID: {pos['trade_id']}); skipping candidate auto-execution")
                         continue
                     ACTIVE_POSITIONS[sym] = pos
                 save_state()
@@ -735,7 +758,7 @@ def execute_highest_rr_trade(kite, staged):
                 from position_monitor import is_contract_held_on_broker
                 is_held, held_qty = is_contract_held_on_broker(kite, contract)
                 if is_held:
-                    logging.info(f"[DUPLICATE_GUARD] Contract {contract} already held on broker (Qty: {held_qty}); skipping T1 auto-order placement")
+                    logging.info(f"[DUPLICATE_GUARD] Contract {contract} already held on broker (Qty: {held_qty}); skipping candidate auto-order placement")
                     continue
                 try:
                     qty = lot_sz * pos_size
@@ -753,7 +776,9 @@ def execute_highest_rr_trade(kite, staged):
                         )
                         placed_oids.append(str(s_oid))
                     oid = placed_oids[0]
-                    logging.info(f"🥇 T1 AUTO-EXECUTE BUY LIMIT: {contract} TotalQty={qty} @ Benchmark Limit Price={limit_price} (Orders: {placed_oids})")
+                    c_badge = best.get("tier_badge", "🥇 T1" if int(best.get("tier", 1)) == 1 else "🥈 T2")
+                    c_label = best.get("tier_label", "TIER_1_GOLD" if int(best.get("tier", 1)) == 1 else "TIER_2_CORE")
+                    logging.info(f"{c_badge} AUTO-EXECUTE BUY LIMIT: {contract} TotalQty={qty} @ Benchmark Limit Price={limit_price} (Orders: {placed_oids})")
                     with position_lock:
                         if sym in ACTIVE_POSITIONS:
                             ACTIVE_POSITIONS[sym]["order_id"] = str(oid)
@@ -780,7 +805,7 @@ def execute_highest_rr_trade(kite, staged):
                         except Exception as leg2_err:
                             logging.error(f"[DEBIT SPREAD SHORT LEG FAILED] {spread_info['leg2']['contract']}: {leg2_err}")
                             # ROLLBACK GUARD: Cancel Leg 1 order slices to prevent unhedged naked exposure
-                            for o_to_cancel in placed_order_ids:
+                            for o_to_cancel in placed_oids:
                                 try:
                                     kite.cancel_order(variety=kite.VARIETY_REGULAR, order_id=o_to_cancel)
                                     logging.warning(f"[DEBIT SPREAD ROLLBACK] Cancelled Leg 1 order {o_to_cancel} because Leg 2 failed: {leg2_err}")
@@ -792,7 +817,7 @@ def execute_highest_rr_trade(kite, staged):
                             continue
 
                     log_to_journal(sym, best["pattern"], TIMEFRAME_ENTRY, "BUY", "SUCCESS",
-                                   f"Order: {oid}, Qty: {qty}, {opt_type}@{target_strike} @ Benchmark Limit={limit_price} (🥇 T1 Gold)", entry=limit_price, sl=best["current_sl"], target=best["t1"], rr=avg_rr,
+                                   f"Order: {oid}, Qty: {qty}, {opt_type}@{target_strike} @ Benchmark Limit={limit_price} ({c_badge} {c_label})", entry=limit_price, sl=best["current_sl"], target=best["t1"], rr=avg_rr,
                                    event_time=best.get("entry_time"))
                 except Exception as e:
                     log_to_journal(sym, best["pattern"], TIMEFRAME_ENTRY, "BUY", "FAILED", str(e),
@@ -839,6 +864,18 @@ def run_fast_radar_check(kite):
 
     _RADAR_ACTIVE.set()
     try:
+        global _LAST_FUNNEL_CLEANUP_DATE
+        now_ist = get_ist_now(naive=True)
+        today_str = now_ist.strftime("%Y-%m-%d")
+
+        # Automated Morning Funnel Reset: Purge prior-day incubation setups upon day rollover or morning startup
+        if _LAST_FUNNEL_CLEANUP_DATE != today_str:
+            try:
+                pattern_funnel.purge_stale_prior_day_setups("nifty50", today_str=today_str)
+                _LAST_FUNNEL_CLEANUP_DATE = today_str
+            except Exception as p_err:
+                logging.warning(f"Radar morning funnel purge error: {p_err}")
+
         funnel_summary = pattern_funnel.get_funnel_summary("nifty50")
         radar_pool = list(funnel_summary.get("category_a_plus", []) + funnel_summary.get("category_a", []))
 
@@ -880,6 +917,25 @@ def run_fast_radar_check(kite):
             with position_lock:
                 if sym in ACTIVE_POSITIONS:
                     continue
+
+            # Evaluate item setup date against today's date, evicting stale prior-day setups cleanly before Kite API calls
+            item_date = None
+            for d_field in ["date", "candle_c_time", "candle_b_time", "candle_a_time", "entry_time", "promoted_at", "created_at"]:
+                v_date = item.get(d_field)
+                if v_date:
+                    try:
+                        clean_dt = clean_timestamp(str(v_date).strip())
+                        if len(clean_dt) >= 10 and clean_dt[4] == '-' and clean_dt[7] == '-':
+                            item_date = clean_dt[:10]
+                            break
+                    except Exception:
+                        pass
+
+            if item_date and item_date < today_str:
+                logging.info(f"[RADAR EVICT: STALE PRIOR-DAY ITEM] {sym} ({item.get('contract')}) setup date {item_date} is prior to {today_str}. Evicting cleanly.")
+                pattern_funnel.evict_item("nifty50", item)
+                continue
+
             tok = item.get("option_token") or item.get("spot_token")
             if not tok:
                 continue
@@ -992,10 +1048,18 @@ def run_fast_radar_check(kite):
 
                                 # ── MORNING INSTITUTIONAL SURGE GATE (09:15 - 10:30 IST) ──
                                 is_morning_window = ("09:15" <= time_now_str <= "10:30")
+                                side_val = str(item.get("side", "CE")).upper()
+                                dir_val = str(item.get("direction", "BULL")).upper()
+                                is_pe = (side_val == "PE" or dir_val == "BEAR")
+
                                 if is_morning_window and spot_vwap > 0 and spot_ltp > 0:
-                                    if spot_ltp < (spot_vwap * 0.997):
-                                        logging.info(f"🛡️ [MORNING VWAP REJECT] {sym}: Spot {spot_ltp:.2f} < VWAP {spot_vwap:.2f} "
+                                    if not is_pe and spot_ltp < (spot_vwap * 0.997):
+                                        logging.info(f"🛡️ [MORNING VWAP REJECT] {sym}: Spot {spot_ltp:.2f} < VWAP {spot_vwap:.2f} (CE) "
                                                      f"during morning window ({time_now_str}). Lacks institutional buying support. Holding candidate.")
+                                        continue
+                                    elif is_pe and spot_ltp > (spot_vwap * 1.003):
+                                        logging.info(f"🛡️ [MORNING VWAP REJECT] {sym}: Spot {spot_ltp:.2f} > VWAP {spot_vwap:.2f} (PE) "
+                                                     f"during morning window ({time_now_str}). Lacks institutional selling pressure. Holding candidate.")
                                         continue
 
                                 df_spot_rvol = safe_kite_call(
@@ -1013,13 +1077,15 @@ def run_fast_radar_check(kite):
                                     item["spot_rvol_badge"] = rvol_spot.get("badge")
                                     item["spot_rvol_projected"] = proj_rvol
 
-                                    # Institutional Volume Surge (RVOL >= 2.0x with Spot > VWAP) -> Promote to T1 Gold!
-                                    if proj_rvol >= 2.0 and (spot_vwap == 0 or spot_ltp >= spot_vwap):
+                                    # Institutional Volume Surge (RVOL >= 2.0x with Spot VWAP alignment) -> Promote to T1 Gold!
+                                    vwap_aligned = (spot_vwap == 0 or (spot_ltp <= spot_vwap if is_pe else spot_ltp >= spot_vwap))
+                                    if proj_rvol >= 2.0 and vwap_aligned:
                                         item["tier"] = 1
                                         item["tier_label"] = f"🥇 T1 Gold (Inst Surge {proj_rvol:.1f}x)"
                                         item["inst_surge"] = True
+                                        op_str = "<=" if is_pe else ">="
                                         logging.info(f"🏛️ [INSTITUTIONAL OPENING SURGE CONFIRMED] {sym} ({item.get('contract')}): "
-                                                     f"Spot {spot_ltp:.2f} >= VWAP {spot_vwap:.2f} & RVOL {proj_rvol:.1f}x! Promoted to 🥇 T1 Gold!")
+                                                     f"Spot {spot_ltp:.2f} {op_str} VWAP {spot_vwap:.2f} & RVOL {proj_rvol:.1f}x! Promoted to 🥇 T1 Gold!")
                                     elif rvol_spot.get("badge") != "NORMAL":
                                         logging.info(f"🔥 [SPOT RVOL CONFLUENCE] {sym}: Underlying has {rvol_spot.get('badge')} (Projected {proj_rvol:.1f}x) backing option breakout!")
                             except Exception as rvol_err:
@@ -1364,6 +1430,10 @@ def main():
         if BACKTEST_DATE is None:
             load_state()
             trade_db.run_db_housekeeping()
+            try:
+                pattern_funnel.purge_stale_prior_day_setups("nifty50")
+            except Exception as funnel_init_err:
+                logging.warning(f"Startup pattern funnel purge warning: {funnel_init_err}")
             active = trade_db.get_active_trades("nifty50")
             seen_symbols = set()
             for t in active:

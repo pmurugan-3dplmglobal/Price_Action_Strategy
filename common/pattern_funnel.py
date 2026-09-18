@@ -39,6 +39,23 @@ STAGE_A_PLUS = "A_PLUS"
 STAGE_A = "A"
 STAGE_B = "B"
 
+def _get_item_date_str(item):
+    """
+    Extract YYYY-MM-DD date string from item attributes (candle timestamps, entry/promoted dates).
+    """
+    if not isinstance(item, dict):
+        return None
+    for k in ["date", "candle_c_time", "candle_b_time", "candle_a_time", "entry_time", "promoted_at", "created_at", "timestamp"]:
+        v = item.get(k)
+        if v:
+            try:
+                clean = clean_timestamp(str(v).strip())
+                if len(clean) >= 10 and clean[4] == '-' and clean[7] == '-':
+                    return clean[:10]
+            except Exception:
+                pass
+    return None
+
 def _get_key(item):
     """
     Returns unique key per underlying asset and direction: {symbol}|{side}.
@@ -383,6 +400,61 @@ def purge_invalidated_or_triggered(engine_name, ltp_dict=None, max_runaway_pct=N
             save_funnel_state(engine_name, updated)
             return updated
         return current
+
+def purge_stale_prior_day_setups(engine_name=None, today_str=None):
+    """
+    Automated Morning Funnel Reset & Stale Setup Cleanup:
+    Purges prior-day incubation setups from pattern_funnel.json across engines.
+    Prevents stale multi-day-old setups from causing eviction floods or false breakouts.
+    If engine_name is None, applies across all engines registered in the funnel.
+    """
+    with _funnel_lock:
+        if today_str is None:
+            today_str = get_ist_now(naive=True).strftime("%Y-%m-%d")
+
+        full_state = load_funnel_state()
+        if not isinstance(full_state, dict):
+            return {}
+
+        engines_to_clean = [engine_name] if engine_name else list(full_state.keys())
+        total_evicted = 0
+
+        for eng in engines_to_clean:
+            eng_data = full_state.get(eng)
+            if not isinstance(eng_data, dict):
+                continue
+
+            def _is_current(x):
+                d_str = _get_item_date_str(x)
+                if not d_str:
+                    return True  # Retain if date cannot be resolved
+                return d_str >= today_str
+
+            old_a_plus = eng_data.get("category_a_plus", [])
+            old_a = eng_data.get("category_a", [])
+            old_b = eng_data.get("category_b", [])
+            old_count = len(old_a_plus) + len(old_a) + len(old_b)
+
+            new_a_plus = [x for x in old_a_plus if _is_current(x)]
+            new_a = [x for x in old_a if _is_current(x)]
+            new_b = [x for x in old_b if _is_current(x)]
+            new_count = len(new_a_plus) + len(new_a) + len(new_b)
+
+            evicted = old_count - new_count
+            if evicted > 0:
+                total_evicted += evicted
+                logger.info(f"[FUNNEL MORNING PURGE] {eng}: Evicted {evicted} stale prior-day setup(s) (Retained {new_count}).")
+                updated_eng = {
+                    "category_a_plus": new_a_plus,
+                    "category_a": new_a,
+                    "category_b": new_b,
+                }
+                save_funnel_state(eng, updated_eng)
+
+        if total_evicted > 0:
+            logger.info(f"[FUNNEL MORNING PURGE COMPLETE] Total stale setups evicted across engines: {total_evicted}")
+
+        return load_funnel_state(engine_name) if engine_name else load_funnel_state()
 
 def get_funnel_summary(engine_name, ltp_dict=None):
     """Return counts and quick stats for UI dashboards, optionally purging invalidated setups if ltp_dict provided."""

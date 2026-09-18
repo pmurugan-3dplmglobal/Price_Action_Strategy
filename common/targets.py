@@ -188,7 +188,7 @@ def find_profit_targets(df_hist, entry_close, stop_loss=None, symbol=None, dte=N
 
     return t1, t2, t3
 
-def calculate_position_size(spot_price, stop_loss, capital=100000.0, risk_percent=1.0, lot_size=1, is_option=False, tier=1, allow_zero=False, min_lots=1):
+def calculate_position_size(spot_price, stop_loss, capital=100000.0, risk_percent=1.0, lot_size=1, is_option=False, tier=1, allow_zero=False, min_lots=1, allow_single_lot_conviction=True, max_single_lot_risk_pct=5.0):
     """
     Fixed-fractional position sizing with Conviction-Weighted Tier Scaling:
     - Sizing scaled by Setup Tier (Conviction Weighting):
@@ -198,7 +198,12 @@ def calculate_position_size(spot_price, stop_loss, capital=100000.0, risk_percen
     - For Cash Equities: units = max_risk_amount / abs(entry - sl)
     - For Options: lots = min(max_risk_amount / risk_per_lot, max_capital_lots)
       where max_capital_lots caps capital deployed in a single option to 25% of account.
-    - Zero-lot sizing (allow_zero=True or min_lots=0): returns 0 if max_risk_amount < risk_per_lot.
+    - High-Conviction 1-Lot Floor (allow_single_lot_conviction=True):
+      Under indivisible F&O lot sizes on high-beta leaders (e.g. TITAN, BAJAJ-AUTO),
+      1-lot risk may exceed 1% risk budget. For Tier 1 & 2 setups, allows an adaptive
+      1-lot floor provided outlay <= 25% capital ceiling and risk per lot <= max_single_lot_risk_pct (default 5%).
+    - Zero-lot sizing (allow_zero=True or min_lots=0): returns 0 if max_risk_amount < risk_per_lot
+      and high-conviction 1-lot floor is not met.
     """
     try:
         sp = float(spot_price or 0.0)
@@ -207,7 +212,16 @@ def calculate_position_size(spot_price, stop_loss, capital=100000.0, risk_percen
         if risk_per_unit <= 0:
             return 0 if (allow_zero or min_lots == 0) else 1
         cap_base = float(capital or 100000.0)
-        tier_val = int(tier or 1)
+        try:
+            tier_val = int(tier or 1)
+        except (ValueError, TypeError):
+            t_str = str(tier or "").upper()
+            if "1" in t_str or "GOLD" in t_str:
+                tier_val = 1
+            elif "2" in t_str or "CORE" in t_str:
+                tier_val = 2
+            else:
+                tier_val = 3
         tier_multiplier = 1.0 if tier_val == 1 else (0.70 if tier_val == 2 else 0.50)
         cap = cap_base * tier_multiplier
         risk_pct = float(risk_percent or 1.0)
@@ -216,13 +230,29 @@ def calculate_position_size(spot_price, stop_loss, capital=100000.0, risk_percen
         if is_option:
             lot_sz = max(1, int(lot_size or 1))
             risk_per_lot = max(0.50, risk_per_unit) * lot_sz
-            if (allow_zero or min_lots == 0) and max_risk_amount < risk_per_lot:
-                return 0
-            base_min_lots = 0 if (allow_zero or min_lots == 0) else max(1, int(min_lots))
-            max_lots_risk = max(base_min_lots, int(max_risk_amount / risk_per_lot))
-            # Capital ceiling: max 25% of capital deployed into a single option strike
             opt_premium = max(1.0, sp)
-            max_lots_capital = max(base_min_lots, int((cap * 0.25) / (opt_premium * lot_sz)))
+            capital_outlay_1lot = opt_premium * lot_sz
+            max_capital_cap = cap * 0.25
+
+            raw_lots = int(max_risk_amount / risk_per_lot)
+
+            # High-Conviction 1-Lot Floor for indivisible F&O contracts:
+            # High-beta market leaders may have 1-lot risk (₹1,500-₹5,000) exceeding 1% risk budget.
+            # If allow_single_lot_conviction is True, tier is 1 or 2, capital outlay <= 25% cap,
+            # and risk per lot <= max_single_lot_risk_pct (default 5% of account capital), floor to 1 lot.
+            is_high_conviction = (tier_val in [1, 2])
+            max_single_lot_risk = cap_base * (float(max_single_lot_risk_pct) / 100.0)
+
+            if raw_lots == 0 and allow_single_lot_conviction and is_high_conviction:
+                if capital_outlay_1lot <= max_capital_cap and risk_per_lot <= max_single_lot_risk:
+                    raw_lots = 1
+
+            if (allow_zero or min_lots == 0) and raw_lots == 0:
+                return 0
+
+            base_min_lots = 0 if (allow_zero or min_lots == 0) else max(1, int(min_lots))
+            max_lots_risk = max(base_min_lots, raw_lots)
+            max_lots_capital = max(base_min_lots, int(max_capital_cap / capital_outlay_1lot))
             return min(max_lots_risk, max_lots_capital)
         else:
             units = int(max_risk_amount / risk_per_unit)

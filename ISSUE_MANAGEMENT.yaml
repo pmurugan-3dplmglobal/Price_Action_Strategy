@@ -1,10 +1,10 @@
 meta:
   system: Price Action Unified Strategy System
   version: v2.1.0-stable
-  last_updated: '2026-09-17'
+  last_updated: '2026-09-18'
   purpose: Active operational tracker for v2.1.0-stable failures, root causes, regressions, and enhancements.
   historical_archive: archive/ISSUE_HISTORY_ARCHIVE.yaml (Preserves 119 resolved legacy issues prior to 2026-09-05)
-  total_active_issues: 43
+  total_active_issues: 44
   archived_issues_summary:
     total_archived: 119
     recent_archived_batch: [FEATURE-031, FEATURE-030, FEATURE-029, ISSUE-084, ISSUE-083, ISSUE-082, ISSUE-081, ISSUE-080, FEATURE-036, FEATURE-035, FEATURE-034, FEATURE-033, ISSUE-054]
@@ -1905,6 +1905,63 @@ issues:
     7. VCP metrics suite `scratch/test_vcp_metrics.py`: 4/4 tests PASSED (100%).
     8. CVE fixes suite `scratch/test_cve_fixes.py`: 5/5 tests PASSED (100%).
     9. AST syntax checks across all touched files: 100% PASSED with zero errors.
+  status: RESOLVED
+  resolution_date: '2026-09-18'
+
+- id: ISSUE-062
+  title: "Candidate Dispatch Priority, F&O Indivisible Lot Conviction Floor, Morning Funnel Purge & PE VWAP Gate Fix"
+  category: DISPATCH_PRIORITY_SIZING_RADAR
+  severity: HIGH
+  date_reported: '2026-09-18'
+  affected_files:
+    - Trade_Option/stock_options_trade_engine.py
+    - common/targets.py
+    - common/pattern_funnel.py
+    - common/trading_core.py
+    - common/morning_reconciler.py
+    - common/trade_db.py
+    - scratch/test_funnel_and_dispatch_fixes.py
+  symptom: |
+    Forensic market expert audit identified five operational execution bottlenecks in stock options engine:
+    1. Head-of-Line Starvation in Candidate Dispatch: Mutually exclusive elif t2_candidates caused Tier 2 setups (e.g. M&M, AUBANK) to be starved when Tier 1 candidates failed pre-order gates or sizing in that cycle.
+    2. F&O Indivisible Lot Sizing Trap: High-beta leaders (TITAN, BAJAJ-AUTO, SOLARINDS, LODHA, MAZDOCK) with large lot sizes had 1-lot risk (Rs 1,500 - Rs 5,000) exceeding standard 1% risk budget (Rs 1,000 on Rs 100k account), causing calculate_position_size() to return 0 lots.
+    3. Stale Funnel Setups & Eviction Floods: Multi-day-old incubation setups lingering in pattern_funnel.json triggered eviction floods and wasted Kite API candle requests during fast surveillance.
+    4. Inverted Morning Spot VWAP Gate for PE Options: Morning VWAP gate unconditionally checked spot_ltp < spot_vwap * 0.997 for both CE and PE, rejecting valid bearish breakdowns for put buyers.
+    5. Pegged Limit Order Spread Rejection on Institutional Leaders: Strict 2.0% spread limit rejected high-conviction leaders like TITAN (2.06% spread) despite utilizing smart pegged mid-price limit order routing.
+  root_cause: |
+    1. Candidate dispatch partitioned staged candidates into disjoint if t1_candidates: ... elif t2_candidates: ... rather than evaluating a combined prioritized pool.
+    2. Position sizing lacked conviction-adaptive floor for indivisible lot F&O contracts within capital and risk safety caps.
+    3. Neither engine startup nor morning reconciler purged prior-day setups from pattern_funnel.json, and fast radar evaluated stale setups without prior-day date checks.
+    4. Morning VWAP gate logic did not differentiate option side/direction (CE bullish reclaim vs PE bearish breakdown).
+    5. Spread liquidity gate used uniform 2.0% threshold regardless of candidate tier or pegged limit order mid-pricing.
+  fix_applied: |
+    1. Trade_Option/stock_options_trade_engine.py:
+       - Replaced mutually exclusive elif candidate dispatch with combined prioritized pool: sorted_pool = t1_sorted + t2_sorted. If Tier 1 candidates fail pre-order gates or sizing, Tier 2 candidates are immediately evaluated in the exact same 15-second cycle.
+       - Added adaptive spread tolerance for high-conviction setups: Tier 1 / Tier 2 candidates using pegged limit order routing allow up to 3.0% spread (max_spread_pct_high_conviction = 0.03).
+       - Fixed Morning Spot VWAP Gate for PE options: CE requires spot_ltp >= spot_vwap * 0.997 (bullish reclaim); PE requires spot_ltp <= spot_vwap * 1.003 (bearish breakdown). Aligned institutional RVOL surge VWAP check for PE options.
+       - Integrated automated morning funnel reset in run_fast_radar_check() upon day rollover and per-item date evaluation evicting stale prior-day setups before candle fetching.
+       - Added startup pattern_funnel.purge_stale_prior_day_setups("nifty50") in main().
+    2. common/targets.py:
+       - Updated calculate_position_size() with allow_single_lot_conviction=True and configurable max_single_lot_risk_pct=5.0. For Tier 1 & 2 setups where 1-lot risk exceeds standard 1% budget, allows 1-lot floor provided outlay <= 25% account capital and 1-lot risk <= 5% account safety cap.
+    3. common/pattern_funnel.py:
+       - Added _get_item_date_str(item) helper to extract date from timestamps.
+       - Added purge_stale_prior_day_setups(engine_name=None, today_str=None) for automated morning cleanup across engines.
+    4. common/trading_core.py:
+       - Re-exported purge_stale_prior_day_setups.
+    5. common/morning_reconciler.py:
+       - Called pattern_funnel.purge_stale_prior_day_setups(today_str=today_str) during 09:16 AM pre-flight audit.
+    6. common/trade_db.py:
+       - Added active trade entry_time sanitization to run_db_housekeeping() and create_trade() to maintain entry_time invariant.
+  verification: |
+    1. Created comprehensive unit test suite scratch/test_funnel_and_dispatch_fixes.py: 11/11 tests PASSED (100% OK).
+    2. Executed master regression suite scratch/run_full_regression_test.py: 22/22 suites PASSED (100% SUCCESS, zero regressions).
+    3. Executed institutional enhancements suite: 5/5 PASSED.
+    4. Executed spread liquidity & reconciler suite: 7/7 PASSED.
+    5. Executed VIX, portfolio & volume suite: 47/47 PASSED.
+    6. Executed parity alignment suite: 4/4 PASSED.
+    7. Executed VCP metrics suite: 4/4 PASSED.
+    8. Executed CVE fixes suite: 5/5 PASSED.
+    9. Batch AST syntax check across all modified files: 100% PASSED.
   status: RESOLVED
   resolution_date: '2026-09-18'
 

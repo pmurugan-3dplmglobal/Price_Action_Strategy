@@ -243,6 +243,11 @@ def create_trade(engine, symbol, data, allow_duplicate=False):
             trade.update(data)
             if not trade.get("entry_time"):
                 trade["entry_time"] = now
+            try:
+                from position_monitor import sanitize_entry_time
+                sanitize_entry_time(trade)
+            except Exception:
+                pass
             if "execution_type" not in trade:
                 pat = str(trade.get("pattern", "")).upper()
                 trade["execution_type"] = "USER_OVERRIDE" if ("OVERRIDE" in pat or "MANUAL" in pat) else "ALGO_TRIGGER"
@@ -758,6 +763,25 @@ def run_db_housekeeping(kite=None):
         except Exception as e:
             logging.warning(f"[trade_db] housekeeping broker reconcile failed: {e}")
             summary["broker_reconciled"] = 0
+    try:
+        from position_monitor import sanitize_entry_time
+        sanitized_count = 0
+        with _DB_LOCK:
+            with _get_connection() as conn:
+                rows = conn.execute("SELECT id, data_json FROM trades WHERE status='ACTIVE'").fetchall()
+                for r in rows:
+                    t_data = json.loads(r["data_json"])
+                    orig_et = t_data.get("entry_time")
+                    clean_et = sanitize_entry_time(t_data)
+                    if clean_et != orig_et:
+                        conn.execute("UPDATE trades SET data_json=? WHERE id=?", (json.dumps(t_data), r["id"]))
+                        sanitized_count += 1
+        if sanitized_count > 0:
+            _sync_tab_databases()
+        summary["sanitized_entry_time"] = sanitized_count
+    except Exception as e:
+        logging.warning(f"[trade_db] housekeeping sanitize entry_time failed: {e}")
+        summary["sanitized_entry_time"] = 0
     if any(summary.values()):
         logging.info(f"[trade_db] housekeeping: {summary}")
     return summary
