@@ -20,6 +20,8 @@ from timeframe_utils import get_ist_now
 from registries import get_symbol_sector
 import trade_db
 
+INDEX_SYMBOLS = {"NIFTY", "BANKNIFTY", "SENSEX", "FINNIFTY", "MIDCPNIFTY", "BANKEX"}
+
 
 def _extract_underlying_symbol(tradingsymbol):
     """
@@ -92,6 +94,23 @@ def _load_portfolio_risk_config(config=None, capital=None, engine=None):
         calc_max_concurrent = int(raw_max_concurrent or 6)
         calc_max_sector = int(p_cfg.get("max_same_sector_positions", 2))
 
+    # Index-specific concurrency cap (default 1 to stop correlated duplicate drawdowns)
+    raw_max_index = None
+    if isinstance(config, dict):
+        if isinstance(config.get("index"), dict):
+            raw_max_index = config["index"].get("max_concurrent_positions")
+        if raw_max_index is None and isinstance(config.get("portfolio_risk"), dict):
+            raw_max_index = config["portfolio_risk"].get("max_concurrent_index_positions")
+        if raw_max_index is None:
+            raw_max_index = config.get("max_concurrent_index_positions")
+    if raw_max_index is None:
+        raw_max_index = p_cfg.get("max_concurrent_index_positions")
+    if raw_max_index is None and isinstance(cfg_all.get("index"), dict):
+        raw_max_index = cfg_all["index"].get("max_concurrent_positions")
+    if raw_max_index is None and isinstance(cfg_all.get("portfolio_risk"), dict):
+        raw_max_index = cfg_all["portfolio_risk"].get("max_concurrent_index_positions")
+    max_concurrent_index = int(raw_max_index) if raw_max_index is not None else 1
+
     # Resolve max_daily_loss_pct with full fallback hierarchy (Engine-specific -> Config -> Portfolio -> Default)
     daily_loss = None
     if engine and isinstance(cfg_all.get(engine), dict):
@@ -108,6 +127,7 @@ def _load_portfolio_risk_config(config=None, capital=None, engine=None):
     return {
         "enable": enable,
         "max_concurrent_positions": calc_max_concurrent,
+        "max_concurrent_index_positions": max_concurrent_index,
         "max_daily_loss_pct": float(daily_loss),
         "max_same_sector_positions": calc_max_sector,
         "dynamic_scaling": dynamic_scaling,
@@ -168,6 +188,7 @@ def check_portfolio_risk_caps(engine, symbol, candidate_tier=2, capital=100000.0
     # 1. Gather all active trades across engines from Broker, DB and in-memory
     active_symbols = set()
     active_contracts = set()
+    active_index_symbols = set()
     sector_counts = {}
 
     # 1A. Live Broker Ground Truth (Kite net positions)
@@ -183,6 +204,8 @@ def check_portfolio_risk_caps(engine, symbol, candidate_tier=2, capital=100000.0
                         raw_sym = _extract_underlying_symbol(cnt)
                         if raw_sym:
                             active_symbols.add(raw_sym)
+                            if raw_sym in INDEX_SYMBOLS:
+                                active_index_symbols.add(raw_sym)
                             sec = get_symbol_sector(raw_sym)
                             sector_counts[sec] = sector_counts.get(sec, 0) + 1
         except Exception as k_err:
@@ -194,12 +217,15 @@ def check_portfolio_risk_caps(engine, symbol, candidate_tier=2, capital=100000.0
         for t in active_db_trades:
             sym = t.get("symbol")
             cnt = t.get("contract") or sym
+            t_eng = str(t.get("engine", "")).lower()
             if sym:
                 raw_sym = _extract_underlying_symbol(sym) or str(sym).strip().upper()
                 if raw_sym not in active_symbols:
                     active_symbols.add(raw_sym)
                     sec = get_symbol_sector(raw_sym)
                     sector_counts[sec] = sector_counts.get(sec, 0) + 1
+                if raw_sym in INDEX_SYMBOLS or t_eng == "index":
+                    active_index_symbols.add(raw_sym if raw_sym in INDEX_SYMBOLS else (sym or "INDEX"))
             if cnt:
                 c_str = str(cnt).strip().upper()
                 active_contracts.add(c_str)
@@ -208,6 +234,8 @@ def check_portfolio_risk_caps(engine, symbol, candidate_tier=2, capital=100000.0
                     active_symbols.add(raw_sym)
                     sec = get_symbol_sector(raw_sym)
                     sector_counts[sec] = sector_counts.get(sec, 0) + 1
+                if raw_sym and (raw_sym in INDEX_SYMBOLS or t_eng == "index"):
+                    active_index_symbols.add(raw_sym if raw_sym in INDEX_SYMBOLS else (sym or "INDEX"))
 
     # 1C. In-Memory Process State
     if isinstance(live_positions, dict):
@@ -220,6 +248,8 @@ def check_portfolio_risk_caps(engine, symbol, candidate_tier=2, capital=100000.0
                     active_symbols.add(raw_sym)
                     sec = get_symbol_sector(raw_sym)
                     sector_counts[sec] = sector_counts.get(sec, 0) + 1
+                if raw_sym in INDEX_SYMBOLS:
+                    active_index_symbols.add(raw_sym)
             if cnt:
                 c_str = str(cnt).strip().upper()
                 active_contracts.add(c_str)
@@ -228,6 +258,8 @@ def check_portfolio_risk_caps(engine, symbol, candidate_tier=2, capital=100000.0
                     active_symbols.add(raw_sym)
                     sec = get_symbol_sector(raw_sym)
                     sector_counts[sec] = sector_counts.get(sec, 0) + 1
+                if raw_sym and raw_sym in INDEX_SYMBOLS:
+                    active_index_symbols.add(raw_sym)
     elif isinstance(live_positions, list):
         for v in live_positions:
             if isinstance(v, dict):
@@ -239,6 +271,8 @@ def check_portfolio_risk_caps(engine, symbol, candidate_tier=2, capital=100000.0
                         active_symbols.add(raw_sym)
                         sec = get_symbol_sector(raw_sym)
                         sector_counts[sec] = sector_counts.get(sec, 0) + 1
+                    if raw_sym in INDEX_SYMBOLS:
+                        active_index_symbols.add(raw_sym)
                 if cnt:
                     c_str = str(cnt).strip().upper()
                     active_contracts.add(c_str)
@@ -247,6 +281,8 @@ def check_portfolio_risk_caps(engine, symbol, candidate_tier=2, capital=100000.0
                         active_symbols.add(raw_sym)
                         sec = get_symbol_sector(raw_sym)
                         sector_counts[sec] = sector_counts.get(sec, 0) + 1
+                    if raw_sym and raw_sym in INDEX_SYMBOLS:
+                        active_index_symbols.add(raw_sym)
 
     # Count distinct active scripts (underlying symbols) across the entire portfolio
     total_active_count = len(active_symbols) if active_symbols else len(active_contracts)
@@ -263,6 +299,28 @@ def check_portfolio_risk_caps(engine, symbol, candidate_tier=2, capital=100000.0
             "limit": max_concurrent,
             "capital": cap_val
         }
+
+    # ── RULE 1B: Max Concurrent Index Positions Cap ──
+    # Enforces max_concurrent_index_positions = 1 (default 1) across directional index trades
+    # (NIFTY, BANKNIFTY, SENSEX, FINNIFTY, MIDCPNIFTY, BANKEX) to stop correlated duplicate drawdowns.
+    candidate_sector = get_symbol_sector(candidate_sym)
+    is_index_candidate = (
+        str(engine).lower() == "index" or
+        candidate_sym in INDEX_SYMBOLS or
+        candidate_sector == "INDICES"
+    )
+    if is_index_candidate:
+        max_concurrent_index = p_cfg.get("max_concurrent_index_positions", 1)
+        active_index_count = len(active_index_symbols)
+        if active_index_count >= max_concurrent_index:
+            reason = (f"MAX_INDEX_POSITIONS_REACHED ({active_index_count}/{max_concurrent_index} "
+                      f"active index trade(s) across portfolio: {sorted(list(active_index_symbols))})")
+            return False, reason, {
+                "rule": "max_concurrent_index_positions",
+                "active_index_count": active_index_count,
+                "active_index_symbols": sorted(list(active_index_symbols)),
+                "limit": max_concurrent_index
+            }
 
     # ── RULE 2: Max Same-Sector Positions Cap ──
     candidate_sector = get_symbol_sector(candidate_sym)

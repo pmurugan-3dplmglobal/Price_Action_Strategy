@@ -404,12 +404,13 @@ def purge_invalidated_or_triggered(engine_name, ltp_dict=None, max_runaway_pct=N
             return updated
         return current
 
-def purge_stale_prior_day_setups(engine_name=None, today_str=None):
+def purge_stale_prior_day_setups(engine_name=None, today_str=None, purge_scan_display=True):
     """
     Automated Morning Funnel Reset & Stale Setup Cleanup:
     Purges prior-day incubation setups from pattern_funnel.json across engines.
     Prevents stale multi-day-old setups from causing eviction floods or false breakouts.
     If engine_name is None, applies across all engines registered in the funnel.
+    If purge_scan_display is True, also evicts prior-day staged setups from scan_display.json.
     """
     with _funnel_lock:
         if today_str is None:
@@ -457,11 +458,57 @@ def purge_stale_prior_day_setups(engine_name=None, today_str=None):
         if total_evicted > 0:
             logger.info(f"[FUNNEL MORNING PURGE COMPLETE] Total stale setups evicted across engines: {total_evicted}")
 
+        # Also purge stale prior-day staged setups from scan_display.json
+        if purge_scan_display:
+            for disp_file in [paths.SCAN_DISPLAY_FILE, paths.SCAN_DISPLAY_INDEX_FILE]:
+                if os.path.exists(disp_file):
+                    try:
+                        with open(disp_file, "r", encoding="utf-8") as f:
+                            disp_data = json.load(f)
+                        staged = disp_data.get("staged_trades", [])
+                        fresh_staged = [
+                            t for t in staged
+                            if _get_item_date_str(t) is None or _get_item_date_str(t) >= today_str
+                        ]
+                        evicted_disp = len(staged) - len(fresh_staged)
+                        if evicted_disp > 0 or disp_data.get("date") != today_str:
+                            disp_data["staged_trades"] = fresh_staged
+                            disp_data["all_staged_today"] = fresh_staged
+                            disp_data["date"] = today_str
+                            tmp_file = f"{disp_file}.tmp.{os.getpid()}"
+                            with open(tmp_file, "w", encoding="utf-8") as f:
+                                json.dump(disp_data, f, indent=2)
+                            os.replace(tmp_file, disp_file)
+                            logger.info(f"[SCAN DISPLAY MORNING PURGE] Evicted {evicted_disp} stale setups from {os.path.basename(disp_file)}.")
+                    except Exception as d_err:
+                        logger.warning(f"Failed purging stale setups from {disp_file}: {d_err}")
+
         return load_funnel_state(engine_name) if engine_name else load_funnel_state()
+
+
+_LAST_AUTO_PURGE_DATE = None
+
+def auto_purge_if_due(engine_name=None):
+    """
+    Automated Morning Auto-Purge Gate (Fix 4):
+    If time >= 08:00 IST and morning purge has not run today, automatically
+    purges prior-day incubation setups from pattern_funnel and scan_display.
+    """
+    global _LAST_AUTO_PURGE_DATE
+    now_ist = get_ist_now(naive=True)
+    today_str = now_ist.strftime("%Y-%m-%d")
+    t_str = now_ist.strftime("%H:%M")
+    if _LAST_AUTO_PURGE_DATE != today_str and t_str >= "08:00":
+        res = purge_stale_prior_day_setups(engine_name=engine_name, today_str=today_str, purge_scan_display=True)
+        _LAST_AUTO_PURGE_DATE = today_str
+        return res
+    return None
+
 
 def get_funnel_summary(engine_name, ltp_dict=None):
     """Return counts and quick stats for UI dashboards, optionally purging invalidated setups if ltp_dict provided."""
     with _funnel_lock:
+        auto_purge_if_due(engine_name)
         if ltp_dict:
             purge_invalidated_or_triggered(engine_name, ltp_dict=ltp_dict)
         state = load_funnel_state(engine_name)

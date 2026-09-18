@@ -486,6 +486,16 @@ def execute_highest_rr_trade(kite, staged):
                         logging.info(f"{sym_cand} already active in ACTIVE_POSITIONS; evaluating next candidate")
                         continue
 
+                    # Index Concurrency Cap (Fix 3): Max 1 open directional index trade across any index
+                    max_idx_pos = int(cfg_eng.get("max_concurrent_positions", 1))
+                    active_idx_in_mem = {s for s in ACTIVE_POSITIONS.keys() if s in INDEX_REGISTRY or s in ["NIFTY", "BANKNIFTY", "SENSEX", "FINNIFTY", "MIDCPNIFTY", "BANKEX"]}
+                    active_db_trades = trade_db.get_active_trades(engine="index")
+                    active_idx_db = {t.get("symbol") for t in active_db_trades if t.get("symbol")}
+                    total_active_indices = active_idx_in_mem.union(active_idx_db)
+                    if len(total_active_indices) >= max_idx_pos:
+                        logging.info(f"[INDEX_CONCURRENCY_CAP] Max concurrent index positions reached ({len(total_active_indices)}/{max_idx_pos} active: {sorted(list(total_active_indices))}). Skipping {sym_cand}")
+                        continue
+
                     if trade_db.is_contract_active(contract_cand, "index") or trade_db.is_symbol_active(sym_cand, "index"):
                         logging.info(f"[DUPLICATE_GUARD] {sym_cand} ({contract_cand}) already active in trade_db; evaluating next candidate")
                         continue

@@ -337,6 +337,29 @@
             }
         }
 
+        async function purgeRadarStale() {
+            try {
+                const res = await fetch('/api/radar/purge-stale', { method: 'POST' });
+                const data = await res.json();
+                if (data.ok) {
+                    if (typeof showToast === 'function') {
+                        showToast(data.message || 'Purged stale prior-day radar setups!', 'success');
+                    }
+                    await refreshData();
+                    renderRadarTab(true);
+                } else {
+                    if (typeof showToast === 'function') {
+                        showToast(`Purge failed: ${data.error || 'Unknown error'}`, 'error');
+                    }
+                }
+            } catch(e) {
+                console.error('Error purging radar:', e);
+                if (typeof showToast === 'function') {
+                    showToast(`Network error: ${e.message}`, 'error');
+                }
+            }
+        }
+
         async function radarExport() {
             try {
                 const r = await fetch('/api/radar/export', { method: 'POST' });
@@ -2896,6 +2919,7 @@
                                 <input type="checkbox" id="radar-hide-runaway" checked onchange="renderRadarTab(true)" style="cursor:pointer">
                                 <span>Hide Runaway / T1 Hit</span>
                             </label>
+                            <button class="btn-scan-clear" onclick="purgeRadarStale()" style="padding:2px 10px;background:#21262d;border:1px solid #d29922;color:#e3b341;border-radius:4px;font-size:10px;cursor:pointer;font-weight:600" title="Purge prior-day stale incubation setups from Radar">🧹 Purge Radar</button>
                             <button class="btn-scan-clear" onclick="clearRadarData()" style="padding:2px 10px;background:inherit;border:1px solid #f85149;color:#f85149;border-radius:4px;font-size:10px;cursor:pointer" title="Clear Radar Setups">Clear</button>
                             <button class="btn-scan-export" onclick="radarExport()" style="padding:2px 10px;background:inherit;border:1px solid #58a6ff;color:#58a6ff;border-radius:4px;font-size:10px;cursor:pointer" title="Export Radar to CSV">Export</button>
                         </div>

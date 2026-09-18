@@ -889,23 +889,26 @@ def run_fast_radar_check(kite):
     Monitors Category A+ (Imminent Breakout) and Category A (Ready) setups in real-time.
     If latest price crosses or closes above Benchmark D trigger, immediately executes!
     """
+    global _LAST_FUNNEL_CLEANUP_DATE
+    now_ist = get_ist_now(naive=True)
+    today_str = now_ist.strftime("%Y-%m-%d")
+    t_str = now_ist.strftime("%H:%M")
+
+    # Automated Morning Funnel Reset (Fix 4): Purge prior-day incubation setups once time >= "08:00" IST
+    # Runs before is_new_entry_allowed() gate so radar is clean prior to 09:16 market open
+    if _LAST_FUNNEL_CLEANUP_DATE != today_str and t_str >= "08:00":
+        try:
+            pattern_funnel.purge_stale_prior_day_setups("nifty50", today_str=today_str, purge_scan_display=True)
+            _LAST_FUNNEL_CLEANUP_DATE = today_str
+            logging.info(f"[RADAR MORNING PURGE] Successfully purged prior-day incubation setups at {t_str} IST for {today_str}")
+        except Exception as p_err:
+            logging.warning(f"Radar morning funnel purge error: {p_err}")
+
     if not is_new_entry_allowed(live_execution_active=True, is_option=True):
         return []
 
     _RADAR_ACTIVE.set()
     try:
-        global _LAST_FUNNEL_CLEANUP_DATE
-        now_ist = get_ist_now(naive=True)
-        today_str = now_ist.strftime("%Y-%m-%d")
-
-        # Automated Morning Funnel Reset: Purge prior-day incubation setups upon day rollover or morning startup
-        if _LAST_FUNNEL_CLEANUP_DATE != today_str:
-            try:
-                pattern_funnel.purge_stale_prior_day_setups("nifty50", today_str=today_str)
-                _LAST_FUNNEL_CLEANUP_DATE = today_str
-            except Exception as p_err:
-                logging.warning(f"Radar morning funnel purge error: {p_err}")
-
         funnel_summary = pattern_funnel.get_funnel_summary("nifty50")
         radar_pool = list(funnel_summary.get("category_a_plus", []) + funnel_summary.get("category_a", []))
 

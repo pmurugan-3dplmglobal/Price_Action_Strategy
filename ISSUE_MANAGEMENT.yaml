@@ -1967,6 +1967,61 @@ issues:
   status: RESOLVED
   resolution_date: '2026-09-18'
 
+- id: ISSUE-063
+  title: "Invert Spread Exit Execution Order, Directional Index Concurrency Cap & 08:00 AM Radar Purge"
+  category: SPREAD_EXIT_RISK_INDEX_CAP_RADAR_PURGE
+  severity: HIGH
+  date_reported: '2026-09-18'
+  affected_files:
+    - common/position_monitor.py
+    - common/portfolio_risk.py
+    - Trade_Option/index_options_trade_engine.py
+    - Trade_Option/stock_options_trade_engine.py
+    - common/pattern_funnel.py
+    - Trade_Option/app_option_Trade.py
+    - Trade_Option/templates/index.html
+    - input/program_config.json
+    - scratch/test_spread_exit_and_index_cap.py
+    - scratch/deploy_update_to_vms.py
+  symptom: |
+    Forensic operational risk review identified three architectural gaps:
+    1. Spread Exit Margin Rejection Risk (P0): In option spread exits, Leg 1 (Long Leg) was sold FIRST, then Leg 2 (Short Leg) was bought SECOND. Selling the long leg first briefly leaves an unhedged naked short option, causing Zerodha RMS margin rejection due to the 5x-10x margin jump.
+    2. Correlated Index Over-Exposure (P1): Multiple simultaneous directional index entries across correlated indices (NIFTY, BANKNIFTY, SENSEX) led to correlated duplicate drawdowns during broad market reversals.
+    3. Stale Radar Incubation Lingering Past 08:00 AM (P1): Prior-day incubation setups remained in pattern_funnel.json and scan_display.json until market open (09:16 AM) because the fast surveillance radar loop was gated by is_new_entry_allowed(). In addition, the dashboard lacked a manual button to immediately purge prior-day incubation setups.
+  root_cause: |
+    1. close_position() in position_monitor.py placed the sell order for Leg 1 before calling _cover_spread_leg2().
+    2. portfolio_risk.py and index_options_trade_engine.py only guarded against duplicate entries of the same index symbol, but did not cap concurrent positions across the entire index family (NIFTY, BANKNIFTY, SENSEX, FINNIFTY, MIDCPNIFTY, BANKEX).
+    3. run_fast_radar_check() in stock_options_trade_engine.py had its morning cleanup placed after is_new_entry_allowed(), which returned False prior to 09:16 AM IST.
+  fix_applied: |
+    1. common/position_monitor.py:
+       - Inverted spread exit execution order across primary marketable limit, fallback limit, and emergency market paths: Leg 2 Short Leg Cover (MARKET BUY) is executed FIRST, and Leg 1 Long Leg Exit (LIMIT/MARKET SELL) is executed SECOND.
+       - Added exit tracking verification in _cover_spread_leg2() to prevent duplicate orders if already submitted or closed on broker.
+       - Integrated _cover_spread_leg2() check in pending limit exit fallback cancellation logic.
+    2. common/portfolio_risk.py & Trade_Option/index_options_trade_engine.py:
+       - Defined INDEX_SYMBOLS family (NIFTY, BANKNIFTY, SENSEX, FINNIFTY, MIDCPNIFTY, BANKEX).
+       - Implemented Rule 1B Max Concurrent Index Positions Cap enforcing max_concurrent_index_positions = 1 (default 1) across directional index trades from broker, trade_db, and in-memory live positions.
+       - Enabled configuration override via index.max_concurrent_positions in program_config.json.
+       - Added active index count guard under position_lock in index_options_trade_engine.py.
+    3. common/pattern_funnel.py & Trade_Option/stock_options_trade_engine.py:
+       - Advanced auto-purge schedule in run_fast_radar_check() to run if time >= "08:00" IST before the is_new_entry_allowed() gate.
+       - Enhanced purge_stale_prior_day_setups() to atomically purge stale prior-day staged setups from scan_display.json.
+       - Added auto_purge_if_due() helper in pattern_funnel.py.
+    4. Trade_Option/app_option_Trade.py & Trade_Option/templates/index.html:
+       - Added /api/radar/purge-stale route for manual/programmatic radar clearing of prior-day setups.
+       - Added responsive "Purge Radar" toolbar button in index.html with toast confirmation and table re-render.
+  verification: |
+    1. Created comprehensive unit test suite scratch/test_spread_exit_and_index_cap.py: 6/6 tests PASSED (100% OK).
+    2. Executed master regression suite scratch/run_full_regression_test.py: 22/22 suites PASSED (100% SUCCESS, zero regressions).
+    3. Executed institutional enhancements suite: 5/5 PASSED.
+    4. Executed spread liquidity & reconciler suite: 7/7 PASSED.
+    5. Executed VIX, portfolio & volume suite: 47/47 PASSED.
+    6. Executed parity alignment suite: 4/4 PASSED.
+    7. Executed CVE fixes suite: 5/5 PASSED.
+    8. Executed funnel & dispatch fixes suite: 17/17 PASSED.
+    9. Batch AST syntax check across all modified files: 100% PASSED.
+  status: RESOLVED
+  resolution_date: '2026-09-18'
+
 
 
 
