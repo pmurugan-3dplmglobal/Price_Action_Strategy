@@ -481,36 +481,66 @@ def run_scan_cycle(kite):
     return temp_stored_trades
 
 def _avg_target_rank(trade):
+    """Composite priority score for candidate ranking (ISSUE-071).
+
+    Priority hierarchy (strongest → weakest):
+    1. Spot Confluence (mandatory for auto-entry, +2.0 bonus for ranking)
+    2. VCP Compression (ATR ratio inversely scaled, squeeze bonus up to +1.5)
+    3. Option VWAP discount (below VWAP = institutional accumulation, up to +0.5)
+    4. Base R:R (capped at 5.0 to prevent distant-target inflation)
+    5. VWAP overpay penalty (demote stretched contracts)
+
+    Evidence (Sep 21 forensic analysis):
+    - All 7 winners had spot_confluence=True, all 3 losers had False.
+    - 3 most explosive runners (VOLTAS +90%, KPITTECH +63%, WAAREEENER +103%)
+      had ATR ratio <= 0.67. All 3 losers had ATR = 1.00 (flat, no compression).
+    - Old scoring: GODREJPROP (R:R=3.75, no confluence) = 3.75 outranked
+      VOLTAS (R:R=3.66, confluence+VCP) = 3.66+0.40+0.30 = 4.36 in T1 pool.
+    """
     targets = [t for t in [trade.get("t1"), trade.get("t2"), trade.get("t3")] if t]
     if not targets:
         return 0
     avg_target = sum(targets) / len(targets)
-    risk = abs(trade.get("entry_spot", 0) - trade.get("current_sl", 0))
+    entry_spot = float(trade.get("entry_spot", 0) or 0)
+    current_sl = float(trade.get("current_sl", 0) or 0)
+    risk = abs(entry_spot - current_sl)
     if risk <= 0:
         return 0
-    base_rr = abs(avg_target - trade["entry_spot"]) / risk
+    # Cap base R:R at 5.0 to prevent far-target inflation
+    base_rr = min(abs(avg_target - entry_spot) / risk, 5.0)
 
-    # Spot Confluence bonus: D1 VWAP reclaim or D2 EMA trend alignment gets +0.40 priority
-    spot_bonus = 0.40 if trade.get("spot_confluence") else 0.0
+    # Spot Confluence: dominant ranking factor (+2.0)
+    spot_bonus = 2.0 if trade.get("spot_confluence") else 0.0
 
-    # Volatility Contraction / Squeeze ranking bonus:
-    # Setups coiled in a TTM squeeze or heavy ATR compression get priority execution
+    # VCP Compression: inversely scaled ATR bonus (coiled spring = explosive breakout)
     vcp_bonus = 0.0
+    atr_r = float(trade.get("atr_ratio", 1.0) or 1.0)
     if trade.get("is_squeeze"):
-        vcp_bonus = 0.50
-    elif float(trade.get("atr_ratio", 1.0) or 1.0) <= 0.60:
-        vcp_bonus = 0.30
+        vcp_bonus = 1.5
+    elif atr_r <= 0.50:
+        vcp_bonus = 1.2
+    elif atr_r <= 0.65:
+        vcp_bonus = 0.8
+    elif atr_r <= 0.80:
+        vcp_bonus = 0.4
 
-    # Option Contract VWAP Overpay penalty: demote stretched contracts
+    # Safe Option VWAP discount: buying in the sweet spot (-5% to 0%) = institutional accumulation price
+    vwap_discount = 0.0
+    v_str = float(trade.get("vwap_stretch", 0.0) or 0.0)
+    if -5.0 <= v_str < 0.0:
+        vwap_discount = 0.5  # sweet spot discount: near VWAP support without breakdown
+
+    # Option Contract VWAP Overpay / Breakdown penalty: demote stretched or broken down contracts
     vwap_penalty = 0.0
     v_st = str(trade.get("vwap_status", "")).upper()
-    v_str = float(trade.get("vwap_stretch", 0.0) or 0.0)
     if v_st == "STRETCHED" or v_str > 15.0:
-        vwap_penalty = 1.0
+        vwap_penalty = 1.5  # overstretched FOMO chase
     elif v_st == "EXPANDED" or v_str > 8.0:
-        vwap_penalty = 0.20
+        vwap_penalty = 0.4
+    elif v_str < -5.0:
+        vwap_penalty = 1.5  # falling knife / IV breakdown penalty
 
-    return max(0.0, base_rr + spot_bonus + vcp_bonus - vwap_penalty)
+    return max(0.0, base_rr + spot_bonus + vcp_bonus + vwap_discount - vwap_penalty)
 
 def _parse_candidate_tier(cand, default=2):
     """
@@ -591,6 +621,15 @@ def execute_highest_rr_trade(kite, staged):
                     logging.info(f"[DUPLICATE_GUARD] {sym} already active in trade_db; evaluating next candidate in pool")
                     continue
 
+            # Gate 1: Mandatory Spot Confluence Gate (ISSUE-071)
+            # Auto-execution requires verified spot directional backing (100% win/loss separation).
+            # If not confirmed, skip auto-entry while leaving setup visible on Scans Tab for manual review.
+            if not best.get("spot_confluence"):
+                logging.info(f"[SPOT_CONFLUENCE_GATE] Auto-execution blocked for {sym} ({best.get('contract') or sym}): "
+                             f"spot_confluence={best.get('spot_confluence')} (type={best.get('spot_confluence_type', 'NONE')}); "
+                             f"setup visible on Scans Tab for manual inspection; evaluating next candidate")
+                continue
+
             cp = best["entry_spot"]
             avg_rr = best.get("rr", 0)
             strike_step = best.get("strike_step", 50)
@@ -661,7 +700,7 @@ def execute_highest_rr_trade(kite, staged):
             c_tier = _parse_candidate_tier(best, default=1)
             pos_size = int(best.get("position_size") or calculate_position_size(
                 spot_price=cp,
-                stop_loss=best["current_sl"],
+                stop_loss=best.get("current_sl", 0.0),
                 capital=cap_val,
                 risk_percent=float(cfg_eng.get("MAX_RISK_PERCENT") or 1.0),
                 lot_size=lot_sz,
@@ -698,6 +737,46 @@ def execute_highest_rr_trade(kite, staged):
                 )
                 if not p_ok:
                     logging.info(f"[PORTFOLIO_RISK_CAP] Auto-execution skipped for {sym} ({contract}): {p_msg}; checking next candidate")
+                    continue
+
+                # Gate 4: Premium Floor Gate on Low-DTE (ISSUE-071)
+                # Avoid theta bleed and wide spread slippage on cheap lottery contracts (LTP/Benchmark < 5.0 when DTE <= 5)
+                dte_val = best.get("dte")
+                if dte_val is None and contract:
+                    try:
+                        from position_monitor import get_contract_days_to_expiry
+                        dte_val = get_contract_days_to_expiry(contract)
+                    except Exception as dte_err:
+                        logging.debug(f"DTE check fallback for {contract}: {dte_err}")
+
+                if dte_val is not None and dte_val <= 5 and benchmark_val < 5.0:
+                    logging.warning(f"[PREMIUM_FLOOR_GATE] Auto-execution skipped for {sym} ({contract}): "
+                                    f"Benchmark premium ₹{benchmark_val:.2f} < ₹5.00 floor with DTE={dte_val} <= 5 (lottery ticket risk); checking next candidate")
+                    log_to_journal(sym, best.get("pattern", ""), TIMEFRAME_ENTRY, "SKIP_PREMIUM_FLOOR", "REJECTED",
+                                   f"Premium ₹{benchmark_val:.2f} < ₹5.00 floor on DTE {dte_val}", entry=limit_price, sl=best.get("current_sl", 0.0), target=best.get("t1"),
+                                   event_time=best.get("entry_time"))
+                    continue
+
+                # Gate 3: Safe Option Value Corridor (-5% to +15% VWAP) (ISSUE-071)
+                # Trap A: Overstretched FOMO Chase (> +15% or > +2sigma) - wait for pullback/retest
+                v_st = str(best.get("vwap_status", "")).upper()
+                v_str = float(best.get("vwap_stretch", 0.0) or 0.0)
+                if v_st == "STRETCHED" or v_str > 15.0:
+                    logging.warning(f"[OPTION_VALUE_GUARD] Auto-execution skipped for {sym} ({contract}): "
+                                    f"Option is overstretched ({v_str:.1f}% above VWAP, status={v_st}); wait for pullback/retest")
+                    log_to_journal(sym, best.get("pattern", ""), TIMEFRAME_ENTRY, "SKIP_OVERSTRETCHED_VWAP", "REJECTED",
+                                   f"Option stretched {v_str:.1f}% above VWAP", entry=limit_price, sl=best.get("current_sl", 0.0), target=best.get("t1"),
+                                   event_time=best.get("entry_time"))
+                    continue
+
+                # Trap B: Falling Knife Breakdown (< -5.0% below Option VWAP)
+                # Avoid buying rotting assets suffering from IV crush or delta bleed
+                if v_str < -5.0:
+                    logging.warning(f"[FALLING_KNIFE_GUARD] Auto-execution skipped for {sym} ({contract}): "
+                                    f"Option is broken down ({v_str:.1f}% below VWAP); skipping decaying asset")
+                    log_to_journal(sym, best.get("pattern", ""), TIMEFRAME_ENTRY, "SKIP_FALLING_KNIFE_VWAP", "REJECTED",
+                                   f"Option broken down {v_str:.1f}% below VWAP", entry=limit_price, sl=best.get("current_sl", 0.0), target=best.get("t1"),
+                                   event_time=best.get("entry_time"))
                     continue
 
                 from liquidity_guard import check_bid_ask_spread_liquidity
@@ -738,17 +817,6 @@ def execute_highest_rr_trade(kite, staged):
                         logging.debug(f"[LIQUIDITY_GATE] Re-evaluating {sym} ({contract}): spread still wide ({spread_val * 100:.2f}%); holding in radar")
                     continue
 
-                # Stage 0.5: Option Contract VWAP Overpay Guard
-                # Never buy options overstretched > 15% or > +2σ above contract VWAP (prevents buying tops)
-                v_st = str(best.get("vwap_status", "")).upper()
-                v_str = float(best.get("vwap_stretch", 0.0) or 0.0)
-                if v_st == "STRETCHED" or v_str > 15.0:
-                    logging.warning(f"[OPTION_VWAP_GUARD] Auto-execution skipped for {sym} ({contract}): Option is overstretched ({v_str:.1f}% above VWAP, status={v_st}); checking next candidate")
-                    log_to_journal(sym, best["pattern"], TIMEFRAME_ENTRY, "SKIP_OVERSTRETCHED_VWAP", "REJECTED",
-                                   f"Option stretched {v_str:.1f}% above VWAP", entry=limit_price, sl=best["current_sl"], target=best["t1"],
-                                   event_time=best.get("entry_time"))
-                    continue
-
                 # Stage 1: Smart Pegged Limit Order Routing (Passive Mid-Price Peg)
                 # If spread >= 0.8%, peg limit order at Mid price between Best Bid and Best Ask to capture spread savings
                 best_bid = float(depth_details.get("best_bid", 0.0))
@@ -772,8 +840,8 @@ def execute_highest_rr_trade(kite, staged):
                         continue
                     pos = {
                         "contract": contract, "option_token": option_token,
-                        "entry_spot": limit_price, "current_sl": best["current_sl"],
-                        "t1": best["t1"], "t2": best["t2"], "t3": best["t3"],
+                        "entry_spot": limit_price, "current_sl": best.get("current_sl", 0.0),
+                        "t1": best.get("t1"), "t2": best.get("t2"), "t3": best.get("t3"),
                         "trailing_stage": 0, "lot_size": lot_sz, "position_size": pos_size,
                         "pattern": best["pattern"], "timeframe": TIMEFRAME_ENTRY,
                         "side": opt_type, "strike": target_strike,

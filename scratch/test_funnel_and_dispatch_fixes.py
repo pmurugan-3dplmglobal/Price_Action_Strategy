@@ -62,7 +62,9 @@ class TestCandidateDispatchPriority(unittest.TestCase):
             "t3": 90.0,
             "rr": 2.5,
             "lot_size": 175,
-            "position_size": 0  # Fails sizing
+            "position_size": 0,  # Fails sizing
+            "spot_confluence": True,
+            "spot_confluence_type": "SPOT_VWAP_RECLAIM"
         }
 
         t2_cand = {
@@ -80,7 +82,9 @@ class TestCandidateDispatchPriority(unittest.TestCase):
             "t3": 80.0,
             "rr": 2.2,
             "lot_size": 150,
-            "position_size": 1  # Valid position size
+            "position_size": 1,  # Valid position size
+            "spot_confluence": True,
+            "spot_confluence_type": "SPOT_VWAP_RECLAIM"
         }
 
         staged = [t1_cand, t2_cand]

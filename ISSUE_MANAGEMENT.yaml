@@ -4,12 +4,47 @@ meta:
   last_updated: '2026-09-21'
   purpose: Active operational tracker for v2.1.0-stable failures, root causes, regressions, and enhancements.
   historical_archive: archive/ISSUE_HISTORY_ARCHIVE.yaml (Preserves 119 resolved legacy issues prior to 2026-09-05)
-  total_active_issues: 48
+  total_active_issues: 49
   archived_issues_summary:
     total_archived: 119
     recent_archived_batch: [FEATURE-031, FEATURE-030, FEATURE-029, ISSUE-084, ISSUE-083, ISSUE-082, ISSUE-081, ISSUE-080, FEATURE-036, FEATURE-035, FEATURE-034, FEATURE-033, ISSUE-054]
     key_archived_families: [ALGO_AUDIT_CVE, QUANT_ENHANCEMENTS, RADAR_LIFECYCLE, VCP_METRICS, SCANNER_DISCOVERY, SECURITY_CONFIG, ZERO_REGRESSION_AUDIT]
 issues:
+- id: ISSUE-071
+  title: Setup Prioritization Laws, Safe Option Value Buying Corridor & VCP Coiled Promotion
+  severity: HIGH
+  category: Prioritization, Spot Confluence, VCP Metrics, Option VWAP Corridor, Premium Floor, Execution Gates
+  family: SELECTION_ENGINE_OPTIMIZATION
+  date_reported: '2026-09-21'
+  symptom: |
+    1. System scanned 95 setups and identified 7 high-velocity runners (+62% to +103% peak gain), but selection engine entered 3 stagnant losers (-12% EOD loss) due to paper R:R target distance ranking.
+    2. Zero-confluence setups (GODREJPROP, BAJAJFINSV, JSWENERGY) were promoted to Tier 1 Gold based solely on wide swing targets, while coiled runners (VOLTAS, KPITTECH) were relegated to Tier 3.
+    3. Low premium options (< ₹5.00) on low-DTE (<= 5 days) suffered delta collapse and theta bleed without moving with underlying.
+    4. Option value buying lacked defined boundaries, creating risk of buying decaying options in falling knives (< -5% VWAP) or chasing overextended tops (> +15% VWAP).
+  root_cause: |
+    1. execute_highest_rr_trade lacked a mandatory gate requiring underlying spot confluence before committing live capital.
+    2. resolve.py only promoted to Tier 1 Gold when wyckoff base and true anchor coincided with R:R >= 2.0, ignoring coiled volatility contraction (ATR <= 0.65 or TTM Squeeze).
+    3. _avg_target_rank weighted paper R:R above structural quality and did not reward safe VWAP accumulation (-5% to 0%) while failing to penalize falling knives (< -5%).
+    4. Sub-₹5 option contracts were allowed on low DTE, exposing capital to lottery ticket theta death.
+  affected_files:
+  - common/resolve.py
+  - Trade_Option/stock_options_trade_engine.py
+  - scratch/test_priority_ranking_laws.py
+  - scratch/run_full_regression_test.py
+  fix_applied: |
+    1. Mandatory Spot Confluence Gate: Enforced in stock_options_trade_engine.py execute_highest_rr_trade. If not best.get('spot_confluence'), auto-execution is skipped and logged with [SPOT_CONFLUENCE_GATE], preserving candidate on Scans Tab for manual review.
+    2. VCP Coiled Promotion Gate: Implemented in resolve.py for CE and PE trade creation and funnel staging. If tier >= 2, spot_confluence is True, (atr_ratio <= 0.65 or is_squeeze), and R:R >= 1.5, setup is promoted to Tier 1 Gold (🥇 T1).
+    3. Safe Option Value Corridor: Enforced in execute_highest_rr_trade (-5.0% to +15.0% option VWAP stretch). Rejects falling knives (stretch < -5.0%, [FALLING_KNIFE_GUARD]) and skips overstretched tops (stretch > 15.0% or STRETCHED, [OPTION_VALUE_GUARD]).
+    4. Premium Floor Gate: Enforced in execute_highest_rr_trade for low DTE. Rejects option contracts where benchmark/LTP < ₹5.00 on DTE <= 5 ([PREMIUM_FLOOR_GATE]).
+    5. Composite Priority Score: Overhauled _avg_target_rank in stock_options_trade_engine.py. Confluence (+2.0) and VCP compression (+0.4 to +1.5) dominate; safe discount (-5% to 0%) adds +0.5; stretch (>15%) and breakdown (<-5%) incur -1.5 penalty; base R:R capped at 5.0.
+    6. Master Regression Test: Created scratch/test_priority_ranking_laws.py (19/19 unit tests passed) and registered as TEST 26 in scratch/run_full_regression_test.py (26/26 passed).
+  verification: |
+    - Ran python scratch/test_priority_ranking_laws.py: 19/19 passed.
+    - Ran python scratch/test_funnel_and_dispatch_fixes.py: 17/17 passed.
+    - Ran python scratch/run_full_regression_test.py: 26/26 passed with 100% success.
+    - Python AST syntax check confirmed 0 errors across common/resolve.py and Trade_Option/stock_options_trade_engine.py.
+  status: RESOLVED
+
 - id: ISSUE-065
   title: Strategic Blueprint Alignment & Production Robustness Hardening
   severity: HIGH

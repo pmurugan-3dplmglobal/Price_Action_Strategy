@@ -1766,6 +1766,17 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                                 tier_label_ce = "TIER_1_GOLD"
                                 tier_badge_ce = "🥇 T1"
 
+                        # VCP Coiled Promotion Gate (ISSUE-071)
+                        atr_r_cand_ce = float(result_ce.get("atr_ratio") or swing_meta_ce.get("atr_ratio") or 1.0)
+                        is_squeeze_cand_ce = bool(result_ce.get("is_squeeze") or swing_meta_ce.get("is_squeeze"))
+                        cand_rr_ce = float(result_ce.get("RR") or 0.0)
+                        if tier_ce >= 2 and spot_conf_ce and (atr_r_cand_ce <= 0.65 or is_squeeze_cand_ce) and cand_rr_ce >= 1.5:
+                            tier_ce = 1
+                            tier_label_ce = "TIER_1_GOLD"
+                            tier_badge_ce = "🥇 T1"
+                            logging.info(f"[VCP_TIER_PROMO] {symbol} CE promoted to Tier 1 Gold: ATR_ratio={atr_r_cand_ce:.2f}, "
+                                         f"squeeze={is_squeeze_cand_ce}, RR={cand_rr_ce:.2f}, confluence={spot_conf_type_ce}")
+
                         effective_sl_ce = calculate_option_atr_sl(
                             entry_price=result_ce["Close"],
                             geometric_sl=result_ce["SL"],
@@ -1809,6 +1820,7 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                             "tier": tier_ce,
                             "tier_label": tier_label_ce,
                             "tier_badge": tier_badge_ce,
+                            "dte": dte_ce,
                             "atr_ratio": result_ce.get("atr_ratio", 1.0),
                             "is_squeeze": result_ce.get("is_squeeze", False),
                             "vcp_tier": result_ce.get("vcp_tier", "NORMAL"),
@@ -1854,6 +1866,16 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                                         f_tier_ce = 1
                                         f_label_ce = "TIER_1_GOLD"
                                         f_badge_ce = "🥇 T1"
+
+                                # VCP Coiled Promotion Gate (ISSUE-071)
+                                atr_r_cand_ce_f = float(stage_ce.get("atr_ratio") or 1.0)
+                                is_squeeze_cand_ce_f = bool(stage_ce.get("is_squeeze"))
+                                cand_rr_ce_f = float(stage_ce.get("rr") or 0.0)
+                                if f_tier_ce >= 2 and spot_conf_ce_f and (atr_r_cand_ce_f <= 0.65 or is_squeeze_cand_ce_f) and cand_rr_ce_f >= 1.5:
+                                    f_tier_ce = 1
+                                    f_label_ce = "TIER_1_GOLD"
+                                    f_badge_ce = "🥇 T1"
+
                                 ce_lot_f = int(ce.get("lot_size") or config.get("lot_size", 1))
                                 funnel_item = {
                                     "symbol": symbol, "contract": ce['tradingsymbol'], "option_token": ce['token'],
@@ -1871,6 +1893,7 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                                     "candle_c_time": stage_ce.get("candle_c_time", ""),
                                     "tier": f_tier_ce, "tier_label": f_label_ce,
                                     "tier_badge": f_badge_ce,
+                                    "dte": dte_ce_f,
                                     "atr_ratio": stage_ce.get("atr_ratio", 1.0),
                                     "is_squeeze": stage_ce.get("is_squeeze", False),
                                     "vcp_tier": stage_ce.get("vcp_tier", "NORMAL"),
@@ -1949,6 +1972,17 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                                 tier_label_pe = "TIER_1_GOLD"
                                 tier_badge_pe = "🥇 T1"
 
+                        # VCP Coiled Promotion Gate (ISSUE-071)
+                        atr_r_cand_pe = float(result_pe.get("atr_ratio") or swing_meta_pe.get("atr_ratio") or 1.0)
+                        is_squeeze_cand_pe = bool(result_pe.get("is_squeeze") or swing_meta_pe.get("is_squeeze"))
+                        cand_rr_pe = float(result_pe.get("RR") or 0.0)
+                        if tier_pe >= 2 and spot_conf_pe and (atr_r_cand_pe <= 0.65 or is_squeeze_cand_pe) and cand_rr_pe >= 1.5:
+                            tier_pe = 1
+                            tier_label_pe = "TIER_1_GOLD"
+                            tier_badge_pe = "🥇 T1"
+                            logging.info(f"[VCP_TIER_PROMO] {symbol} PE promoted to Tier 1 Gold: ATR_ratio={atr_r_cand_pe:.2f}, "
+                                         f"squeeze={is_squeeze_cand_pe}, RR={cand_rr_pe:.2f}, confluence={spot_conf_type_pe}")
+
                         effective_sl_pe = calculate_option_atr_sl(
                             entry_price=result_pe["Close"],
                             geometric_sl=result_pe["SL"],
@@ -1992,6 +2026,7 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                             "tier": tier_pe,
                             "tier_label": tier_label_pe,
                             "tier_badge": tier_badge_pe,
+                            "dte": dte_pe,
                             "atr_ratio": result_pe.get("atr_ratio", 1.0),
                             "is_squeeze": result_pe.get("is_squeeze", False),
                             "vcp_tier": result_pe.get("vcp_tier", "NORMAL"),
@@ -2037,6 +2072,16 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                                         f_tier_pe = 1
                                         f_label_pe = "TIER_1_GOLD"
                                         f_badge_pe = "🥇 T1"
+
+                                # VCP Coiled Promotion Gate (ISSUE-071)
+                                atr_r_cand_pe_f = float(stage_pe.get("atr_ratio") or 1.0)
+                                is_squeeze_cand_pe_f = bool(stage_pe.get("is_squeeze"))
+                                cand_rr_pe_f = float(stage_pe.get("rr") or 0.0)
+                                if f_tier_pe >= 2 and spot_conf_pe_f and (atr_r_cand_pe_f <= 0.65 or is_squeeze_cand_pe_f) and cand_rr_pe_f >= 1.5:
+                                    f_tier_pe = 1
+                                    f_label_pe = "TIER_1_GOLD"
+                                    f_badge_pe = "🥇 T1"
+
                                 pe_lot_f = int(pe.get("lot_size") or config.get("lot_size", 1))
                                 funnel_item = {
                                     "symbol": symbol, "contract": pe['tradingsymbol'], "option_token": pe['token'],
@@ -2054,6 +2099,7 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                                     "candle_c_time": stage_pe.get("candle_c_time", ""),
                                     "tier": f_tier_pe, "tier_label": f_label_pe,
                                     "tier_badge": f_badge_pe,
+                                    "dte": dte_pe_f,
                                     "atr_ratio": stage_pe.get("atr_ratio", 1.0),
                                     "is_squeeze": stage_pe.get("is_squeeze", False),
                                     "vcp_tier": stage_pe.get("vcp_tier", "NORMAL"),

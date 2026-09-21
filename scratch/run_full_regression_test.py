@@ -814,6 +814,24 @@ except Exception as e:
     errors.append(f"Near-T1 & Gain Lock Invariants Failed: {e}")
     print(f" FAILED [ERR] ({e})", flush=True)
 
+# -------------------------------------------------------------------------
+# TEST 26: Priority Ranking Laws, VCP Coiled Promotion & Value Corridor (ISSUE-071)
+# -------------------------------------------------------------------------
+print("[TEST 26] Testing Priority Ranking Laws, Safe Value Corridor & Premium Floor (ISSUE-071)...", end="", flush=True)
+try:
+    import subprocess
+    import paths
+    cmd_p_laws = [
+        sys.executable,
+        os.path.join(paths.SCRATCH_DIR, "test_priority_ranking_laws.py")
+    ]
+    res_pl = subprocess.run(cmd_p_laws, cwd=paths.PROJECT_ROOT, capture_output=True, text=True)
+    assert res_pl.returncode == 0, f"Priority ranking laws unit tests failed:\nSTDOUT:\n{res_pl.stdout}\nSTDERR:\n{res_pl.stderr}"
+    print(" PASSED [OK]", flush=True)
+except Exception as e:
+    errors.append(f"Priority Ranking Laws Invariants Failed: {e}")
+    print(f" FAILED [ERR] ({e})", flush=True)
+
 print("\n" + "=" * 100)
 if not errors:
     print("      ALL REGRESSION TESTS PASSED WITH 100% SUCCESS -- ZERO REGRESSIONS FOUND!")

@@ -475,9 +475,11 @@ system_integrity_safeguards:
   continuous_15pct_loss_shield: "Continuous 15% Greek Loss Shield: Exempts HARD_MAX_15PCT_SL and morning catastrophic circuits from Spot SL Guard suppression, aligning emergency cutoff strictly to max_loss_pct (15%)."
   spread_exit_inversion: "Inverted Spread Exit Sequence (close_position): In option spread positions (BULL_CALL_SPREAD / BEAR_PUT_SPREAD), Leg 2 Short Leg Cover (BUY) is executed FIRST, and Leg 1 Long Leg Exit (SELL) is executed SECOND. Buying the short leg cover first eliminates naked short exposure and prevents Zerodha RMS margin spikes (5x-10x margin jump) that previously caused margin rejection."
   index_concurrency_cap: "Directional Index Concurrency Cap (portfolio_risk & index_options_trade_engine): Enforces max_concurrent_index_positions = 1 (default 1) across the entire index family (NIFTY, BANKNIFTY, SENSEX, FINNIFTY, MIDCPNIFTY, BANKEX) to prevent correlated duplicate drawdowns during broad market reversals. Fully configurable via index.max_concurrent_positions in program_config.json."
+  priority_ranking_and_value_corridor: "Setup Prioritization Laws, Safe Option Value Corridor & VCP Coiled Promotion (ISSUE-071): 1. Mandatory Spot Confluence Gate: Auto-execution in execute_highest_rr_trade strictly requires spot_confluence=True (unbacked setups remain visible on Scans Tab). 2. VCP Coiled Promotion Gate: In resolve.py, setups with tier >= 2, spot_confluence=True, (atr_ratio <= 0.65 or is_squeeze), and R:R >= 1.5 auto-promote to Tier 1 Gold (🥇 T1). 3. Safe Option Value Corridor: Evaluates Option Intraday VWAP stretch between -5.0% and +15.0%; rejects decaying falling knives (stretch < -5.0%, [FALLING_KNIFE_GUARD]) and skips overstretched tops (stretch > 15.0% or STRETCHED, [OPTION_VALUE_GUARD]). 4. Premium Floor Gate: When DTE <= 5, rejects cheap lottery options (benchmark < ₹5.00, [PREMIUM_FLOOR_GATE]). 5. Composite Priority Score: _avg_target_rank weights spot confluence (+2.0) and VCP compression (+0.4 to +1.5) over paper R:R (capped at 5.0), adding +0.5 for safe VWAP accumulation (-5% to 0%) and penalizing breakdowns."
 
 verification_and_quality_assurance:
-  master_regression_suite: "scratch/run_full_regression_test.py — 22/22 Test Suites Passing (100% Success Rate)"
+  master_regression_suite: "scratch/run_full_regression_test.py — 26/26 Test Suites Passing (100% Success Rate)"
+  priority_ranking_laws_suite: "scratch/test_priority_ranking_laws.py — 19/19 Unit Tests Passing (100% Success Rate)"
   unit_verification_suite: "scratch/test_institutional_enhancements.py — 5/5 Unit Tests Passing (100% Success Rate)"
   parity_alignment_suite: "scratch/test_parity_alignment.py — 4/4 Unit Tests Passing (100% Success Rate)"
   vcp_metrics_suite: "scratch/test_vcp_metrics.py — 4/4 Unit Tests Passing (100% Success Rate)"
@@ -487,6 +489,12 @@ verification_and_quality_assurance:
   spread_exit_and_index_cap_suite: "scratch/test_spread_exit_and_index_cap.py — 6/6 Unit Tests Passing (100% Success Rate)"
   ast_syntax_integrity: "100% Python files parsed with zero syntax errors"
   recent_major_issues_resolved:
+    - id: "ISSUE-071"
+      title: "Setup Prioritization Laws, Safe Option Value Buying Corridor & VCP Coiled Promotion"
+      status: "RESOLVED"
+    - id: "ISSUE-065"
+      title: "Strategic Blueprint Alignment & Production Robustness Hardening"
+      status: "RESOLVED"
     - id: "ISSUE-063"
       title: "Invert Spread Exit Execution Order, Directional Index Concurrency Cap & 08:00 AM Radar Purge"
       status: "RESOLVED"
