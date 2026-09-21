@@ -796,6 +796,24 @@ except Exception as e:
     errors.append(f"Incident 1 & 2 Invariants Failed: {e}")
     print(f" FAILED [ERR] ({e})", flush=True)
 
+# -------------------------------------------------------------------------
+# TEST 25: Near-T1 (90% T1) Proximity & Multi-Tier Extended Gain Lock Invariants
+# -------------------------------------------------------------------------
+print("[TEST 25] Testing Near-T1 (90% T1) Proximity & Multi-Tier Extended Gain Lock Invariants...", end="", flush=True)
+try:
+    import subprocess
+    import paths
+    cmd_near_t1 = [
+        sys.executable,
+        os.path.join(paths.SCRATCH_DIR, "test_near_t1_and_gain_locks.py")
+    ]
+    res_near_t1 = subprocess.run(cmd_near_t1, cwd=paths.PROJECT_ROOT, capture_output=True, text=True)
+    assert res_near_t1.returncode == 0, f"Near-T1 & Gain Lock unit tests failed:\nSTDOUT:\n{res_near_t1.stdout}\nSTDERR:\n{res_near_t1.stderr}"
+    print(" PASSED [OK]", flush=True)
+except Exception as e:
+    errors.append(f"Near-T1 & Gain Lock Invariants Failed: {e}")
+    print(f" FAILED [ERR] ({e})", flush=True)
+
 print("\n" + "=" * 100)
 if not errors:
     print("      ALL REGRESSION TESTS PASSED WITH 100% SUCCESS -- ZERO REGRESSIONS FOUND!")

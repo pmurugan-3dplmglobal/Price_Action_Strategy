@@ -4,7 +4,7 @@ meta:
   last_updated: '2026-09-21'
   purpose: Active operational tracker for v2.1.0-stable failures, root causes, regressions, and enhancements.
   historical_archive: archive/ISSUE_HISTORY_ARCHIVE.yaml (Preserves 119 resolved legacy issues prior to 2026-09-05)
-  total_active_issues: 45
+  total_active_issues: 46
   archived_issues_summary:
     total_archived: 119
     recent_archived_batch: [FEATURE-031, FEATURE-030, FEATURE-029, ISSUE-084, ISSUE-083, ISSUE-082, ISSUE-081, ISSUE-080, FEATURE-036, FEATURE-035, FEATURE-034, FEATURE-033, ISSUE-054]
@@ -2359,3 +2359,39 @@ issues:
     2. Integrated into master regression suite as TEST 24: scratch/run_full_regression_test.py (24/24 test suites PASSED, 100% SUCCESS, zero regressions).
   status: RESOLVED
   resolution_date: '2026-09-21'
+
+- id: ISSUE-067
+  title: "Near-T1 (90% T1) Proximity Guard, Multi-Tier Extended Gain Trailing Lock, Dynamic 2% LTP Clamping & Open Order Broker Reconciliation"
+  category: PROFIT_PRESERVATION_&_TRADE_LIFECYCLE_MONITORING
+  severity: HIGH
+  date_reported: '2026-09-21'
+  affected_files:
+    - common/position_monitor.py
+    - scratch/test_near_t1_and_gain_locks.py
+    - scratch/run_full_regression_test.py
+  symptom: |
+    1. SIEMENS26SEP3950CE (Trade #784) spiked from entry ₹24.60 to ₹42.85 (+74.2% gain peak), coming within ₹0.29 of T1 (₹43.80 buffer ₹43.14). Because it missed T1 by ₹0.29 and only the basic +18% trigger existed, SL remained locked at ₹27.05 (+10%), leaving ₹15.80/share (+54%) of open profit unprotected.
+    2. If price pulled back from a huge peak (e.g. from 42.85 to 37.45), any strict check 'new_sl >= live_ltp' rejected the entire trail upgrade, leaving SL frozen at +10% even while the position was still up +50%.
+    3. When limit orders filled on Kite, if the trade record in trades.sqlite3 retained order_status = 'OPEN', monitor_positions skipped trailing forever due to 'if pos.get("order_status") == "OPEN": continue'.
+    4. In monitor_positions, tid = pos.get("trade_id") returned None for records loaded directly from SQLite where primary key is 'id', preventing SQLite updates.
+  root_cause: |
+    1. Absence of Near-T1 proximity trailing guard (when price reaches >= 90% of target distance, lock in 70% of target distance).
+    2. Absence of multi-tier extended gain locks for options (+30%, +40%, +50%, +70%) and stocks (+8%, +14%, +20%).
+    3. Strict rejection of trailing SL when candidate SL exceeded pulled-back LTP, instead of dynamically clamping candidate SL to 2% below live LTP.
+    4. reconcile_and_cancel_stale_orders and monitor_positions did not cross-reference broker net holdings for open limit orders to auto-mutate order_status to FILLED.
+    5. Trade primary key dictionary lookups only used pos.get("trade_id") instead of pos.get("trade_id") or pos.get("id").
+  fix_applied: |
+    1. Near-T1 Proximity Guard: When price extends >= 90% toward Target T1, automatically lock in 70% of the target distance into trailing SL.
+    2. Multi-Tier Extended Gain Trailing Lock:
+       - Options: +70% gain -> Lock +50%; +50% gain -> Lock +35%; +40% gain -> Lock +25%; +30% gain -> Lock +20%; +18% gain -> Lock +10%; +12% gain -> Lock +3%.
+       - Stocks: +20% gain -> Lock +12%; +14% gain -> Lock +6%; +8% gain -> Lock +2% (+BE).
+    3. Dynamic 2% LTP Clamping: If candidate SL exceeds live LTP after a pullback, clamp SL safely to live_ltp * 0.98 (2% below LTP for longs; 2% above for shorts) instead of rejecting the upgrade, maximizing profit locked without triggering suicide stops.
+    4. Open Order Broker Reconciliation: In both reconcile_and_cancel_stale_orders and monitor_positions, check is_contract_held_on_broker and Kite net positions. If holding quantity exists, mutate order_status = FILLED in memory and trades.sqlite3.
+    5. Dual-Key Trade Lookup: Updated all monitor DB update hooks to use pos.get("trade_id") or pos.get("id").
+  verification: |
+    1. Dedicated unit test suite scratch/test_near_t1_and_gain_locks.py (3/3 PASSED).
+    2. Integrated as TEST 25 in scratch/run_full_regression_test.py (25/25 PASSED, 100% SUCCESS).
+    3. Live verification on Trade #784 (SIEMENS26SEP3950CE): successfully transitioned from OPEN to FILLED, ratcheted SL from 27.05 to 38.05 (+54.7% profit locked).
+  status: RESOLVED
+  resolution_date: '2026-09-21'
+

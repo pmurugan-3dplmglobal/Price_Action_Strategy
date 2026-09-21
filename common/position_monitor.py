@@ -1150,8 +1150,14 @@ def reconcile_and_cancel_stale_orders(kite, positions_dict=None, position_lock=N
                 oid = str(pos.get("order_id", ""))
                 c = pos.get("contract") or sym
                 matched_o = completed_orders_by_id.get(oid) or completed_orders_by_sym.get(c)
-                if matched_o:
-                    avg_p = float(matched_o.get("average_price") or 0.0)
+                broker_pos = net_pos_dict.get(c) or net_pos_dict.get(sym)
+                is_broker_held = broker_pos and abs(int(broker_pos.get("quantity", 0))) > 0
+                if matched_o or is_broker_held:
+                    avg_p = 0.0
+                    if matched_o:
+                        avg_p = float(matched_o.get("average_price") or 0.0)
+                    elif broker_pos:
+                        avg_p = float(broker_pos.get("average_price") or broker_pos.get("buy_price") or 0.0)
                     logging.info(f"[ORDER_MANAGER] Order #{oid} for {sym} ({c}) filled on Kite @ {avg_p:.2f}. Mutating status to FILLED.")
                     if position_lock:
                         with position_lock:
@@ -1163,6 +1169,16 @@ def reconcile_and_cancel_stale_orders(kite, positions_dict=None, position_lock=N
                         pos["order_status"] = "FILLED"
                         if avg_p > 0:
                             pos["entry_spot"] = avg_p
+                    trade_id_val = pos.get("trade_id") or pos.get("id")
+                    if trade_id_val:
+                        try:
+                            import trade_db
+                            upd_payload = {"order_status": "FILLED"}
+                            if avg_p > 0:
+                                upd_payload["entry_price"] = avg_p
+                            trade_db.update_trade(trade_id_val, upd_payload)
+                        except Exception as e_tdb:
+                            logging.debug(f"[ORDER_MANAGER] update_trade failed for #{trade_id_val}: {e_tdb}")
 
     open_orders = [o for o in orders if o.get("status") in ["OPEN", "TRIGGER PENDING"]]
     if not open_orders:
@@ -1444,10 +1460,33 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
 
     for sym, pos in items:
         try:
-            # If position is still an unfilled entry limit order waiting on Kite,
-            # do NOT execute trailing SL or profit exits on 0 held quantity.
+            # If position is still marked OPEN, verify if it has actually filled on Kite broker.
+            # Only skip if genuinely unfilled with 0 held quantity.
             if pos.get("order_status") == "OPEN":
-                continue
+                contract_check = pos.get("contract") or pos.get("symbol") or sym
+                is_held = False
+                held_qty = 0
+                if kite and live:
+                    try:
+                        is_held, held_qty = is_contract_held_on_broker(kite, contract_check)
+                    except Exception as b_err:
+                        logging.debug(f"[MONITOR] is_contract_held_on_broker check failed for {contract_check}: {b_err}")
+
+                if is_held and abs(held_qty) > 0:
+                    logging.info(f"[MONITOR] Reconciled open order for {sym} ({contract_check}): filled on broker with qty={held_qty}. Mutating order_status to FILLED.")
+                    pos["order_status"] = "FILLED"
+                    with lock:
+                        if sym in positions_dict:
+                            positions_dict[sym]["order_status"] = "FILLED"
+                    trade_id_val = pos.get("trade_id") or pos.get("id")
+                    if trade_id_val:
+                        try:
+                            import trade_db
+                            trade_db.update_trade(trade_id_val, {"order_status": "FILLED"})
+                        except Exception as upd_err:
+                            logging.debug(f"[MONITOR] Failed to update trade {trade_id_val} order_status to FILLED: {upd_err}")
+                else:
+                    continue
             contract = pos.get("contract") or pos.get("symbol") or sym
             c_str = str(contract).upper()
             is_stock_spot = pos.get("position_type") == "stock" or (pos.get("position_type") is None and not ("CE" in c_str or "PE" in c_str))
@@ -1536,7 +1575,7 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
 
             last = df.iloc[-1]
             cp = float(last['close'])
-            tid = pos.get("trade_id")
+            tid = pos.get("trade_id") or pos.get("id")
             current_sl = float(pos.get("current_sl", 0))
 
             # Compute High (hp) and Low (lp) strictly for candles AFTER trade entry_time + live_ltp
@@ -2046,10 +2085,7 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
             if pd.isna(atr) or atr <= 0:
                 atr = entry_s * 0.02
 
-            # Feature 5: Trailing Stage 1 (Gain Lock)
-            # - Options: Trigger 1 when peak gain >= +12% -> Trail SL to Entry + 3% (or BE buffer)
-            #            Trigger 2 when peak gain >= +18% -> Trail SL to Entry + 10% (Minervini rule)
-            # - Stocks: Trigger when peak gain >= +8% / +10% -> Trail SL to +BE (Entry + buffer for Bull, Entry - buffer for Bear)
+            # Feature 5: Trailing Stage 1 & Extended Gain Lock (Near-T1 & Multi-Tier Proximity)
             trail_rules = cfg.get("trailing_rules", {}) if isinstance(cfg.get("trailing_rules"), dict) else {}
             opt_gain_trigger = float(trail_rules.get("option_trail_1_gain_pct", cfg.get("option_trail_1_gain_pct", 12.0)))
             opt_sl_lock_pct = float(trail_rules.get("option_trail_1_sl_pct", cfg.get("option_trail_1_sl_pct", 3.0)))
@@ -2057,82 +2093,177 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
             opt_sl_lock_pct_2 = float(trail_rules.get("option_trail_2_sl_pct", cfg.get("option_trail_2_sl_pct", 10.0)))
             stock_gain_trigger = float(trail_rules.get("stock_trail_1_gain_pct", cfg.get("stock_trail_1_gain_pct", 8.0)))
 
-            req_gain = stock_gain_trigger if is_stock else opt_gain_trigger
+            # Extended Trailing Tiers (Minervini / Datta Spikes Protection)
+            # Options: +30% -> +20%, +40% -> +25%, +50% -> +35%, +70% -> +50%
+            opt_gain_trigger_3 = float(trail_rules.get("option_trail_3_gain_pct", 30.0))
+            opt_sl_lock_pct_3 = float(trail_rules.get("option_trail_3_sl_pct", 20.0))
+            opt_gain_trigger_4 = float(trail_rules.get("option_trail_4_gain_pct", 40.0))
+            opt_sl_lock_pct_4 = float(trail_rules.get("option_trail_4_sl_pct", 25.0))
+            opt_gain_trigger_5 = float(trail_rules.get("option_trail_5_gain_pct", 50.0))
+            opt_sl_lock_pct_5 = float(trail_rules.get("option_trail_5_sl_pct", 35.0))
+            opt_gain_trigger_6 = float(trail_rules.get("option_trail_6_gain_pct", 70.0))
+            opt_sl_lock_pct_6 = float(trail_rules.get("option_trail_6_sl_pct", 50.0))
 
-            if pos.get("trailing_stage", 0) == 0 and gain_pct >= req_gain:
-                curr_sl = float(pos.get("current_sl") or 0.0)
-                if not is_stock:
-                    # Choose whether Tier 1 (+12% -> +3%) or Tier 2 (+18% -> +10%)
-                    active_sl_pct = opt_sl_lock_pct_2 if gain_pct >= opt_gain_trigger_2 else opt_sl_lock_pct
-                    active_trigger = opt_gain_trigger_2 if gain_pct >= opt_gain_trigger_2 else opt_gain_trigger
-                    sl_offset = entry_s * (active_sl_pct / 100.0)
-                    opt_target = round(round((entry_s + sl_offset) / 0.05) * 0.05, 2)
-                    new_sl = max(curr_sl, opt_target)
-                    trail_label = f"TRAIL-1 (+{active_trigger:.0f}% Gain Lock -> +{active_sl_pct:.0f}% SL)"
-                    log_sl_label = f"SL=+{active_sl_pct:.0f}% {new_sl:.2f} (+{gain_pct:.1f}% gain locked)"
-                elif is_short_stock:
-                    buf_dist = get_sl_buffer_distance(entry_s, side="BEAR")
-                    be_offset = max(buf_dist, 0.5 * atr)
-                    be_target = round(round((entry_s - be_offset) / 0.05) * 0.05, 2)
-                    new_sl = min(curr_sl, be_target) if curr_sl > 0 else be_target
-                    trail_label = "TRAIL-1 (+8% Gain Lock -> +2% BE)"
-                    log_sl_label = f"SL=+BE {new_sl:.2f} (+{gain_pct:.1f}% gain locked)"
+            # Near-T1 Proximity Guard (Pre-T1 Profit Lock):
+            # When price reaches 90% of target distance, lock in 70% of target distance to protect near-target spikes
+            near_t1_trigger_pct = float(trail_rules.get("near_t1_trigger_pct", 0.90))
+            near_t1_lock_pct = float(trail_rules.get("near_t1_lock_pct", 0.70))
+
+            curr_sl = float(pos.get("current_sl") or 0.0)
+            candidate_sl = None
+            candidate_label = ""
+            candidate_sl_label = ""
+
+            if not is_stock:
+                # ── OPTIONS TRAILING EVALUATION ──
+                # 1. Extended Gain Tier Escalation
+                if gain_pct >= opt_gain_trigger_6:
+                    target_lock_pct = opt_sl_lock_pct_6
+                    active_trigger = opt_gain_trigger_6
+                elif gain_pct >= opt_gain_trigger_5:
+                    target_lock_pct = opt_sl_lock_pct_5
+                    active_trigger = opt_gain_trigger_5
+                elif gain_pct >= opt_gain_trigger_4:
+                    target_lock_pct = opt_sl_lock_pct_4
+                    active_trigger = opt_gain_trigger_4
+                elif gain_pct >= opt_gain_trigger_3:
+                    target_lock_pct = opt_sl_lock_pct_3
+                    active_trigger = opt_gain_trigger_3
+                elif gain_pct >= opt_gain_trigger_2:
+                    target_lock_pct = opt_sl_lock_pct_2
+                    active_trigger = opt_gain_trigger_2
+                elif gain_pct >= opt_gain_trigger:
+                    target_lock_pct = opt_sl_lock_pct
+                    active_trigger = opt_gain_trigger
                 else:
-                    buf_dist = get_sl_buffer_distance(entry_s, side="BULL")
-                    be_offset = max(buf_dist, 0.5 * atr)
+                    target_lock_pct = 0.0
+                    active_trigger = 0.0
+
+                if target_lock_pct > 0.0 and entry_s > 0:
+                    sl_offset = entry_s * (target_lock_pct / 100.0)
+                    opt_target = round(round((entry_s + sl_offset) / 0.05) * 0.05, 2)
+                    candidate_sl = opt_target
+                    candidate_label = f"TRAIL-GAIN (+{active_trigger:.0f}% Gain Lock -> +{target_lock_pct:.0f}% SL)"
+                    candidate_sl_label = f"SL=+{target_lock_pct:.0f}% {opt_target:.2f} (+{gain_pct:.1f}% gain locked)"
+
+                # 2. Near-T1 Proximity Check (Pre-T1 Guard)
+                if t1_val and t1_val > entry_s and entry_s > 0:
+                    target_dist = t1_val - entry_s
+                    near_t1_thresh = entry_s + (near_t1_trigger_pct * target_dist)
+                    if hp >= near_t1_thresh:
+                        near_t1_target = round(round((entry_s + (near_t1_lock_pct * target_dist)) / 0.05) * 0.05, 2)
+                        if candidate_sl is None or near_t1_target > candidate_sl:
+                            candidate_sl = near_t1_target
+                            candidate_label = f"TRAIL-NEAR-T1 (90% T1 Hit [{hp:.2f} >= {near_t1_thresh:.2f}] -> 70% Target Locked)"
+                            candidate_sl_label = f"SL=Near-T1 {near_t1_target:.2f} (Target={t1_val:.2f})"
+
+            elif is_short_stock:
+                # ── SHORT EQUITY TRAILING EVALUATION ──
+                buf_dist = get_sl_buffer_distance(entry_s, side="BEAR")
+                be_offset = max(buf_dist, 0.5 * atr)
+                if gain_pct >= 20.0:
+                    be_target = round(round((entry_s * 0.88) / 0.05) * 0.05, 2)
+                    candidate_label = "TRAIL-GAIN (+20% Gain Lock -> +12% BE)"
+                    candidate_sl_label = f"SL=+12% {be_target:.2f}"
+                elif gain_pct >= 14.0:
+                    be_target = round(round((entry_s * 0.94) / 0.05) * 0.05, 2)
+                    candidate_label = "TRAIL-GAIN (+14% Gain Lock -> +6% BE)"
+                    candidate_sl_label = f"SL=+6% {be_target:.2f}"
+                elif gain_pct >= stock_gain_trigger:
+                    be_target = round(round((entry_s - be_offset) / 0.05) * 0.05, 2)
+                    candidate_label = "TRAIL-1 (+8% Gain Lock -> +2% BE)"
+                    candidate_sl_label = f"SL=+BE {be_target:.2f} (+{gain_pct:.1f}% gain locked)"
+                else:
+                    be_target = None
+
+                candidate_sl = be_target
+
+                # Near-T1 for Short Equities
+                if t1_val and t1_val < entry_s and entry_s > 0:
+                    target_dist = entry_s - t1_val
+                    near_t1_thresh = entry_s - (near_t1_trigger_pct * target_dist)
+                    if lp <= near_t1_thresh:
+                        near_t1_target = round(round((entry_s - (near_t1_lock_pct * target_dist)) / 0.05) * 0.05, 2)
+                        if candidate_sl is None or near_t1_target < candidate_sl:
+                            candidate_sl = near_t1_target
+                            candidate_label = f"TRAIL-NEAR-T1 (90% T1 Hit [{lp:.2f} <= {near_t1_thresh:.2f}] -> 70% Target Locked)"
+                            candidate_sl_label = f"SL=Near-T1 {near_t1_target:.2f} (Target={t1_val:.2f})"
+
+            else:
+                # ── LONG EQUITY TRAILING EVALUATION ──
+                buf_dist = get_sl_buffer_distance(entry_s, side="BULL")
+                be_offset = max(buf_dist, 0.5 * atr)
+                if gain_pct >= 20.0:
+                    be_target = round(round((entry_s * 1.12) / 0.05) * 0.05, 2)
+                    candidate_label = "TRAIL-GAIN (+20% Gain Lock -> +12% BE)"
+                    candidate_sl_label = f"SL=+12% {be_target:.2f}"
+                elif gain_pct >= 14.0:
+                    be_target = round(round((entry_s * 1.06) / 0.05) * 0.05, 2)
+                    candidate_label = "TRAIL-GAIN (+14% Gain Lock -> +6% BE)"
+                    candidate_sl_label = f"SL=+6% {be_target:.2f}"
+                elif gain_pct >= stock_gain_trigger:
                     be_target = round(round((entry_s + be_offset) / 0.05) * 0.05, 2)
-                    new_sl = max(curr_sl, be_target)
-                    trail_label = "TRAIL-1 (+8% Gain Lock -> +2% BE)"
-                    log_sl_label = f"SL=+BE {new_sl:.2f} (+{gain_pct:.1f}% gain locked)"
+                    candidate_label = "TRAIL-1 (+8% Gain Lock -> +2% BE)"
+                    candidate_sl_label = f"SL=+BE {be_target:.2f} (+{gain_pct:.1f}% gain locked)"
+                else:
+                    be_target = None
 
-                # ── TRAILING STOP-LOSS PHYSICAL SANITY GUARD ──
-                # A stop-loss can NEVER be trailed to or beyond the current live market price (which causes an instant suicide stopout).
-                trail_valid = True
-                if live_ltp > 0:
-                    if not is_short_stock and new_sl >= live_ltp:
-                        logging.warning(f"[TRAIL_SL_REJECT] Refusing to trail SL ({new_sl:.2f}) >= live LTP ({live_ltp:.2f}) for long {sym} ({pos.get('contract')}). Price has pulled back below trail level.")
-                        trail_valid = False
-                    elif is_short_stock and new_sl <= live_ltp:
-                        logging.warning(f"[TRAIL_SL_REJECT] Refusing to trail SL ({new_sl:.2f}) <= live LTP ({live_ltp:.2f}) for short {sym} ({pos.get('contract')}). Price has rallied above trail level.")
-                        trail_valid = False
+                candidate_sl = be_target
 
-                if trail_valid:
-                    sl_stamp = dt.now().isoformat()
-                    with lock:
-                        if sym in positions_dict:
-                            positions_dict[sym]["current_sl"] = new_sl
-                            positions_dict[sym]["trailing_stage"] = 1
-                            positions_dict[sym]["sl_set_time"] = sl_stamp
-                    ext_metric = f"Low={lp:.2f}" if is_short_stock else f"High={hp:.2f}"
-                    logging.info(f"{trail_label} {sym}: {ext_metric} (+{gain_pct:.1f}%) -> SL={new_sl:.2f}")
-                    log_fn(sym, pos.get("pattern", ""), timeframe_entry, "TRAIL_BE", "MUTATED",
-                           log_sl_label,
-                           entry=entry_s, sl=new_sl, target=t1_val,
-                           event_time=last.get('date'))
-                    if tid:
-                        trade_db.update_trade(tid, {"trailing_stage": 1, "current_sl": new_sl, "sl_set_time": sl_stamp})
+                # Near-T1 for Long Equities
+                if t1_val and t1_val > entry_s and entry_s > 0:
+                    target_dist = t1_val - entry_s
+                    near_t1_thresh = entry_s + (near_t1_trigger_pct * target_dist)
+                    if hp >= near_t1_thresh:
+                        near_t1_target = round(round((entry_s + (near_t1_lock_pct * target_dist)) / 0.05) * 0.05, 2)
+                        if candidate_sl is None or near_t1_target > candidate_sl:
+                            candidate_sl = near_t1_target
+                            candidate_label = f"TRAIL-NEAR-T1 (90% T1 Hit [{hp:.2f} >= {near_t1_thresh:.2f}] -> 70% Target Locked)"
+                            candidate_sl_label = f"SL=Near-T1 {near_t1_target:.2f} (Target={t1_val:.2f})"
 
-            # Upgrade Trailing Stage 1 if position extends from +12% to +18%:
-            elif not is_stock and pos.get("trailing_stage", 0) == 1 and gain_pct >= opt_gain_trigger_2:
-                curr_sl = float(pos.get("current_sl") or 0.0)
-                sl_offset_2 = entry_s * (opt_sl_lock_pct_2 / 100.0)
-                opt_target_2 = round(round((entry_s + sl_offset_2) / 0.05) * 0.05, 2)
-                if opt_target_2 > curr_sl:
-                    if live_ltp > 0 and opt_target_2 >= live_ltp:
-                        logging.warning(f"[TRAIL_SL_REJECT] Refusing to upgrade Stage 2 SL ({opt_target_2:.2f}) >= live LTP ({live_ltp:.2f}) for long {sym}. Skipping trail upgrade.")
-                    else:
+            # ── RATCHETING & PHYSICAL SANITY CLAMP ──
+            if candidate_sl is not None:
+                new_sl = candidate_sl
+                is_improved = (new_sl < curr_sl) if is_short_stock else (new_sl > curr_sl)
+                if is_improved:
+                    trail_valid = True
+                    if live_ltp > 0:
+                        if not is_short_stock and new_sl >= live_ltp:
+                            # Price pulled back below target lock; clamp safely 2% below live LTP if above curr_sl
+                            clamped_sl = round(round((live_ltp * 0.98) / 0.05) * 0.05, 2)
+                            if clamped_sl > curr_sl:
+                                logging.info(f"[TRAIL_SL_CLAMP] Candidate SL ({new_sl:.2f}) >= live LTP ({live_ltp:.2f}) for long {sym}. Clamping to {clamped_sl:.2f} (2% below LTP).")
+                                new_sl = clamped_sl
+                            else:
+                                logging.warning(f"[TRAIL_SL_REJECT] Refusing to trail SL ({new_sl:.2f}) >= live LTP ({live_ltp:.2f}) for long {sym} ({pos.get('contract')}). Price has pulled back below trail level.")
+                                trail_valid = False
+                        elif is_short_stock and new_sl <= live_ltp:
+                            clamped_sl = round(round((live_ltp * 1.02) / 0.05) * 0.05, 2)
+                            if curr_sl <= 0 or clamped_sl < curr_sl:
+                                logging.info(f"[TRAIL_SL_CLAMP] Candidate SL ({new_sl:.2f}) <= live LTP ({live_ltp:.2f}) for short {sym}. Clamping to {clamped_sl:.2f} (2% above LTP).")
+                                new_sl = clamped_sl
+                            else:
+                                logging.warning(f"[TRAIL_SL_REJECT] Refusing to trail SL ({new_sl:.2f}) <= live LTP ({live_ltp:.2f}) for short {sym} ({pos.get('contract')}). Price has rallied above trail level.")
+                                trail_valid = False
+
+                    if trail_valid and ((new_sl < curr_sl) if is_short_stock else (new_sl > curr_sl)):
                         sl_stamp = dt.now().isoformat()
                         with lock:
                             if sym in positions_dict:
-                                positions_dict[sym]["current_sl"] = opt_target_2
+                                positions_dict[sym]["current_sl"] = new_sl
+                                positions_dict[sym]["trailing_stage"] = max(int(positions_dict[sym].get("trailing_stage", 0)), 1)
                                 positions_dict[sym]["sl_set_time"] = sl_stamp
-                        logging.info(f"TRAIL-1 UPGRADE {sym}: High={hp:.2f} (+{gain_pct:.1f}%) -> SL={opt_target_2:.2f} (+{opt_sl_lock_pct_2:.0f}% SL locked)")
-                        log_fn(sym, pos.get("pattern", ""), timeframe_entry, "TRAIL_UPGRADE", "MUTATED",
-                               f"SL=+{opt_sl_lock_pct_2:.0f}% {opt_target_2:.2f} (+{gain_pct:.1f}% locked)",
-                               entry=entry_s, sl=opt_target_2, target=t1_val or t2_val,
-                               event_time=last.get('date'))
+                        ext_metric = f"Low={lp:.2f}" if is_short_stock else f"High={hp:.2f}"
+                        logging.info(f"{candidate_label} {sym}: {ext_metric} (+{gain_pct:.1f}%) -> SL={new_sl:.2f}")
+                        try:
+                            log_fn(sym, pos.get("pattern", ""), timeframe_entry, "TRAIL_UPGRADE" if pos.get("trailing_stage", 0) >= 1 else "TRAIL_BE", "MUTATED",
+                                   candidate_sl_label,
+                                   entry=entry_s, sl=new_sl, target=t1_val,
+                                   event_time=last.get('date'))
+                        except Exception as log_err:
+                            logging.debug(f"[MONITOR] log_fn failed for {sym}: {log_err}")
                         if tid:
-                            trade_db.update_trade(tid, {"current_sl": opt_target_2, "sl_set_time": sl_stamp})
+                            trade_db.update_trade(tid, {"trailing_stage": max(int(pos.get("trailing_stage", 0)), 1), "current_sl": new_sl, "sl_set_time": sl_stamp})
 
             t1_hit = ((lp <= (t1_val + buf_t1)) if is_short_stock else (hp >= (t1_val - buf_t1))) if (t1_val is not None and t1_val > 0) else False
 
