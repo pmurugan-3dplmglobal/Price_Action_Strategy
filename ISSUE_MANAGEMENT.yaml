@@ -4,7 +4,7 @@ meta:
   last_updated: '2026-09-21'
   purpose: Active operational tracker for v2.1.0-stable failures, root causes, regressions, and enhancements.
   historical_archive: archive/ISSUE_HISTORY_ARCHIVE.yaml (Preserves 119 resolved legacy issues prior to 2026-09-05)
-  total_active_issues: 47
+  total_active_issues: 48
   archived_issues_summary:
     total_archived: 119
     recent_archived_batch: [FEATURE-031, FEATURE-030, FEATURE-029, ISSUE-084, ISSUE-083, ISSUE-082, ISSUE-081, ISSUE-080, FEATURE-036, FEATURE-035, FEATURE-034, FEATURE-033, ISSUE-054]
@@ -2420,5 +2420,41 @@ issues:
     3. Master regression suite scratch/run_full_regression_test.py (25/25 PASSED, 100% SUCCESS).
   status: RESOLVED
   resolution_date: '2026-09-21'
+
+- id: ISSUE-070
+  title: "Staged Time (StagedT) IST Precision Visibility for 1-Click Buy Decisions & Position Monitor Variable Scoping"
+  category: UI_DATA_PARITY_&_EXECUTION_VISIBILITY
+  severity: MEDIUM
+  date_reported: '2026-09-21'
+  affected_files:
+    - common/display_writer.py
+    - common/resolve.py
+    - common/position_monitor.py
+    - Trade_Stock/stock_reversal_scanner.py
+    - Trade_Option/templates/index.html
+    - Trade_Stock/templates/index.html
+    - Trade_Option/app_option_Trade.py
+    - Trade_Stock/app_Stock_Trade.py
+    - Trade_Stock/blueprints/routes_scanner.py
+    - scratch/test_near_t1_and_gain_locks.py
+  symptom: |
+    1. Scanned Setups table displayed EntryTime (when the breakout/anchor candle triggered) but lacked visibility into the exact real-world wall-clock IST time when the scanner discovered, resolved, and staged the setup. Traders evaluating 1-Click Buy could not discern whether a setup was fresh (e.g. staged 30s ago) or stale (e.g. staged 45 minutes ago).
+    2. In position_monitor.py, entry_s and current_sl were only conditionally bound in certain control branches, resulting in UnboundLocalError during EOD auto-squareoff or risk evaluation.
+  root_cause: |
+    1. write_scan_display_data, scan_symbol, and stock_reversal_scanner omitted staged_time serialization, and UI HTML tables had no dedicated StagedT column.
+    2. position_monitor.py defined entry_s inside specific conditional blocks (e.g., if df.empty, 15:15 carry check) rather than at the top of the per-position iteration.
+  fix_applied: |
+    1. Added staged_time timestamp tracking (YYYY-MM-DD HH:MM:SS IST) across common/resolve.py, common/display_writer.py, and Trade_Stock/stock_reversal_scanner.py, preserving original staged timestamps across continuous scanner cycles.
+    2. Added dedicated StagedT column between EntryTime and Result across Trade_Option/templates/index.html and Trade_Stock/templates/index.html with full sortTable support and second-precision hover tooltips (Staged at: YYYY-MM-DD HH:MM:SS IST).
+    3. Synchronized CSV export routes in Trade_Option/app_option_Trade.py, Trade_Stock/app_Stock_Trade.py, and routes_scanner.py to include StagedT.
+    4. Unconditionally initialized entry_s and current_sl at the head of monitor_active_positions loop in common/position_monitor.py.
+    5. Patched get_ist_now in scratch/test_near_t1_and_gain_locks.py to guarantee 100% time-independent regression testing.
+  verification: |
+    1. Unit verification in scratch/test_institutional_enhancements_v2.py (11/11 PASSED).
+    2. Near-T1 and gain locks verification in scratch/test_near_t1_and_gain_locks.py (3/3 PASSED).
+    3. Full regression test suite scratch/run_full_regression_test.py (25/25 suites PASSED, 100% SUCCESS).
+  status: RESOLVED
+  resolution_date: '2026-09-21'
+
 
 

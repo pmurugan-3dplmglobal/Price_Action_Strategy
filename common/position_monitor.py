@@ -1580,6 +1580,8 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
             side_val = str(pos.get("side", "")).upper()
             dir_val = str(pos.get("direction", "")).upper()
             is_short_stock = is_stock and (side_val in ["SELL", "PE", "BEAR"] or dir_val == "BEAR")
+            entry_s = float(pos.get("entry_spot") or pos.get("entry_price") or 0.0)
+            current_sl = float(pos.get("current_sl", 0.0) or 0.0)
 
             now_time_str = get_ist_now().strftime("%H:%M")
             is_before_failsafe = now_time_str < failsafe_start_str

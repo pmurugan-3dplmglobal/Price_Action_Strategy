@@ -96,6 +96,7 @@ def write_scan_display_data(staged, active, display_file, engine_name=None):
                 except Exception:
                     pass
 
+            staged_t = t.get("staged_time") or t.get("staged_at") or t.get("created_at") or (now_str if is_staged else "")
             return {
                 "symbol": t.get("symbol", ""),
                 "contract": contract,
@@ -110,6 +111,7 @@ def write_scan_display_data(staged, active, display_file, engine_name=None):
                 "pattern": pattern,
                 "entry_time": clean_timestamp(entry_time),
                 "exit_time": clean_timestamp(exit_time),
+                "staged_time": clean_timestamp(staged_t or ""),
                 "result": result,
                 "carry_forward": False,
                 "rr": round(rr_num, 2),
@@ -252,8 +254,11 @@ def write_scan_display_data(staged, active, display_file, engine_name=None):
                 prev = contract_map[key]
                 prev_time = str(prev.get("entry_time") or "")
                 curr_time = str(t.get("entry_time") or "")
+                orig_staged_time = prev.get("staged_time") or t.get("staged_time")
                 if curr_time > prev_time or (curr_time == prev_time and float(t.get("rr", 0)) > float(prev.get("rr", 0))):
                     contract_map[key] = t
+                if orig_staged_time and not contract_map[key].get("staged_time"):
+                    contract_map[key]["staged_time"] = orig_staged_time
 
         deduped_staged = list(contract_map.values())
         

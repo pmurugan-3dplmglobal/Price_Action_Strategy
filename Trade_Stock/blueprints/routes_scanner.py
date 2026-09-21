@@ -146,7 +146,7 @@ def api_scan_export():
         output = io.StringIO()
         writer = csv.writer(output)
         writer.writerow(["Symbol", "Contract", "Side", "Tier", "Entry", "SL", "T1", "T2", "T3",
-                         "AncherT", "EntryTime", "Result", "CF", "RR", "Engine", "Status",
+                         "AncherT", "EntryTime", "StagedT", "Result", "CF", "RR", "Engine", "Status",
                          "Spot_Trend", "Spot_T1_Target"])
         files = [
             ("Daily", _app.SCAN_DISPLAY_FILE),
@@ -190,6 +190,7 @@ def api_scan_export():
                         _app._format_float(t.get("t3")),
                         _app._format_timestamp(t.get("candle_a_time")),
                         _app._format_timestamp(t.get("entry_time")),
+                        _app._format_timestamp(t.get("staged_time")),
                         _app._format_pattern_result(t.get("pattern") or t.get("result")),
                         "Yes" if t.get("carry_forward") else "No",
                         _app._format_float(t.get("rr")),

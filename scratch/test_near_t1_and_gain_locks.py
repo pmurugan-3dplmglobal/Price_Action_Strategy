@@ -59,6 +59,7 @@ class TestNearT1AndGainLocks(unittest.TestCase):
         self.mock_kite.quote.return_value = {"NFO:SIEMENS26SEP3950CE": {"last_price": 37.45}}
         
         with patch("common.position_monitor._load_program_config_file", return_value={}), \
+             patch("common.position_monitor.get_ist_now", return_value=dt(2026, 9, 21, 11, 30, 0)), \
              patch("common.position_monitor.fetch_and_resample_candles", return_value=mock_df), \
              patch("common.trade_db.update_trade"):
 
@@ -108,6 +109,7 @@ class TestNearT1AndGainLocks(unittest.TestCase):
         self.mock_kite.quote.return_value = {"NFO:TCS26SEP3500CE": {"last_price": 142.0}}
 
         with patch("common.position_monitor._load_program_config_file", return_value={}), \
+             patch("common.position_monitor.get_ist_now", return_value=dt(2026, 9, 21, 11, 30, 0)), \
              patch("common.position_monitor.fetch_and_resample_candles", return_value=mock_df), \
              patch("common.trade_db.update_trade"):
 
@@ -159,6 +161,7 @@ class TestNearT1AndGainLocks(unittest.TestCase):
         self.mock_kite.quote.return_value = {"NSE:INFY": {"last_price": 915.0}}
 
         with patch("common.position_monitor._load_program_config_file", return_value={"tranche_mode": False}), \
+             patch("common.position_monitor.get_ist_now", return_value=dt(2026, 9, 21, 11, 30, 0)), \
              patch("common.position_monitor.fetch_and_resample_candles", return_value=mock_df), \
              patch("common.trade_db.update_trade"):
 

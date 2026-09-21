@@ -43,6 +43,7 @@ meta:
     - Always-Live Risk Guardian Decoupling, Auto SQLite Broker Recovery Persistence, Multi-Lot 50% T1 Scale-Out, and Intraday Theta Stagnation Guard (ISSUE-101)
     - Unified Single-Container Full-Width Reports Tab Navigation & Responsive Tab Bar (FEATURE-055)
     - Strategic Blueprint Alignment & Production Hardening (Multi-Process 2.8 req/s Limiter, Debit Spread Fix, 15m/60m Index TF, 11:30 0DTE Cutoff, Ping-Pong Loop Halt, Quote-First Radar Polling, Kite LPP Clamping, Live Quant Expectancy Ribbon) (ISSUE-065)
+    - Staged Time (StagedT) IST Precision Visibility for 1-Click Buy Decisions & Position Monitor Variable Scoping (FEATURE-056 / ISSUE-070)
 
 architecture:
   diagram: |

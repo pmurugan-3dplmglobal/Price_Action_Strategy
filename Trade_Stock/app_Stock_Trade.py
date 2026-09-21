@@ -1332,7 +1332,7 @@ def api_scan_export():
         output = io.StringIO()
         writer = csv.writer(output)
         writer.writerow(["Symbol", "Contract", "Side", "Tier", "Entry", "SL", "T1", "T2", "T3",
-                         "AncherT", "EntryTime", "Result", "CF", "RR", "Engine", "Status",
+                         "AncherT", "EntryTime", "StagedT", "Result", "CF", "RR", "Engine", "Status",
                          "Spot_Trend", "Spot_T1_Target"])
         files = [("Daily", SCAN_DISPLAY_FILE), ("Bear", SCAN_DISPLAY_BEAR_FILE), ("Weekly Bull", paths.SCAN_DISPLAY_WEEKLY_FILE), ("Weekly Bear", paths.SCAN_DISPLAY_WEEKLY_BEAR_FILE), ("Stock EMA", EMA_DISPLAY_FILE_STOCK)]
         spot_eval_cache = {}
@@ -1370,6 +1370,7 @@ def api_scan_export():
                         _format_float(t.get("t3")),
                         _format_timestamp(t.get("candle_a_time")),
                         _format_timestamp(t.get("entry_time")),
+                        _format_timestamp(t.get("staged_time")),
                         _format_pattern_result(t.get("pattern") or t.get("result")),
                         "Yes" if t.get("carry_forward") else "No",
                         _format_float(t.get("rr")),
