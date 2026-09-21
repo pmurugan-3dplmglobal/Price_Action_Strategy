@@ -2022,6 +2022,31 @@ issues:
   status: RESOLVED
   resolution_date: '2026-09-18'
 
-
-
-
+- id: ISSUE-064
+  title: "Unify 2-Column Reports Layout into Single Full-Width Container with Cohesive Tab Navigation"
+  category: UI_UX_ENHANCEMENT
+  severity: MEDIUM
+  date_reported: '2026-09-21'
+  affected_files:
+    - Trade_Option/templates/index.html
+    - Trade_Stock/templates/index.html
+  symptom: |
+    Under "LIVE REPORTS", the UI displayed a 50/50 two-column split layout with two separate panels/divs side-by-side:
+    - Left panel: Live Positions, Pattern Radar, Today's scan, EMA Scan, Watchlist & Learning, 5M Trap-ADX
+    - Right panel: Live Log, Trade Journal, Negation Analyzer
+    This caused severe horizontal cramping on tabular views (especially Pattern Surveillance Radar with 13 columns and Trade Journal) and compressed log terminal output into narrow word-wrapped lines.
+  root_cause: |
+    The dashboard HTML layout used .reports-grid with grid-template-columns: 1fr 1fr and segregated tab groups into reports-left and reports-right instead of a unified single-container view.
+  fix_applied: |
+    1. Trade_Option/templates/index.html & Trade_Stock/templates/index.html:
+       - Merged .reports-left and .reports-right into a single full-width .reports-container div.
+       - Unified all tab buttons into a single horizontal tab navigation bar with responsive swipe-scroll support (scrollbar-width: thin, flex: 1, min-width: max-content).
+       - Updated switchTab() function to deactivate all tabs/buttons and activate only the selected tab pane at 100% full width.
+       - Aliased switchLeftTab() to switchTab() for seamless backward compatibility.
+       - Added smooth auto-scroll to latest log entries when switching to the "Live Log" tab.
+  verification: |
+    1. Python HTML tag nesting and balance validation: 100% PASSED with zero unclosed tags.
+    2. Node.js V8 compiler syntax checks on all embedded script tags: 100% PASSED.
+    3. Master regression suite (python scratch/run_full_regression_test.py): 22/22 suites PASSED (100% SUCCESS).
+  status: RESOLVED
+  resolution_date: '2026-09-21'

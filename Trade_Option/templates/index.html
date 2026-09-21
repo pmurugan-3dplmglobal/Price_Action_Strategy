@@ -13,25 +13,40 @@
         let positionFilter = 'active';
 
         // ── Tab Switching ──
-        function switchLeftTab(tabId) {
-            document.querySelectorAll('.left-tab-content').forEach(t => t.classList.remove('active'));
-            document.querySelectorAll('.left-tab-btn').forEach(b => b.classList.remove('active'));
+        function switchTab(tabId, btnEl) {
+            document.querySelectorAll('.tab-content, .left-tab-content').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.tab-btn, .left-tab-btn').forEach(b => b.classList.remove('active'));
             const target = document.getElementById(tabId);
             if (target) target.classList.add('active');
-            if (event && event.target) event.target.classList.add('active');
-            if (tabId === 'backtest-tab') renderBacktest();
-            if (tabId === 'radar-funnel-tab') renderRadarTab();
-            if (tabId === 'scan-tab-left') renderScanTab();
-            if (tabId === 'ema-scan-tab') renderEmaScanTab();
-            if (tabId === 'watchlist-tab') renderWatchlistTab();
-            if (tabId === 'trap-adx-tab') renderTrapAdxTab();
+
+            let btn = btnEl;
+            if (!btn && typeof event !== 'undefined' && event) {
+                if (event.currentTarget && event.currentTarget.tagName === 'BUTTON') {
+                    btn = event.currentTarget;
+                } else if (event.target) {
+                    btn = event.target.closest('button');
+                }
+            }
+            if (!btn) {
+                btn = document.querySelector(`.tab-btn[onclick*="'${tabId}'"], .left-tab-btn[onclick*="'${tabId}'"]`);
+            }
+            if (btn) btn.classList.add('active');
+
+            if (tabId === 'backtest-tab' && typeof renderBacktest === 'function') renderBacktest();
+            if (tabId === 'radar-funnel-tab' && typeof renderRadarTab === 'function') renderRadarTab();
+            if (tabId === 'scan-tab-left' && typeof renderScanTab === 'function') renderScanTab();
+            if (tabId === 'weekly-scan-tab' && typeof renderWeeklyScanTab === 'function') renderWeeklyScanTab();
+            if (tabId === 'ema-scan-tab' && typeof renderEmaScanTab === 'function') renderEmaScanTab();
+            if (tabId === 'watchlist-tab' && typeof renderWatchlistTab === 'function') renderWatchlistTab();
+            if (tabId === 'trap-adx-tab' && typeof renderTrapAdxTab === 'function') renderTrapAdxTab();
+            if (tabId === 'log-tab') {
+                const logBox = document.getElementById('log-body');
+                if (logBox) logBox.scrollTop = logBox.scrollHeight;
+            }
         }
 
-        function switchTab(tabId) {
-            document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
-            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-            document.getElementById(tabId).classList.add('active');
-            event.target.classList.add('active');
+        function switchLeftTab(tabId, btnEl) {
+            switchTab(tabId, btnEl);
         }
 
         function saveJournalLesson(btn, tradeId, symbol, dateStr) {
@@ -2579,25 +2594,24 @@
         .toggle-label input:checked + .toggle-slider { background: #238636; }
         .toggle-label input:checked + .toggle-slider::after { left: 16px; background: #fff; }
 
-        .reports-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: start; }
-        .reports-left .section-panel { margin-bottom: 0; border-top: none; border-radius: 0 0 8px 8px; }
+        .reports-container { width: 100%; margin-bottom: 20px; }
+        .reports-container .section-panel { margin-bottom: 0; border-top: none; border-radius: 0 0 8px 8px; }
+        .reports-grid { display: block; width: 100%; }
+        .reports-left, .reports-right { width: 100%; }
+        .reports-left .section-panel, .reports-right .section-panel { margin-bottom: 0; border-top: none; border-radius: 0 0 8px 8px; }
 
         .pnl-positive { color: #3fb950 !important; font-weight: 600; }
         .pnl-negative { color: #f85149 !important; font-weight: 600; }
-        .reports-right .section-panel { margin-bottom: 0; border-top: none; border-radius: 0 0 8px 8px; }
-        .left-tab-bar { display: flex; gap: 0; background: #1c2128; border: 1px solid #30363d; border-bottom: none; border-radius: 8px 8px 0 0; overflow: hidden; }
-        .left-tab-btn { background: transparent; border: none; color: #8b949e; padding: 8px 16px; cursor: pointer; font-size: 12px; font-weight: 600; border-bottom: 2px solid transparent; flex: 1; text-align: center; }
-        .left-tab-btn:hover { color: #c9d1d9; background: #21262d; }
-        .left-tab-btn.active { color: #58a6ff; border-bottom-color: #58a6ff; background: #161b22; }
-        .left-tab-content { display: none; }
-        .left-tab-content.active { display: block; }
 
-        .tab-bar { display: flex; gap: 0; background: #1c2128; border: 1px solid #30363d; border-bottom: none; border-radius: 8px 8px 0 0; overflow: hidden; }
-        .tab-btn { background: transparent; border: none; color: #8b949e; padding: 8px 16px; cursor: pointer; font-size: 12px; font-weight: 600; border-bottom: 2px solid transparent; flex: 1; text-align: center; }
-        .tab-btn:hover { color: #c9d1d9; background: #21262d; }
-        .tab-btn.active { color: #58a6ff; border-bottom-color: #58a6ff; background: #161b22; }
-        .tab-content { display: none; }
-        .tab-content.active { display: block; }
+        .tab-bar, .left-tab-bar { display: flex; gap: 0; background: #1c2128; border: 1px solid #30363d; border-bottom: none; border-radius: 8px 8px 0 0; overflow-x: auto; scrollbar-width: thin; -webkit-overflow-scrolling: touch; }
+        .tab-bar::-webkit-scrollbar, .left-tab-bar::-webkit-scrollbar { height: 4px; }
+        .tab-bar::-webkit-scrollbar-track, .left-tab-bar::-webkit-scrollbar-track { background: #161b22; }
+        .tab-bar::-webkit-scrollbar-thumb, .left-tab-bar::-webkit-scrollbar-thumb { background: #30363d; border-radius: 2px; }
+        .tab-btn, .left-tab-btn { background: transparent; border: none; color: #8b949e; padding: 10px 16px; cursor: pointer; font-size: 12px; font-weight: 600; border-bottom: 2px solid transparent; flex: 1; min-width: max-content; text-align: center; transition: background 0.15s, color 0.15s; }
+        .tab-btn:hover, .left-tab-btn:hover { color: #c9d1d9; background: #21262d; }
+        .tab-btn.active, .left-tab-btn.active { color: #58a6ff; border-bottom-color: #58a6ff; background: #161b22; font-weight: 700; }
+        .tab-content, .left-tab-content { display: none; width: 100%; }
+        .tab-content.active, .left-tab-content.active { display: block; width: 100%; }
 
         table { width: 100%; border-collapse: collapse; margin-bottom: 16px; background: #161b22; border-radius: 8px; overflow: hidden; }
         th { background: #21262d; color: #8b949e; font-size: 11px; text-transform: uppercase; padding: 8px 10px; text-align: left; border-bottom: 1px solid #30363d; cursor: pointer; user-select: none; }
@@ -2884,17 +2898,19 @@
 
     <h2>Live Reports</h2>
 
-    <div class="reports-grid">
-        <div class="reports-left">
-            <div class="left-tab-bar">
-                <button class="left-tab-btn active" onclick="switchLeftTab('active-pos-tab')">Live Positions</button>
-                <button class="left-tab-btn" onclick="switchLeftTab('radar-funnel-tab')">📡 Pattern Radar</button>
-                <button class="left-tab-btn" onclick="switchLeftTab('scan-tab-left')">Today's scan</button>
-                <button class="left-tab-btn" onclick="switchLeftTab('ema-scan-tab')">EMA Scan</button>
-                <button class="left-tab-btn" onclick="switchLeftTab('watchlist-tab')">👁️ Watchlist & Learning</button>
-                <button class="left-tab-btn" onclick="switchLeftTab('trap-adx-tab')">⚡ 5M Trap-ADX</button>
-            </div>
-            <div id="active-pos-tab" class="left-tab-content active">
+    <div class="reports-container">
+        <div class="tab-bar">
+            <button class="tab-btn active" onclick="switchTab('active-pos-tab', this)">Live Positions</button>
+            <button class="tab-btn" onclick="switchTab('radar-funnel-tab', this)">📡 Pattern Radar</button>
+            <button class="tab-btn" onclick="switchTab('scan-tab-left', this)">Today's scan</button>
+            <button class="tab-btn" onclick="switchTab('ema-scan-tab', this)">EMA Scan</button>
+            <button class="tab-btn" onclick="switchTab('watchlist-tab', this)">👁️ Watchlist & Learning</button>
+            <button class="tab-btn" onclick="switchTab('trap-adx-tab', this)">⚡ 5M Trap-ADX</button>
+            <button class="tab-btn" onclick="switchTab('log-tab', this)">Live Log</button>
+            <button class="tab-btn" onclick="switchTab('journal-tab', this)">Trade Journal</button>
+            <button class="tab-btn" onclick="switchTab('analyzer-tab', this)">🎯 Negation Analyzer</button>
+        </div>
+        <div id="active-pos-tab" class="tab-content active">
                 <div class="section-panel">
                     <div class="section-header">
                         <span>Positions</span>
@@ -2910,7 +2926,7 @@
                     <div id="active-positions-body"><p class="empty-state">No positions</p></div>
                 </div>
             </div>
-            <div id="radar-funnel-tab" class="left-tab-content">
+            <div id="radar-funnel-tab" class="tab-content">
                 <div class="section-panel">
                     <div class="section-header">
                         <span>📡 Pattern Surveillance Radar (A+, A, B)</span>
@@ -2927,7 +2943,7 @@
                     <div id="radar-funnel-body"><p class="empty-state">Loading pattern radar...</p></div>
                 </div>
             </div>
-            <div id="scan-tab-left" class="left-tab-content">
+            <div id="scan-tab-left" class="tab-content">
                 <div class="section-panel">
                     <div class="section-header">
                         <span>Trade Details</span>
@@ -2957,7 +2973,7 @@
                     <div id="scan-body"><p class="empty-state">No scan trades yet</p></div>
                 </div>
             </div>
-            <div id="ema-scan-tab" class="left-tab-content">
+            <div id="ema-scan-tab" class="tab-content">
                 <div class="section-panel">
                     <div class="section-header">
                         <span>EMA Crossover Scan Trades</span>
@@ -2969,7 +2985,7 @@
                     <div id="ema-scan-body"><p class="empty-state">No EMA scan trades yet</p></div>
                 </div>
             </div>
-            <div id="watchlist-tab" class="left-tab-content">
+            <div id="watchlist-tab" class="tab-content">
                 <div class="section-panel">
                     <div class="section-header">
                         <span>👁️ Price Action Watchlist & Post-Trade Learning</span>
@@ -2982,7 +2998,7 @@
                     <div id="watchlist-body"><p class="empty-state">No watchlist items yet</p></div>
                 </div>
             </div>
-            <div id="trap-adx-tab" class="left-tab-content">
+            <div id="trap-adx-tab" class="tab-content">
                 <div class="section-panel">
                     <div class="section-header">
                         <span>⚡ 5-Minute Trap-ADX & 45M Stock Breakout Radar</span>
@@ -2994,14 +3010,7 @@
                     <div id="trap-adx-body"><p class="empty-state">Loading 5M Trap-ADX & Stock 45M Breakout radar...</p></div>
                 </div>
             </div>
-        </div>
-        <div class="reports-right">
-            <div class="tab-bar">
-                <button class="tab-btn active" onclick="switchTab('log-tab')">Live Log</button>
-                <button class="tab-btn" onclick="switchTab('journal-tab')">Trade Journal</button>
-                <button class="tab-btn" onclick="switchTab('analyzer-tab')">🎯 Negation Analyzer</button>
-            </div>
-            <div id="log-tab" class="tab-content active">
+            <div id="log-tab" class="tab-content">
                 <div class="section-panel">
                     <div class="section-header"><span>Live Log</span>
                         <div style="display:flex;align-items:center;gap:6px;">
@@ -3076,7 +3085,6 @@
                     </div>
                 </div>
             </div>
-        </div>
     </div>
 
     <!-- Interactive TradingView Chart Modal -->
