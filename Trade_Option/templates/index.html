@@ -41,7 +41,10 @@
             if (tabId === 'trap-adx-tab' && typeof renderTrapAdxTab === 'function') renderTrapAdxTab();
             if (tabId === 'log-tab') {
                 const logBox = document.getElementById('log-body');
-                if (logBox) logBox.scrollTop = logBox.scrollHeight;
+                if (logBox) {
+                    logBox.scrollTop = logBox.scrollHeight;
+                    requestAnimationFrame(() => { logBox.scrollTop = logBox.scrollHeight; });
+                }
             }
         }
 
@@ -2607,7 +2610,7 @@
         .tab-bar::-webkit-scrollbar, .left-tab-bar::-webkit-scrollbar { height: 4px; }
         .tab-bar::-webkit-scrollbar-track, .left-tab-bar::-webkit-scrollbar-track { background: #161b22; }
         .tab-bar::-webkit-scrollbar-thumb, .left-tab-bar::-webkit-scrollbar-thumb { background: #30363d; border-radius: 2px; }
-        .tab-btn, .left-tab-btn { background: transparent; border: none; color: #8b949e; padding: 10px 16px; cursor: pointer; font-size: 12px; font-weight: 600; border-bottom: 2px solid transparent; flex: 1; min-width: max-content; text-align: center; transition: background 0.15s, color 0.15s; }
+        .tab-btn, .left-tab-btn { background: transparent; border: none; outline: none; color: #8b949e; padding: 10px 16px; cursor: pointer; font-size: 12px; font-weight: 600; border-bottom: 2px solid transparent; flex: 1; min-width: max-content; white-space: nowrap; text-align: center; transition: background 0.15s, color 0.15s; }
         .tab-btn:hover, .left-tab-btn:hover { color: #c9d1d9; background: #21262d; }
         .tab-btn.active, .left-tab-btn.active { color: #58a6ff; border-bottom-color: #58a6ff; background: #161b22; font-weight: 700; }
         .tab-content, .left-tab-content { display: none; width: 100%; }
