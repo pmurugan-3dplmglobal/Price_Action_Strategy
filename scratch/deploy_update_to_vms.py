@@ -33,9 +33,11 @@ if os.path.exists(p):
         d = json.load(f)
     d.setdefault('index', {})['execution_mode'] = 'DEBIT_SPREAD'
     d.setdefault('index', {})['max_concurrent_positions'] = 1
+    d.setdefault('index', {})['timeframe_entry'] = '15minute'
+    d.setdefault('index', {})['timeframe_anchor'] = '60minute'
     with open(p, 'w', encoding='utf-8') as f:
         json.dump(d, f, indent=2)
-    print('Updated program_config.json execution_mode to DEBIT_SPREAD and max_concurrent_positions to 1')
+    print('Updated program_config.json execution_mode to DEBIT_SPREAD, max_pos 1, TF 15m/60m')
 else:
     print('No local program_config.json found')
 "
