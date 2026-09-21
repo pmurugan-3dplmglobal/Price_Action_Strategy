@@ -890,6 +890,11 @@ def execute_highest_rr_trade(kite, staged):
                     qty = lot_sz * pos_size
                     if qty <= 0:
                         logging.warning(f"[ZERO_QTY_GUARD] Skipping order placement for {sym} ({contract}): computed quantity {qty} <= 0")
+                        with position_lock:
+                            ACTIVE_POSITIONS.pop(sym, None)
+                        if pos.get("trade_id"):
+                            trade_db.update_trade(pos["trade_id"], {"status": "FAILED", "exit_reason": "ORDER_PLACEMENT_FAILED"})
+                        save_state()
                         continue
                     qty_slices = slice_quantity_for_freeze(contract, qty)
                     placed_oids = []
@@ -948,6 +953,12 @@ def execute_highest_rr_trade(kite, staged):
                                    f"Order: {oid}, Qty: {qty}, {opt_type}@{target_strike} @ Benchmark Limit={limit_price} ({c_badge} {c_label})", entry=limit_price, sl=best["current_sl"], target=best["t1"], rr=avg_rr,
                                    event_time=best.get("entry_time"))
                 except Exception as e:
+                    for o_to_cancel in placed_oids:
+                        try:
+                            kite.cancel_order(variety=kite.VARIETY_REGULAR, order_id=o_to_cancel)
+                            logging.warning(f"[PARTIAL_SLICE_ROLLBACK] Cancelled placed slice {o_to_cancel} due to order failure: {e}")
+                        except Exception as c_err:
+                            logging.debug(f"Could not cancel slice {o_to_cancel}: {c_err}")
                     log_to_journal(sym, best["pattern"], TIMEFRAME_ENTRY, "BUY", "FAILED", str(e),
                                    entry=limit_price, sl=best["current_sl"], target=best["t1"],
                                    event_time=best.get("entry_time"))

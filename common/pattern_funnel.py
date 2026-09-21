@@ -301,7 +301,7 @@ def _matches_evict(x, item_or_key):
     if target == x_4part:
         return True
 
-    parts = target.split("|")
+    parts = [p.strip() for p in target.split("|")]
     if len(parts) == 4:
         p_sym, p_pat, p_side, p_strk = parts
         if p_strk.endswith(".0"):
@@ -309,6 +309,15 @@ def _matches_evict(x, item_or_key):
         if p_sym == x_sym and p_side == x_side:
             if not p_strk or not x_strk or p_strk == x_strk:
                 return True
+            try:
+                if float(p_strk) == float(x_strk):
+                    return True
+            except (ValueError, TypeError):
+                pass
+    elif len(parts) == 2:
+        p_sym, p_side = parts
+        if p_sym == x_sym and p_side == x_side:
+            return True
     return False
 
 def evict_item(engine_name, item_or_key):

@@ -333,12 +333,17 @@ def execute_index_entry(kite, pos):
                     with position_lock:
                         ACTIVE_POSITIONS.pop(sym, None)
                 if pos.get("trade_id"):
-                    trade_db.update_trade(pos["trade_id"], {"status": "FAILED", "updated_at": dt.now().strftime("%Y-%m-%d %H:%M:%S")})
+                    trade_db.update_trade(pos["trade_id"], {"status": "FAILED", "exit_reason": "ORDER_PLACEMENT_FAILED", "updated_at": dt.now().strftime("%Y-%m-%d %H:%M:%S")})
                 return False
 
         return True
     except Exception as e:
         logging.error(f"Entry failed for {pos['contract']}: {e}")
+        if sym and sym in ACTIVE_POSITIONS:
+            with position_lock:
+                ACTIVE_POSITIONS.pop(sym, None)
+        if pos.get("trade_id"):
+            trade_db.update_trade(pos["trade_id"], {"status": "FAILED", "exit_reason": "ORDER_PLACEMENT_FAILED", "updated_at": dt.now().strftime("%Y-%m-%d %H:%M:%S")})
         return False
 
 def simulate_trade_outcome(kite, trade, target_date):
@@ -527,36 +532,32 @@ def execute_highest_rr_trade(kite, staged):
                 if live_ok:
                     with position_lock:
                         ACTIVE_POSITIONS.pop(best["symbol"], None)
-                continue
-            if ok:
-                profit = round((best.get("t3") or best.get("t1") or 0) - best["entry_spot"], 2)
-                rr_best = best.get("rr", "")
-                if live_ok:
-                    log_to_journal(best["symbol"], best["pattern"], best["timeframe"],
-                                   "BUY_" + best["side"], "SUCCESS", f"Contract: {best['contract']}, Qty: {best['position_size']}",
-                                   entry=best["entry_spot"], sl=best["current_sl"], target=best.get("t1", ""), rr=rr_best,
-                                   event_time=best.get("entry_time"))
-                else:
-                    log_to_journal(best["symbol"], best["pattern"], best["timeframe"],
-                                   "DRY_" + best["side"], "SUCCESS", f"Contract: {best['contract']}, Size: {best['position_size']}",
-                                   entry=best["entry_spot"], sl=best["current_sl"], target=best.get("t1", ""), rr=rr_best,
-                                   event_time=best.get("entry_time"))
-                    sim = simulate_trade_outcome(kite, best, BACKTEST_DATE)
-                    if sim["result"]:
-                        log_to_journal(best["symbol"], best["pattern"], best["timeframe"],
-                                       sim["result"], "COMPLETED", sim["detail"],
-                                       entry=best["entry_spot"], sl=best["current_sl"], target=best.get("t1", ""), rr=rr_best,
-                                       event_time=sim.get("exit_time") or sim.get("entry_time"))
-                        logging.info(f"[BACKTEST] Trade outcome: {sim['result']} | {sim['detail']}")
-                logging.info(f"EXECUTED best cycle trade: {best['symbol']} {best['side']} | {best['pattern']} | max-profit={profit}")
-                break
-            else:
-                with position_lock:
-                    ACTIVE_POSITIONS.pop(best["symbol"], None)
                 if pos.get("trade_id"):
-                    trade_db.update_trade(pos["trade_id"], {"status": "FAILED", "updated_at": dt.now().strftime("%Y-%m-%d %H:%M:%S")})
-                logging.warning(f"Order placement failed for {best['contract']}. Locked pattern {key} to prevent rate-limit spam loops.")
+                    trade_db.update_trade(pos["trade_id"], {"status": "FAILED", "exit_reason": "ORDER_PLACEMENT_FAILED", "updated_at": dt.now().strftime("%Y-%m-%d %H:%M:%S")})
+                logging.warning(f"Order placement failed for {best.get('contract')}. Locked pattern {key} to prevent rate-limit spam loops.")
                 continue
+
+            profit = round((best.get("t3") or best.get("t1") or 0) - best["entry_spot"], 2)
+            rr_best = best.get("rr", "")
+            if live_ok:
+                log_to_journal(best["symbol"], best["pattern"], best["timeframe"],
+                               "BUY_" + best["side"], "SUCCESS", f"Contract: {best['contract']}, Qty: {best['position_size']}",
+                               entry=best["entry_spot"], sl=best["current_sl"], target=best.get("t1", ""), rr=rr_best,
+                               event_time=best.get("entry_time"))
+            else:
+                log_to_journal(best["symbol"], best["pattern"], best["timeframe"],
+                               "DRY_" + best["side"], "SUCCESS", f"Contract: {best['contract']}, Size: {best['position_size']}",
+                               entry=best["entry_spot"], sl=best["current_sl"], target=best.get("t1", ""), rr=rr_best,
+                               event_time=best.get("entry_time"))
+                sim = simulate_trade_outcome(kite, best, BACKTEST_DATE)
+                if sim["result"]:
+                    log_to_journal(best["symbol"], best["pattern"], best["timeframe"],
+                                   sim["result"], "COMPLETED", sim["detail"],
+                                   entry=best["entry_spot"], sl=best["current_sl"], target=best.get("t1", ""), rr=rr_best,
+                                   event_time=sim.get("exit_time") or sim.get("entry_time"))
+                    logging.info(f"[BACKTEST] Trade outcome: {sim['result']} | {sim['detail']}")
+            logging.info(f"EXECUTED best cycle trade: {best['symbol']} {best['side']} | {best['pattern']} | max-profit={profit}")
+            break
         else:
             cp = best["entry_spot"]
             contract = best.get("contract", "")

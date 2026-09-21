@@ -32,6 +32,9 @@ class TestE2EIntegrationFlowAudit(unittest.TestCase):
             "spot_sl": 1750.0,
             "dte": 4,
             "spot_entry": 1780.0,
+            "spot_t1": 1850.0,
+            "strike": 1800,
+            "strike_step": 20,
             "spot_token": 12345,
             "spot_confluence": True,
             "atr_ratio": 0.55
@@ -46,6 +49,9 @@ class TestE2EIntegrationFlowAudit(unittest.TestCase):
         self.assertEqual(item.get("spot_sl"), 1750.0)
         self.assertEqual(item.get("dte"), 4)
         self.assertEqual(item.get("spot_entry"), 1780.0)
+        self.assertEqual(item.get("spot_t1"), 1850.0)
+        self.assertEqual(item.get("strike"), 1800)
+        self.assertEqual(item.get("strike_step"), 20)
         self.assertEqual(item.get("spot_token"), 12345)
 
     def test_03_quote_first_fast_skips(self):
@@ -101,21 +107,67 @@ class TestE2EIntegrationFlowAudit(unittest.TestCase):
         self.assertTrue(pattern_funnel._matches_evict(item, item["contract"]))
         self.assertTrue(pattern_funnel._matches_evict(item, item["symbol"]))
         self.assertTrue(pattern_funnel._matches_evict(item, f"{item['symbol']}|{item['side']}"))
+        # Float strike representations
+        self.assertTrue(pattern_funnel._matches_evict(item, f"{item['symbol']}|{item['pattern']}|{item['side']}|1800.0"))
+        self.assertTrue(pattern_funnel._matches_evict(item, f"{item['symbol']}|{item['pattern']}|{item['side']}|1800.00"))
+        # Whitespace tolerance around pipes
+        self.assertTrue(pattern_funnel._matches_evict(item, f" {item['symbol']} | {item['pattern']} | {item['side']} | {item['strike']} "))
+        self.assertTrue(pattern_funnel._matches_evict(item, f" {item['symbol']} | {item['side']} "))
+        # End-to-end funnel state persistence & eviction
+        t_eng = f"audit_funnel_{int(time.time() * 1000)}"
+        pattern_funnel.promote_item(t_eng, item, pattern_funnel.STAGE_A)
+        s_before = pattern_funnel.get_funnel_summary(t_eng)
+        self.assertEqual(len(s_before["category_a"]), 1)
+        pattern_funnel.evict_item(t_eng, key_4)
+        s_after = pattern_funnel.get_funnel_summary(t_eng)
+        self.assertEqual(len(s_after["category_a"]), 0)
+        pattern_funnel.clear_funnel(t_eng)
 
     def test_10_latent_order_failure_resurrection(self):
+        # 1. Stock engine order failure transition
         sym = f"FAIL_SYM_{int(time.time() * 1000)}"
         pos = {"contract": f"{sym}26SEP100CE", "entry_spot": 10.0, "current_sl": 8.0, "t1": 15.0, "status": "ACTIVE"}
         tid, created = trade_db.create_trade("nifty50", sym, pos)
         self.assertTrue(created)
         pos["trade_id"] = tid
-        # Simulate order failure handling: remove from in-memory positions and mark FAILED in SQLite
         mem = {sym: pos}
         mem.pop(sym, None)
         if pos.get("trade_id"):
             trade_db.update_trade(pos["trade_id"], {"status": "FAILED", "exit_reason": "ORDER_PLACEMENT_FAILED"})
         db_active = trade_db.get_active_trades("nifty50")
         self.assertNotIn(sym, [t.get("symbol") for t in db_active])
+        rec = trade_db.get_trade(tid)
+        self.assertEqual(rec["status"], "FAILED")
+        self.assertEqual(rec["exit_reason"], "ORDER_PLACEMENT_FAILED")
         trade_db.remove_trades([tid])
+
+        # 2. Index engine order failure transition
+        idx_sym = f"IDX_FAIL_{int(time.time() * 1000)}"
+        idx_pos = {"contract": f"{idx_sym}26SEP24500CE", "entry_spot": 100.0, "current_sl": 80.0, "t1": 150.0, "status": "ACTIVE"}
+        idx_tid, idx_created = trade_db.create_trade("index", idx_sym, idx_pos)
+        self.assertTrue(idx_created)
+        idx_pos["trade_id"] = idx_tid
+        trade_db.update_trade(idx_pos["trade_id"], {"status": "FAILED", "exit_reason": "ORDER_PLACEMENT_FAILED"})
+        idx_active = trade_db.get_active_trades("index")
+        self.assertNotIn(idx_sym, [t.get("symbol") for t in idx_active])
+        rec_idx = trade_db.get_trade(idx_tid)
+        self.assertEqual(rec_idx["status"], "FAILED")
+        self.assertEqual(rec_idx["exit_reason"], "ORDER_PLACEMENT_FAILED")
+        trade_db.remove_trades([idx_tid])
+
+        # 3. Zero quantity guard: position popped and marked FAILED
+        zq_sym = f"ZQ_FAIL_{int(time.time() * 1000)}"
+        zq_pos = {"contract": f"{zq_sym}26SEP100CE", "entry_spot": 10.0, "current_sl": 8.0, "t1": 15.0, "status": "ACTIVE"}
+        zq_tid, zq_created = trade_db.create_trade("nifty50", zq_sym, zq_pos)
+        self.assertTrue(zq_created)
+        zq_pos["trade_id"] = zq_tid
+        lot_sz = 1; pos_sz = 0; computed_qty = lot_sz * pos_sz
+        if computed_qty <= 0:
+            if zq_pos.get("trade_id"):
+                trade_db.update_trade(zq_pos["trade_id"], {"status": "FAILED", "exit_reason": "ORDER_PLACEMENT_FAILED"})
+        zq_active = trade_db.get_active_trades("nifty50")
+        self.assertNotIn(zq_sym, [t.get("symbol") for t in zq_active])
+        trade_db.remove_trades([zq_tid])
 
 if __name__ == "__main__":
     unittest.main()

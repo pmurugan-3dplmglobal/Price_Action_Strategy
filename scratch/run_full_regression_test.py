@@ -550,6 +550,18 @@ try:
     summ = pattern_funnel.get_funnel_summary(t_eng)
     assert len(summ["category_a_plus"]) == 0, "Must evict cleanly from all categories"
 
+    # 4b. Evict by 4-part key representation with float strike
+    pattern_funnel.promote_item(t_eng, item, pattern_funnel.STAGE_A)
+    assert len(pattern_funnel.get_funnel_summary(t_eng)["category_a"]) == 1
+    pattern_funnel.evict_item(t_eng, f"{item['symbol']}|{item['pattern']}|{item['side']}|100.0")
+    assert len(pattern_funnel.get_funnel_summary(t_eng)["category_a"]) == 0, "Must evict by 4-part key with float strike"
+
+    # 4c. Evict by contract string
+    pattern_funnel.promote_item(t_eng, item, pattern_funnel.STAGE_B)
+    assert len(pattern_funnel.get_funnel_summary(t_eng)["category_b"]) == 1
+    pattern_funnel.evict_item(t_eng, item["contract"])
+    assert len(pattern_funnel.get_funnel_summary(t_eng)["category_b"]) == 0, "Must evict by contract"
+
     # 5. Verify Automated Purge on 80% T1 Hit and TF Closing SL Policy
     item_run = {
         "symbol": "RUNSYM", "contract": "RUNSYM26SEP200CE", "side": "CE",

@@ -22,24 +22,34 @@ issues:
     3. When candidates were serialized to scan_display.json via display_writer.build_trade, spot-anchored context fields (spot_sl, spot_token, spot_entry, and dte) were omitted, causing fast radar ingestion to lose spot SL protection and DTE context.
   root_cause: |
     1. common/pattern_funnel.py _matches_evict lacked logic to match 4-part key representations f"{sym}|{pattern}|{side}|{strike}" against funnel items, and stock_options_trade_engine did not explicitly call evict_item with contract.
-    2. stock_options_trade_engine order failure exception handlers omitted updating trade_db with status="FAILED", leaving ghost records with status="ACTIVE" in SQLite.
-    3. common/display_writer.py build_trade dictionary constructor omitted spot_sl, spot_token, spot_entry, and dte fields.
+    2. stock_options_trade_engine and index_options_trade_engine order failure exception handlers omitted updating trade_db with status="FAILED", leaving ghost records with status="ACTIVE" in SQLite and an unreachable dead else branch in index engine.
+    3. common/display_writer.py build_trade dictionary constructor omitted spot_sl, spot_token, spot_entry, spot_t1, strike, strike_step, and dte fields.
   affected_files:
   - common/pattern_funnel.py
-  - Trade_Option/stock_options_trade_engine.py
   - common/display_writer.py
+  - Trade_Option/stock_options_trade_engine.py
+  - Trade_Option/index_options_trade_engine.py
   - scratch/test_e2e_integration_flow_audit.py
+  - scratch/run_full_regression_test.py
   fix_applied: |
-    1. common/pattern_funnel.py: Updated _matches_evict to parse and compare 4-part key f"{sym}|{pattern}|{side}|{strike}" against funnel items as well as matching symbol and side.
+    1. common/pattern_funnel.py:
+       - Updated _matches_evict to parse and compare 4-part key f"{sym}|{pattern}|{side}|{strike}" against funnel items as well as matching symbol and side.
+       - Added whitespace tolerance around pipe delimiters and numeric float equality for strike comparisons (e.g. 1800 vs 1800.0/1800.00).
     2. Trade_Option/stock_options_trade_engine.py:
        - Added explicit pattern_funnel.evict_item("nifty50", contract) call alongside key eviction.
        - In both order placement failure and Leg 2 failure rollback handlers, added trade_db.update_trade(pos["trade_id"], {"status": "FAILED", "exit_reason": "ORDER_PLACEMENT_FAILED"}), completely preventing FAST_DB_SYNC ghost trade resurrection.
-    3. common/display_writer.py: In build_trade(), included spot_sl, spot_token (or index_token), spot_entry, and dte in output dictionary.
-    4. scratch/test_e2e_integration_flow_audit.py: Updated test_02, test_09, and test_10 to verify serialization preservation, 4-part key eviction, and ghost resurrection prevention.
+       - Added zero-quantity guard pop and DB FAILED update to eliminate 0-qty active ghost positions.
+       - Added resting slice cancellation rollback in order placement exception handler to prevent orphaned limit orders on exchange.
+    3. Trade_Option/index_options_trade_engine.py:
+       - Resolved ghost trade resurrection in execute_highest_rr_trade and execute_index_entry: ensured failed order placements transition SQLite record to status="FAILED" with exit_reason="ORDER_PLACEMENT_FAILED".
+       - Eliminated unreachable dead else block after execute_index_entry call.
+    4. common/display_writer.py: In build_trade(), included spot_sl, spot_token (or index_token), spot_entry, spot_t1, strike, strike_step, and dte in output dictionary.
+    5. scratch/test_e2e_integration_flow_audit.py: Updated test_02, test_09, and test_10 to verify full serialization preservation, 4-part float/whitespace key eviction, end-to-end funnel state eviction, and stock + index ghost resurrection prevention.
+    6. scratch/run_full_regression_test.py: Enhanced TEST 20 to assert 4-part key and contract eviction invariants.
   verification: |
     - Ran python scratch/test_e2e_integration_flow_audit.py: 10/10 passed with 100% success.
     - Ran python scratch/run_full_regression_test.py: 26/26 test suites passed with zero regressions.
-    - AST syntax checks verified across all modified files (common/pattern_funnel.py, Trade_Option/stock_options_trade_engine.py, common/display_writer.py).
+    - AST syntax checks verified across all modified files (common/pattern_funnel.py, common/display_writer.py, Trade_Option/stock_options_trade_engine.py, Trade_Option/index_options_trade_engine.py, scratch/test_e2e_integration_flow_audit.py, scratch/run_full_regression_test.py).
   status: RESOLVED
   resolution_date: '2026-09-21'
 
