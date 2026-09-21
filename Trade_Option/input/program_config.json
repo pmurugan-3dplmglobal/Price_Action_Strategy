@@ -27,8 +27,8 @@
     "scan_interval": 300
   },
   "index": {
-    "timeframe_entry": "3minute",
-    "timeframe_anchor": "15minute",
+    "timeframe_entry": "15minute",
+    "timeframe_anchor": "60minute",
     "capital": 100000,
     "strike_range": 1,
     "enable_swing_filter": true,

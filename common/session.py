@@ -137,34 +137,89 @@ def get_weekly_expiry(target_weekday=1):
     return (now + timedelta(days=days_ahead)).date()
 
 
-class TokenBucketRateLimiter:
-    """Thread-safe Token Bucket Rate Limiter to comply with Zerodha Kite API rate limit (3 req/sec)."""
-    def __init__(self, rate=2.8, capacity=3.0):
-        self.rate = rate          # Tokens added per second (e.g. 2.8 req/sec)
-        self.capacity = capacity  # Maximum bucket capacity
-        self.tokens = capacity
-        self.last_update = time.time()
+import sqlite3
+
+
+class MultiProcessTokenBucketRateLimiter:
+    """Multi-process and thread-safe Token Bucket Rate Limiter to strictly comply with Zerodha Kite API rate limit (3 req/sec aggregate across processes)."""
+    def __init__(self, db_path=None, rate=2.8, capacity=3.0):
+        self.db_path = db_path or getattr(paths, "KITE_RATE_LIMITER_DB", os.path.join(paths.MONITOR_DIR, "kite_rate_limiter.sqlite3"))
+        self.rate = rate
+        self.capacity = capacity
         self.lock = threading.Lock()
+        self.mem_tokens = capacity
+        self.mem_last_update = time.time()
+        self._init_db()
+
+    def _init_db(self):
+        try:
+            os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+            conn = sqlite3.connect(self.db_path, timeout=10.0)
+            try:
+                conn.execute("PRAGMA journal_mode=WAL;")
+                conn.execute("PRAGMA synchronous=NORMAL;")
+                conn.execute("CREATE TABLE IF NOT EXISTS rate_limiter (id INTEGER PRIMARY KEY, last_update REAL, tokens REAL);")
+                conn.execute("INSERT OR IGNORE INTO rate_limiter (id, last_update, tokens) VALUES (1, ?, ?);", (time.time(), self.capacity))
+                conn.commit()
+            finally:
+                conn.close()
+        except Exception as e:
+            logging.debug(f"[RATE_LIMITER] DB init error (fallback to memory): {e}")
 
     def acquire(self, tokens=1, priority=False):
         with self.lock:
             while True:
                 now = time.time()
-                elapsed = now - self.last_update
-                self.last_update = now
-                self.tokens = min(self.capacity, self.tokens + elapsed * self.rate)
-                
-                # Priority calls (Fast Radar) can immediately borrow down to -1.0 token to avoid delay
-                min_threshold = -1.0 if priority else 0.0
-                if (self.tokens - tokens) >= min_threshold or self.tokens >= tokens:
-                    self.tokens -= tokens
-                    return
-                # Need to wait
-                needed = tokens - self.tokens
-                wait_time = needed / self.rate
-                time.sleep(max(0.005, wait_time))
+                wait_time = 0.05
+                db_success = False
+                try:
+                    conn = sqlite3.connect(self.db_path, timeout=5.0)
+                    conn.isolation_level = None
+                    try:
+                        conn.execute("BEGIN IMMEDIATE")
+                        cur = conn.cursor()
+                        cur.execute("SELECT last_update, tokens FROM rate_limiter WHERE id=1")
+                        row = cur.fetchone()
+                        if not row:
+                            cur.execute("INSERT OR IGNORE INTO rate_limiter (id, last_update, tokens) VALUES (1, ?, ?)", (now, self.capacity))
+                            row = (now, self.capacity)
+                        last_time, curr_tokens = float(row[0]), float(row[1])
+                        elapsed = max(0.0, now - last_time)
+                        new_tokens = min(self.capacity, curr_tokens + elapsed * self.rate)
 
-_GLOBAL_KITE_RATE_LIMITER = TokenBucketRateLimiter(rate=2.8, capacity=3.0)
+                        min_threshold = -1.0 if priority else 0.0
+                        if (new_tokens - tokens) >= min_threshold or new_tokens >= tokens:
+                            new_tokens -= tokens
+                            cur.execute("UPDATE rate_limiter SET last_update=?, tokens=? WHERE id=1", (now, new_tokens))
+                            conn.execute("COMMIT")
+                            return
+                        else:
+                            needed = tokens - new_tokens
+                            wait_time = max(0.01, needed / self.rate)
+                            cur.execute("UPDATE rate_limiter SET last_update=?, tokens=? WHERE id=1", (now, new_tokens))
+                            conn.execute("COMMIT")
+                            db_success = True
+                    finally:
+                        conn.close()
+                except Exception as err:
+                    logging.debug(f"[RATE_LIMITER] Shared DB lock transient error: {err}")
+                    db_success = False
+
+                if not db_success:
+                    elapsed = max(0.0, now - self.mem_last_update)
+                    self.mem_last_update = now
+                    self.mem_tokens = min(self.capacity, self.mem_tokens + elapsed * self.rate)
+                    min_threshold = -1.0 if priority else 0.0
+                    if (self.mem_tokens - tokens) >= min_threshold or self.mem_tokens >= tokens:
+                        self.mem_tokens -= tokens
+                        return
+                    wait_time = max(0.01, (tokens - self.mem_tokens) / self.rate)
+
+                time.sleep(min(wait_time, 0.35))
+
+
+TokenBucketRateLimiter = MultiProcessTokenBucketRateLimiter
+_GLOBAL_KITE_RATE_LIMITER = MultiProcessTokenBucketRateLimiter(rate=2.8, capacity=3.0)
 
 
 def safe_kite_call(func, *args, retries=3, delay=0.8, priority=False, **kwargs):

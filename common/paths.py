@@ -57,6 +57,7 @@ SCANNED_TRADES_DB = monitor_file("scanned_trades_db.json")
 CYCLE_STORE_FILE = monitor_file("cycle_trades.json")
 EXECUTED_STORE_FILE = monitor_file("executed_patterns.json")
 PATTERN_FUNNEL_FILE = monitor_file("pattern_funnel.json")
+KITE_RATE_LIMITER_DB = monitor_file("kite_rate_limiter.sqlite3")
 
 # Scan display files (what the dashboards read)
 SCAN_DISPLAY_FILE = monitor_file("scan_display.json")

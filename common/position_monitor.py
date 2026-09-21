@@ -468,6 +468,7 @@ def close_stock_position(kite, pos, live_market=True, product=None, qty_override
 EXECUTED_EXITS_FILE = paths.EXECUTED_EXITS_FILE
 EXECUTED_EXITS = {}
 _EXECUTED_EXITS_MTIME = 0
+_CLOSED_CONTRACTS_TODAY = set()
 
 def load_executed_exits():
     """Load executed exits from disk, using mtime to skip re-reads when file hasn't changed."""
@@ -484,8 +485,10 @@ def load_executed_exits():
         EXECUTED_EXITS = {}
 
 def save_executed_exit(contract, order_id, details=None):
-    global EXECUTED_EXITS
+    global EXECUTED_EXITS, _CLOSED_CONTRACTS_TODAY
     load_executed_exits()
+    if contract:
+        _CLOSED_CONTRACTS_TODAY.add(str(contract).strip().upper())
     details = dict(details) if details else {}
     if str(order_id) == "REJECTED_ERROR":
         prev_retries = int(EXECUTED_EXITS.get(contract, {}).get("details", {}).get("retry_count", 0))
@@ -507,8 +510,10 @@ def is_contract_exit_executed(contract):
     return contract in EXECUTED_EXITS
 
 def clear_executed_exit(contract):
-    global EXECUTED_EXITS
+    global EXECUTED_EXITS, _CLOSED_CONTRACTS_TODAY
     load_executed_exits()
+    if contract:
+        _CLOSED_CONTRACTS_TODAY.discard(str(contract).strip().upper())
     if contract in EXECUTED_EXITS:
         del EXECUTED_EXITS[contract]
         try:
@@ -2468,10 +2473,15 @@ def monitor_all_active_positions(kite, live=True):
     # 4. Check for unlinked live broker positions on Kite
     try:
         pos_data = kite.positions()
+        closed_today = trade_db.get_contracts_closed_today()
         net_pos = [p for p in pos_data.get("net", []) if p.get("tradingsymbol") and int(p.get("quantity", 0)) != 0]
         for p in net_pos:
             tsym = p.get("tradingsymbol")
             if not tsym:
+                continue
+            tsym_c = str(tsym).strip().upper()
+            if tsym_c in closed_today or tsym_c in _CLOSED_CONTRACTS_TODAY or trade_db.is_contract_closed_today(tsym):
+                logging.debug(f"[STANDALONE_MONITOR] Skipping broker recovery for {tsym}: contract already closed today.")
                 continue
             # If not in any active group, auto-stage into monitor dict
             if tsym not in index_positions and tsym not in stock_options_positions and tsym not in stock_cash_positions:
@@ -2625,5 +2635,17 @@ def monitor_all_active_positions(kite, live=True):
 
     return monitored_count
 
-
-
+def clamp_lpp_buy_price(limit_price, ltp, lpp_factor=1.08):
+    """
+    Kite Limit Price Protection (LPP) Safety Clamp:
+    Prevents broker RMS order rejection ('order price is higher than current limit price protection').
+    Clamps marketable limit buy orders to min(limit_price, round(ltp * lpp_factor, 1)).
+    """
+    if limit_price is None or float(limit_price) <= 0:
+        return limit_price
+    lp = float(limit_price)
+    if ltp is not None and float(ltp) > 0:
+        lpp_ceiling = round(float(ltp) * float(lpp_factor), 1)
+        if lp > lpp_ceiling:
+            return lpp_ceiling
+    return lp

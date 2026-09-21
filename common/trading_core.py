@@ -258,3 +258,20 @@ from rvol_calculator import (
     get_market_elapsed_minutes
 )
 
+
+def clamp_lpp_buy_price(limit_price, ltp, lpp_factor=1.08):
+    """
+    Kite Limit Price Protection (LPP) Safety Clamp:
+    Prevents broker RMS order rejection ('order price is higher than current limit price protection').
+    Clamps marketable limit buy orders to min(limit_price, round(ltp * lpp_factor, 1)).
+    """
+    if limit_price is None or float(limit_price) <= 0:
+        return limit_price
+    lp = float(limit_price)
+    if ltp is not None and float(ltp) > 0:
+        lpp_ceiling = round(float(ltp) * float(lpp_factor), 1)
+        if lp > lpp_ceiling:
+            return lpp_ceiling
+    return lp
+
+

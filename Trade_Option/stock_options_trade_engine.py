@@ -612,13 +612,32 @@ def execute_highest_rr_trade(kite, staged):
                     nfo_df = _get_nfo_cache()
                     cand_side = str(best.get("side", "CE")).upper()
                     cand_dir = "BEAR" if cand_side == "PE" else "BULL"
+                    # Pass real underlying spot & spot_t1 into resolve_option_spread()
+                    real_spot = float(best.get("spot_entry") or 0.0)
+                    if real_spot <= 0 and kite:
+                        try:
+                            reg_entry = STOCK_REGISTRY.get(sym, {})
+                            spot_ts = reg_entry.get("tradingsymbol", sym)
+                            q_spot = safe_kite_call(kite.quote, [f"NSE:{spot_ts}"])
+                            real_spot = float(q_spot.get(f"NSE:{spot_ts}", {}).get("last_price", 0.0))
+                        except Exception as q_err:
+                            logging.debug(f"Underlying spot quote error for {sym}: {q_err}")
+                    if real_spot <= 0:
+                        real_spot = float(best.get("strike") or cp)
+
+                    real_spot_t1 = best.get("spot_t1")
+                    if not real_spot_t1 or float(real_spot_t1) <= 0:
+                        real_spot_t1 = None
+                    else:
+                        real_spot_t1 = float(real_spot_t1)
+
                     spread_info = resolve_option_spread(
                         nfo_instruments=nfo_df,
                         base_symbol=sym,
-                        spot_price=cp,
+                        spot_price=real_spot,
                         step_size=strike_step,
                         direction=cand_dir,
-                        target_price=best.get("t1"),
+                        target_price=real_spot_t1,
                         side=cand_side
                     )
                     if spread_info:
@@ -739,6 +758,13 @@ def execute_highest_rr_trade(kite, staged):
                     if mid_price > 0 and mid_price < limit_price:
                         logging.info(f"[PEGGED_LIMIT_ROUTING] {contract}: Pegging limit at Mid-Price {mid_price:.2f} (Bid={best_bid:.2f}, Ask={best_ask:.2f}, Spread={depth_details.get('spread_pct'):.2f}%) instead of marketable {limit_price:.2f}")
                         limit_price = mid_price
+
+                # Kite Limit Price Protection (LPP) Safety Clamp:
+                from position_monitor import clamp_lpp_buy_price
+                clamped_limit = clamp_lpp_buy_price(limit_price, best_ask if best_ask > 0 else (best_bid if best_bid > 0 else cp))
+                if clamped_limit < limit_price:
+                    logging.info(f"[LPP_CLAMP] Clamped limit buy price for {contract} from {limit_price:.2f} to {clamped_limit:.2f} (LTP/Ask={best_ask or cp:.2f})")
+                    limit_price = clamped_limit
 
                 with position_lock:
                     if sym in ACTIVE_POSITIONS:
@@ -944,6 +970,32 @@ def run_fast_radar_check(kite):
 
         radar_pool.sort(key=_radar_priority, reverse=True)
 
+        # ── Item 8: Radar Quote-First Polling ──
+        # Query bulk kite.quote() for candidate LTPs first; only fetch historical candle
+        # data when LTP is near benchmark (LTP >= Benchmark * 0.995), cutting scan cycle latency.
+        radar_quotes = {}
+        quote_instruments = []
+        for itm in radar_pool:
+            c_name = itm.get("contract")
+            if c_name:
+                c_str = str(c_name).upper()
+                exch_prefix = "BFO" if ("SENSEX" in c_str or "BSE" in c_str) else "NFO"
+                quote_instruments.append(f"{exch_prefix}:{c_name}")
+            else:
+                s_name = itm.get("symbol")
+                if s_name:
+                    quote_instruments.append(f"NSE:{s_name}")
+
+        if quote_instruments and kite:
+            for ch_start in range(0, len(quote_instruments), 100):
+                ch = quote_instruments[ch_start : ch_start + 100]
+                try:
+                    q_res = safe_kite_call(kite.quote, ch, priority=True)
+                    if q_res and isinstance(q_res, dict):
+                        radar_quotes.update(q_res)
+                except Exception as qe:
+                    logging.debug(f"Radar bulk quote fetch error: {qe}")
+
         triggered = []
         for item in radar_pool:
             sym = item.get("symbol")
@@ -957,6 +1009,35 @@ def run_fast_radar_check(kite):
                 logging.info(f"[RADAR EVICT: STALE PRIOR-DAY ITEM] {sym} ({item.get('contract')}) setup date {item_date} is prior to {today_str}. Evicting cleanly.")
                 pattern_funnel.evict_item("nifty50", item)
                 continue
+
+            c_name = item.get("contract")
+            c_str = str(c_name).upper() if c_name else ""
+            exch_prefix = "BFO" if ("SENSEX" in c_str or "BSE" in c_str) else "NFO"
+            q_k = f"{exch_prefix}:{c_name}" if c_name else f"NSE:{sym}"
+            q_info = radar_quotes.get(q_k, {})
+            live_ltp = float(q_info.get("last_price") or 0.0)
+            bm = float(item.get("benchmark") or 0.0)
+            sl = float(item.get("current_sl") or 0.0)
+            t1 = float(item.get("t1") or 0.0)
+
+            # Quote-First Trigger Polling:
+            # If live LTP is known from bulk quote and not near benchmark (LTP < Benchmark * 0.995),
+            # skip expensive historical candle fetch!
+            if live_ltp > 0 and bm > 0:
+                t1_80pct = round(bm + 0.80 * (t1 - bm), 2) if (bm > 0 and t1 > bm) else round(t1 * 0.80, 2) if t1 > 0 else 0.0
+                if t1_80pct > 0 and live_ltp >= t1_80pct:
+                    logging.info(f"[RADAR EVICT: 80% T1 HIT VIA QUOTE] {sym} ({item.get('contract')}) live LTP {live_ltp:.2f} >= {t1_80pct:.2f}. Evicting setup.")
+                    pattern_funnel.evict_item("nifty50", item)
+                    continue
+
+                if sl > 0 and live_ltp <= sl:
+                    logging.debug(f"[RADAR FAST SKIP: SL BREACH VIA QUOTE] {sym} ({item.get('contract')}) live LTP {live_ltp:.2f} <= SL {sl:.2f}. Skipping candle fetch.")
+                    continue
+
+                min_trigger_pct = 0.980 if item.get("trigger_type") == "POST_D_RETEST" else 0.995
+                if live_ltp < (bm * min_trigger_pct):
+                    logging.debug(f"[RADAR QUOTE-FIRST GATE] {sym} ({item.get('contract')}): LTP {live_ltp:.2f} < Benchmark threshold ({bm * min_trigger_pct:.2f}). Skipping candle fetch.")
+                    continue
 
             tok = item.get("option_token") or item.get("spot_token")
             if not tok:

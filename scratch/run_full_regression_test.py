@@ -760,6 +760,24 @@ except Exception as e:
     errors.append(f"Sys.path Normalization Invariant Failed: {e}")
     print(f" FAILED [ERR] ({e})", flush=True)
 
+# -------------------------------------------------------------------------
+# TEST 23: Strategic Blueprint Invariants (ISSUE-065)
+# -------------------------------------------------------------------------
+print("[TEST 23] Testing Strategic Blueprint Invariants (ISSUE-065)...", end="", flush=True)
+try:
+    import subprocess
+    import paths
+    cmd_blueprint = [
+        sys.executable,
+        os.path.join(paths.SCRATCH_DIR, "test_strategic_blueprint_fixes.py")
+    ]
+    res_bp = subprocess.run(cmd_blueprint, cwd=paths.PROJECT_ROOT, capture_output=True, text=True)
+    assert res_bp.returncode == 0, f"Strategic blueprint unit tests failed:\nSTDOUT:\n{res_bp.stdout}\nSTDERR:\n{res_bp.stderr}"
+    print(" PASSED [OK]", flush=True)
+except Exception as e:
+    errors.append(f"Strategic Blueprint Invariants Failed: {e}")
+    print(f" FAILED [ERR] ({e})", flush=True)
+
 print("\n" + "=" * 100)
 if not errors:
     print("      ALL REGRESSION TESTS PASSED WITH 100% SUCCESS -- ZERO REGRESSIONS FOUND!")

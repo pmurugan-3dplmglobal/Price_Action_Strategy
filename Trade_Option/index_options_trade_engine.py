@@ -62,9 +62,9 @@ TOKEN_FILE = paths.TOKEN_FILE
 NFO_CACHE_FILE = paths.NFO_CACHE_FILE
 SCAN_INTERVAL_SECONDS = 15
 
-TIMEFRAME_ENTRY = "3minute"
-TIMEFRAME_ANCHOR = "15minute"
-TIMEFRAME_FALLBACK = "3minute"
+TIMEFRAME_ENTRY = "15minute"
+TIMEFRAME_ANCHOR = "60minute"
+TIMEFRAME_FALLBACK = "15minute"
 STRIKE_RANGE = 1
 BACKTEST_DATE = None
 
@@ -135,16 +135,16 @@ def resolve_option_contract(base_symbol, spot_price, step_size, option_type, exp
         expiries = df['expiry'].unique()
         selected_idx = min(expiry_offset, len(expiries) - 1)
 
-        # 0DTE Expiry Day Afternoon Protection:
-        # If today is expiry day (days_rem == 0) and time >= 13:30 IST,
+        # 0DTE Expiry Day Protection:
+        # If today is expiry day (days_rem == 0) and time >= 11:30 IST,
         # roll over to next weekly expiry series (expiries[1]) to eliminate severe 0DTE theta decay.
         curr_exp = expiries[0]
         today = get_ist_date()
         days_rem = (curr_exp - today).days
         now_ist = get_ist_now().time()
-        if days_rem == 0 and now_ist >= datetime_time(13, 30) and len(expiries) > 1:
+        if days_rem == 0 and now_ist >= datetime_time(11, 30) and len(expiries) > 1:
             selected_idx = min(selected_idx + 1, len(expiries) - 1)
-            logging.info(f"[EXPIRY_ROLLOVER] {base_symbol}: 0DTE afternoon (>=13:30 IST) -> rolling from {curr_exp} to next weekly expiry {expiries[selected_idx]}")
+            logging.info(f"[EXPIRY_ROLLOVER] {base_symbol}: 0DTE (>=11:30 IST) -> rolling from {curr_exp} to next weekly expiry {expiries[selected_idx]}")
 
         target_expiry = expiries[selected_idx]
         sub = df[df['expiry'] == target_expiry]
@@ -246,6 +246,8 @@ def execute_index_entry(kite, pos):
             price = round(bm * 1.005, 1)
         else:
             price = round((ask if ask > 0 else ltp) * 1.005, 1)
+        from position_monitor import clamp_lpp_buy_price
+        price = clamp_lpp_buy_price(price, ask if ask > 0 else ltp)
         lot_sz = pos.get("lot_size") or get_option_lot_size(pos["contract"]) or INDEX_REGISTRY.get(pos.get("symbol", ""), {}).get("lot_size", 1)
 
         from liquidity_guard import check_bid_ask_spread_liquidity
@@ -386,7 +388,7 @@ def execute_highest_rr_trade(kite, staged):
             logging.warning(f"[RISK_BUDGET_EXCEEDED] Trade rejected for {best.get('symbol')} ({best.get('contract')}): Position size is 0 lots (Risk per lot exceeds capital budget).")
             continue
 
-        # 12:30 IST 0DTE Index Cutoff Guard
+        # 11:30 IST 0DTE Index Cutoff Guard
         contract_cand = best.get("contract")
         try:
             from position_monitor import get_contract_days_to_expiry
@@ -396,8 +398,8 @@ def execute_highest_rr_trade(kite, staged):
         if dte_cand is not None and dte_cand <= 0:
             from datetime import time as dt_time
             from trading_core import get_ist_now
-            if get_ist_now().time() >= dt_time(12, 30):
-                logging.info(f"[0DTE_CUTOFF_EXCEEDED] 0DTE Index setup {contract_cand} rejected: Current IST time {get_ist_now().strftime('%H:%M:%S')} >= 12:30 IST cutoff.")
+            if get_ist_now().time() >= dt_time(11, 30):
+                logging.info(f"[0DTE_CUTOFF_EXCEEDED] 0DTE Index setup {contract_cand} rejected: Current IST time {get_ist_now().strftime('%H:%M:%S')} >= 11:30 IST cutoff.")
                 continue
 
         if live_ok or BACKTEST_DATE is not None:
@@ -434,13 +436,18 @@ def execute_highest_rr_trade(kite, staged):
                         cp = float(best.get("strike") or best.get("entry_spot") or 0.0)
 
                     strike_step = INDEX_REGISTRY.get(sym, {}).get("strike_step", 50)
+                    spot_t1 = best.get("spot_t1")
+                    if not spot_t1 or float(spot_t1) <= 0:
+                        spot_t1 = None
+                    else:
+                        spot_t1 = float(spot_t1)
                     spread_info = resolve_option_spread(
                         nfo_instruments=nfo_df,
                         base_symbol=sym,
                         spot_price=cp,
                         step_size=strike_step,
                         direction=cand_dir,
-                        target_price=best.get("t1"),
+                        target_price=spot_t1,
                         side=cand_side
                     )
                     if spread_info:

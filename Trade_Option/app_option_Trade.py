@@ -417,7 +417,43 @@ def compute_stats(positions, journal):
                 pnl += float(pnl_str)
         except Exception:
             pass
-    return {"total_trades": total, "win_rate": win_rate, "active_positions": active, "pnl": round(pnl, 2)}
+
+    stats_out = {
+        "total_trades": total,
+        "win_rate": win_rate,
+        "active_positions": active,
+        "pnl": round(pnl, 2),
+        "win_rate_pct": win_rate,
+        "avg_win_pct": 0.0,
+        "avg_loss_pct": 0.0,
+        "payoff_ratio": 0.0,
+        "avg_win_r": 0.0,
+        "avg_loss_r": 0.0,
+        "expectancy_r": 0.0,
+        "total_realized_r": 0.0
+    }
+    try:
+        import trade_db
+        db_stats = trade_db.get_trade_statistics()
+        ov = db_stats.get("overall", {})
+        if ov and ov.get("tracked_trades", 0) > 0:
+            stats_out.update({
+                "win_rate": ov.get("win_rate_pct", win_rate),
+                "win_rate_pct": ov.get("win_rate_pct", win_rate),
+                "avg_win_pct": ov.get("avg_win_pct", 0.0),
+                "avg_loss_pct": ov.get("avg_loss_pct", 0.0),
+                "payoff_ratio": ov.get("payoff_ratio", 0.0),
+                "avg_win_r": ov.get("avg_win_r", 0.0),
+                "avg_loss_r": ov.get("avg_loss_r", 0.0),
+                "expectancy_r": ov.get("expectancy_r", 0.0),
+                "total_realized_r": ov.get("total_realized_r", 0.0),
+                "algo_pure": db_stats.get("algo_pure", {}),
+                "discretionary": db_stats.get("discretionary", {})
+            })
+    except Exception as st_err:
+        logging.debug(f"Trade stats calculation error: {st_err}")
+
+    return stats_out
 
 SCAN_SYMBOLS = [
     "RELIANCE","TCS","HDFCBANK","ICICIBANK","INFY","ITC","SBIN","BHARTIARTL","LT","WIPRO",
@@ -1991,6 +2027,8 @@ def api_buy_scanned_trade():
                     price = round((ask if ask > 0 else ltp) * 1.005, 1)
                     if price <= 0:
                         price = round(entry_spot * 1.005, 1)
+                from position_monitor import clamp_lpp_buy_price
+                price = clamp_lpp_buy_price(price, ask if ask > 0 else ltp)
                 
                 from trading_core import INDEX_REGISTRY, STOCK_REGISTRY, get_option_lot_size, check_bid_ask_spread_liquidity
                 registry = INDEX_REGISTRY if (engine == "index" or is_index) else STOCK_REGISTRY
@@ -2011,16 +2049,16 @@ def api_buy_scanned_trade():
                             "error": "Index Option Entry Cutoff: All new index option entries are blocked after 13:30 IST to prevent late-day expiry chop and EOD traps. Set force=true if you explicitly wish to override."
                         }), 400
 
-                # ── 0DTE Expiry Rules (12:30 Cutoff & ₹40 Floor) ──
+                # ── 0DTE Expiry Rules (11:30 Cutoff & ₹40 Floor) ──
                 dte_contract = get_contract_days_to_expiry(contract) if is_opt else None
                 if is_opt and dte_contract is not None and dte_contract <= 0 and not force_order:
                     if is_index and market_open:
                         from datetime import time as dt_time
                         from trading_core import get_ist_now
-                        if get_ist_now().time() >= dt_time(12, 30):
+                        if get_ist_now().time() >= dt_time(11, 30):
                             return jsonify({
                                 "ok": False,
-                                "error": f"0DTE Index Cutoff: 0DTE index option entries are blocked after 12:30 IST ({get_ist_now().strftime('%H:%M:%S')}) to prevent rapid expiry decay. Set force=true to override."
+                                "error": f"0DTE Index Cutoff: 0DTE index option entries are blocked after 11:30 IST ({get_ist_now().strftime('%H:%M:%S')}) to prevent rapid expiry decay. Set force=true to override."
                             }), 400
 
                     chk_p = float(price or ltp or entry_spot or 0.0)
@@ -2030,40 +2068,65 @@ def api_buy_scanned_trade():
                             "error": f"0DTE Option Premium Floor: Option premium ₹{chk_p:.2f} < ₹40.00 minimum floor on 0DTE. Low-premium 0DTE options suffer severe gamma traps and theta crush. Set force=true to override."
                         }), 400
 
-                # ── 2-Leg Debit Spread Resolution for Index Option Trades ──
+                # ── 2-Leg Debit Spread Resolution for Option Trades (Index & Stock) ──
                 spread_info = None
                 leg2_order_id = None
-                if is_index:
+                cfg_engine_key = "index" if is_index else "nifty50"
+                cfg_sp = cfg_all.get(cfg_engine_key, {}) if 'cfg_all' in locals() else load_config().get(cfg_engine_key, {})
+                exec_mode = str(cfg_sp.get("execution_mode", "DEBIT_SPREAD" if is_index else "AUTO")).upper()
+                use_spread_buy = (exec_mode in ["DEBIT_SPREAD", "SPREAD_ONLY"]) or (is_index and exec_mode == "AUTO")
+                if use_spread_buy:
                     try:
-                        cfg_idx = cfg_all.get("index", {}) if 'cfg_all' in locals() else load_config().get("index", {})
-                        exec_mode = str(cfg_idx.get("execution_mode", "DEBIT_SPREAD")).upper()
-                        if exec_mode in ["DEBIT_SPREAD", "SPREAD_ONLY", "AUTO"]:
+                        try:
+                            from common.position_monitor import _get_nfo_cache
+                            from common.resolve import resolve_option_spread
+                        except ModuleNotFoundError:
+                            from position_monitor import _get_nfo_cache
+                            from resolve import resolve_option_spread
+                        nfo_df = _get_nfo_cache()
+                        # Resolve real underlying spot price & spot target T1
+                        real_spot = float(data.get("spot_entry") or data.get("spot_price") or 0.0)
+                        if real_spot <= 0 and _kite_session:
                             try:
-                                from common.position_monitor import _get_nfo_cache
-                                from common.resolve import resolve_option_spread
-                            except ModuleNotFoundError:
-                                from position_monitor import _get_nfo_cache
-                                from resolve import resolve_option_spread
-                            nfo_df = _get_nfo_cache()
-                            cp = float(entry_spot or ltp or 0.0)
-                            strike_step = INDEX_REGISTRY.get(symbol, {}).get("strike_step", 50)
-                            dir_calc = data.get("direction") or ("BULL" if side == "CE" else "BEAR")
+                                if is_index:
+                                    reg_entry = INDEX_REGISTRY.get(symbol, {})
+                                    spot_ts = reg_entry.get("tradingsymbol", symbol)
+                                    exch_prefix = "BSE" if symbol == "SENSEX" else "NSE"
+                                    q_spot = _kite_session.quote([f"{exch_prefix}:{spot_ts}"])
+                                    real_spot = float(q_spot.get(f"{exch_prefix}:{spot_ts}", {}).get("last_price", 0.0))
+                                else:
+                                    reg_entry = STOCK_REGISTRY.get(symbol, {})
+                                    spot_ts = reg_entry.get("tradingsymbol", symbol)
+                                    q_spot = _kite_session.quote([f"NSE:{spot_ts}"])
+                                    real_spot = float(q_spot.get(f"NSE:{spot_ts}", {}).get("last_price", 0.0))
+                            except Exception as q_err:
+                                logging.debug(f"Underlying spot quote error in 1-Click Buy: {q_err}")
+
+                        real_spot_t1 = float(data.get("spot_t1") or data.get("spot_target") or 0.0)
+                        if real_spot_t1 <= 0:
+                            real_spot_t1 = None
+
+                        strike_step = INDEX_REGISTRY.get(symbol, {}).get("strike_step", 50) if is_index else STOCK_REGISTRY.get(symbol, {}).get("strike_step", 50)
+                        dir_calc = data.get("direction") or ("BULL" if side == "CE" else "BEAR")
+
+                        if real_spot > 0:
                             spread_info = resolve_option_spread(
                                 nfo_instruments=nfo_df,
                                 base_symbol=symbol,
-                                spot_price=cp,
+                                spot_price=real_spot,
                                 step_size=strike_step,
                                 direction=dir_calc,
-                                target_price=t1 if t1 > 0 else None
+                                target_price=real_spot_t1,
+                                side=side
                             )
-                            if spread_info:
-                                contract = spread_info["leg1"]["contract"]
-                                c_str = str(contract).upper()
-                                exch = "BFO" if ("SENSEX" in c_str or "BSE" in c_str) else "NFO"
-                                lot_size = get_option_lot_size(contract) or registry.get(symbol, {}).get("lot_size", 1)
-                                logging.info(f"[1-CLICK BUY DEBIT SPREAD RESOLVED] {symbol}: Leg 1 (Long)={contract} | Leg 2 (Short)={spread_info['leg2']['contract']}")
+                        if spread_info:
+                            contract = spread_info["leg1"]["contract"]
+                            c_str = str(contract).upper()
+                            exch = "BFO" if ("SENSEX" in c_str or "BSE" in c_str) else "NFO"
+                            lot_size = get_option_lot_size(contract) or registry.get(symbol, {}).get("lot_size", 1)
+                            logging.info(f"[1-CLICK BUY DEBIT SPREAD RESOLVED] {symbol}: Leg 1 (Long)={contract} | Leg 2 (Short)={spread_info['leg2']['contract']}")
                     except Exception as sp_resolve_err:
-                        logging.warning(f"1-Click Buy index spread resolution error: {sp_resolve_err}")
+                        logging.warning(f"1-Click Buy spread resolution error: {sp_resolve_err}")
 
                 if not force_order:
                     try:

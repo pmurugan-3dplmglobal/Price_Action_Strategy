@@ -383,6 +383,49 @@ def is_contract_active(contract, engine=None):
     return bool(row)
 
 
+def is_contract_closed_today(contract, engine=None):
+    """Check if a specific contract was already closed/completed today in SQLite trades DB.
+    Prevents ping-pong loop where broker monitor repeatedly re-creates closed trades as USER_OVERRIDE.
+    """
+    if not contract:
+        return False
+    norm = _normalize_contract(contract)
+    today_str = get_ist_now().strftime("%Y-%m-%d")
+    with _get_connection() as conn:
+        if engine:
+            row = conn.execute(
+                "SELECT id FROM trades WHERE status='COMPLETED' AND engine=? AND contract=? "
+                "AND (created_at LIKE ? OR updated_at LIKE ? OR exit_time LIKE ?) LIMIT 1",
+                (engine, norm, f"{today_str}%", f"{today_str}%", f"{today_str}%")
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT id FROM trades WHERE status='COMPLETED' AND contract=? "
+                "AND (created_at LIKE ? OR updated_at LIKE ? OR exit_time LIKE ?) LIMIT 1",
+                (norm, f"{today_str}%", f"{today_str}%", f"{today_str}%")
+            ).fetchone()
+    return bool(row)
+
+
+def get_contracts_closed_today(engine=None):
+    """Return a set of normalized contract symbols that were closed/completed today."""
+    today_str = get_ist_now().strftime("%Y-%m-%d")
+    with _get_connection() as conn:
+        if engine:
+            rows = conn.execute(
+                "SELECT DISTINCT contract FROM trades WHERE status='COMPLETED' AND engine=? "
+                "AND (created_at LIKE ? OR updated_at LIKE ? OR exit_time LIKE ?)",
+                (engine, f"{today_str}%", f"{today_str}%", f"{today_str}%")
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT DISTINCT contract FROM trades WHERE status='COMPLETED' "
+                "AND (created_at LIKE ? OR updated_at LIKE ? OR exit_time LIKE ?)",
+                (f"{today_str}%", f"{today_str}%", f"{today_str}%")
+            ).fetchall()
+    return {_normalize_contract(r["contract"]) for r in rows if r["contract"]}
+
+
 def is_symbol_active(symbol, engine=None):
     """Check if an underlying symbol is currently ACTIVE in SQLite trades DB."""
     if not symbol:
@@ -441,6 +484,41 @@ def get_trade_statistics():
         total_pnl = sum(float(t.get("pnl_percent") or 0.0) for t in with_pnl)
         avg_pnl = round(total_pnl / len(with_pnl), 2) if with_pnl else 0.0
         win_rate = round(len(wins) / len(with_pnl) * 100, 1) if with_pnl else 0.0
+
+        # R-Multiple and Expectancy calculations
+        win_pnls = [float(t.get("pnl_percent") or 0.0) for t in wins]
+        loss_pnls = [abs(float(t.get("pnl_percent") or 0.0)) for t in losses]
+        avg_win_pct = round(sum(win_pnls) / len(win_pnls), 2) if win_pnls else 0.0
+        avg_loss_pct = round(sum(loss_pnls) / len(loss_pnls), 2) if loss_pnls else 0.0
+        payoff_ratio = round(avg_win_pct / avg_loss_pct, 2) if avg_loss_pct > 0 else 0.0
+
+        # R-multiples per trade: (exit - entry) / planned_risk
+        r_multiples = []
+        for t in with_pnl:
+            ep = float(t.get("entry_spot") or t.get("entry_price") or 0.0)
+            xp = float(t.get("exit_price") or 0.0)
+            sl = float(t.get("current_sl") or t.get("geometric_sl") or 0.0)
+            is_pe_or_short = str(t.get("side", "")).upper() in ["PE", "SELL", "SHORT"] or str(t.get("direction", "")).upper() == "BEAR"
+            if ep > 0 and sl > 0 and abs(ep - sl) > 0 and xp > 0:
+                risk = abs(ep - sl)
+                raw_diff = (ep - xp) if (is_pe_or_short and t.get("position_type") == "stock") else (xp - ep)
+                r_val = round(raw_diff / risk, 2)
+            else:
+                # Standardized 10% unit risk proxy if explicit SL points are absent
+                pnl_val = float(t.get("pnl_percent") or 0.0)
+                r_val = round(pnl_val / 10.0, 2)
+            r_multiples.append(r_val)
+
+        win_r_list = [r for r in r_multiples if r > 0]
+        loss_r_list = [abs(r) for r in r_multiples if r <= 0]
+        avg_win_r = round(sum(win_r_list) / len(win_r_list), 2) if win_r_list else 0.0
+        avg_loss_r = round(sum(loss_r_list) / len(loss_r_list), 2) if loss_r_list else 0.0
+
+        w_frac = len(wins) / len(with_pnl) if with_pnl else 0.0
+        l_frac = len(losses) / len(with_pnl) if with_pnl else 0.0
+        expectancy_r = round((w_frac * avg_win_r) - (l_frac * avg_loss_r), 2)
+        total_r = round(sum(r_multiples), 2)
+
         return {
             "total_trades": len(t_list),
             "tracked_trades": len(with_pnl),
@@ -448,7 +526,14 @@ def get_trade_statistics():
             "losses": len(losses),
             "win_rate_pct": win_rate,
             "avg_pnl_pct": avg_pnl,
-            "total_pnl_pct": round(total_pnl, 2)
+            "total_pnl_pct": round(total_pnl, 2),
+            "avg_win_pct": avg_win_pct,
+            "avg_loss_pct": avg_loss_pct,
+            "payoff_ratio": payoff_ratio,
+            "avg_win_r": avg_win_r,
+            "avg_loss_r": avg_loss_r,
+            "expectancy_r": expectancy_r,
+            "total_realized_r": total_r
         }
 
     algo_trades = [t for t in trades if t.get("execution_type") == "ALGO_TRIGGER" or ("OVERRIDE" not in str(t.get("pattern", "")).upper() and "MANUAL" not in str(t.get("pattern", "")).upper())]

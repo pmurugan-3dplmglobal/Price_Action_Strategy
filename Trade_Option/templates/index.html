@@ -1503,6 +1503,38 @@
             pnlEl.textContent = pnl + '%';
             pnlEl.style.color = pnl >= 0 ? '#3fb950' : '#f85149';
 
+            // Expectancy & Quantitative Edge Ribbon updates
+            const expWr = (stats.win_rate_pct !== undefined && stats.win_rate_pct !== null) ? stats.win_rate_pct : wr;
+            const expWrEl = document.getElementById('stat-exp-winrate');
+            if (expWrEl) {
+                expWrEl.textContent = (expWr || 0) + '%';
+                expWrEl.style.color = expWr >= 50 ? '#3fb950' : (expWr > 0 ? '#d29922' : '#8b949e');
+            }
+
+            const avgWin = Number(stats.avg_win_pct || 0);
+            const avgLoss = Number(stats.avg_loss_pct || 0);
+            const expWinLossEl = document.getElementById('stat-exp-winloss');
+            if (expWinLossEl) {
+                expWinLossEl.textContent = `+${avgWin.toFixed(1)}% / -${avgLoss.toFixed(1)}%`;
+            }
+
+            const payoff = Number(stats.payoff_ratio || 0);
+            const expPayoffEl = document.getElementById('stat-exp-payoff');
+            if (expPayoffEl) {
+                expPayoffEl.textContent = payoff.toFixed(2);
+                expPayoffEl.style.color = payoff >= 1.5 ? '#3fb950' : (payoff >= 1.0 ? '#58a6ff' : '#f85149');
+            }
+
+            const expR = Number(stats.expectancy_r || 0);
+            const totR = Number(stats.total_realized_r || 0);
+            const expREl = document.getElementById('stat-exp-r');
+            if (expREl) {
+                const rSign = totR >= 0 ? '+' : '';
+                const eSign = expR >= 0 ? '+' : '';
+                expREl.textContent = `${rSign}${totR.toFixed(2)} R (E: ${eSign}${expR.toFixed(2)} R/tr)`;
+                expREl.style.color = expR >= 0 ? '#3fb950' : '#f85149';
+            }
+
             let posHtml = '';
             let allTrades = d.all_trades || [];
             let ltpData = d.ltp || {};
@@ -2842,6 +2874,27 @@
         <div class="stat-card">
             <div class="value" id="stat-pnl" style="color:#8b949e;">0%</div>
             <div class="label">P&L</div>
+        </div>
+    </div>
+
+    <!-- Live Expectancy & Quantitative Edge Ribbon -->
+    <div class="expectancy-ribbon" style="display:flex; flex-wrap:wrap; gap:12px; align-items:center; justify-content:space-between; background:#161b22; border:1px solid #30363d; border-radius:8px; padding:10px 16px; margin-bottom:20px; font-size:12px; color:#c9d1d9;">
+        <div style="display:flex; align-items:center; gap:8px;">
+            <span style="font-weight:700; color:#58a6ff; letter-spacing:0.5px; text-transform:uppercase; font-size:11px;">QUANT EXPECTANCY:</span>
+            <span style="color:#8b949e;">Win Rate:</span>
+            <span id="stat-exp-winrate" style="font-weight:600; color:#3fb950;">0.0%</span>
+        </div>
+        <div style="display:flex; align-items:center; gap:8px;">
+            <span style="color:#8b949e;">Avg Win / Loss:</span>
+            <span id="stat-exp-winloss" style="font-weight:600; color:#c9d1d9;">+0.0% / -0.0%</span>
+        </div>
+        <div style="display:flex; align-items:center; gap:8px;">
+            <span style="color:#8b949e;">Payoff Ratio:</span>
+            <span id="stat-exp-payoff" style="font-weight:600; color:#58a6ff;">0.00</span>
+        </div>
+        <div style="display:flex; align-items:center; gap:8px;">
+            <span style="color:#8b949e;">Net Realized R:</span>
+            <span id="stat-exp-r" style="font-weight:700; color:#3fb950;">+0.00 R (E: +0.00 R/tr)</span>
         </div>
     </div>
 

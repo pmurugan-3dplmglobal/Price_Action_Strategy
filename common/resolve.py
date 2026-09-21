@@ -246,6 +246,8 @@ def sync_kite_positions(kite, registry, positions_dict, lock, engine, timeframe_
                 with lock:
                     if sym in positions_dict:
                         del positions_dict[sym]
+                    if p.get("tradingsymbol") in positions_dict:
+                        del positions_dict[p.get("tradingsymbol")]
                 continue
             is_stock = p.get("exchange", "") == "NSE"
             is_opt = is_option_contract(p.get("tradingsymbol", ""))
@@ -308,6 +310,9 @@ def sync_kite_positions(kite, registry, positions_dict, lock, engine, timeframe_
                     "position_type": "stock" if is_stock else "option"
                 }
             import trade_db
+            if trade_db.is_contract_closed_today(contract):
+                logging.debug(f"[KITE_SYNC] Skipping re-creation of {contract}: contract was closed today in trade_db.")
+                continue
             tid, _created = trade_db.create_trade(engine, sym, {"contract": contract, "entry_spot": entry, "current_sl": 0, "t1": 0, "t2": 0, "t3": 0, "lot_size": lot_size, "position_size": abs_nq, "quantity": abs_nq, "side": side_str, "direction": dir_str, "pattern": "MANUAL_ENTRY", "entry_time": dt.now().isoformat()})
             with lock:
                 positions_dict[pos_key]["trade_id"] = tid
@@ -2478,7 +2483,7 @@ def resolve_option_strikes(nfo_instruments, base_symbol, spot_price, step_size, 
                     else:
                         c = future.iloc[0]
                 else:
-                    if days_rem == 0 and get_ist_now().time() >= datetime_time(13, 30) and len(expiries) > 1:
+                    if days_rem == 0 and get_ist_now().time() >= datetime_time(11, 30) and len(expiries) > 1:
                         target_exp = expiries[1]
                         sub = future[future['expiry_dt'] == target_exp]
                         c = sub.iloc[0] if not sub.empty else future.iloc[0]

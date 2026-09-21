@@ -1,15 +1,69 @@
 meta:
   system: Price Action Unified Strategy System
   version: v2.1.0-stable
-  last_updated: '2026-09-18'
+  last_updated: '2026-09-21'
   purpose: Active operational tracker for v2.1.0-stable failures, root causes, regressions, and enhancements.
   historical_archive: archive/ISSUE_HISTORY_ARCHIVE.yaml (Preserves 119 resolved legacy issues prior to 2026-09-05)
-  total_active_issues: 44
+  total_active_issues: 45
   archived_issues_summary:
     total_archived: 119
     recent_archived_batch: [FEATURE-031, FEATURE-030, FEATURE-029, ISSUE-084, ISSUE-083, ISSUE-082, ISSUE-081, ISSUE-080, FEATURE-036, FEATURE-035, FEATURE-034, FEATURE-033, ISSUE-054]
     key_archived_families: [ALGO_AUDIT_CVE, QUANT_ENHANCEMENTS, RADAR_LIFECYCLE, VCP_METRICS, SCANNER_DISCOVERY, SECURITY_CONFIG, ZERO_REGRESSION_AUDIT]
 issues:
+- id: ISSUE-065
+  title: Strategic Blueprint Alignment & Production Robustness Hardening
+  severity: HIGH
+  category: Strategy Blueprint, Debit Spreads, Rate Limiting, Timeframe Alignment, Broker Reconciliation, Quote-First Polling, Quantitative Metrics
+  family: ARCHITECTURE_HARDENING
+  date_reported: '2026-09-21'
+  symptom: |
+    1. Stock debit spread executions passed option contract premium instead of underlying spot price and spot_t1, distorting spread strike calculations.
+    2. Index options engine defaulted to 5m/15m instead of playbook standard 15m entry / 60m anchor.
+    3. Closed trades were susceptible to broker-reconciliation resurrection (ping-pong loop) if broker positions were unlinked.
+    4. 0DTE index options lacked midday 11:30 IST rollover cutoff, suffering extreme theta decay into expiry afternoon.
+    5. Cross-process API contention across 3 concurrent daemons (Options, Stock, Scanner) triggered HTTP 429 backoffs.
+    6. Scanning 210 F&O stock options candle history took 15-30+ minutes due to rate-limit throttles.
+    7. High limit prices triggered Kite Limit Price Protection (LPP) rejections.
+    8. Dashboard lacked quantitative edge visibility (win rate, payoff ratio, realized R-multiples, expectancy).
+  root_cause: |
+    1. stock_options_trade_engine and 1-Click Buy passed option premium as underlying_ltp to resolve_option_spread.
+    2. index_options_trade_engine hardcoded 5m/15m defaults.
+    3. reconcile_broker_live_positions re-created trades for positions closed earlier that day.
+    4. 0DTE expiry rollover was set to 13:30 IST instead of 11:30 IST.
+    5. In-memory token bucket rate limiters were isolated per process without cross-process synchronization.
+    6. Full OHLCV candle downloads were requested for all 210 stocks regardless of price proximity to trigger benchmark.
+    7. Placing limit buy orders at raw trigger levels above current LTP exceeded Kite RMS LPP threshold band (+8%).
+    8. Dashboard compute_stats did not integrate segmented R-multiples and mathematical expectancy.
+  affected_files:
+  - common/paths.py
+  - common/trading_core.py
+  - common/session.py
+  - common/trade_db.py
+  - common/position_monitor.py
+  - common/resolve.py
+  - Trade_Option/stock_options_trade_engine.py
+  - Trade_Option/index_options_trade_engine.py
+  - Trade_Option/input/program_config.json
+  - input/program_config.json
+  - Trade_Option/app_option_Trade.py
+  - Trade_Option/templates/index.html
+  - scratch/test_strategic_blueprint_fixes.py
+  - scratch/run_full_regression_test.py
+  fix_applied: |
+    1. Passed real underlying spot and spot_t1 to resolve_option_spread in stock engine and 1-Click Buy.
+    2. Aligned index engine defaults to 15m entry / 60m anchor in code and program_config.json.
+    3. Added is_contract_closed_today() check and _CLOSED_CONTRACTS_TODAY tracking to halt reconciliation ping-pong while preserving 120s order-fill grace window.
+    4. Advanced 0DTE index options rollover cutoff to 11:30 IST (rolling to next weekly).
+    5. Implemented MultiProcessTokenBucketRateLimiter with SQLite WAL atomic transactions capping aggregate Kite API calls to 2.8 req/s.
+    6. Integrated Quote-First trigger polling in stock radar loop using bulk kite.quote(), skipping candle downloads when LTP < Benchmark * 0.995.
+    7. Enforced clamp_lpp_buy_price() capping limit buy price at min(limit_price, ltp * 1.08) to prevent Kite LPP rejections.
+    8. Enhanced trade_db with payoff ratio and R-expectancy metrics, displayed in real-time UI ribbon on Dashboard.
+  verification: |
+    1. scratch/test_strategic_blueprint_fixes.py passed 8/8 (100% SUCCESS).
+    2. scratch/run_full_regression_test.py passed all 23 regression test suites (100% SUCCESS).
+  status: RESOLVED
+  resolution_date: '2026-09-21'
+
 - id: ISSUE-060
   title: Smart Thursday EOD Theta Guard, Late-Day Runway Guard & Morning Institutional Radar
   severity: HIGH
