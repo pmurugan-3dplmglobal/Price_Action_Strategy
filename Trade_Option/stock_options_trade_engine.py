@@ -875,6 +875,8 @@ def execute_highest_rr_trade(kite, staged):
 
             trade_db.record_executed_pattern("nifty50", key, {"contract": contract, "entry": limit_price})
             pattern_funnel.evict_item("nifty50", key)
+            if contract:
+                pattern_funnel.evict_item("nifty50", contract)
             clear_executed_exit(contract)
             clear_executed_exit(sym)
 
@@ -937,6 +939,8 @@ def execute_highest_rr_trade(kite, staged):
                                     logging.error(f"[DEBIT SPREAD ROLLBACK ERROR] Could not cancel Leg 1 order {o_to_cancel}: {c_err}")
                             with position_lock:
                                 ACTIVE_POSITIONS.pop(sym, None)
+                            if pos.get("trade_id"):
+                                trade_db.update_trade(pos["trade_id"], {"status": "FAILED", "exit_reason": "ORDER_PLACEMENT_FAILED"})
                             save_state()
                             continue
 
@@ -949,6 +953,8 @@ def execute_highest_rr_trade(kite, staged):
                                    event_time=best.get("entry_time"))
                     with position_lock:
                         ACTIVE_POSITIONS.pop(sym, None)
+                    if pos.get("trade_id"):
+                        trade_db.update_trade(pos["trade_id"], {"status": "FAILED", "exit_reason": "ORDER_PLACEMENT_FAILED"})
                     save_state()
                     continue
             elif BACKTEST_DATE is not None:

@@ -4,12 +4,45 @@ meta:
   last_updated: '2026-09-21'
   purpose: Active operational tracker for v2.1.0-stable failures, root causes, regressions, and enhancements.
   historical_archive: archive/ISSUE_HISTORY_ARCHIVE.yaml (Preserves 119 resolved legacy issues prior to 2026-09-05)
-  total_active_issues: 49
+  total_active_issues: 50
   archived_issues_summary:
     total_archived: 119
     recent_archived_batch: [FEATURE-031, FEATURE-030, FEATURE-029, ISSUE-084, ISSUE-083, ISSUE-082, ISSUE-081, ISSUE-080, FEATURE-036, FEATURE-035, FEATURE-034, FEATURE-033, ISSUE-054]
     key_archived_families: [ALGO_AUDIT_CVE, QUANT_ENHANCEMENTS, RADAR_LIFECYCLE, VCP_METRICS, SCANNER_DISCOVERY, SECURITY_CONFIG, ZERO_REGRESSION_AUDIT]
 issues:
+- id: ISSUE-072
+  title: End-to-End Integration Robustness — Funnel Eviction Key Parity, Ghost Trade Resurrection Prevention, and Scan Tab Ingestion Field Preservation
+  severity: HIGH
+  category: Funnel Eviction, Trade Lifecycle, Database State Sync, Display Serialization, Spot Ingestion
+  family: ARCHITECTURE_HARDENING
+  date_reported: '2026-09-21'
+  symptom: |
+    1. Executed setups remained in pattern_funnel.json after order routing because stock_options_trade_engine passed the 4-part key f"{sym}|{pattern}|{side}|{strike}", but _matches_evict in common/pattern_funnel.py only compared against 2-part key (SYM|SIDE), contract name, or symbol.
+    2. When order placement failed or Leg 2 failed in stock_options_trade_engine, ACTIVE_POSITIONS.pop(sym) removed the in-memory trade, but the SQLite record created right before order placement remained status="ACTIVE", causing FAST_DB_SYNC in main_scan_loop to resurrect ghost trades.
+    3. When candidates were serialized to scan_display.json via display_writer.build_trade, spot-anchored context fields (spot_sl, spot_token, spot_entry, and dte) were omitted, causing fast radar ingestion to lose spot SL protection and DTE context.
+  root_cause: |
+    1. common/pattern_funnel.py _matches_evict lacked logic to match 4-part key representations f"{sym}|{pattern}|{side}|{strike}" against funnel items, and stock_options_trade_engine did not explicitly call evict_item with contract.
+    2. stock_options_trade_engine order failure exception handlers omitted updating trade_db with status="FAILED", leaving ghost records with status="ACTIVE" in SQLite.
+    3. common/display_writer.py build_trade dictionary constructor omitted spot_sl, spot_token, spot_entry, and dte fields.
+  affected_files:
+  - common/pattern_funnel.py
+  - Trade_Option/stock_options_trade_engine.py
+  - common/display_writer.py
+  - scratch/test_e2e_integration_flow_audit.py
+  fix_applied: |
+    1. common/pattern_funnel.py: Updated _matches_evict to parse and compare 4-part key f"{sym}|{pattern}|{side}|{strike}" against funnel items as well as matching symbol and side.
+    2. Trade_Option/stock_options_trade_engine.py:
+       - Added explicit pattern_funnel.evict_item("nifty50", contract) call alongside key eviction.
+       - In both order placement failure and Leg 2 failure rollback handlers, added trade_db.update_trade(pos["trade_id"], {"status": "FAILED", "exit_reason": "ORDER_PLACEMENT_FAILED"}), completely preventing FAST_DB_SYNC ghost trade resurrection.
+    3. common/display_writer.py: In build_trade(), included spot_sl, spot_token (or index_token), spot_entry, and dte in output dictionary.
+    4. scratch/test_e2e_integration_flow_audit.py: Updated test_02, test_09, and test_10 to verify serialization preservation, 4-part key eviction, and ghost resurrection prevention.
+  verification: |
+    - Ran python scratch/test_e2e_integration_flow_audit.py: 10/10 passed with 100% success.
+    - Ran python scratch/run_full_regression_test.py: 26/26 test suites passed with zero regressions.
+    - AST syntax checks verified across all modified files (common/pattern_funnel.py, Trade_Option/stock_options_trade_engine.py, common/display_writer.py).
+  status: RESOLVED
+  resolution_date: '2026-09-21'
+
 - id: ISSUE-071
   title: Setup Prioritization Laws, Safe Option Value Buying Corridor & VCP Coiled Promotion
   severity: HIGH

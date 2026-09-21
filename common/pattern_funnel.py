@@ -289,7 +289,27 @@ def _matches_evict(x, item_or_key):
     x_key = _get_key(x).upper()
     x_cntr = str(x.get("contract") or "").strip().upper()
     x_sym = str(x.get("symbol") or "").strip().upper()
-    return target == x_key or target == x_cntr or target == x_sym
+    if target == x_key or target == x_cntr or target == x_sym:
+        return True
+
+    x_pat = str(x.get("pattern") or "").strip().upper()
+    x_side = str(x.get("side") or "CE").strip().upper()
+    x_strk = str(x.get("strike") or "").strip().upper()
+    if x_strk.endswith(".0"):
+        x_strk = x_strk[:-2]
+    x_4part = f"{x_sym}|{x_pat}|{x_side}|{x_strk}".upper()
+    if target == x_4part:
+        return True
+
+    parts = target.split("|")
+    if len(parts) == 4:
+        p_sym, p_pat, p_side, p_strk = parts
+        if p_strk.endswith(".0"):
+            p_strk = p_strk[:-2]
+        if p_sym == x_sym and p_side == x_side:
+            if not p_strk or not x_strk or p_strk == x_strk:
+                return True
+    return False
 
 def evict_item(engine_name, item_or_key):
     """Remove an invalidated or executed item from all funnel categories (by dict, key, contract, or symbol)."""
