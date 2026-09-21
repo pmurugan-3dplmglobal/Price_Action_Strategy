@@ -588,17 +588,31 @@ def get_exchange_freeze_limit(symbol_or_contract: str) -> int:
         return 1755
     elif "SENSEX" in s or "BANKEX" in s:
         return 1000
-    return 1755
+    # For individual stock options, NSE freeze limits are typically 25,000 to 150,000+ shares
+    return 50000
 
 def slice_quantity_for_freeze(symbol_or_contract: str, total_qty: int) -> list:
-    """Slices order quantity into chunks <= exchange freeze limit to prevent RMS rejections."""
+    """Slices order quantity into chunks <= exchange freeze limit, strictly preserving lot size multiples."""
+    if total_qty <= 0:
+        return []
     limit = get_exchange_freeze_limit(symbol_or_contract)
-    if total_qty <= limit or limit <= 0:
+    lot_size = get_option_lot_size(symbol_or_contract) or 1
+
+    # Invariant: Each slice MUST be an integer multiple of lot_size
+    chunk_size = (limit // lot_size) * lot_size
+    if chunk_size <= 0:
+        chunk_size = lot_size  # At minimum, one full lot
+
+    if total_qty <= chunk_size:
         return [total_qty]
+
     slices = []
     rem = total_qty
     while rem > 0:
-        chunk = min(rem, limit)
+        chunk = min(rem, chunk_size)
+        chunk = (chunk // lot_size) * lot_size
+        if chunk <= 0:
+            chunk = rem
         slices.append(chunk)
         rem -= chunk
     return slices
@@ -970,12 +984,21 @@ def close_position(kite, pos, live_market=True, product=None, qty_override=None,
 
                 placed_m_oids = []
                 for s_qty in qty_slices:
-                    s_oid = kite.place_order(
-                        variety=kite.VARIETY_REGULAR, tradingsymbol=contract,
-                        exchange=target_exch, transaction_type=kite.TRANSACTION_TYPE_SELL,
-                        quantity=s_qty, order_type=kite.ORDER_TYPE_MARKET,
-                        product=target_product
-                    )
+                    # Stock options block MARKET orders on NSE. Place deep limit sell at min tick (0.05) to sweep all bids.
+                    if is_option and not ("NIFTY" in c_str or "SENSEX" in c_str or "BANKEX" in c_str):
+                        s_oid = kite.place_order(
+                            variety=kite.VARIETY_REGULAR, tradingsymbol=contract,
+                            exchange=target_exch, transaction_type=kite.TRANSACTION_TYPE_SELL,
+                            quantity=s_qty, order_type=kite.ORDER_TYPE_LIMIT,
+                            price=0.05, product=target_product
+                        )
+                    else:
+                        s_oid = kite.place_order(
+                            variety=kite.VARIETY_REGULAR, tradingsymbol=contract,
+                            exchange=target_exch, transaction_type=kite.TRANSACTION_TYPE_SELL,
+                            quantity=s_qty, order_type=kite.ORDER_TYPE_MARKET,
+                            product=target_product
+                        )
                     placed_m_oids.append(str(s_oid))
                 oid = placed_m_oids[0]
                 if not qty_override:

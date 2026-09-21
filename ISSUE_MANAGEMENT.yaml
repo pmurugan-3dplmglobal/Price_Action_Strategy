@@ -4,7 +4,7 @@ meta:
   last_updated: '2026-09-21'
   purpose: Active operational tracker for v2.1.0-stable failures, root causes, regressions, and enhancements.
   historical_archive: archive/ISSUE_HISTORY_ARCHIVE.yaml (Preserves 119 resolved legacy issues prior to 2026-09-05)
-  total_active_issues: 46
+  total_active_issues: 47
   archived_issues_summary:
     total_archived: 119
     recent_archived_batch: [FEATURE-031, FEATURE-030, FEATURE-029, ISSUE-084, ISSUE-083, ISSUE-082, ISSUE-081, ISSUE-080, FEATURE-036, FEATURE-035, FEATURE-034, FEATURE-033, ISSUE-054]
@@ -2394,4 +2394,31 @@ issues:
     3. Live verification on Trade #784 (SIEMENS26SEP3950CE): successfully transitioned from OPEN to FILLED, ratcheted SL from 27.05 to 38.05 (+54.7% profit locked).
   status: RESOLVED
   resolution_date: '2026-09-21'
+
+- id: ISSUE-068
+  title: "Stock Option Freeze Limit Slicing Odd-Lot Failure & Market Order Block Handling"
+  category: ORDER_EXECUTION_&_FREEZE_SLICING
+  severity: CRITICAL
+  date_reported: '2026-09-21'
+  affected_files:
+    - common/position_monitor.py
+    - scratch/test_institutional_enhancements_v2.py
+  symptom: |
+    ADANIPOWER26SEP215CE (holding 3,550 shares on VM2 Bhavani) failed all exit attempts with:
+    'All exit attempts failed for ADANIPOWER26SEP215CE: primary=`quantity` should be multiple of 3550., alt=`quantity` should be multiple of 3550., market=MARKET orders are blocked for stock options due to illiquidity.'
+  root_cause: |
+    1. get_exchange_freeze_limit returned 1755 (NIFTY's index limit) for stock options by default.
+    2. slice_quantity_for_freeze sliced total_qty into chunks of limit (1755) without enforcing integer multiples of the contract's lot_size (3,550), producing odd-lot slices [1755, 1755, 40].
+    3. close_position emergency fallback attempted pure ORDER_TYPE_MARKET, which is strictly blocked by NSE and Zerodha for stock options.
+  fix_applied: |
+    1. Set default stock option freeze limit to 50,000 shares in get_exchange_freeze_limit.
+    2. Updated slice_quantity_for_freeze to compute chunk_size = (limit // lot_size) * lot_size, strictly guaranteeing every order slice is an exact integer multiple of lot_size.
+    3. Replaced ORDER_TYPE_MARKET with a deep marketable limit order at minimum tick (price=0.05) for stock options in close_position emergency fallback, sweeping best bids without market order rejection.
+  verification: |
+    1. Tested slice_quantity_for_freeze for ADANIPOWER (3550 -> [3550]), NIFTY (2600 -> [1755, 845]), and BANKNIFTY (1500 -> [900, 600]).
+    2. Verified scratch/test_institutional_enhancements_v2.py (11/11 PASSED).
+    3. Master regression suite scratch/run_full_regression_test.py (25/25 PASSED, 100% SUCCESS).
+  status: RESOLVED
+  resolution_date: '2026-09-21'
+
 
