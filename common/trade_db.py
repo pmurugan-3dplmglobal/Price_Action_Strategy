@@ -480,7 +480,7 @@ def get_trade_statistics():
     def _calc_stats(t_list):
         with_pnl = [t for t in t_list if t.get("pnl_percent") is not None]
         wins = [t for t in with_pnl if float(t.get("pnl_percent") or 0.0) > 0]
-        losses = [t for t in with_pnl if float(t.get("pnl_percent") or 0.0) <= 0]
+        losses = [t for t in with_pnl if float(t.get("pnl_percent") or 0.0) < 0]
         total_pnl = sum(float(t.get("pnl_percent") or 0.0) for t in with_pnl)
         avg_pnl = round(total_pnl / len(with_pnl), 2) if with_pnl else 0.0
         win_rate = round(len(wins) / len(with_pnl) * 100, 1) if with_pnl else 0.0
@@ -510,7 +510,7 @@ def get_trade_statistics():
             r_multiples.append(r_val)
 
         win_r_list = [r for r in r_multiples if r > 0]
-        loss_r_list = [abs(r) for r in r_multiples if r <= 0]
+        loss_r_list = [abs(r) for r in r_multiples if r < 0]
         avg_win_r = round(sum(win_r_list) / len(win_r_list), 2) if win_r_list else 0.0
         avg_loss_r = round(sum(loss_r_list) / len(loss_r_list), 2) if loss_r_list else 0.0
 

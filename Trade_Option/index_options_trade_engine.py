@@ -235,14 +235,15 @@ def execute_index_entry(kite, pos):
         clear_executed_exit(pos['contract'])
         target_exch = "BFO" if ("SENSEX" in c_str or "BSE" in c_str) else "NFO"
         q_key = f"{target_exch}:{pos['contract']}"
-        q = kite.quote([q_key])
+        q = safe_kite_call(kite.quote, [q_key])
         ltp = float(q.get(q_key, {}).get("last_price", 0))
         ask = 0
         depth = q.get(q_key, {}).get("depth", {}).get("sell", [])
         if depth and len(depth) > 0 and depth[0].get("price", 0) > 0:
             ask = float(depth[0]["price"])
         bm = float(pos.get("benchmark") or 0)
-        if bm > 0:
+        is_spread = pos.get("position_type") == "option_spread"
+        if bm > 0 and not is_spread:
             price = round(bm * 1.005, 1)
         else:
             price = round((ask if ask > 0 else ltp) * 1.005, 1)
@@ -293,7 +294,7 @@ def execute_index_entry(kite, pos):
             leg2_c = pos["leg2_contract"]
             try:
                 leg2_q_key = f"{target_exch}:{leg2_c}"
-                leg2_q = kite.quote([leg2_q_key])
+                leg2_q = safe_kite_call(kite.quote, [leg2_q_key])
                 leg2_depth = leg2_q.get(leg2_q_key, {}).get("depth", {}).get("buy", [])
                 leg2_bid = float(leg2_depth[0]["price"]) if (leg2_depth and len(leg2_depth) > 0 and leg2_depth[0].get("price", 0) > 0) else float(leg2_q.get(leg2_q_key, {}).get("last_price", 0))
                 leg2_limit = round(leg2_bid * 0.995, 1) if leg2_bid > 0 else 0
@@ -424,11 +425,11 @@ def execute_highest_rr_trade(kite, staged):
                     cp = float(best.get("spot_entry") or 0.0)
                     if cp <= 0:
                         reg_entry = INDEX_REGISTRY.get(sym, {})
-                        spot_ts = reg_entry.get("tradingsymbol")
+                        spot_ts = "SENSEX" if sym == "SENSEX" else reg_entry.get("tradingsymbol")
                         exch_prefix = "BSE" if sym == "SENSEX" else "NSE"
                         if spot_ts and kite:
                             try:
-                                q_spot = kite.quote([f"{exch_prefix}:{spot_ts}"])
+                                q_spot = safe_kite_call(kite.quote, [f"{exch_prefix}:{spot_ts}"])
                                 cp = float(q_spot.get(f"{exch_prefix}:{spot_ts}", {}).get("last_price", 0.0))
                             except Exception:
                                 cp = 0.0
@@ -600,7 +601,7 @@ def main_scan_loop(kite):
                 ACTIVE_POSITIONS[sym] = pos
             logging.info(f"Recovered position: {sym} | {t.get('contract','')}")
     try:
-        kite_positions = kite.positions()
+        kite_positions = safe_kite_call(kite.positions) or {}
         all_positions = kite_positions.get("net", []) or kite_positions.get("day", [])
         
         # Auto-complete positions closed on Zerodha (quantity == 0)

@@ -260,6 +260,16 @@ def sync_kite_positions(kite, registry, positions_dict, lock, engine, timeframe_
 
             contract = p["tradingsymbol"]
             pos_key = contract
+            import trade_db
+            if trade_db.is_contract_closed_today(contract):
+                logging.debug(f"[KITE_SYNC] Skipping re-creation of {contract}: contract was closed today in trade_db.")
+                with lock:
+                    if pos_key in positions_dict:
+                        del positions_dict[pos_key]
+                    if sym in positions_dict and positions_dict[sym].get("contract") == contract:
+                        del positions_dict[sym]
+                continue
+
             entry = float(p.get("net_price") or p.get("buy_price") or p.get("average_price") or 0)
             import position_monitor
             lot_size = position_monitor.get_option_lot_size(contract) or registry.get(sym, {}).get("lot_size", 1)
@@ -291,7 +301,6 @@ def sync_kite_positions(kite, registry, positions_dict, lock, engine, timeframe_
                                 positions_dict[target_key][k] = v
                             tid = positions_dict[target_key].get("trade_id")
                             if tid:
-                                import trade_db
                                 trade_db.update_trade(tid, scan_sl)
                     continue
                 
@@ -309,10 +318,6 @@ def sync_kite_positions(kite, registry, positions_dict, lock, engine, timeframe_
                     "entry_time": dt.now().isoformat(),
                     "position_type": "stock" if is_stock else "option"
                 }
-            import trade_db
-            if trade_db.is_contract_closed_today(contract):
-                logging.debug(f"[KITE_SYNC] Skipping re-creation of {contract}: contract was closed today in trade_db.")
-                continue
             tid, _created = trade_db.create_trade(engine, sym, {"contract": contract, "entry_spot": entry, "current_sl": 0, "t1": 0, "t2": 0, "t3": 0, "lot_size": lot_size, "position_size": abs_nq, "quantity": abs_nq, "side": side_str, "direction": dir_str, "pattern": "MANUAL_ENTRY", "entry_time": dt.now().isoformat()})
             with lock:
                 positions_dict[pos_key]["trade_id"] = tid
@@ -1548,8 +1553,8 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
         ce = ce_map[strike]
         pe = pe_map[strike]
 
-        # 0DTE Index 12:30 IST Cutoff Guard
-        if is_index_sym and get_ist_now().time() >= datetime_time(12, 30):
+        # 0DTE Index 11:30 IST Cutoff Guard
+        if is_index_sym and get_ist_now().time() >= datetime_time(11, 30):
             try:
                 from position_monitor import get_contract_days_to_expiry
             except ImportError:
@@ -1559,7 +1564,7 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                     get_contract_days_to_expiry = None
             dte_chk = get_contract_days_to_expiry(ce['tradingsymbol']) if get_contract_days_to_expiry else None
             if dte_chk is not None and dte_chk <= 0:
-                logging.info(f"[0DTE_CUTOFF] {symbol}: 0DTE index option entry cutoff reached (12:30 IST). Skipping strike {strike}.")
+                logging.info(f"[0DTE_CUTOFF] {symbol}: 0DTE index option entry cutoff reached (11:30 IST). Skipping strike {strike}.")
                 continue
         same_tf = timeframe_entry == timeframe_anchor and from_entry == from_anchor and to_entry == to_anchor
         dfs = {}

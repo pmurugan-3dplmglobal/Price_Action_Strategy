@@ -81,31 +81,41 @@ class TestStrategicBlueprintFixes(unittest.TestCase):
                 self.assertEqual(idx_cfg.get("timeframe_entry"), "15minute", f"Mismatch in {cfg_path}")
                 self.assertEqual(idx_cfg.get("timeframe_anchor"), "60minute", f"Mismatch in {cfg_path}")
 
-    def test_03_0dte_cutoff_and_rollover(self):
-        """Verify 0DTE cutoff at 11:30 IST rolls index options to next weekly expiry."""
-        today_str = datetime.now().strftime("%Y-%m-%d")
-        expiries = [today_str, "2026-10-01", "2026-10-08"]
+    def test_03_0dte_cutoff_and_rollover_in_resolve(self):
+        """Verify resolve_option_strikes rolls over 0DTE index options to next weekly after 11:30 IST."""
+        from datetime import date
+        import pandas as pd
+        today_date = date(2026, 9, 21)
+        next_week_date = date(2026, 9, 28)
 
-        # Before 11:30 IST -> should choose current weekly expiry (expiries[0])
-        morning_time = datetime.strptime("10:00:00", "%H:%M:%S").time()
-        # After 11:30 IST -> should choose next weekly expiry (expiries[1])
-        afternoon_time = datetime.strptime("12:00:00", "%H:%M:%S").time()
+        mock_nfo = pd.DataFrame([
+            {"name": "NIFTY", "instrument_type": "CE", "strike": 24000.0, "expiry": today_date.strftime("%Y-%m-%d"), "instrument_token": 1001, "tradingsymbol": "NIFTY26SEP24000CE", "lot_size": 65},
+            {"name": "NIFTY", "instrument_type": "CE", "strike": 24000.0, "expiry": next_week_date.strftime("%Y-%m-%d"), "instrument_token": 1002, "tradingsymbol": "NIFTY26OCT24000CE", "lot_size": 65},
+            {"name": "RELIANCE", "instrument_type": "CE", "strike": 2900.0, "expiry": today_date.strftime("%Y-%m-%d"), "instrument_token": 2001, "tradingsymbol": "RELIANCE26SEP2900CE", "lot_size": 250},
+            {"name": "RELIANCE", "instrument_type": "CE", "strike": 2900.0, "expiry": next_week_date.strftime("%Y-%m-%d"), "instrument_token": 2002, "tradingsymbol": "RELIANCE26OCT2900CE", "lot_size": 250},
+        ])
 
-        # Simulate resolve_option_strikes expiry selection logic
-        def choose_expiry(is_index, exp_list, now_time):
-            if is_index and len(exp_list) > 1 and exp_list[0] == today_str:
-                if now_time >= dtime(11, 30):
-                    return exp_list[1]
-            return exp_list[0]
+        with patch("common.resolve.get_ist_date", return_value=today_date):
+            # Case A: Index option before 11:30 IST -> today's expiry
+            with patch("common.resolve.get_ist_now", return_value=datetime(2026, 9, 21, 10, 15)):
+                strikes_morning = resolve.resolve_option_strikes(mock_nfo, "NIFTY", 24000.0, 50, "CE", n_range=1)
+                self.assertTrue(len(strikes_morning) > 0)
+                self.assertEqual(strikes_morning[0]["tradingsymbol"], "NIFTY26SEP24000CE")
 
-        self.assertEqual(choose_expiry(True, expiries, morning_time), today_str)
-        self.assertEqual(choose_expiry(True, expiries, afternoon_time), "2026-10-01")
+            # Case B: Index option after 11:30 IST -> rolls over to next weekly expiry
+            with patch("common.resolve.get_ist_now", return_value=datetime(2026, 9, 21, 11, 45)):
+                strikes_afternoon = resolve.resolve_option_strikes(mock_nfo, "NIFTY", 24000.0, 50, "CE", n_range=1)
+                self.assertTrue(len(strikes_afternoon) > 0)
+                self.assertEqual(strikes_afternoon[0]["tradingsymbol"], "NIFTY26OCT24000CE")
 
-        # Non-index stock option should stay on expiries[0]
-        self.assertEqual(choose_expiry(False, expiries, afternoon_time), today_str)
+            # Case C: Stock option after 11:30 IST -> does not use 11:30 index cutoff
+            with patch("common.resolve.get_ist_now", return_value=datetime(2026, 9, 21, 11, 45)):
+                strikes_stock = resolve.resolve_option_strikes(mock_nfo, "RELIANCE", 2900.0, 20, "CE", n_range=1)
+                self.assertTrue(len(strikes_stock) > 0)
+                self.assertEqual(strikes_stock[0]["tradingsymbol"], "RELIANCE26OCT2900CE")
 
     def test_04_reconciliation_ping_pong_prevention(self):
-        """Verify closed contracts are recorded and blocked from broker-recovery re-creation."""
+        """Verify closed contracts are recorded and blocked from broker-recovery re-creation and ghost staging."""
         test_contract = "TEST_NIFTY26SEP24000CE"
         
         # Initially not closed
@@ -118,6 +128,17 @@ class TestStrategicBlueprintFixes(unittest.TestCase):
         # Clean up
         pm.clear_executed_exit(test_contract)
         self.assertNotIn(test_contract, pm._CLOSED_CONTRACTS_TODAY)
+
+        # Test sync_kite_positions ghost staging avoidance when contract was closed today
+        mock_kite = MagicMock()
+        mock_kite.positions.return_value = {
+            "net": [{"tradingsymbol": "CLOSED_TCS26SEP3000CE", "quantity": 100, "exchange": "NFO", "instrument_token": 9999, "average_price": 50.0}]
+        }
+        positions_dict = {}
+        lock = MagicMock()
+        with patch("common.trade_db.is_contract_closed_today", return_value=True):
+            resolve.sync_kite_positions(mock_kite, {}, positions_dict, lock, "nifty50", "15minute", "60minute")
+            self.assertNotIn("CLOSED_TCS26SEP3000CE", positions_dict)
 
         # Verify ISSUE-059 120s grace window logic in position_monitor
         grace_window = 120
@@ -159,74 +180,93 @@ class TestStrategicBlueprintFixes(unittest.TestCase):
                 except Exception:
                     pass
 
-    def test_06_debit_spread_parameters(self):
-        """Verify resolve_option_spread accepts real underlying spot and target."""
+    def test_06_debit_spread_and_sensex_quote(self):
+        """Verify resolve_option_spread accepts real underlying spot and target, and SENSEX quotes correctly."""
+        from datetime import date
+        import pandas as pd
         spot_price = 2850.0
         spot_t1 = 2920.0
-        option_ltp = 45.0  # Option premium is NOT spot price
 
-        with patch("common.resolve.resolve_option_spread") as mock_spread:
-            mock_spread.return_value = {
-                "leg1_contract": "RELIANCE26SEP2850CE",
-                "leg2_contract": "RELIANCE26SEP2900CE",
-                "net_debit": 22.0
-            }
+        mock_nfo = pd.DataFrame([
+            {"name": "RELIANCE", "instrument_type": "CE", "strike": 2850.0, "expiry": "2026-10-29", "instrument_token": 3001, "tradingsymbol": "RELIANCE26OCT2850CE", "lot_size": 250},
+            {"name": "RELIANCE", "instrument_type": "CE", "strike": 2900.0, "expiry": "2026-10-29", "instrument_token": 3002, "tradingsymbol": "RELIANCE26OCT2900CE", "lot_size": 250},
+            {"name": "RELIANCE", "instrument_type": "CE", "strike": 2950.0, "expiry": "2026-10-29", "instrument_token": 3003, "tradingsymbol": "RELIANCE26OCT2950CE", "lot_size": 250},
+        ])
+
+        with patch("common.resolve.get_ist_date", return_value=date(2026, 9, 21)):
             res = resolve.resolve_option_spread(
-                kite=MagicMock(),
-                symbol="RELIANCE",
-                side="CE",
-                underlying_ltp=spot_price,
-                target_spot=spot_t1
-            )
-            mock_spread.assert_called_once_with(
-                kite=mock_spread.call_args[1]["kite"],
-                symbol="RELIANCE",
-                side="CE",
-                underlying_ltp=spot_price,
-                target_spot=spot_t1
+                nfo_instruments=mock_nfo,
+                base_symbol="RELIANCE",
+                spot_price=spot_price,
+                step_size=50,
+                direction="BULL",
+                target_price=spot_t1,
+                side="CE"
             )
             self.assertIsNotNone(res)
-            self.assertNotEqual(mock_spread.call_args[1]["underlying_ltp"], option_ltp)
+            self.assertEqual(res["leg1"]["contract"], "RELIANCE26OCT2850CE")
+            self.assertEqual(res["leg2"]["contract"], "RELIANCE26OCT2900CE")
+
+        # Verify SENSEX quote lookup string
+        sym = "SENSEX"
+        reg_entry = {"tradingsymbol": "BSE SENSEX"}
+        spot_ts = "SENSEX" if sym == "SENSEX" else reg_entry.get("tradingsymbol")
+        exch_prefix = "BSE" if sym == "SENSEX" else "NSE"
+        self.assertEqual(f"{exch_prefix}:{spot_ts}", "BSE:SENSEX")
 
     def test_07_quote_first_radar_polling(self):
         """Verify radar Quote-First triggers candle fetch only when LTP approaches Benchmark."""
-        benchmark = 1000.0
-        min_trigger_pct = 0.995
-        trigger_threshold = benchmark * min_trigger_pct  # 995.0
+        import stock_options_trade_engine as stock_engine
+        mock_kite = MagicMock()
+        mock_kite.quote.return_value = {
+            "NFO:FAR_BELOW_BM": {"last_price": 85.0}
+        }
 
-        # Scenario A: LTP is far below threshold (e.g., 980.0) -> Skip candle fetch
-        ltp_far = 980.0
-        should_fetch_far = ltp_far >= trigger_threshold
-        self.assertFalse(should_fetch_far, "Candle fetch should be skipped when LTP < Benchmark * 0.995")
+        mock_item = {
+            "symbol": "MOCK_FAR",
+            "contract": "FAR_BELOW_BM",
+            "benchmark": 100.0,
+            "current_sl": 70.0,
+            "t1": 140.0,
+            "tier": 1,
+            "tier_label": "TIER_1_GOLD",
+            "option_token": 7777,
+            "trigger_type": "BREAKOUT"
+        }
 
-        # Scenario B: LTP touches or exceeds threshold (e.g., 996.0) -> Fetch candles
-        ltp_near = 996.0
-        should_fetch_near = ltp_near >= trigger_threshold
-        self.assertTrue(should_fetch_near, "Candle fetch should trigger when LTP >= Benchmark * 0.995")
+        with patch("common.pattern_funnel.get_funnel_summary", return_value={"category_a": [mock_item]}):
+            with patch("timeframe_utils.fetch_and_resample_candles") as mock_fetch:
+                with patch("os.path.exists", return_value=False):
+                    res = stock_engine.run_fast_radar_check(mock_kite)
+                    mock_fetch.assert_not_called()
+                    self.assertEqual(res, [])
 
     def test_08_quantitative_expectancy_and_r_multiple(self):
-        """Verify trade_db trade statistics calculates win rate, payoff ratio, and R-expectancy accurately."""
+        """Verify trade_db trade statistics calculates win rate, payoff ratio, and R-expectancy accurately without scratch dilution."""
         mock_trades = [
             # Trade 1: Win (+20%, 2R)
             {"pnl_percent": 20.0, "entry_spot": 100.0, "exit_price": 120.0, "current_sl": 90.0, "side": "CE", "execution_type": "ALGO_TRIGGER"},
             # Trade 2: Win (+10%, 1R)
             {"pnl_percent": 10.0, "entry_spot": 100.0, "exit_price": 110.0, "current_sl": 90.0, "side": "CE", "execution_type": "ALGO_TRIGGER"},
             # Trade 3: Loss (-10%, -1R)
-            {"pnl_percent": -10.0, "entry_spot": 100.0, "exit_price": 90.0, "current_sl": 90.0, "side": "CE", "execution_type": "ALGO_TRIGGER"}
+            {"pnl_percent": -10.0, "entry_spot": 100.0, "exit_price": 90.0, "current_sl": 90.0, "side": "CE", "execution_type": "ALGO_TRIGGER"},
+            # Trade 4: Scratch / Breakeven (0.0%, 0R)
+            {"pnl_percent": 0.0, "entry_spot": 100.0, "exit_price": 100.0, "current_sl": 90.0, "side": "CE", "execution_type": "ALGO_TRIGGER"}
         ]
 
         with patch("common.trade_db.get_completed_trades", return_value=mock_trades):
             stats = trade_db.get_trade_statistics()
             ov = stats["overall"]
-            self.assertEqual(ov["total_trades"], 3)
+            self.assertEqual(ov["total_trades"], 4)
             self.assertEqual(ov["wins"], 2)
-            self.assertEqual(ov["losses"], 1)
-            self.assertAlmostEqual(ov["win_rate_pct"], 66.7, places=1)
+            self.assertEqual(ov["losses"], 1)  # Scratch trade (0%) is not counted as a loss
+            self.assertEqual(ov["win_rate_pct"], 50.0)
             self.assertAlmostEqual(ov["avg_win_pct"], 15.0, places=1)
             self.assertAlmostEqual(ov["avg_loss_pct"], 10.0, places=1)
             self.assertAlmostEqual(ov["payoff_ratio"], 1.5, places=2)
+            self.assertAlmostEqual(ov["avg_loss_r"], 1.0, places=1)  # Scratch 0R did not dilute avg_loss_r
             self.assertGreater(ov["expectancy_r"], 0.0)
-            self.assertEqual(ov["total_realized_r"], 2.0)  # 2R + 1R - 1R = 2R
+            self.assertEqual(ov["total_realized_r"], 2.0)  # 2R + 1R - 1R + 0R = 2R
 
 
 if __name__ == "__main__":

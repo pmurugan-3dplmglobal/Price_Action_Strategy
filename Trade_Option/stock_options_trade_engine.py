@@ -1034,7 +1034,7 @@ def run_fast_radar_check(kite):
                     logging.debug(f"[RADAR FAST SKIP: SL BREACH VIA QUOTE] {sym} ({item.get('contract')}) live LTP {live_ltp:.2f} <= SL {sl:.2f}. Skipping candle fetch.")
                     continue
 
-                min_trigger_pct = 0.980 if item.get("trigger_type") == "POST_D_RETEST" else 0.995
+                min_trigger_pct = 0.980 if (item.get("trigger_type") == "POST_D_RETEST" or (sl > 0 and t1 > 0)) else 0.995
                 if live_ltp < (bm * min_trigger_pct):
                     logging.debug(f"[RADAR QUOTE-FIRST GATE] {sym} ({item.get('contract')}): LTP {live_ltp:.2f} < Benchmark threshold ({bm * min_trigger_pct:.2f}). Skipping candle fetch.")
                     continue

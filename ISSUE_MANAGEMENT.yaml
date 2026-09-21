@@ -25,15 +25,23 @@ issues:
     6. Scanning 210 F&O stock options candle history took 15-30+ minutes due to rate-limit throttles.
     7. High limit prices triggered Kite Limit Price Protection (LPP) rejections.
     8. Dashboard lacked quantitative edge visibility (win rate, payoff ratio, realized R-multiples, expectancy).
+    9. SENSEX spot quote failed Kite lookup due to 'BSE:BSE SENSEX' string formatting.
+    10. 1-Click Buy Debit Spread retained naked benchmark price instead of recalculating Leg 1 ask/LTP.
+    11. Closed trades staged empty ghost records with trade_id None in sync_kite_positions before closed checks.
+    12. Scratch trades (0% PnL) diluted avg_loss_pct and avg_loss_r in trade_db.
   root_cause: |
     1. stock_options_trade_engine and 1-Click Buy passed option premium as underlying_ltp to resolve_option_spread.
-    2. index_options_trade_engine hardcoded 5m/15m defaults.
+    2. index_options_trade_engine and position_monitor hardcoded 3m/5m/15m defaults.
     3. reconcile_broker_live_positions re-created trades for positions closed earlier that day.
-    4. 0DTE expiry rollover was set to 13:30 IST instead of 11:30 IST.
+    4. 0DTE expiry rollover and scan_symbol cutoff was set to 12:30/13:30 IST instead of 11:30 IST.
     5. In-memory token bucket rate limiters were isolated per process without cross-process synchronization.
     6. Full OHLCV candle downloads were requested for all 210 stocks regardless of price proximity to trigger benchmark.
     7. Placing limit buy orders at raw trigger levels above current LTP exceeded Kite RMS LPP threshold band (+8%).
     8. Dashboard compute_stats did not integrate segmented R-multiples and mathematical expectancy.
+    9. BSE registry entry uses tradingsymbol 'BSE SENSEX', resulting in 'BSE:BSE SENSEX' when prepending BSE.
+    10. 1-Click Buy route did not re-quote Leg 1 ask/ltp after resolving spread, keeping naked benchmark price.
+    11. sync_kite_positions inserted pos_key into positions_dict before is_contract_closed_today check.
+    12. trade_db included <= 0 in loss calculations, diluting average loss R-multiples with 0.0 values.
   affected_files:
   - common/paths.py
   - common/trading_core.py
@@ -51,13 +59,17 @@ issues:
   - scratch/run_full_regression_test.py
   fix_applied: |
     1. Passed real underlying spot and spot_t1 to resolve_option_spread in stock engine and 1-Click Buy.
-    2. Aligned index engine defaults to 15m entry / 60m anchor in code and program_config.json.
+    2. Aligned index engine defaults to 15m entry / 60m anchor across code, config schemas, and position_monitor.
     3. Added is_contract_closed_today() check and _CLOSED_CONTRACTS_TODAY tracking to halt reconciliation ping-pong while preserving 120s order-fill grace window.
-    4. Advanced 0DTE index options rollover cutoff to 11:30 IST (rolling to next weekly).
+    4. Advanced 0DTE index options rollover cutoff to 11:30 IST across resolve_option_strikes, scan_symbol, and engines.
     5. Implemented MultiProcessTokenBucketRateLimiter with SQLite WAL atomic transactions capping aggregate Kite API calls to 2.8 req/s.
     6. Integrated Quote-First trigger polling in stock radar loop using bulk kite.quote(), skipping candle downloads when LTP < Benchmark * 0.995.
-    7. Enforced clamp_lpp_buy_price() capping limit buy price at min(limit_price, ltp * 1.08) to prevent Kite LPP rejections.
+    7. Enforced clamp_lpp_buy_price() capping limit buy price at min(limit_price, ltp * 1.07) to prevent Kite LPP rejections.
     8. Enhanced trade_db with payoff ratio and R-expectancy metrics, displayed in real-time UI ribbon on Dashboard.
+    9. Fixed SENSEX quote formatting to 'BSE:SENSEX' in index engine and app_option_Trade.
+    10. Recalculated Leg 1 ask/LTP pricing and clamped via clamp_lpp_buy_price upon 1-Click Buy debit spread resolution.
+    11. Positioned is_contract_closed_today at head of sync_kite_positions loop, preventing ghost staging.
+    12. Restructured trade_db loss metrics to strictly negative (< 0), preventing scratch trade dilution.
   verification: |
     1. scratch/test_strategic_blueprint_fixes.py passed 8/8 (100% SUCCESS).
     2. scratch/run_full_regression_test.py passed all 23 regression test suites (100% SUCCESS).

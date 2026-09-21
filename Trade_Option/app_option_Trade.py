@@ -119,8 +119,8 @@ PROGRAMS = {
         "log_file": INDEX_LOG_FILE,
         "config_fields": {
             "execution_mode": {"label": "Execution Mode", "type": "select", "options": ["AUTO", "DEBIT_SPREAD", "NAKED_ONLY"], "default": "AUTO"},
-            "timeframe_entry": {"label": "Entry Timeframe", "type": "select", "options": ["3minute","5minute","10minute","15minute","30minute","60minute","75min","4hr","day","week"], "default": "3minute"},
-            "timeframe_anchor": {"label": "Anchor Timeframe", "type": "select", "options": ["3minute","5minute","10minute","15minute","30minute","60minute","75min","4hr","day","week"], "default": "15minute"},
+            "timeframe_entry": {"label": "Entry Timeframe", "type": "select", "options": ["3minute","5minute","10minute","15minute","30minute","60minute","75min","4hr","day","week"], "default": "15minute"},
+            "timeframe_anchor": {"label": "Anchor Timeframe", "type": "select", "options": ["3minute","5minute","10minute","15minute","30minute","60minute","75min","4hr","day","week"], "default": "60minute"},
             "capital": {"label": "Capital", "type": "number", "default": 100000.0},
             "max_daily_loss_pct": {"label": "Daily Loss Limit (%)", "type": "number", "default": 3.0},
             "strike_range": {"label": "Strike Range (±)", "type": "number", "default": 1},
@@ -2015,11 +2015,14 @@ def api_buy_scanned_trade():
                 logging.warning(f"Portfolio risk check error in 1-Click Buy: {p_err}")
 
             try:
+                from common.session import safe_kite_call
                 q_key = f"{exch}:{contract}"
-                q = _kite_session.quote([q_key])
+                q = safe_kite_call(_kite_session.quote, [q_key]) if _kite_session else {}
                 ltp = float(q.get(q_key, {}).get("last_price", 0))
                 ask = 0
                 depth = q.get(q_key, {}).get("depth", {}).get("sell", [])
+                if depth and len(depth) > 0 and depth[0].get("price", 0) > 0:
+                    ask = float(depth[0]["price"])
                 bm = float(data.get("benchmark") or 0)
                 if bm > 0:
                     price = round(bm * 1.005, 1)
@@ -2090,14 +2093,14 @@ def api_buy_scanned_trade():
                             try:
                                 if is_index:
                                     reg_entry = INDEX_REGISTRY.get(symbol, {})
-                                    spot_ts = reg_entry.get("tradingsymbol", symbol)
+                                    spot_ts = "SENSEX" if symbol == "SENSEX" else reg_entry.get("tradingsymbol", symbol)
                                     exch_prefix = "BSE" if symbol == "SENSEX" else "NSE"
-                                    q_spot = _kite_session.quote([f"{exch_prefix}:{spot_ts}"])
+                                    q_spot = safe_kite_call(_kite_session.quote, [f"{exch_prefix}:{spot_ts}"])
                                     real_spot = float(q_spot.get(f"{exch_prefix}:{spot_ts}", {}).get("last_price", 0.0))
                                 else:
                                     reg_entry = STOCK_REGISTRY.get(symbol, {})
                                     spot_ts = reg_entry.get("tradingsymbol", symbol)
-                                    q_spot = _kite_session.quote([f"NSE:{spot_ts}"])
+                                    q_spot = safe_kite_call(_kite_session.quote, [f"NSE:{spot_ts}"])
                                     real_spot = float(q_spot.get(f"NSE:{spot_ts}", {}).get("last_price", 0.0))
                             except Exception as q_err:
                                 logging.debug(f"Underlying spot quote error in 1-Click Buy: {q_err}")
@@ -2125,6 +2128,16 @@ def api_buy_scanned_trade():
                             exch = "BFO" if ("SENSEX" in c_str or "BSE" in c_str) else "NFO"
                             lot_size = get_option_lot_size(contract) or registry.get(symbol, {}).get("lot_size", 1)
                             logging.info(f"[1-CLICK BUY DEBIT SPREAD RESOLVED] {symbol}: Leg 1 (Long)={contract} | Leg 2 (Short)={spread_info['leg2']['contract']}")
+                            # Recalculate Leg 1 quote, price and LPP clamp for the spread leg
+                            q_key = f"{exch}:{contract}"
+                            q = safe_kite_call(_kite_session.quote, [q_key]) if _kite_session else {}
+                            ltp = float(q.get(q_key, {}).get("last_price", 0))
+                            ask = 0
+                            depth = q.get(q_key, {}).get("depth", {}).get("sell", [])
+                            if depth and len(depth) > 0 and depth[0].get("price", 0) > 0:
+                                ask = float(depth[0]["price"])
+                            price = round((ask if ask > 0 else ltp) * 1.005, 1)
+                            price = clamp_lpp_buy_price(price, ask if ask > 0 else ltp)
                     except Exception as sp_resolve_err:
                         logging.warning(f"1-Click Buy spread resolution error: {sp_resolve_err}")
 
@@ -2202,7 +2215,7 @@ def api_buy_scanned_trade():
                         leg2_c = spread_info["leg2"]["contract"]
                         leg2_exch = "BFO" if ("SENSEX" in leg2_c.upper() or "BSE" in leg2_c.upper()) else "NFO"
                         leg2_q_key = f"{leg2_exch}:{leg2_c}"
-                        leg2_q = _kite_session.quote([leg2_q_key])
+                        leg2_q = safe_kite_call(_kite_session.quote, [leg2_q_key]) if _kite_session else {}
                         leg2_depth = leg2_q.get(leg2_q_key, {}).get("depth", {}).get("buy", [])
                         leg2_bid = float(leg2_depth[0]["price"]) if (leg2_depth and len(leg2_depth) > 0 and leg2_depth[0].get("price", 0) > 0) else float(leg2_q.get(leg2_q_key, {}).get("last_price", 0))
                         leg2_limit = round(leg2_bid * 0.995, 1) if leg2_bid > 0 else 0
