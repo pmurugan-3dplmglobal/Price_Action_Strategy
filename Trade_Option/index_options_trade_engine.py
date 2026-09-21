@@ -637,6 +637,15 @@ def main_scan_loop(kite):
                 "position_type": "option",
                 "benchmark": 0, "anchor_floor": 0, "direction": "BULL"
             }
+            # DEBIT SPREAD RECOVERY: Check if there is an opposing short leg for this symbol on broker
+            short_p = next((sp for sp in all_positions if sp.get("exchange") in ("NFO", "BFO") and int(sp.get("quantity", 0)) < 0 and match_registry_symbol(INDEX_REGISTRY, sp.get("tradingsymbol", "")) == symbol), None)
+            if short_p:
+                pos["position_type"] = "option_spread"
+                pos["leg2_contract"] = short_p["tradingsymbol"]
+                pos["leg2_qty"] = abs(int(short_p["quantity"]))
+                pos["leg2_token"] = int(short_p.get("instrument_token", 0))
+                logging.info(f"[KITE_RECOVER_SPREAD] Linked short leg {short_p['tradingsymbol']} (Qty: {pos['leg2_qty']}) to {p['tradingsymbol']}")
+
             clear_executed_exit(p["tradingsymbol"])
             pos["trade_id"], _created = trade_db.create_trade("index", symbol, {k: v for k, v in pos.items() if k != "trade_id"})
             scan_sl = lookup_scan_sl_target(p["tradingsymbol"], symbol, "index", kite, pos["entry_spot"], TIMEFRAME_ENTRY, TIMEFRAME_ANCHOR)

@@ -916,6 +916,27 @@ def close_position(kite, pos, live_market=True, product=None, qty_override=None,
         logging.info(f"[BACKTEST EXIT] {contract}")
         return {"success": True, "reason": "BACKTEST"}
 
+    # DYNAMIC BROKER SPREAD DETECTION & SAFEGUARD:
+    # If this is an option exit and pos lacks leg2_contract (e.g. position was recovered from broker),
+    # verify if Kite currently holds an open short option in the same underlying symbol.
+    # If a short leg exists, auto-link it and cover it FIRST to prevent Zerodha RMS naked margin rejections!
+    if kite and live_market and is_option and (pos.get("position_type") != "option_spread" or not pos.get("leg2_contract")):
+        try:
+            underlying_sym = pos.get("symbol") or ""
+            net_positions = kite.positions().get("net", [])
+            for np in net_positions:
+                ts = np.get("tradingsymbol", "")
+                n_qty = int(np.get("quantity", 0))
+                if n_qty < 0 and is_option_contract(ts):
+                    if (underlying_sym and underlying_sym in ts) or (contract[:5] in ts):
+                        logging.warning(f"[SPREAD AUTO-DETECT] Detected unlinked short leg {ts} (Qty: {n_qty}) on broker for {contract}. Auto-linking to {contract} and covering FIRST.")
+                        pos["position_type"] = "option_spread"
+                        pos["leg2_contract"] = ts
+                        pos["leg2_qty"] = abs(n_qty)
+                        break
+        except Exception as detect_err:
+            logging.debug(f"[SPREAD AUTO-DETECT] Broker position check error: {detect_err}")
+
     # SPREAD EXIT INVERSION: If option spread, cover Leg 2 Short Leg FIRST!
     # Buying short leg back eliminates naked writing risk and prevents Zerodha RMS margin spikes.
     if pos.get("position_type") == "option_spread" and pos.get("leg2_contract"):

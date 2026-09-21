@@ -252,10 +252,15 @@ def sync_kite_positions(kite, registry, positions_dict, lock, engine, timeframe_
             is_stock = p.get("exchange", "") == "NSE"
             is_opt = is_option_contract(p.get("tradingsymbol", ""))
             if nq < 0 and (not is_stock and is_opt):
-                # Option positions are long-only
+                # If this is a short option, check if it's the Leg 2 hedge for an active long position in the same symbol
                 with lock:
-                    if sym in positions_dict:
-                        del positions_dict[sym]
+                    target_long = positions_dict.get(sym)
+                    if target_long and target_long.get("contract") != p.get("tradingsymbol"):
+                        target_long["position_type"] = "option_spread"
+                        target_long["leg2_contract"] = p.get("tradingsymbol")
+                        target_long["leg2_qty"] = abs(nq)
+                        target_long["leg2_token"] = int(p.get("instrument_token", 0))
+                        logging.info(f"[KITE_SYNC_SPREAD] Linked short leg {p.get('tradingsymbol')} (Qty: {abs(nq)}) to long {target_long.get('contract')}")
                 continue
 
             contract = p["tradingsymbol"]
