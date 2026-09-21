@@ -778,6 +778,24 @@ except Exception as e:
     errors.append(f"Strategic Blueprint Invariants Failed: {e}")
     print(f" FAILED [ERR] ({e})", flush=True)
 
+# -------------------------------------------------------------------------
+# TEST 24: Incident 1 & 2 Invariants (Anchor Wick Guard, Point D Color, Trailing SL Sanity)
+# -------------------------------------------------------------------------
+print("[TEST 24] Testing Incident 1 & 2 Invariants (Wick Guard, Point D Color, Trailing SL Sanity)...", end="", flush=True)
+try:
+    import subprocess
+    import paths
+    cmd_incidents = [
+        sys.executable,
+        os.path.join(paths.SCRATCH_DIR, "test_incident_fixes.py")
+    ]
+    res_inc = subprocess.run(cmd_incidents, cwd=paths.PROJECT_ROOT, capture_output=True, text=True)
+    assert res_inc.returncode == 0, f"Incident unit tests failed:\nSTDOUT:\n{res_inc.stdout}\nSTDERR:\n{res_inc.stderr}"
+    print(" PASSED [OK]", flush=True)
+except Exception as e:
+    errors.append(f"Incident 1 & 2 Invariants Failed: {e}")
+    print(f" FAILED [ERR] ({e})", flush=True)
+
 print("\n" + "=" * 100)
 if not errors:
     print("      ALL REGRESSION TESTS PASSED WITH 100% SUCCESS -- ZERO REGRESSIONS FOUND!")

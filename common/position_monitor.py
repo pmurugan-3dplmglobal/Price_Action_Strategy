@@ -1732,13 +1732,16 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                             tight_sl = round(round((entry_s * 0.90) / 0.05) * 0.05, 2)
                             curr_sl = float(pos.get("current_sl") or 0.0)
                             if tight_sl > curr_sl:
-                                with lock:
-                                    if sym in positions_dict:
-                                        positions_dict[sym]["current_sl"] = tight_sl
-                                        positions_dict[sym]["theta_stagnation_tightened"] = True
-                                logging.info(f"[THETA_STAGNATION_GUARD] {sym} held for {held_mins:.0f}m at {now_time_str} IST with flat PnL ({curr_pnl:.1f}%). Tightened SL from {curr_sl:.2f} -> {tight_sl:.2f} (-10% cap) to protect against afternoon decay.")
-                                if tid:
-                                    trade_db.update_trade(tid, {"current_sl": tight_sl, "theta_stagnation_tightened": True})
+                                if live_ltp > 0 and tight_sl >= live_ltp:
+                                    logging.warning(f"[THETA_STAGNATION_REJECT] Tightened SL ({tight_sl:.2f}) >= live LTP ({live_ltp:.2f}) for long {sym}. Skipping invalid tightening.")
+                                else:
+                                    with lock:
+                                        if sym in positions_dict:
+                                            positions_dict[sym]["current_sl"] = tight_sl
+                                            positions_dict[sym]["theta_stagnation_tightened"] = True
+                                    logging.info(f"[THETA_STAGNATION_GUARD] {sym} held for {held_mins:.0f}m at {now_time_str} IST with flat PnL ({curr_pnl:.1f}%). Tightened SL from {curr_sl:.2f} -> {tight_sl:.2f} (-10% cap) to protect against afternoon decay.")
+                                    if tid:
+                                        trade_db.update_trade(tid, {"current_sl": tight_sl, "theta_stagnation_tightened": True})
 
             # ── STALE / OUTLIER ENTRY PRICE GUARD ──
             # Prevent false emergency SL triggers when entry_spot or current_sl has an extreme data mismatch vs live LTP
@@ -2082,20 +2085,32 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                     trail_label = "TRAIL-1 (+8% Gain Lock -> +2% BE)"
                     log_sl_label = f"SL=+BE {new_sl:.2f} (+{gain_pct:.1f}% gain locked)"
 
-                sl_stamp = dt.now().isoformat()
-                with lock:
-                    if sym in positions_dict:
-                        positions_dict[sym]["current_sl"] = new_sl
-                        positions_dict[sym]["trailing_stage"] = 1
-                        positions_dict[sym]["sl_set_time"] = sl_stamp
-                ext_metric = f"Low={lp:.2f}" if is_short_stock else f"High={hp:.2f}"
-                logging.info(f"{trail_label} {sym}: {ext_metric} (+{gain_pct:.1f}%) -> SL={new_sl:.2f}")
-                log_fn(sym, pos.get("pattern", ""), timeframe_entry, "TRAIL_BE", "MUTATED",
-                       log_sl_label,
-                       entry=entry_s, sl=new_sl, target=t1_val,
-                       event_time=last.get('date'))
-                if tid:
-                    trade_db.update_trade(tid, {"trailing_stage": 1, "current_sl": new_sl, "sl_set_time": sl_stamp})
+                # ── TRAILING STOP-LOSS PHYSICAL SANITY GUARD ──
+                # A stop-loss can NEVER be trailed to or beyond the current live market price (which causes an instant suicide stopout).
+                trail_valid = True
+                if live_ltp > 0:
+                    if not is_short_stock and new_sl >= live_ltp:
+                        logging.warning(f"[TRAIL_SL_REJECT] Refusing to trail SL ({new_sl:.2f}) >= live LTP ({live_ltp:.2f}) for long {sym} ({pos.get('contract')}). Price has pulled back below trail level.")
+                        trail_valid = False
+                    elif is_short_stock and new_sl <= live_ltp:
+                        logging.warning(f"[TRAIL_SL_REJECT] Refusing to trail SL ({new_sl:.2f}) <= live LTP ({live_ltp:.2f}) for short {sym} ({pos.get('contract')}). Price has rallied above trail level.")
+                        trail_valid = False
+
+                if trail_valid:
+                    sl_stamp = dt.now().isoformat()
+                    with lock:
+                        if sym in positions_dict:
+                            positions_dict[sym]["current_sl"] = new_sl
+                            positions_dict[sym]["trailing_stage"] = 1
+                            positions_dict[sym]["sl_set_time"] = sl_stamp
+                    ext_metric = f"Low={lp:.2f}" if is_short_stock else f"High={hp:.2f}"
+                    logging.info(f"{trail_label} {sym}: {ext_metric} (+{gain_pct:.1f}%) -> SL={new_sl:.2f}")
+                    log_fn(sym, pos.get("pattern", ""), timeframe_entry, "TRAIL_BE", "MUTATED",
+                           log_sl_label,
+                           entry=entry_s, sl=new_sl, target=t1_val,
+                           event_time=last.get('date'))
+                    if tid:
+                        trade_db.update_trade(tid, {"trailing_stage": 1, "current_sl": new_sl, "sl_set_time": sl_stamp})
 
             # Upgrade Trailing Stage 1 if position extends from +12% to +18%:
             elif not is_stock and pos.get("trailing_stage", 0) == 1 and gain_pct >= opt_gain_trigger_2:
@@ -2103,18 +2118,21 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                 sl_offset_2 = entry_s * (opt_sl_lock_pct_2 / 100.0)
                 opt_target_2 = round(round((entry_s + sl_offset_2) / 0.05) * 0.05, 2)
                 if opt_target_2 > curr_sl:
-                    sl_stamp = dt.now().isoformat()
-                    with lock:
-                        if sym in positions_dict:
-                            positions_dict[sym]["current_sl"] = opt_target_2
-                            positions_dict[sym]["sl_set_time"] = sl_stamp
-                    logging.info(f"TRAIL-1 UPGRADE {sym}: High={hp:.2f} (+{gain_pct:.1f}%) -> SL={opt_target_2:.2f} (+{opt_sl_lock_pct_2:.0f}% SL locked)")
-                    log_fn(sym, pos.get("pattern", ""), timeframe_entry, "TRAIL_UPGRADE", "MUTATED",
-                           f"SL=+{opt_sl_lock_pct_2:.0f}% {opt_target_2:.2f} (+{gain_pct:.1f}% locked)",
-                           entry=entry_s, sl=opt_target_2, target=t1_val or t2_val,
-                           event_time=last.get('date'))
-                    if tid:
-                        trade_db.update_trade(tid, {"current_sl": opt_target_2, "sl_set_time": sl_stamp})
+                    if live_ltp > 0 and opt_target_2 >= live_ltp:
+                        logging.warning(f"[TRAIL_SL_REJECT] Refusing to upgrade Stage 2 SL ({opt_target_2:.2f}) >= live LTP ({live_ltp:.2f}) for long {sym}. Skipping trail upgrade.")
+                    else:
+                        sl_stamp = dt.now().isoformat()
+                        with lock:
+                            if sym in positions_dict:
+                                positions_dict[sym]["current_sl"] = opt_target_2
+                                positions_dict[sym]["sl_set_time"] = sl_stamp
+                        logging.info(f"TRAIL-1 UPGRADE {sym}: High={hp:.2f} (+{gain_pct:.1f}%) -> SL={opt_target_2:.2f} (+{opt_sl_lock_pct_2:.0f}% SL locked)")
+                        log_fn(sym, pos.get("pattern", ""), timeframe_entry, "TRAIL_UPGRADE", "MUTATED",
+                               f"SL=+{opt_sl_lock_pct_2:.0f}% {opt_target_2:.2f} (+{gain_pct:.1f}% locked)",
+                               entry=entry_s, sl=opt_target_2, target=t1_val or t2_val,
+                               event_time=last.get('date'))
+                        if tid:
+                            trade_db.update_trade(tid, {"current_sl": opt_target_2, "sl_set_time": sl_stamp})
 
             t1_hit = ((lp <= (t1_val + buf_t1)) if is_short_stock else (hp >= (t1_val - buf_t1))) if (t1_val is not None and t1_val > 0) else False
 
@@ -2227,6 +2245,14 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                                 be_offset = max(buf_dist, 0.5 * atr)
                                 be_sl = round(round((entry_s + be_offset) / 0.05) * 0.05, 2)
                                 partial_pnl = ((exit_price - entry_s) / entry_s * 100) if entry_s else 0
+                            curr_sl_before = float(pos.get("current_sl") or 0.0)
+                            if live_ltp > 0:
+                                if not is_short_stock and be_sl >= live_ltp:
+                                    logging.warning(f"[TRAIL_SL_REJECT] Refusing to trail Runner SL (+BE {be_sl:.2f}) >= live LTP ({live_ltp:.2f}) for long {sym}. Clamping to current SL {curr_sl_before:.2f}.")
+                                    be_sl = curr_sl_before
+                                elif is_short_stock and be_sl <= live_ltp:
+                                    logging.warning(f"[TRAIL_SL_REJECT] Refusing to trail Runner SL (+BE {be_sl:.2f}) <= live LTP ({live_ltp:.2f}) for short {sym}. Clamping to current SL {curr_sl_before:.2f}.")
+                                    be_sl = curr_sl_before
                             with lock:
                                 if sym in positions_dict:
                                     positions_dict[sym]["position_size"] = remaining_lots
@@ -2310,21 +2336,30 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                                 be_offset = max(buf_dist, 0.5 * atr)
                                 be_sl = round(round((entry_s + be_offset) / 0.05) * 0.05, 2)
                                 new_sl = max(curr_sl, be_sl)
-                            sl_stamp = dt.now().isoformat()
-                            with lock:
-                                if sym in positions_dict:
-                                    positions_dict[sym]["current_sl"] = new_sl
-                                    positions_dict[sym]["trailing_stage"] = 1
-                                    positions_dict[sym]["t1_booked"] = True
-                                    positions_dict[sym]["sl_set_time"] = sl_stamp
-                            pos["t1_booked"] = True
-                            logging.info(f"TRAIL-1 {sym}: SL=+BE ({new_sl:.2f})")
-                            log_fn(sym, pos.get("pattern", ""), timeframe_entry, "TRAIL_BE", "MUTATED",
-                                   f"SL=+BE {new_sl:.2f}",
-                                   entry=entry_s, sl=new_sl, target=t1_val,
-                                   event_time=last.get('date'))
-                            if tid:
-                                trade_db.update_trade(tid, {"trailing_stage": 1, "t1_booked": True, "current_sl": new_sl, "sl_set_time": sl_stamp})
+                            trail_valid = True
+                            if live_ltp > 0:
+                                if not is_short_stock and new_sl >= live_ltp:
+                                    logging.warning(f"[TRAIL_SL_REJECT] Refusing to trail SL (+BE {new_sl:.2f}) >= live LTP ({live_ltp:.2f}) for long {sym}.")
+                                    trail_valid = False
+                                elif is_short_stock and new_sl <= live_ltp:
+                                    logging.warning(f"[TRAIL_SL_REJECT] Refusing to trail SL (+BE {new_sl:.2f}) <= live LTP ({live_ltp:.2f}) for short {sym}.")
+                                    trail_valid = False
+                            if trail_valid:
+                                sl_stamp = dt.now().isoformat()
+                                with lock:
+                                    if sym in positions_dict:
+                                        positions_dict[sym]["current_sl"] = new_sl
+                                        positions_dict[sym]["trailing_stage"] = 1
+                                        positions_dict[sym]["t1_booked"] = True
+                                        positions_dict[sym]["sl_set_time"] = sl_stamp
+                                pos["t1_booked"] = True
+                                logging.info(f"TRAIL-1 {sym}: SL=+BE ({new_sl:.2f})")
+                                log_fn(sym, pos.get("pattern", ""), timeframe_entry, "TRAIL_BE", "MUTATED",
+                                       f"SL=+BE {new_sl:.2f}",
+                                       entry=entry_s, sl=new_sl, target=t1_val,
+                                       event_time=last.get('date'))
+                                if tid:
+                                    trade_db.update_trade(tid, {"trailing_stage": 1, "t1_booked": True, "current_sl": new_sl, "sl_set_time": sl_stamp})
 
             t2_hit = ((lp <= (t2_val + buf_t2)) if is_short_stock else (hp >= (t2_val - buf_t2))) if (t2_val is not None and t2_val > 0) else False
             if pos.get("trailing_stage", 0) == 1 and t2_val and t2_hit:
@@ -2369,19 +2404,28 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                         new_sl = min(curr_sl, target_base) if curr_sl > 0 else target_base
                     else:
                         new_sl = max(curr_sl, target_base)
-                    sl_stamp = dt.now().isoformat()
-                    with lock:
-                        if sym in positions_dict:
-                            positions_dict[sym]["current_sl"] = new_sl
-                            positions_dict[sym]["trailing_stage"] = 2
-                            positions_dict[sym]["sl_set_time"] = sl_stamp
-                    logging.info(f"TRAIL-2 {sym}: SL=T1 ({new_sl:.2f})")
-                    log_fn(sym, pos.get("pattern", ""), timeframe_entry, "TRAIL_T1", "MUTATED",
-                           f"SL={new_sl:.2f}",
-                           entry=pos.get("entry_spot", 0), sl=new_sl, target=t2_val,
-                           event_time=last.get('date'))
-                    if tid:
-                        trade_db.update_trade(tid, {"trailing_stage": 2, "current_sl": new_sl, "sl_set_time": sl_stamp})
+                    trail_valid = True
+                    if live_ltp > 0:
+                        if not is_short_stock and new_sl >= live_ltp:
+                            logging.warning(f"[TRAIL_SL_REJECT] Refusing to trail SL=T1 ({new_sl:.2f}) >= live LTP ({live_ltp:.2f}) for long {sym}.")
+                            trail_valid = False
+                        elif is_short_stock and new_sl <= live_ltp:
+                            logging.warning(f"[TRAIL_SL_REJECT] Refusing to trail SL=T1 ({new_sl:.2f}) <= live LTP ({live_ltp:.2f}) for short {sym}.")
+                            trail_valid = False
+                    if trail_valid:
+                        sl_stamp = dt.now().isoformat()
+                        with lock:
+                            if sym in positions_dict:
+                                positions_dict[sym]["current_sl"] = new_sl
+                                positions_dict[sym]["trailing_stage"] = 2
+                                positions_dict[sym]["sl_set_time"] = sl_stamp
+                        logging.info(f"TRAIL-2 {sym}: SL=T1 ({new_sl:.2f})")
+                        log_fn(sym, pos.get("pattern", ""), timeframe_entry, "TRAIL_T1", "MUTATED",
+                               f"SL={new_sl:.2f}",
+                               entry=pos.get("entry_spot", 0), sl=new_sl, target=t2_val,
+                               event_time=last.get('date'))
+                        if tid:
+                            trade_db.update_trade(tid, {"trailing_stage": 2, "current_sl": new_sl, "sl_set_time": sl_stamp})
 
             t3_hit = ((lp <= (t3_val + buf_t3)) if is_short_stock else (hp >= (t3_val - buf_t3))) if (t3_val is not None and t3_val > 0) else False
             if t3_val and t3_hit:
@@ -2554,13 +2598,14 @@ def monitor_all_active_positions(kite, live=True):
                     "spot_entry": cand_spot_entry,
                     "spot_token": cand_spot_token,
                     "spot_t1": cand_spot_t1,
-                    "trailing_stage": int(sl_info.get("trailing_stage") or 0) if sl_info else 0,
+                    "trailing_stage": 0,
                     "pattern": cand_pat,
                     "position_type": "option" if is_opt else "stock",
                     "side": "SELL" if is_short_eq else ("PE" if (is_opt and c_str.endswith("PE")) else ("CE" if is_opt else "BUY")),
                     "direction": "BEAR" if (is_short_eq or (is_opt and c_str.endswith("PE"))) else "BULL",
                     "product": p.get("product", "MIS" if is_short_eq else "CNC"),
-                    "source": "kite"
+                    "source": "kite",
+                    "entry_time": dt.now().isoformat()
                 }
 
                 # Persist unlinked broker position directly into SQLite to preserve state across ticks/restarts
@@ -2570,7 +2615,21 @@ def monitor_all_active_positions(kite, live=True):
                     tid, _created = trade_db.create_trade(eng_type, underlying_sym, broker_pos_dict)
                     if tid:
                         broker_pos_dict["id"] = tid
-                        logging.info(f"[BROKER_RECOVERY_PERSIST] Persisted unlinked broker position {tsym} (Trade #{tid}) into trades.sqlite3")
+                        if not _created:
+                            trade_db.update_trade(tid, {
+                                "entry_spot": broker_avg_p,
+                                "entry_price": broker_avg_p,
+                                "entry_time": dt.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                "current_sl": cand_sl,
+                                "t1": cand_t1,
+                                "t2": cand_t2,
+                                "t3": cand_t3,
+                                "trailing_stage": 0,
+                                "t1_booked": False
+                            })
+                            logging.info(f"[BROKER_RECOVERY_UPDATE] Updated active trade #{tid} for {tsym} with broker avg {broker_avg_p:.2f} and reset entry_time to now.")
+                        else:
+                            logging.info(f"[BROKER_RECOVERY_PERSIST] Persisted unlinked broker position {tsym} (Trade #{tid}) into trades.sqlite3")
                 except Exception as p_err:
                     logging.warning(f"Could not persist broker position {tsym} into DB: {p_err}")
 

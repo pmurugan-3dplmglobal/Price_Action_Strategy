@@ -333,11 +333,11 @@ def scan_anchor_bcd_breakout(df_entry, df_anchor, anchor_tf="", entry_tf="", ena
         # Pre-compute targets for NoPA filter
         t1, t2, t3 = find_profit_targets(df_anchor, benchmark, stop_loss=invalidation)
 
-        # NoPA: discard if SL/T1/T2 already closed past post-A (closing basis)
+        # NoPA: discard if SL/T1/T2 already closed/wicked past post-A
         if t1 is not None:
             after_a = df_entry.iloc[a_idx + 1 :]
             if not after_a.empty:
-                if float(after_a['close'].min()) < a_low:
+                if float(after_a['low'].min()) < a_low or float(after_a['close'].min()) < a_low:
                     continue
                 if float(after_a['close'].max()) >= t1:
                     continue
@@ -382,11 +382,13 @@ def scan_anchor_bcd_breakout(df_entry, df_anchor, anchor_tf="", entry_tf="", ena
         if len(remaining) < 3:
             continue
 
-        # Point B: FIRST candle after A closing above benchmark (max 60 candles, invalid if close < a_low)
+        # Point B: FIRST candle after A closing above benchmark (max 60 candles, invalid if low or close < a_low)
         b_idx = None
         for j in range(min(60, len(remaining))):
-            c_close_b = float(remaining.iloc[j]['close'])
-            if c_close_b < a_low:
+            c_row_b = remaining.iloc[j]
+            c_close_b = float(c_row_b['close'])
+            c_low_b = float(c_row_b['low'])
+            if c_low_b < a_low or c_close_b < a_low:
                 break
             if c_close_b > benchmark:
                 b_idx = a_idx + 1 + j
@@ -394,7 +396,7 @@ def scan_anchor_bcd_breakout(df_entry, df_anchor, anchor_tf="", entry_tf="", ena
         if b_idx is None:
             continue
 
-        # Point C: FIRST candle AFTER B with red retest (dips to/close to benchmark, stays above A.low)
+        # Point C: FIRST candle AFTER B with red retest (dips to/close to benchmark, stays strictly above A.low)
         c_slice = df_entry.iloc[b_idx + 1:]
         c_idx = None
         risk_dist = max(0.50, benchmark - a_low)
@@ -414,14 +416,16 @@ def scan_anchor_bcd_breakout(df_entry, df_anchor, anchor_tf="", entry_tf="", ena
             c_close = float(c_row['close'])
             c_open = float(c_row['open'])
             is_red = c_close < c_open
-            if (c_low <= benchmark and c_close >= a_low and is_red) or \
-               (c_low <= a_low and c_close >= a_low and c_close < float(a['open']) and is_red):
+            # Structural Invalidation: Retest candle cannot breach Anchor A Low floor
+            if c_low < a_low or c_close < a_low:
+                break
+            if (c_low <= benchmark and c_low >= a_low and is_red):
                 c_idx = b_idx + 1 + j
                 break
         if c_idx is None:
             continue
 
-        # Point D: FIRST candle AFTER C closing above benchmark (color independent)
+        # Point D: FIRST candle AFTER C closing above benchmark (MUST be a bullish green candle)
         d_slice = df_entry.iloc[c_idx + 1:]
         d_idx = None
         is_near_close_d = False
@@ -431,13 +435,16 @@ def scan_anchor_bcd_breakout(df_entry, df_anchor, anchor_tf="", entry_tf="", ena
             d_row = d_slice.iloc[j]
             d_close = float(d_row['close'])
             d_open = float(d_row['open'])
+            d_low = float(d_row['low'])
 
-            if d_close < a_low:
+            # Invalidation: If candle breaches Anchor A Low floor, structure is negated
+            if d_low < a_low or d_close < a_low:
                 break
 
             # Case A: Completed Historical Candle (100% closed)
+            # Breakout candle MUST be bullish green (d_close >= d_open) confirming buyer expansion
             if curr_idx < len(df_entry) - 1:
-                if d_close > benchmark:
+                if d_close > benchmark and d_close >= d_open:
                     d_idx = curr_idx
                     break
 
@@ -445,8 +452,8 @@ def scan_anchor_bcd_breakout(df_entry, df_anchor, anchor_tf="", entry_tf="", ena
             else:
                 tf_to_check = entry_tf or anchor_tf
                 if tf_to_check and is_live_candle_near_close(d_row.get('date'), tf_to_check, completion_pct=0.80):
-                    # Guard 1: Benchmark Buffer Guard (+0.3%)
-                    if d_close >= (benchmark * 1.003):
+                    # Guard 1: Benchmark Buffer Guard (+0.3%) & Bullish Green Candle
+                    if d_close >= (benchmark * 1.003) and d_close >= d_open:
                         # Guard 2: Proportional Volume Validation Guard (60% of 20-period avg volume at 80% time)
                         vol_passed = True
                         if 'volume' in df_entry.columns and curr_idx >= 20:
@@ -464,9 +471,9 @@ def scan_anchor_bcd_breakout(df_entry, df_anchor, anchor_tf="", entry_tf="", ena
 
         d = df_entry.iloc[d_idx]
 
-        # Invalidation between A and D: Option A - no candle closes below A.low (A.low floor line)
+        # Invalidation between A and D: No candle wicks or closes below A.low (structural floor)
         between = df_entry.iloc[a_idx + 1 : d_idx]
-        if not between.empty and float(between['close'].min()) < a_low:
+        if not between.empty and (float(between['low'].min()) < a_low or float(between['close'].min()) < a_low):
             continue
 
         close_price = float(d['close'])
@@ -819,10 +826,10 @@ def scan_pattern_lifecycle_stage(df_entry, df_anchor, anchor_tf="", entry_tf="",
         risk = benchmark - invalidation
         rr = (t1 - benchmark) / risk if (t1 and risk > 0) else 0.0
 
-        # 2. Hard Anchor TF Eviction Rule: Discard if post-A closed <= SL or >= T1
+        # 2. Hard Anchor TF Eviction Rule: Discard if post-A low < invalidation or close <= SL or >= T1
         after_a = df_target.iloc[a_idx + 1:]
         if not after_a.empty:
-            if float(after_a['close'].min()) <= invalidation:
+            if float(after_a['low'].min()) < invalidation or float(after_a['close'].min()) <= invalidation:
                 continue
             if t1 is not None and float(after_a['close'].max()) >= t1:
                 continue
@@ -836,7 +843,10 @@ def scan_pattern_lifecycle_stage(df_entry, df_anchor, anchor_tf="", entry_tf="",
         # 3. Check Point B on Anchor TF
         b_idx = None
         for j in range(len(after_a)):
-            if float(after_a.iloc[j]['close']) > benchmark:
+            b_cand = after_a.iloc[j]
+            if float(b_cand['low']) < a_low or float(b_cand['close']) < a_low:
+                break
+            if float(b_cand['close']) > benchmark:
                 b_idx = a_idx + 1 + j
                 break
 
@@ -862,9 +872,11 @@ def scan_pattern_lifecycle_stage(df_entry, df_anchor, anchor_tf="", entry_tf="",
                 is_red = c_close <= c_open
                 is_doji_or_narrow = (abs(c_close - c_open) / max(0.05, c_high - c_low)) <= 0.40
 
-                # Confirmed Retest: Dips to or near benchmark (+/- 1.5%), holds above A.low, and is either a red pullback or a narrow absorption bar
-                if (c_low <= benchmark * 1.015 and c_close >= a_low and (is_red or is_doji_or_narrow)) or \
-                   (c_low <= a_low and c_close >= a_low and c_close < float(a['open']) and is_red):
+                # Invalidation: Retest cannot breach Anchor A Low floor
+                if c_low < a_low or c_close < a_low:
+                    break
+
+                if (c_low <= benchmark * 1.015 and c_low >= a_low and (is_red or is_doji_or_narrow)):
                     c_idx = b_idx + 1 + j
                     break
 

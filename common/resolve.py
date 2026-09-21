@@ -291,6 +291,44 @@ def sync_kite_positions(kite, registry, positions_dict, lock, engine, timeframe_
                         positions_dict[target_key]["option_token"] = int(p.get("instrument_token", 0))
                     positions_dict[target_key]["symbol"] = sym
                     positions_dict[target_key]["contract"] = contract
+
+                    # ── STALE / PRIOR-DAY RE-ENTRY RECONCILIATION GUARD ──
+                    # If this position was opened today (overnight_quantity == 0) or if the existing memory entry_time
+                    # is from a prior calendar day, or if broker entry price differs significantly (>5%),
+                    # reset entry_time to now, reset entry_spot/entry_price, and reset trailing_stage to 0.
+                    today_date = get_ist_now().date()
+                    existing_entry_time = positions_dict[target_key].get("entry_time")
+                    is_prior_day = False
+                    if existing_entry_time:
+                        try:
+                            e_dt = dt.fromisoformat(str(existing_entry_time).split("+")[0].replace("T", " "))
+                            if e_dt.date() < today_date:
+                                is_prior_day = True
+                        except Exception:
+                            pass
+                    
+                    is_fresh_today = int(p.get("overnight_quantity", 0)) == 0 and int(p.get("day_buy_quantity", 0) or p.get("day_sell_quantity", 0)) > 0
+                    old_entry_spot = float(positions_dict[target_key].get("entry_spot") or 0.0)
+                    price_diverged = (old_entry_spot > 0 and entry > 0 and abs(entry - old_entry_spot) / old_entry_spot > 0.05)
+
+                    if (is_prior_day or is_fresh_today or price_diverged) and entry > 0:
+                        logging.info(f"[KITE_SYNC_RESET] Reconciled live position for {contract}: PriorDay={is_prior_day}, FreshToday={is_fresh_today}, PriceDiverged={price_diverged}. Resetting entry_spot {old_entry_spot:.2f} -> {entry:.2f}, entry_time to now, and trailing_stage to 0.")
+                        positions_dict[target_key]["entry_spot"] = entry
+                        positions_dict[target_key]["entry_price"] = entry
+                        positions_dict[target_key]["entry_time"] = dt.now().isoformat()
+                        positions_dict[target_key]["trailing_stage"] = 0
+                        positions_dict[target_key]["t1_booked"] = False
+                        positions_dict[target_key]["theta_stagnation_tightened"] = False
+                        tid = positions_dict[target_key].get("trade_id")
+                        if tid:
+                            trade_db.update_trade(tid, {
+                                "entry_spot": entry,
+                                "entry_price": entry,
+                                "entry_time": dt.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                "trailing_stage": 0,
+                                "t1_booked": False,
+                                "theta_stagnation_tightened": False
+                            })
                     
                     if not positions_dict[target_key].get("user_edited"):
                         scan_sl = lookup_scan_sl_target(contract, sym, "daily_bear" if is_short else engine, kite, entry, timeframe_entry, timeframe_anchor, side=side_str)
@@ -319,6 +357,14 @@ def sync_kite_positions(kite, registry, positions_dict, lock, engine, timeframe_
                     "position_type": "stock" if is_stock else "option"
                 }
             tid, _created = trade_db.create_trade(engine, sym, {"contract": contract, "entry_spot": entry, "current_sl": 0, "t1": 0, "t2": 0, "t3": 0, "lot_size": lot_size, "position_size": abs_nq, "quantity": abs_nq, "side": side_str, "direction": dir_str, "pattern": "MANUAL_ENTRY", "entry_time": dt.now().isoformat()})
+            if not _created and tid:
+                trade_db.update_trade(tid, {
+                    "entry_spot": entry,
+                    "entry_price": entry,
+                    "entry_time": dt.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "trailing_stage": 0,
+                    "t1_booked": False
+                })
             with lock:
                 positions_dict[pos_key]["trade_id"] = tid
             logging.info(f"[KITE_SYNC] New manual position: {contract} entry={entry}")
@@ -2147,8 +2193,13 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
 
     # Layer 2: Dominant Conviction Arbitrage — Select Single Best Setup per Symbol
     if symbol_candidates:
-        strict_gate = cfg_engine.get("STRICT_MACRO_GATE", False) or cfg_engine.get("strict_macro_gate", False)
-        strict_gate = True if str(strict_gate).lower() == "true" else bool(strict_gate)
+        is_index_sym = symbol in ["NIFTY", "BANKNIFTY", "SENSEX", "FINNIFTY", "MIDCPNIFTY"] or "index" in engine_name.lower()
+        strict_gate_cfg = cfg_engine.get("STRICT_MACRO_GATE", None) if cfg_engine.get("STRICT_MACRO_GATE") is not None else cfg_engine.get("strict_macro_gate", None)
+        if strict_gate_cfg is not None:
+            strict_gate = True if str(strict_gate_cfg).lower() == "true" else bool(strict_gate_cfg)
+        else:
+            # Default to True for index options to strictly block unaligned counter-trend entries
+            strict_gate = True if is_index_sym else False
 
         # Step 1: Filter candidates by Spot Macro Trend Bias & Institutional Counter-Trend Governance
         # A. Continuations (D2) MUST strictly align with the macro trend (never trade continuation counter to trend)

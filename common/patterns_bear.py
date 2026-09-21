@@ -370,9 +370,11 @@ def scan_anchor_bcd_breakout_bearish(df_entry, df_anchor, anchor_tf="", entry_tf
         b_idx = None
         for i in range(e_anchor_idx + 1, min(e_anchor_idx + 60, len(df_entry))):
             candle = df_entry.iloc[i]
-            if float(candle['close']) > a_high:
+            c_high = float(candle['high'])
+            c_close = float(candle['close'])
+            if c_high > a_high or c_close > a_high:
                 break
-            if float(candle['close']) < a_low:
+            if c_close < a_low:
                 b_idx = i
                 break
 
@@ -398,12 +400,11 @@ def scan_anchor_bcd_breakout_bearish(df_entry, df_anchor, anchor_tf="", entry_tf
             c_open = float(candle['open'])
             c_high = float(candle['high'])
             is_green = c_close > c_open
-            if c_close > a_high:
+            # Structural Invalidation: Retest candle cannot breach Anchor A High ceiling
+            if c_high > a_high or c_close > a_high:
                 break
-            # Point C Retest: Must test broken benchmark a_low with green retest candle
-            # or green rejection upper wick, holding below a_high ceiling (exact parity with Bull Point C)
-            if ((c_high >= a_low and c_close <= a_high and is_green) or
-                (c_high >= a_high and c_close <= a_high and c_close > float(anchor_candle['open']) and is_green)):
+            # Point C Retest: Must test broken benchmark a_low with green retest candle, holding below a_high ceiling
+            if (c_high >= a_low and c_high <= a_high and is_green):
                 c_idx = i
                 break
 
@@ -417,14 +418,17 @@ def scan_anchor_bcd_breakout_bearish(df_entry, df_anchor, anchor_tf="", entry_tf
             candle = df_entry.iloc[i]
             c_close = float(candle['close'])
             c_open = float(candle['open'])
-            is_red = c_close < c_open
+            c_high = float(candle['high'])
+            is_red = c_close <= c_open
 
-            if c_close > a_high:
+            # Invalidation: If candle breaches Anchor A High ceiling, structure is negated
+            if c_high > a_high or c_close > a_high:
                 break
 
             # Case A: Completed Historical Candle (100% closed)
+            # Breakdown candle MUST be bearish red (c_close <= c_open) confirming seller expansion
             if i < len(df_entry) - 1:
-                if c_close < a_low:
+                if c_close < a_low and is_red:
                     d_idx = i
                     break
 
@@ -432,8 +436,8 @@ def scan_anchor_bcd_breakout_bearish(df_entry, df_anchor, anchor_tf="", entry_tf
             else:
                 tf_to_check = entry_tf or anchor_tf
                 if tf_to_check and is_live_candle_near_close(candle.get('date'), tf_to_check, completion_pct=0.80):
-                    # Guard 1: Benchmark Buffer Guard (-0.3% below benchmark for bearish)
-                    if c_close <= (a_low * 0.997):
+                    # Guard 1: Benchmark Buffer Guard (-0.3% below benchmark for bearish) & Bearish Red Candle
+                    if c_close <= (a_low * 0.997) and is_red:
                         # Guard 2: Proportional Volume Validation Guard (60% of 20-period avg volume at 80% time)
                         vol_passed = True
                         if 'volume' in df_entry.columns and i >= 20:
@@ -453,8 +457,8 @@ def scan_anchor_bcd_breakout_bearish(df_entry, df_anchor, anchor_tf="", entry_tf
         if candles_since_d > 60:
             continue
 
-        intermediate_bars = df_entry.iloc[e_anchor_idx:d_idx + 1]
-        if float(intermediate_bars['close'].max()) > a_high:
+        intermediate_bars = df_entry.iloc[e_anchor_idx + 1:d_idx]
+        if not intermediate_bars.empty and (float(intermediate_bars['high'].max()) > a_high or float(intermediate_bars['close'].max()) > a_high):
             continue
 
         anchor_name = det_result["Pattern"] if det_result else "BEAR_BASE_ABCD"
@@ -766,10 +770,10 @@ def scan_pattern_lifecycle_stage_bearish(df_entry, df_anchor, anchor_tf="", entr
         risk = invalidation - a_low
         rr = (a_low - t1) / risk if (t1 and risk > 0) else 0.0
 
-        # 2. Hard Anchor TF Eviction Rule: Discard if post-A closed >= SL or <= T1
+        # 2. Hard Anchor TF Eviction Rule: Discard if post-A high > invalidation or close >= SL or <= T1
         after_a = df_target.iloc[anchor_idx + 1:]
         if not after_a.empty:
-            if float(after_a['close'].max()) >= invalidation:
+            if float(after_a['high'].max()) > invalidation or float(after_a['close'].max()) >= invalidation:
                 continue
             if t1 is not None and float(after_a['close'].min()) <= t1:
                 continue
@@ -783,7 +787,10 @@ def scan_pattern_lifecycle_stage_bearish(df_entry, df_anchor, anchor_tf="", entr
         # 3. Check Point B: breakdown below a_low on Anchor TF
         b_idx = None
         for j in range(len(after_a)):
-            if float(after_a.iloc[j]['close']) < a_low:
+            b_cand = after_a.iloc[j]
+            if float(b_cand['high']) > a_high or float(b_cand['close']) > a_high:
+                break
+            if float(b_cand['close']) < a_low:
                 b_idx = anchor_idx + 1 + j
                 break
 
@@ -808,8 +815,12 @@ def scan_pattern_lifecycle_stage_bearish(df_entry, df_anchor, anchor_tf="", entr
                 c_low = float(c_row['low'])
                 is_green = c_close >= c_open
                 is_doji_or_narrow = (abs(c_close - c_open) / max(0.05, c_high - c_low)) <= 0.40
-                if (c_high >= a_low * 0.985 and c_close <= a_high and (is_green or is_doji_or_narrow)) or \
-                   (c_high >= a_high and c_close <= a_high and c_close > float(anchor_candle['open']) and is_green):
+
+                # Invalidation: Retest cannot breach Anchor A High ceiling
+                if c_high > a_high or c_close > a_high:
+                    break
+
+                if (c_high >= a_low * 0.985 and c_high <= a_high and (is_green or is_doji_or_narrow)):
                     c_idx = b_idx + 1 + j
                     break
 
