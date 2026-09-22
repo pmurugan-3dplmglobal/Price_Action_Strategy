@@ -816,6 +816,18 @@ def execute_highest_rr_trade(kite, staged):
                 )
                 if not vix_ok:
                     logging.info(f"[VIX_REGIME_GATE] Auto-execution skipped for {sym} ({contract}): {vix_msg}; checking next candidate")
+                    try:
+                        from watchlist_monitor import add_watchlist_item
+                        add_watchlist_item(
+                            contract=contract,
+                            base_symbol=sym,
+                            entry_price=limit_price,
+                            lot_size=lot_sz,
+                            tag="MISSED_OPPORTUNITY",
+                            note=f"Skipped by {vix_msg} (R:R={best.get('rr', 0.0):.2f}, Tier={c_tier})"
+                        )
+                    except Exception as w_err:
+                        logging.debug(f"[WATCHLIST] Missed opportunity log error: {w_err}")
                     continue
 
                 from portfolio_risk import check_portfolio_risk_caps
@@ -868,6 +880,18 @@ def execute_highest_rr_trade(kite, staged):
 
                     if not p_ok:
                         logging.info(f"[PORTFOLIO_RISK_CAP] Auto-execution skipped for {sym} ({contract}): {p_msg}; checking next candidate")
+                        try:
+                            from watchlist_monitor import add_watchlist_item
+                            add_watchlist_item(
+                                contract=contract,
+                                base_symbol=sym,
+                                entry_price=limit_price,
+                                lot_size=lot_sz,
+                                tag="MISSED_OPPORTUNITY",
+                                note=f"Skipped by {p_msg} (R:R={best.get('rr', 0.0):.2f}, Tier={c_tier})"
+                            )
+                        except Exception as w_err:
+                            logging.debug(f"[WATCHLIST] Missed opportunity log error: {w_err}")
                         continue
 
                 # Gate 4: Premium Floor Gate on Low-DTE (ISSUE-071)
@@ -984,7 +1008,18 @@ def execute_highest_rr_trade(kite, staged):
                         "position_type": "option_spread" if spread_info else "option",
                         "tier": c_tier,
                         "tier_label": best.get("tier_label") or ("TIER_1_GOLD" if c_tier == 1 else "TIER_2_CORE"),
-                        "tier_badge": best.get("tier_badge") or ("🥇 T1" if c_tier == 1 else "🥈 T2")
+                        "tier_badge": best.get("tier_badge") or ("🥇 T1" if c_tier == 1 else "🥈 T2"),
+                        "mfe_pct": 0.0,
+                        "mae_pct": 0.0,
+                        "trade_dna": {
+                            "spot_vwap_dist_pct": round(((float(best.get("spot_ltp", 0.0) or 0.0) - float(best.get("spot_vwap", 0.0) or 0.0)) / float(best.get("spot_vwap", 1.0) or 1.0)) * 100, 2) if float(best.get("spot_vwap", 0.0) or 0.0) > 0 else 0.0,
+                            "spot_rvol": round(float(best.get("rvol") or best.get("spot_rvol") or 1.0), 2),
+                            "spot_ema_trend": "BULL" if best.get("is_bull", True) else "BEAR",
+                            "spot_atr_ratio": round(float(best.get("spot_atr_ratio", 1.0) or 1.0), 2),
+                            "opt_vcp_ratio": round(float(best.get("opt_atr_ratio", 1.0) or 1.0), 2),
+                            "opt_spread_pct": round(float(best.get("spread_pct", 0.0) or 0.0), 2),
+                            "opt_vwap_sigma": round(float(best.get("opt_vwap_sigma", 0.0) or 0.0), 2)
+                        }
                     }
                     if spread_info:
                         pos["spread_type"] = spread_info["spread_type"]

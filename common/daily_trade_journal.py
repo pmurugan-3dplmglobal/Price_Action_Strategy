@@ -38,6 +38,14 @@ CSV_HEADER = [
     "PnL_Rs",
     "PnL_Pct",
     "Outcome",
+    "MFE_Pct",
+    "MAE_Pct",
+    "Attribution_Code",
+    "Spot_VWAP_Dist_Pct",
+    "Spot_RVOL",
+    "Spot_EMA_Trend",
+    "Spot_ATR_Ratio",
+    "Opt_VCP_Ratio",
     "Analysis_Remarks",
     "Self_Learning_Lesson"
 ]
@@ -61,6 +69,67 @@ def load_journal_entries():
             return json.load(f)
     except Exception:
         return []
+
+def classify_trade_attribution(trade_data, pnl_rs=0.0, outcome=""):
+    """
+    Classify trade outcome into a structured, machine-readable Attribution Code (FEATURE-041).
+    Used for quantitative post-trade analysis, win/loss clustering, and strategy improvement.
+    """
+    try:
+        pnl = float(pnl_rs or trade_data.get("PnL_Rs") or trade_data.get("pnl") or trade_data.get("pnl_rs") or 0.0)
+    except (ValueError, TypeError):
+        pnl = 0.0
+
+    out = str(outcome or trade_data.get("Outcome") or trade_data.get("status") or "").upper()
+    dna = trade_data.get("trade_dna") if isinstance(trade_data.get("trade_dna"), dict) else {}
+    pattern = str(trade_data.get("Pattern") or trade_data.get("pattern") or "").upper()
+    tier = str(trade_data.get("Tier") or trade_data.get("tier") or "").upper()
+    side = str(trade_data.get("Side") or trade_data.get("side") or "").upper()
+    exit_reason = str(trade_data.get("exit_reason") or trade_data.get("details") or "").upper()
+
+    try:
+        spot_atr = float(dna.get("spot_atr_ratio") or trade_data.get("Spot_ATR_Ratio") or 1.0)
+    except (ValueError, TypeError):
+        spot_atr = 1.0
+    try:
+        opt_vcp = float(dna.get("opt_vcp_ratio") or trade_data.get("Opt_VCP_Ratio") or 1.0)
+    except (ValueError, TypeError):
+        opt_vcp = 1.0
+    spot_trend = str(dna.get("spot_ema_trend") or trade_data.get("Spot_EMA_Trend") or "").upper()
+    try:
+        opt_spread = float(dna.get("opt_spread_pct") or 0.0)
+    except (ValueError, TypeError):
+        opt_spread = 0.0
+
+    is_active = "ACTIVE" in out or "CARRY" in out or trade_data.get("Exit_Time") in ("OPEN", "")
+
+    if is_active:
+        return "ACTIVE_IN_PROGRESS"
+
+    if pnl > 0 or "TARGET" in out or "T1" in out or "T2" in out or "T3" in out or "PROFIT" in out:
+        if spot_atr <= 0.85 and opt_vcp <= 0.85:
+            return "WIN_DUAL_VCP_RUNNER"
+        if "T1" in tier or "GOLD" in tier:
+            return "WIN_D1_REVERSAL"
+        if "D2" in pattern or "CONTINUATION" in pattern or "PYRAMID" in pattern:
+            return "WIN_D2_PYRAMID"
+        return "WIN_MOMENTUM_RUNNER"
+
+    if pnl < 0 or "SL" in out or "STOP" in out or "LOSS" in out:
+        # Check counter-trend trap
+        if spot_trend == "BULL" and (side in ["PE", "SELL", "BEAR"]):
+            return "LOSS_COUNTER_SPOT_TRAP"
+        if spot_trend == "BEAR" and (side in ["CE", "BUY", "BULL"]):
+            return "LOSS_COUNTER_SPOT_TRAP"
+        if opt_spread >= 2.0:
+            return "LOSS_SLIPPAGE_SPREAD"
+        if "EMERGENCY" in exit_reason or "CAP" in exit_reason:
+            return "LOSS_EMERGENCY_CAP"
+        if "THETA" in exit_reason or "STAGNATION" in exit_reason:
+            return "LOSS_THETA_DECAY"
+        return "LOSS_DISCIPLINED_SL"
+
+    return "EXIT_NEUTRAL"
 
 def save_journal_entries(entries):
     """Save full list of journal entries to JSON and CSV."""
@@ -94,6 +163,14 @@ def save_journal_entries(entries):
                 e.get("PnL_Rs", ""),
                 e.get("PnL_Pct", ""),
                 e.get("Outcome", ""),
+                e.get("MFE_Pct", ""),
+                e.get("MAE_Pct", ""),
+                e.get("Attribution_Code", ""),
+                e.get("Spot_VWAP_Dist_Pct", ""),
+                e.get("Spot_RVOL", ""),
+                e.get("Spot_EMA_Trend", ""),
+                e.get("Spot_ATR_Ratio", ""),
+                e.get("Opt_VCP_Ratio", ""),
                 e.get("Analysis_Remarks", ""),
                 e.get("Self_Learning_Lesson", "")
             ])
@@ -381,6 +458,14 @@ def generate_daily_journal(target_date=None, kite=None):
                     "PnL_Rs": pnl_rs,
                     "PnL_Pct": pnl_pct_str,
                     "Outcome": outcome,
+                    "MFE_Pct": 0.0,
+                    "MAE_Pct": 0.0,
+                    "Attribution_Code": classify_trade_attribution({"PnL_Rs": pnl_rs, "Outcome": outcome, "Tier": tier_badge, "Pattern": pattern_name}),
+                    "Spot_VWAP_Dist_Pct": "",
+                    "Spot_RVOL": "",
+                    "Spot_EMA_Trend": "",
+                    "Spot_ATR_Ratio": "",
+                    "Opt_VCP_Ratio": "",
                     "Analysis_Remarks": rem,
                     "Self_Learning_Lesson": les
                 }
@@ -425,6 +510,18 @@ def generate_daily_journal(target_date=None, kite=None):
                     e["PnL_Pct"] = f"{pnl_pct:+.2f}%" if pnl_pct else "0.00%"
                     if t.get("timeframe"):
                         e["Timeframe"] = t.get("timeframe")
+                    if t.get("mfe_pct") is not None:
+                        e["MFE_Pct"] = float(t.get("mfe_pct") or 0.0)
+                    if t.get("mae_pct") is not None:
+                        e["MAE_Pct"] = float(t.get("mae_pct") or 0.0)
+                    e["Attribution_Code"] = t.get("attribution_code") or classify_trade_attribution(t, pnl_rs, status)
+                    if isinstance(t.get("trade_dna"), dict):
+                        tdna = t["trade_dna"]
+                        e["Spot_VWAP_Dist_Pct"] = tdna.get("spot_vwap_dist_pct", "")
+                        e["Spot_RVOL"] = tdna.get("spot_rvol", "")
+                        e["Spot_EMA_Trend"] = tdna.get("spot_ema_trend", "")
+                        e["Spot_ATR_Ratio"] = tdna.get("spot_atr_ratio", "")
+                        e["Opt_VCP_Ratio"] = tdna.get("opt_vcp_ratio", "")
 
         for t in trades:
             c_date = (t.get("created_at") or t.get("entry_time") or "")[:10]
@@ -445,6 +542,11 @@ def generate_daily_journal(target_date=None, kite=None):
                     if existing_user_notes[sym].get("lesson"): les = existing_user_notes[sym]["lesson"]
                 if t.get("self_learning_lesson"):
                     les = t.get("self_learning_lesson")
+
+                dna = t.get("trade_dna") if isinstance(t.get("trade_dna"), dict) else {}
+                mfe_val = float(t.get("mfe_pct") or 0.0)
+                mae_val = float(t.get("mae_pct") or 0.0)
+                attr_code = t.get("attribution_code") or classify_trade_attribution(t, pnl_rs, outcome)
                 
                 rec = {
                     "Date": target_date,
@@ -468,6 +570,14 @@ def generate_daily_journal(target_date=None, kite=None):
                     "PnL_Rs": pnl_rs,
                     "PnL_Pct": f"{pnl_pct:+.2f}%" if pnl_pct else "0.00%",
                     "Outcome": outcome,
+                    "MFE_Pct": mfe_val,
+                    "MAE_Pct": mae_val,
+                    "Attribution_Code": attr_code,
+                    "Spot_VWAP_Dist_Pct": dna.get("spot_vwap_dist_pct", ""),
+                    "Spot_RVOL": dna.get("spot_rvol", ""),
+                    "Spot_EMA_Trend": dna.get("spot_ema_trend", ""),
+                    "Spot_ATR_Ratio": dna.get("spot_atr_ratio", ""),
+                    "Opt_VCP_Ratio": dna.get("opt_vcp_ratio", ""),
                     "Analysis_Remarks": rem,
                     "Self_Learning_Lesson": les
                 }
@@ -534,6 +644,14 @@ def get_trade_journal_analytics(entries=None):
     by_timeframe = {}
     by_engine = {}
     by_outcome = {}
+    by_attribution = {}
+    by_rvol_bucket = {}
+    by_vcp_compression = {}
+
+    mfe_list_winners = []
+    mae_list_winners = []
+    mfe_list_losers = []
+    mae_list_losers = []
 
     for e in entries:
         outcome = str(e.get("Outcome", "")).strip()
@@ -561,6 +679,16 @@ def get_trade_journal_analytics(entries=None):
 
         total_pnl_rs += pnl_rs
 
+        # MFE / MAE parsing
+        try:
+            mfe_v = float(e.get("MFE_Pct") or 0.0)
+        except (ValueError, TypeError):
+            mfe_v = 0.0
+        try:
+            mae_v = float(e.get("MAE_Pct") or 0.0)
+        except (ValueError, TypeError):
+            mae_v = 0.0
+
         if is_active:
             active_trades += 1
         else:
@@ -568,11 +696,15 @@ def get_trade_journal_analytics(entries=None):
             if pnl_rs > 0:
                 winning_trades += 1
                 gross_profit_rs += pnl_rs
+                mfe_list_winners.append(mfe_v)
+                mae_list_winners.append(mae_v)
                 if pnl_rs > max_win_rs:
                     max_win_rs = pnl_rs
             elif pnl_rs < 0:
                 losing_trades += 1
                 gross_loss_rs += abs(pnl_rs)
+                mfe_list_losers.append(mfe_v)
+                mae_list_losers.append(mae_v)
                 if pnl_rs < max_loss_rs:
                     max_loss_rs = pnl_rs
             else:
@@ -609,6 +741,35 @@ def get_trade_journal_analytics(entries=None):
         update_breakdown(by_timeframe, tf)
         update_breakdown(by_engine, eng)
 
+        # Attribution Breakdown
+        attr_code = str(e.get("Attribution_Code") or classify_trade_attribution(e, pnl_rs, outcome))
+        update_breakdown(by_attribution, attr_code)
+
+        # RVOL bucket Breakdown
+        rvol_raw = e.get("Spot_RVOL")
+        if rvol_raw not in (None, "", "UNKNOWN"):
+            try:
+                rvol_f = float(rvol_raw)
+                if rvol_f < 1.0:
+                    rvol_bucket = "< 1.0 (Low Vol)"
+                elif rvol_f < 1.5:
+                    rvol_bucket = "1.0 - 1.5 (Normal)"
+                else:
+                    rvol_bucket = ">= 1.5 (High Inst)"
+                update_breakdown(by_rvol_bucket, rvol_bucket)
+            except (ValueError, TypeError):
+                pass
+
+        # VCP Compression Breakdown
+        atr_ratio_raw = e.get("Spot_ATR_Ratio")
+        if atr_ratio_raw not in (None, "", "UNKNOWN"):
+            try:
+                atr_f = float(atr_ratio_raw)
+                vcp_bucket = "Coiled (ATR <= 0.85)" if atr_f <= 0.85 else "Expanding (ATR > 0.85)"
+                update_breakdown(by_vcp_compression, vcp_bucket)
+            except (ValueError, TypeError):
+                pass
+
     # Finalize percentages and averages for groups
     def finalize_breakdown(group_dict):
         for k, v in group_dict.items():
@@ -622,6 +783,9 @@ def get_trade_journal_analytics(entries=None):
     finalize_breakdown(by_swing_waves)
     finalize_breakdown(by_timeframe)
     finalize_breakdown(by_engine)
+    finalize_breakdown(by_attribution)
+    finalize_breakdown(by_rvol_bucket)
+    finalize_breakdown(by_vcp_compression)
 
     win_rate_pct = round((winning_trades / closed_trades) * 100, 2) if closed_trades > 0 else 0.0
     profit_factor = round(gross_profit_rs / gross_loss_rs, 2) if gross_loss_rs > 0 else (999.99 if gross_profit_rs > 0 else 0.0)
@@ -646,14 +810,21 @@ def get_trade_journal_analytics(entries=None):
             "avg_win_rs": avg_win,
             "avg_loss_rs": avg_loss,
             "max_win_rs": round(max_win_rs, 2),
-            "max_loss_rs": round(max_loss_rs, 2)
+            "max_loss_rs": round(max_loss_rs, 2),
+            "avg_mfe_pct_winners": round(sum(mfe_list_winners) / len(mfe_list_winners), 2) if mfe_list_winners else 0.0,
+            "avg_mae_pct_winners": round(sum(mae_list_winners) / len(mae_list_winners), 2) if mae_list_winners else 0.0,
+            "avg_mfe_pct_losers": round(sum(mfe_list_losers) / len(mfe_list_losers), 2) if mfe_list_losers else 0.0,
+            "avg_mae_pct_losers": round(sum(mae_list_losers) / len(mae_list_losers), 2) if mae_list_losers else 0.0
         },
         "by_pattern": by_pattern,
         "by_tier": by_tier,
         "by_swing_waves": by_swing_waves,
         "by_timeframe": by_timeframe,
         "by_engine": by_engine,
-        "by_outcome": by_outcome
+        "by_outcome": by_outcome,
+        "by_attribution": by_attribution,
+        "by_rvol_bucket": by_rvol_bucket,
+        "by_vcp_compression": by_vcp_compression
     }
 
 if __name__ == "__main__":

@@ -1704,6 +1704,22 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                 hp = max(hp, float(c_row['high']))
                 lp = min(lp, float(c_row['low']))
 
+            # ── REAL-TIME MFE & MAE TRACKING (FEATURE-041) ──
+            # MFE = Maximum Favorable Excursion (highest peak profit % reached)
+            # MAE = Maximum Adverse Excursion (deepest drawdown % endured)
+            if entry_s > 0:
+                if is_short_stock:
+                    mfe_val = round((entry_s - lp) / entry_s * 100, 2)
+                    mae_val = round(-(hp - entry_s) / entry_s * 100, 2)
+                else:
+                    mfe_val = round((hp - entry_s) / entry_s * 100, 2)
+                    mae_val = round((lp - entry_s) / entry_s * 100, 2)
+
+                pos["mfe_pct"] = max(float(pos.get("mfe_pct", 0.0) or 0.0), mfe_val)
+                pos["mae_pct"] = min(float(pos.get("mae_pct", 0.0) or 0.0), mae_val)
+                pos["mfe_peak_price"] = hp if not is_short_stock else lp
+                pos["mae_deep_price"] = lp if not is_short_stock else hp
+
             sl_hit = False
             sl_reason = ""
             event_time = last.get('date')
@@ -1713,6 +1729,8 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                 if sym in positions_dict:
                     positions_dict[sym]["candle_tf_time"] = str(event_time) if event_time else ""
                     positions_dict[sym]["timeframe"] = pos_tf
+                    positions_dict[sym]["mfe_pct"] = pos.get("mfe_pct", 0.0)
+                    positions_dict[sym]["mae_pct"] = pos.get("mae_pct", 0.0)
 
             # ── FRIDAY EOD 15:15 SMART OPTION AUTO-SQUAREOFF GUARD ──
             # On Fridays (weekday == 4 >= 15:15 IST), manage weekend carryover risk:
@@ -2156,7 +2174,11 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                             trade_db.update_trade(tid, {
                                 "status": "SL_HIT",
                                 "exit_time": dt.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                "exit_price": round(exit_price, 2),
                                 "pnl_percent": round(pnl, 2),
+                                "mfe_pct": pos.get("mfe_pct", 0.0),
+                                "mae_pct": pos.get("mae_pct", 0.0),
+                                "trade_dna": pos.get("trade_dna", {}),
                                 "details": f"SL hit [{sl_reason}] | TF: {pos_tf}"
                             })
                         to_clear.append(sym)
@@ -2561,7 +2583,11 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                                     trade_db.update_trade(tid, {
                                         "status": "TARGET_HIT",
                                         "exit_time": dt.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                        "exit_price": round(exit_price, 2),
                                         "pnl_percent": round(pnl, 2),
+                                        "mfe_pct": pos.get("mfe_pct", 0.0),
+                                        "mae_pct": pos.get("mae_pct", 0.0),
+                                        "trade_dna": pos.get("trade_dna", {}),
                                         "details": det_str
                                     })
                                 to_clear.append(sym)
@@ -2635,7 +2661,11 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                             trade_db.update_trade(tid, {
                                 "status": "TARGET_HIT",
                                 "exit_time": dt.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                "exit_price": round(exit_price, 2),
                                 "pnl_percent": round(pnl, 2),
+                                "mfe_pct": pos.get("mfe_pct", 0.0),
+                                "mae_pct": pos.get("mae_pct", 0.0),
+                                "trade_dna": pos.get("trade_dna", {}),
                                 "details": det_str
                             })
                         to_clear.append(sym)
@@ -2694,7 +2724,15 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                            entry=entry_s, sl=pos.get("current_sl", ""), target=t3_val,
                            event_time=last.get('date'))
                     if tid:
-                        trade_db.update_trade(tid, {"status": "TARGET_HIT", "exit_time": dt.now().strftime("%Y-%m-%d %H:%M:%S"), "pnl_percent": round(pnl, 2)})
+                        trade_db.update_trade(tid, {
+                            "status": "TARGET_HIT",
+                            "exit_time": dt.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            "exit_price": round(exit_price, 2),
+                            "pnl_percent": round(pnl, 2),
+                            "mfe_pct": pos.get("mfe_pct", 0.0),
+                            "mae_pct": pos.get("mae_pct", 0.0),
+                            "trade_dna": pos.get("trade_dna", {})
+                        })
                     to_clear.append(sym)
                 else:
                     logging.critical(f"[EXIT_T3 FAILED] T3 exit order for {sym} failed or pending ({exit_res}). Retaining in memory for retry.")

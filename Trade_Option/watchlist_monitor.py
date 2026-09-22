@@ -203,6 +203,14 @@ def fetch_watchlist_live_data(kite=None):
                     verdict = f"Top Profit Booked! Option dipped -INR {exit_p - opt_ltp:.2f}/sh from peak"
                 else:
                     verdict = f"Extended Runner: Up another +INR {opt_ltp - exit_p:.2f}/sh beyond exit"
+        elif tag == "MISSED_OPPORTUNITY" and entry_p and opt_ltp > 0:
+            if pnl_entry_pct is not None:
+                if pnl_entry_pct >= 15.0:
+                    verdict = f"Opportunity Missed: Surged +{pnl_entry_pct:.1f}% (+INR {pnl_entry_val:+,.0f})"
+                elif pnl_entry_pct <= -15.0:
+                    verdict = f"Bullet Dodged: Dropped {pnl_entry_pct:.1f}% (Avoided -INR {abs(pnl_entry_val):,.0f})"
+                else:
+                    verdict = f"Flat / In-Zone: {pnl_entry_pct:+.1f}% (INR {pnl_entry_val:+,.0f})"
         elif entry_p and opt_ltp > 0:
             verdict = f"Active: {pnl_entry_pct:+.2f}% (P&L: INR {pnl_entry_val:+,.0f})"
 

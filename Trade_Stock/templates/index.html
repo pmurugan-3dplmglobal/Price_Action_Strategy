@@ -1362,6 +1362,9 @@
                     '<th onclick="sortTable(this,7)">PnL (₹)</th>' +
                     '<th onclick="sortTable(this,8)">PnL (%)</th>' +
                     '<th onclick="sortTable(this,9)">Outcome</th>' +
+                    '<th>MFE / MAE</th>' +
+                    '<th>Attribution</th>' +
+                    '<th>Trade DNA</th>' +
                     '<th>Remarks & Self-Learning Lesson</th>' +
                     '</tr></thead><tbody>';
 
@@ -1380,6 +1383,13 @@
                     const outcome = j.Outcome || j.Status || 'COMPLETED';
                     const remarks = j.Analysis_Remarks || '';
                     const lesson = j.Self_Learning_Lesson || '';
+                    const mfePct = j.MFE_Pct !== undefined && j.MFE_Pct !== '' ? `${parseFloat(j.MFE_Pct).toFixed(1)}%` : '-';
+                    const maePct = j.MAE_Pct !== undefined && j.MAE_Pct !== '' ? `${parseFloat(j.MAE_Pct).toFixed(1)}%` : '-';
+                    const attrCode = j.Attribution_Code || (pnlRs > 0 ? 'WIN_SETUP' : 'LOSS_SETUP');
+                    const rvolStr = j.Spot_RVOL ? `RVOL: ${j.Spot_RVOL}` : '';
+                    const vcpStr = j.Spot_ATR_Ratio ? `VCP: ${j.Spot_ATR_Ratio}` : '';
+                    const emaStr = j.Spot_EMA_Trend ? `EMA: ${j.Spot_EMA_Trend}` : '';
+                    const dnaBadges = [rvolStr, vcpStr, emaStr].filter(Boolean).join(' | ') || '-';
 
                     let pnlBadge = 'badge-open';
                     if (pnlRs !== '-') {
@@ -1398,6 +1408,9 @@
                         <td><span class="badge ${pnlBadge}">${pnlRs}</span></td>
                         <td>${pnlPct}</td>
                         <td><span class="badge ${pnlBadge}">${outcome}</span></td>
+                        <td style="font-size:11px;white-space:nowrap"><span style="color:#3fb950">▲ +${mfePct}</span><br><span style="color:#f85149">▼ ${maePct}</span></td>
+                        <td><span class="badge" style="background:#21262d;font-family:monospace;font-size:10px;border:1px solid #30363d">${attrCode}</span></td>
+                        <td style="font-size:10px;color:#8b949e;white-space:nowrap">${dnaBadges}</td>
                         <td style="min-width:280px">
                             <div style="font-size:11px;color:#8b949e;margin-bottom:4px">${remarks}</div>
                             <div style="display:flex;gap:4px">

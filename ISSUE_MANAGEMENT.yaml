@@ -3011,3 +3011,44 @@ issues:
     3. Master regression test suite (32/32 PASSED with 100% success).
   status: RESOLVED
   resolution_date: '2026-09-22'
+
+- id: FEATURE-041
+  title: Trade Journal & Watchlist Self-Learning Analytics Suite (Trade DNA, MFE/MAE, Attribution & Opportunity Cost)
+  severity: MEDIUM
+  category: Self-Learning Infrastructure, Trade Journal, Watchlist, Quantitative Analytics
+  family: TRADE_ANALYTICS
+  date_reported: '2026-09-22'
+  affected_files:
+    - common/position_monitor.py
+    - common/trade_db.py
+    - common/daily_trade_journal.py
+    - Trade_Option/stock_options_trade_engine.py
+    - Trade_Option/index_options_trade_engine.py
+    - Trade_Option/watchlist_monitor.py
+    - Trade_Option/templates/index.html
+    - Trade_Stock/templates/index.html
+    - scratch/test_trade_journal_enhancements.py
+  symptom: |
+    1. Historical trade journal entries recorded basic entry/exit prices and PnL, but lacked underlying market context at the moment of entry (Spot VWAP distance, RVOL, EMA trend, Spot/Option VCP ATR ratios).
+    2. Lack of excursion data: Traders could not see whether winning trades took deep drawdowns before target (MAE) or whether losing trades peaked into high profit before reversing (MFE).
+    3. Generic, non-machine-readable remarks prevented quantitative clustering of win/loss root causes.
+    4. Unexecuted high-conviction setups skipped by portfolio risk caps (6/6 full) or low VIX had no automated opportunity cost tracking.
+  root_cause: |
+    1. position_monitor.py evaluated hp/lp for target/SL checks but never persisted peak run-up (MFE) or deepest adverse drop (MAE) into trade records or active position payloads.
+    2. Options trade engines did not capture a structured Trade DNA snapshot at order placement.
+    3. daily_trade_journal.py lacked structured attribution classification and RVOL/VCP statistical aggregation functions.
+    4. watchlist_monitor.py did not have a dedicated verdict handler for MISSED_OPPORTUNITY tracking.
+  fix_applied: |
+    1. In position_monitor.py: Added real-time MFE (Maximum Favorable Excursion) and MAE (Maximum Adverse Excursion) computation on every candle/quote update, persisting mfe_pct and mae_pct to active_positions_db.json and updating trade_db on all exits.
+    2. In stock_options_trade_engine.py and index_options_trade_engine.py: Attached trade_dna snapshot (spot_vwap_dist_pct, spot_rvol, spot_ema_trend, spot_atr_ratio, opt_vcp_ratio, opt_spread_pct) at order creation.
+    3. In both trade engines: Automatically register skipped Tier 1 candidates in watchlist_monitor with tag MISSED_OPPORTUNITY when rejected by portfolio caps or low-VIX regime.
+    4. In daily_trade_journal.py: Expanded CSV_HEADER with 8 new fields (MFE_Pct, MAE_Pct, Attribution_Code, Spot_VWAP_Dist_Pct, Spot_RVOL, Spot_EMA_Trend, Spot_ATR_Ratio, Opt_VCP_Ratio), added classify_trade_attribution() classifier, and enhanced get_trade_journal_analytics() with MFE/MAE averages, attribution breakdown, RVOL buckets, and VCP compression buckets.
+    5. In watchlist_monitor.py: Added intelligent verdict generator for MISSED_OPPORTUNITY ("Opportunity Missed: Surged +X%" vs "Bullet Dodged: Dropped -Y%").
+    6. In templates (Trade_Option & Trade_Stock index.html): Added MFE/MAE, Attribution, and Trade DNA columns to interactive trade journal UI tables.
+  verification: |
+    1. Dedicated unit test suite scratch/test_trade_journal_enhancements.py passed 11/11 tests in 0.41s.
+    2. AST syntax check passed on all modified files.
+    3. Import smoke test passed across all subsystems.
+    4. Master regression test suite (32/32 PASSED with 100% success).
+  status: RESOLVED
+  resolution_date: '2026-09-22'

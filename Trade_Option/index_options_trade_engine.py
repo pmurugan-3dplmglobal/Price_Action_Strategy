@@ -560,6 +560,18 @@ def execute_highest_rr_trade(kite, staged):
                 )
                 if not vix_ok:
                     logging.info(f"[VIX_REGIME_GATE] Auto-execution skipped for {best['symbol']} ({best['contract']}): {vix_msg}")
+                    try:
+                        from watchlist_monitor import add_watchlist_item
+                        add_watchlist_item(
+                            contract=best.get("contract"),
+                            base_symbol=best.get("symbol"),
+                            entry_price=best.get("entry_spot"),
+                            lot_size=pos.get("lot_size", 1),
+                            tag="MISSED_OPPORTUNITY",
+                            note=f"Skipped by {vix_msg} (R:R={best.get('rr', 0.0):.2f}, Tier={c_tier})"
+                        )
+                    except Exception as w_err:
+                        logging.debug(f"[WATCHLIST] Missed opportunity log error: {w_err}")
                     continue
 
                 from portfolio_risk import check_portfolio_risk_caps
@@ -574,6 +586,18 @@ def execute_highest_rr_trade(kite, staged):
                 )
                 if not p_ok:
                     logging.info(f"[PORTFOLIO_RISK_CAP] Auto-execution skipped for {best['symbol']} ({best['contract']}): {p_msg}")
+                    try:
+                        from watchlist_monitor import add_watchlist_item
+                        add_watchlist_item(
+                            contract=best.get("contract"),
+                            base_symbol=best.get("symbol"),
+                            entry_price=best.get("entry_spot"),
+                            lot_size=pos.get("lot_size", 1),
+                            tag="MISSED_OPPORTUNITY",
+                            note=f"Skipped by {p_msg} (R:R={best.get('rr', 0.0):.2f}, Tier={c_tier})"
+                        )
+                    except Exception as w_err:
+                        logging.debug(f"[WATCHLIST] Missed opportunity log error: {w_err}")
                     continue
 
                 with position_lock:
@@ -591,6 +615,18 @@ def execute_highest_rr_trade(kite, staged):
                     total_active_indices = active_idx_in_mem.union(active_idx_db)
                     if len(total_active_indices) >= max_idx_pos:
                         logging.info(f"[INDEX_CONCURRENCY_CAP] Max concurrent index positions reached ({len(total_active_indices)}/{max_idx_pos} active: {sorted(list(total_active_indices))}). Skipping {sym_cand}")
+                        try:
+                            from watchlist_monitor import add_watchlist_item
+                            add_watchlist_item(
+                                contract=contract_cand,
+                                base_symbol=sym_cand,
+                                entry_price=best.get("entry_spot"),
+                                lot_size=pos.get("lot_size", 1),
+                                tag="MISSED_OPPORTUNITY",
+                                note=f"Skipped by INDEX_CONCURRENCY_CAP (R:R={best.get('rr', 0.0):.2f}, Tier={c_tier})"
+                            )
+                        except Exception as w_err:
+                            logging.debug(f"[WATCHLIST] Missed opportunity log error: {w_err}")
                         continue
 
                     if trade_db.is_contract_active(contract_cand, "index") or trade_db.is_symbol_active(sym_cand, "index"):
@@ -604,6 +640,17 @@ def execute_highest_rr_trade(kite, staged):
                         continue
 
                     pos["entry_time"] = dt.now().strftime("%Y-%m-%d %H:%M:%S")
+                    pos["mfe_pct"] = 0.0
+                    pos["mae_pct"] = 0.0
+                    pos["trade_dna"] = {
+                        "spot_vwap_dist_pct": round(((float(best.get("spot_ltp", 0.0) or best.get("entry_spot", 0.0) or 0.0) - float(best.get("spot_vwap", 0.0) or 0.0)) / float(best.get("spot_vwap", 1.0) or 1.0)) * 100, 2) if float(best.get("spot_vwap", 0.0) or 0.0) > 0 else 0.0,
+                        "spot_rvol": round(float(best.get("rvol") or best.get("spot_rvol") or 1.0), 2),
+                        "spot_ema_trend": "BULL" if str(best.get("side", "CE")).upper() == "CE" else "BEAR",
+                        "spot_atr_ratio": round(float(best.get("spot_atr_ratio", 1.0) or 1.0), 2),
+                        "opt_vcp_ratio": round(float(best.get("opt_atr_ratio", 1.0) or 1.0), 2),
+                        "opt_spread_pct": round(float(best.get("spread_pct", 0.0) or 0.0), 2),
+                        "opt_vwap_sigma": round(float(best.get("opt_vwap_sigma", 0.0) or 0.0), 2)
+                    }
                     pos["trade_id"], _created = trade_db.create_trade("index", sym_cand, {k: v for k, v in pos.items() if k != "trade_id"})
                     if not _created:
                         logging.info(f"[DUPLICATE_GUARD] Active trade for {contract_cand} already exists in trade_db (ID: {pos['trade_id']}); evaluating next candidate")
