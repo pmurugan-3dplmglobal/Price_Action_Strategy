@@ -543,3 +543,90 @@ def find_profit_targets_bearish(df_hist, entry_close, stop_loss=None, symbol=Non
     return t1, t2, t3
 
 
+def _avg_target_rank(trade):
+    """Composite priority score for candidate ranking across options and index engines (ISSUE-071, ISSUE-073).
+
+    Priority hierarchy (strongest -> weakest):
+    1. Spot Confluence (mandatory for auto-entry, +2.0 bonus for ranking)
+    2. VCP Compression (ATR ratio inversely scaled, squeeze bonus up to +1.5)
+    3. Option VWAP discount (below VWAP = institutional accumulation, up to +0.5)
+    4. Base R:R (capped at 5.0 to prevent distant-target inflation)
+    5. VWAP overpay penalty (demote stretched contracts)
+    """
+    if not isinstance(trade, dict):
+        return 0.0
+    targets = [t for t in [trade.get("t1"), trade.get("t2"), trade.get("t3")] if t]
+    if not targets:
+        return 0.0
+    avg_target = sum(targets) / len(targets)
+    entry_spot = float(trade.get("entry_spot", 0) or 0)
+    current_sl = float(trade.get("current_sl", 0) or 0)
+    risk = abs(entry_spot - current_sl)
+    if risk <= 0:
+        return 0.0
+    # Cap base R:R at 5.0 to prevent far-target inflation
+    base_rr = min(abs(avg_target - entry_spot) / risk, 5.0)
+
+    # Spot Confluence: dominant ranking factor (+2.0)
+    spot_bonus = 2.0 if trade.get("spot_confluence") else 0.0
+
+    # VCP Compression: inversely scaled ATR bonus (coiled spring = explosive breakout)
+    vcp_bonus = 0.0
+    atr_r = float(trade.get("atr_ratio", 1.0) or 1.0)
+    if trade.get("is_squeeze"):
+        vcp_bonus = 1.5
+    elif atr_r <= 0.50:
+        vcp_bonus = 1.2
+    elif atr_r <= 0.65:
+        vcp_bonus = 0.8
+    elif atr_r <= 0.80:
+        vcp_bonus = 0.4
+
+    # Safe Option VWAP discount: buying in the sweet spot (-5% to 0%) = institutional accumulation price
+    vwap_discount = 0.0
+    v_str = float(trade.get("vwap_stretch", 0.0) or 0.0)
+    if -5.0 <= v_str < 0.0:
+        vwap_discount = 0.5  # sweet spot discount: near VWAP support without breakdown
+
+    # Option Contract VWAP Overpay / Breakdown penalty: demote stretched or broken down contracts
+    vwap_penalty = 0.0
+    v_st = str(trade.get("vwap_status", "")).upper()
+    if v_st == "STRETCHED" or v_str > 15.0:
+        vwap_penalty = 1.5  # overstretched FOMO chase
+    elif v_st == "EXPANDED" or v_str > 8.0:
+        vwap_penalty = 0.4
+    elif v_str < -5.0:
+        vwap_penalty = 1.5  # falling knife / IV breakdown penalty
+
+    return max(0.0, base_rr + spot_bonus + vcp_bonus + vwap_discount - vwap_penalty)
+
+
+def _parse_candidate_tier(cand, default=2):
+    """
+    Safely extract integer tier (1, 2, or 3) from candidate dict regardless of type
+    (handles None, int, or string representations like 'TIER_1_GOLD', '🥇 T1', 'TIER_2_CORE', '🥈 T2').
+    """
+    if not isinstance(cand, dict):
+        return default
+    raw_tier = cand.get("tier")
+    if raw_tier is not None:
+        try:
+            return int(raw_tier)
+        except (ValueError, TypeError):
+            pass
+    t_str = str(raw_tier or cand.get("tier_badge") or cand.get("tier_label") or "").upper()
+    if "1" in t_str or "GOLD" in t_str or "T1" in t_str:
+        return 1
+    elif "2" in t_str or "CORE" in t_str or "T2" in t_str:
+        return 2
+    elif "3" in t_str or "MOMENTUM" in t_str or "T3" in t_str:
+        return 3
+    return default
+
+
+# Aliases for clean architectural naming
+calculate_composite_rank = _avg_target_rank
+parse_candidate_tier = _parse_candidate_tier
+
+
+

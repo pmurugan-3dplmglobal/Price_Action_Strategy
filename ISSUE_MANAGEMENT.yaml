@@ -1,15 +1,70 @@
 meta:
   system: Price Action Unified Strategy System
   version: v2.1.0-stable
-  last_updated: '2026-09-21'
+  last_updated: '2026-09-22'
   purpose: Active operational tracker for v2.1.0-stable failures, root causes, regressions, and enhancements.
   historical_archive: archive/ISSUE_HISTORY_ARCHIVE.yaml (Preserves 119 resolved legacy issues prior to 2026-09-05)
-  total_active_issues: 50
+  total_active_issues: 51
   archived_issues_summary:
     total_archived: 119
     recent_archived_batch: [FEATURE-031, FEATURE-030, FEATURE-029, ISSUE-084, ISSUE-083, ISSUE-082, ISSUE-081, ISSUE-080, FEATURE-036, FEATURE-035, FEATURE-034, FEATURE-033, ISSUE-054]
     key_archived_families: [ALGO_AUDIT_CVE, QUANT_ENHANCEMENTS, RADAR_LIFECYCLE, VCP_METRICS, SCANNER_DISCOVERY, SECURITY_CONFIG, ZERO_REGRESSION_AUDIT]
 issues:
+- id: ISSUE-073
+  title: Index Engine 7-Gate Execution Parity, Normalized Composite Ranking, Decoupled Surveillance Thread, and Speed Phase Latency Elimination
+  severity: HIGH
+  category: Parity Alignment, Execution Gates, Latency Elimination, Instant Dispatch, Fast Screener, Threading
+  family: ARCHITECTURE_HARDENING
+  date_reported: '2026-09-22'
+  symptom: |
+    1. index_options_trade_engine.py evaluated candidates using unnormalized nominal point differences (t3 - entry_spot), causing SENSEX (~80,000 pts) and BANKNIFTY (~50,000 pts) to artificially dominate NIFTY (~24,500 pts) regardless of true percentage return or Risk-to-Reward ratio.
+    2. index_options_trade_engine.py lacked the 7 Execution Gates enforced in stock options engine: allowed zero-confluence trades, lottery-ticket premiums (< ₹5.00) on low DTE, overstretched contracts (> +15% VWAP), and falling-knife breakdowns (< -5% VWAP).
+    3. Position monitoring in index_options_trade_engine.py ran sequentially inside the 15-second main_scan_loop, meaning trailing stop-loss ratchets and target profit takes paused during long scan cycles.
+    4. stock_options_trade_engine.py executed trades only after all 210 stocks finished scanning (8-12 minute latency), causing newly discovered Tier 1 Gold setups to degrade in R:R by the time orders were submitted.
+    5. stock_options_trade_engine.py fetched full multi-TF candle history for all 210 stocks including dormant/dead stocks with 0 volume and 0% movement.
+  root_cause: |
+    1. index_options_trade_engine lacked composite scoring logic (_avg_target_rank) and candidate tier partitioning (Tier 1 Gold vs Tier 2 Core).
+    2. execute_highest_rr_trade in index engine lacked Gate 1 (Mandatory Spot Confluence), Gate 2 (Low-DTE Premium Floor), Gate 3 (Safe Option Value Corridor), Gate 6 (Adaptive Spread Tolerance), and Gate 7 (Pegged Mid-Price limit order routing).
+    3. index_options_trade_engine did not run monitor_active_positions in a dedicated daemon thread.
+    4. stock_options_trade_engine accumulated results into temp_stored_trades and waited for ThreadPoolExecutor completion before invoking execute_highest_rr_trade.
+    5. run_scan_cycle in stock engine submitted the full scan_order list to worker threads without pre-screening out flat/dormant stocks during active market hours.
+  affected_files:
+  - common/targets.py
+  - common/trading_core.py
+  - Trade_Option/index_options_trade_engine.py
+  - Trade_Option/stock_options_trade_engine.py
+  - input/program_config.json
+  - scratch/test_index_7gates_and_instant_dispatch.py
+  - scratch/run_full_regression_test.py
+  fix_applied: |
+    1. Single Source of Truth for Composite Ranking:
+       - Added _avg_target_rank and _parse_candidate_tier to common/targets.py, with aliases calculate_composite_rank and parse_candidate_tier.
+       - Re-exported in common/trading_core.py for system-wide access.
+    2. Index Engine Parity & 7-Gate Funnel (Trade_Option/index_options_trade_engine.py):
+       - Overhauled execute_highest_rr_trade to sort staged candidates using _avg_target_rank, prioritizing Tier 1 Gold (🥇 T1) over Tier 2 Core (🥈 T2) and eliminating index scale bias.
+       - Enforced Gate 1 (Spot Confluence Gate): Auto-entry requires verified spot directional confluence (spot_confluence == True).
+       - Enforced Gate 2 (Low-DTE Premium Floor): Blocks contracts where benchmark/LTP < ₹5.00 on DTE <= 5, while retaining 11:30 0DTE cutoff.
+       - Enforced Gate 3 (Safe Option Value Corridor): Rejects overstretched contracts (> +15% VWAP or STRETCHED) and falling knives (< -5.0% VWAP).
+       - Enforced Gate 6 (Adaptive Spread Tolerance): execute_index_entry reads max_spread_pct_high_conviction (up to 3.0%) for Tier 1 Gold and Tier 2 Core setups.
+       - Enforced Gate 7 (Smart Pegged Limit Routing & LPP Clamp): Pegs limit buy orders at Mid-Price between Bid and Ask when spread >= 0.8%, clamped via clamp_lpp_buy_price.
+       - Updated run_multi_day_backtest to select best candidate via _avg_target_rank instead of nominal points.
+    3. Decoupled Index Position Monitor:
+       - Created position_monitor_loop(kite) daemon thread running continuous 15s surveillance, ensuring trailing SL and target exits never block behind scan loops.
+    4. Latency Elimination (Trade_Option/stock_options_trade_engine.py):
+       - Pillar 1 (Instant Dispatch on Discovery): In as_completed(futures) loop, if any worker returns a Tier 1 Gold candidate with spot confluence, immediately invokes execute_highest_rr_trade(kite, [cand]) with deduplication tracking.
+       - Pillar 2 (Fast Bulk-Quote Screener): In run_scan_cycle, filters out dormant F&O stocks (0 volume or <0.10% move and turnover < ₹25 Lakhs) during active market hours, while strictly preserving incubating setups (Cat A+/A/B), active positions, and core NIFTY50 stocks.
+    5. Strategic Blueprint Alignment:
+       - Corrected input/program_config.json index timeframes to standard 15m entry / 60m anchor.
+    6. Testing & Regression:
+       - Created scratch/test_index_7gates_and_instant_dispatch.py (7/7 tests passed).
+       - Registered as TEST 27 in scratch/run_full_regression_test.py (27/27 suites passed, 100% success).
+  verification: |
+    - Ran python scratch/test_index_7gates_and_instant_dispatch.py: 7/7 passed.
+    - Ran python scratch/run_full_regression_test.py: 27/27 test suites passed with zero regressions.
+    - AST syntax verified on all modified files.
+  status: RESOLVED
+  resolution_date: '2026-09-22'
+
 - id: ISSUE-072
   title: End-to-End Integration Robustness — Funnel Eviction Key Parity, Ghost Trade Resurrection Prevention, and Scan Tab Ingestion Field Preservation
   severity: HIGH

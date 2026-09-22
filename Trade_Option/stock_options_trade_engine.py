@@ -383,6 +383,35 @@ def run_scan_cycle(kite):
 
     # Sort descending by priority score; tie-break alphabetically
     scan_order = sorted(base_symbols, key=lambda s: (-_compute_scan_priority(s), s))
+
+    # Fast Bulk-Quote Screener (ISSUE-072 Speed Phase, Pillar 2)
+    # Filter out dormant/zero-volume symbols during active market hours to cut scan cycle latency
+    # Safeguards: Always retains incubating setups (Cat A+/A/B), active positions, NIFTY50 core stocks, and active movers
+    if kite and is_market_open() and BACKTEST_DATE is None:
+        active_scan_symbols = []
+        skipped_count = 0
+        from equity_universe import NIFTY50_SYMBOLS
+        for sym in scan_order:
+            if sym in incubating_syms or sym in ACTIVE_POSITIONS or sym in NIFTY50_SYMBOLS:
+                active_scan_symbols.append(sym)
+                continue
+            q = spot_quotes.get(f"NSE:{sym}", {})
+            lp = float(q.get("last_price") or 0.0)
+            vol = float(q.get("volume") or 0.0)
+            ohlc = q.get("ohlc") or {}
+            prev_close = float(ohlc.get("close") or 0.0)
+            pct_chg = abs(lp - prev_close) / prev_close * 100.0 if prev_close > 0 else 0.0
+            turnover_cr = (vol * lp) / 1e7
+
+            # If stock has 0 volume or completely flat (<0.10% move and turnover < ₹25 Lakhs), skip heavy multi-TF candle fetch
+            if lp <= 0 or vol <= 0 or (pct_chg < 0.10 and turnover_cr < 0.25):
+                skipped_count += 1
+                continue
+            active_scan_symbols.append(sym)
+        if skipped_count > 0:
+            logging.info(f"[FAST_SCREENER] Screened {len(scan_order)} stocks: {len(active_scan_symbols)} active candidates prioritized, {skipped_count} dormant/flat stocks skipped.")
+        scan_order = active_scan_symbols
+
     if scan_order:
         top_preview = ", ".join([f"{s}({_compute_scan_priority(s):.0f}pts)" for s in scan_order[:6]])
         logging.info(f"[PRIORITY SCAN ORDER] Evaluated {len(scan_order)} stocks. Top priority: {top_preview}")
@@ -394,6 +423,9 @@ def run_scan_cycle(kite):
     worker_threads = 2 if radar_active_count > 0 else 3
     if radar_active_count > 0:
         logging.info(f"[RADAR PRIORITY GATE] {radar_active_count} setup(s) on radar. Throttling macro scan (workers={worker_threads}) to preserve Zerodha Kite rate limits.")
+
+    dispatched_in_cycle = set()
+    live_ok = LIVE_MARKET_DEPLOYMENT and live_execution_enabled(LIVE_EXECUTION_FLAG) and is_new_entry_allowed(live_execution_active=True, is_option=True)
 
     with ThreadPoolExecutor(max_workers=worker_threads) as pool:
         futures = {}
@@ -416,6 +448,25 @@ def run_scan_cycle(kite):
                     temp_stored_trades.extend(result)
                     with position_lock:
                         shared_write_display(temp_stored_trades, dict(ACTIVE_POSITIONS), SCAN_DISPLAY_FILE, "nifty50")
+
+                    # Instant Dispatch on Discovery (ISSUE-072 Speed Phase, Pillar 1)
+                    # When a worker discovers a Tier 1 Gold candidate with confirmed spot confluence,
+                    # dispatch it IMMEDIATELY rather than waiting 8-12 minutes for all 210 stocks to complete!
+                    if live_ok:
+                        for cand in result:
+                            if not isinstance(cand, dict):
+                                continue
+                            c_tier = _parse_candidate_tier(cand, default=2)
+                            if c_tier == 1 and cand.get("spot_confluence"):
+                                sym_c = cand.get("symbol", "")
+                                p_c = cand.get("pattern", "")
+                                s_c = cand.get("side", "")
+                                stk_c = cand.get("strike", "")
+                                d_key = f"{sym_c}|{p_c}|{s_c}|{stk_c}"
+                                if d_key not in dispatched_in_cycle and not trade_db.is_pattern_executed("nifty50", d_key):
+                                    logging.info(f"[INSTANT_DISPATCH] 🥇 Tier 1 Gold setup discovered for {sym_c} ({cand.get('contract')}). Triggering instant execution without waiting for batch completion!")
+                                    dispatched_in_cycle.add(d_key)
+                                    execute_highest_rr_trade(kite, [cand])
             except Exception as e:
                 logging.error(f"Error processing {symbol}: {e}")
 

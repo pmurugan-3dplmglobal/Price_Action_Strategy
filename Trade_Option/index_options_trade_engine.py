@@ -51,7 +51,9 @@ from trading_core import (
     get_option_lot_size,
     clear_executed_exit,
     slice_quantity_for_freeze,
-    calculate_position_size
+    calculate_position_size,
+    _avg_target_rank,
+    _parse_candidate_tier
 )
 
 LIVE_MARKET_DEPLOYMENT = True
@@ -238,22 +240,43 @@ def execute_index_entry(kite, pos):
         q = safe_kite_call(kite.quote, [q_key])
         ltp = float(q.get(q_key, {}).get("last_price", 0))
         ask = 0
-        depth = q.get(q_key, {}).get("depth", {}).get("sell", [])
-        if depth and len(depth) > 0 and depth[0].get("price", 0) > 0:
-            ask = float(depth[0]["price"])
+        depth_sell = q.get(q_key, {}).get("depth", {}).get("sell", [])
+        if depth_sell and len(depth_sell) > 0 and depth_sell[0].get("price", 0) > 0:
+            ask = float(depth_sell[0]["price"])
+        depth_buy = q.get(q_key, {}).get("depth", {}).get("buy", [])
+        bid = float(depth_buy[0]["price"]) if (depth_buy and len(depth_buy) > 0 and depth_buy[0].get("price", 0) > 0) else 0.0
+
         bm = float(pos.get("benchmark") or 0)
         is_spread = pos.get("position_type") == "option_spread"
         if bm > 0 and not is_spread:
             price = round(bm * 1.005, 1)
         else:
             price = round((ask if ask > 0 else ltp) * 1.005, 1)
+
+        # Smart Pegged Limit Order Routing (Passive Mid-Price Peg)
+        # If spread >= 0.8%, peg limit order at Mid price between Best Bid and Best Ask to capture spread savings
+        if bid > 0 and ask > 0 and (ask - bid) / ask >= 0.008:
+            mid_price = round((bid + ask) / 2.0, 1)
+            if mid_price > 0 and mid_price < price:
+                logging.info(f"[INDEX PEGGED_LIMIT_ROUTING] {pos['contract']}: Pegging limit at Mid-Price {mid_price:.2f} (Bid={bid:.2f}, Ask={ask:.2f}) instead of {price:.2f}")
+                price = mid_price
+
         from position_monitor import clamp_lpp_buy_price
-        price = clamp_lpp_buy_price(price, ask if ask > 0 else ltp)
+        price = clamp_lpp_buy_price(price, ask if ask > 0 else (ltp or price))
         lot_sz = pos.get("lot_size") or get_option_lot_size(pos["contract"]) or INDEX_REGISTRY.get(pos.get("symbol", ""), {}).get("lot_size", 1)
+
+        cfg_eng = load_program_config_for_engine("index")
+        cfg_liq = cfg_eng.get("liquidity_gate", {})
+        base_max_spread = float(cfg_liq.get("max_spread_pct", 0.02))
+        cand_tier = _parse_candidate_tier(pos, default=1)
+        if cand_tier in [1, 2] or "T1" in str(pos.get("tier_badge", "")) or "GOLD" in str(pos.get("tier_label", "")):
+            max_spread = float(cfg_liq.get("max_spread_pct_high_conviction", max(base_max_spread, 0.03)))
+        else:
+            max_spread = base_max_spread
 
         from liquidity_guard import check_bid_ask_spread_liquidity
         liq_ok, spread_val, liq_msg, _ = check_bid_ask_spread_liquidity(
-            kite=kite, exchange=target_exch, contract=pos["contract"], max_spread_pct=0.02
+            kite=kite, exchange=target_exch, contract=pos["contract"], max_spread_pct=max_spread
         )
         if not liq_ok:
             logging.warning(f"[LIQUIDITY_GATE] Entry rejected for {pos['contract']}: {liq_msg}")
@@ -354,10 +377,9 @@ def simulate_trade_outcome(kite, trade, target_date):
 # ──────────────────────────────────────────────
 
 def execute_highest_rr_trade(kite, staged):
-    """After a scan cycle, evaluate staged candidates in descending order of profit and execute the first unexecuted/valid setup."""
+    """After a scan cycle, evaluate staged candidates in descending order of composite rank and execute the best valid setup (ISSUE-071, ISSUE-073)."""
     if not staged:
         return
-    sorted_staged = sorted(staged, key=lambda t: (t.get("t3") or t.get("t1") or 0) - t.get("entry_spot", 0), reverse=True)
     live_ok = LIVE_MARKET_DEPLOYMENT and live_execution_enabled(LIVE_EXECUTION_FLAG) and is_new_entry_allowed(live_execution_active=True, is_option=True, is_index=True)
     if LIVE_MARKET_DEPLOYMENT and live_execution_enabled(LIVE_EXECUTION_FLAG) and not is_new_entry_allowed(live_execution_active=True, is_option=True, is_index=True):
         logging.info("[INDEX_CUTOFF_GUARD] New index trade entries blocked after 13:30 IST. Skipping cycle execution.")
@@ -367,6 +389,28 @@ def execute_highest_rr_trade(kite, staged):
     exec_mode = str(cfg_eng.get("execution_mode", "DEBIT_SPREAD")).upper()
     use_spread = (exec_mode in ["DEBIT_SPREAD", "SPREAD_ONLY", "AUTO"])
 
+    # Prioritized Candidate Pools: Tier 1 Gold (Priority 1) and Tier 2 Core (Priority 2)
+    t1_candidates = []
+    t2_candidates = []
+    seen_cand_ids = set()
+    for t in staged:
+        if not isinstance(t, dict):
+            continue
+        c_tier = _parse_candidate_tier(t, default=2)
+        c_id = id(t)
+        if c_tier == 1:
+            t1_candidates.append(t)
+            seen_cand_ids.add(c_id)
+        elif c_tier == 2 and c_id not in seen_cand_ids:
+            t2_candidates.append(t)
+            seen_cand_ids.add(c_id)
+
+    t1_sorted = sorted(t1_candidates, key=_avg_target_rank, reverse=True)
+    t2_sorted = sorted(t2_candidates, key=_avg_target_rank, reverse=True)
+    sorted_staged = t1_sorted + t2_sorted
+    if not sorted_staged:
+        sorted_staged = sorted(staged, key=_avg_target_rank, reverse=True)
+
     for best in sorted_staged:
         key = f"{best['symbol']}|{best['pattern']}|{best['side']}|{best.get('strike', '')}"
         if trade_db.is_pattern_executed("index", key):
@@ -375,8 +419,18 @@ def execute_highest_rr_trade(kite, staged):
 
         sym = best.get("symbol", "")
         contract_cand = best.get("contract", "")
+
+        # Gate 1: Mandatory Spot Confluence Gate (ISSUE-071, ISSUE-073)
+        # Auto-execution requires verified spot directional backing (100% win/loss separation).
+        if not best.get("spot_confluence"):
+            logging.info(f"[SPOT_CONFLUENCE_GATE] Index auto-execution blocked for {sym} ({contract_cand or sym}): "
+                         f"spot_confluence={best.get('spot_confluence')} (type={best.get('spot_confluence_type', 'NONE')}); "
+                         f"setup visible on Scans Tab; evaluating next candidate")
+            continue
+
         lot_sz = int(best.get("lot_size") or (get_option_lot_size(contract_cand) if contract_cand else None) or INDEX_REGISTRY.get(sym, {}).get("lot_size", 1) or 1)
         raw_pos_size = best.get("position_size")
+        c_tier = _parse_candidate_tier(best, default=1)
         if raw_pos_size is None:
             raw_pos_size = calculate_position_size(
                 spot_price=float(best.get("entry_spot") or 0.0),
@@ -385,7 +439,7 @@ def execute_highest_rr_trade(kite, staged):
                 risk_percent=float(cfg_eng.get("MAX_RISK_PERCENT") or 1.0),
                 lot_size=lot_sz,
                 is_option=True,
-                tier=best.get("tier", 1),
+                tier=c_tier,
                 allow_zero=True
             )
         pos_size = int(raw_pos_size or 0)
@@ -394,19 +448,39 @@ def execute_highest_rr_trade(kite, staged):
             logging.warning(f"[RISK_BUDGET_EXCEEDED] Trade rejected for {best.get('symbol')} ({best.get('contract')}): Position size is 0 lots (Risk per lot exceeds capital budget).")
             continue
 
-        # 11:30 IST 0DTE Index Cutoff Guard
-        contract_cand = best.get("contract")
-        try:
-            from position_monitor import get_contract_days_to_expiry
-        except ModuleNotFoundError:
-            from common.position_monitor import get_contract_days_to_expiry
-        dte_cand = get_contract_days_to_expiry(contract_cand) if contract_cand else None
+        # Gate 2: Low-DTE Premium Floor Gate & 11:30 0DTE Cutoff (ISSUE-071, ISSUE-073)
+        dte_cand = best.get("dte")
+        if dte_cand is None and contract_cand:
+            try:
+                from position_monitor import get_contract_days_to_expiry
+                dte_cand = get_contract_days_to_expiry(contract_cand)
+            except Exception:
+                pass
+
+        benchmark_val = float(best.get("benchmark") or best.get("entry_spot") or 0.0)
+        if dte_cand is not None and dte_cand <= 5 and benchmark_val < 5.0:
+            logging.warning(f"[PREMIUM_FLOOR_GATE] Index auto-execution skipped for {sym} ({contract_cand}): "
+                            f"Benchmark premium ₹{benchmark_val:.2f} < ₹5.00 floor with DTE={dte_cand} <= 5 (lottery ticket risk); checking next candidate")
+            continue
+
         if dte_cand is not None and dte_cand <= 0:
             from datetime import time as dt_time
             from trading_core import get_ist_now
             if get_ist_now().time() >= dt_time(11, 30):
                 logging.info(f"[0DTE_CUTOFF_EXCEEDED] 0DTE Index setup {contract_cand} rejected: Current IST time {get_ist_now().strftime('%H:%M:%S')} >= 11:30 IST cutoff.")
                 continue
+
+        # Gate 3: Safe Option Value Corridor (-5% to +15% VWAP) (ISSUE-071, ISSUE-073)
+        v_st = str(best.get("vwap_status", "")).upper()
+        v_str = float(best.get("vwap_stretch", 0.0) or 0.0)
+        if v_st == "STRETCHED" or v_str > 15.0:
+            logging.warning(f"[OPTION_VALUE_GUARD] Index auto-execution skipped for {sym} ({contract_cand}): "
+                            f"Option is overstretched ({v_str:.1f}% above VWAP, status={v_st}); wait for pullback/retest")
+            continue
+        if v_str < -5.0:
+            logging.warning(f"[FALLING_KNIFE_GUARD] Index auto-execution skipped for {sym} ({contract_cand}): "
+                            f"Option is broken down ({v_str:.1f}% below VWAP); skipping decaying asset")
+            continue
 
         if live_ok or BACKTEST_DATE is not None:
             pos = best.copy()
@@ -473,7 +547,7 @@ def execute_highest_rr_trade(kite, staged):
 
             if live_ok:
                 from vix_guard import evaluate_vix_regime
-                vix_ok, vix_msg, _ = evaluate_vix_regime(kite, tier_val=best.get("tier", 1))
+                vix_ok, vix_msg, _ = evaluate_vix_regime(kite, tier_val=c_tier)
                 if not vix_ok:
                     logging.info(f"[VIX_REGIME_GATE] Auto-execution skipped for {best['symbol']} ({best['contract']}): {vix_msg}")
                     continue
@@ -483,7 +557,7 @@ def execute_highest_rr_trade(kite, staged):
                 p_ok, p_msg, _ = check_portfolio_risk_caps(
                     engine="index",
                     symbol=best["symbol"],
-                    candidate_tier=best.get("tier", 1),
+                    candidate_tier=c_tier,
                     capital=cap_val,
                     live_positions=ACTIVE_POSITIONS,
                     kite=kite
@@ -575,6 +649,20 @@ def monitor_active_positions(kite):
                                      kite.PRODUCT_NRML, "index", TIMEFRAME_ENTRY,
                                      trade_db, log_to_journal,
                                      live=LIVE_MARKET_DEPLOYMENT)
+
+def position_monitor_loop(kite):
+    """Dedicated background thread for index position monitoring (ISSUE-073).
+    Decoupled from scan cycles so trailing SL, +BE lock, and target exits are evaluated continuously every 15s.
+    """
+    logging.info("[INDEX MONITOR THREAD] Dedicated position monitor loop started (15s interval).")
+    while True:
+        try:
+            if LIVE_MARKET_DEPLOYMENT:
+                monitor_active_positions(kite)
+        except Exception as e:
+            logging.error(f"[INDEX MONITOR THREAD] Error monitoring positions: {e}")
+        time.sleep(15)
+
 
 # ──────────────────────────────────────────────
 #  DISPLAY DATA WRITER + KITE SYNC
@@ -763,7 +851,7 @@ def run_multi_day_backtest(kite, start_date, end_date):
             if staged and len(staged) >= 1:
                 results["days_with_trades"] += 1
                 results["total_trades"] += 1
-                best = max(staged, key=lambda t: (t.get("t3") or t.get("t1") or 0) - t.get("entry_spot", 0))
+                best = max(staged, key=_avg_target_rank)
                 sym = best["symbol"]
                 if sym not in results["by_symbol"]:
                     results["by_symbol"][sym] = {"trades": 0, "wins": 0, "losses": 0, "no_exits": 0}
@@ -889,6 +977,8 @@ def main():
                       "Use --date=YYYY-MM-DD or --backtest-range=START,END to run backtest. Exiting.")
         return
     logging.info(f"Scanner: {TIMEFRAME_ENTRY} | Anchor: {TIMEFRAME_ANCHOR} | Capital: {INITIAL_CAPITAL} | Risk: {MAX_RISK_PERCENT}%")
+    monitor_worker = threading.Thread(target=position_monitor_loop, args=(kite,), daemon=True)
+    monitor_worker.start()
     worker = threading.Thread(target=main_scan_loop, args=(kite,), daemon=True)
     worker.start()
     try:

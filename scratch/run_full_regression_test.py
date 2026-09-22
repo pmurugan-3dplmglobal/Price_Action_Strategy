@@ -844,6 +844,24 @@ except Exception as e:
     errors.append(f"Priority Ranking Laws Invariants Failed: {e}")
     print(f" FAILED [ERR] ({e})", flush=True)
 
+# -------------------------------------------------------------------------
+# TEST 27: Index Engine 7-Gate Funnel, Normalized Ranking & Speed Phase (ISSUE-073)
+# -------------------------------------------------------------------------
+print("[TEST 27] Testing Index Engine 7-Gate Funnel, Normalized Ranking & Speed Phase (ISSUE-073)...", end="", flush=True)
+try:
+    import subprocess
+    import paths
+    cmd_i7g = [
+        sys.executable,
+        os.path.join(paths.SCRATCH_DIR, "test_index_7gates_and_instant_dispatch.py")
+    ]
+    res_i7g = subprocess.run(cmd_i7g, cwd=paths.PROJECT_ROOT, capture_output=True, text=True)
+    assert res_i7g.returncode == 0, f"Index 7-Gate Funnel unit tests failed:\nSTDOUT:\n{res_i7g.stdout}\nSTDERR:\n{res_i7g.stderr}"
+    print(" PASSED [OK]", flush=True)
+except Exception as e:
+    errors.append(f"Index 7-Gate Funnel Invariants Failed: {e}")
+    print(f" FAILED [ERR] ({e})", flush=True)
+
 print("\n" + "=" * 100)
 if not errors:
     print("      ALL REGRESSION TESTS PASSED WITH 100% SUCCESS -- ZERO REGRESSIONS FOUND!")
@@ -852,3 +870,4 @@ else:
     for err in errors:
         print(f"        - {err}")
 print("=" * 100)
+

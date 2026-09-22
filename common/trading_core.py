@@ -96,7 +96,11 @@ from targets import (
     get_sl_buffer_distance,
     calculate_option_atr_sl,
     calc_rr,
-    check_circuit_and_spread_shield
+    check_circuit_and_spread_shield,
+    _avg_target_rank,
+    _parse_candidate_tier,
+    calculate_composite_rank,
+    parse_candidate_tier
 )
 
 # ── patterns_bull ──
