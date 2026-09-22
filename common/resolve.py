@@ -243,11 +243,21 @@ def sync_kite_positions(kite, registry, positions_dict, lock, engine, timeframe_
                 continue
             nq = int(p.get("quantity", 0))
             if nq == 0:
+                cnt_str = p.get("tradingsymbol")
                 with lock:
                     if sym in positions_dict:
                         del positions_dict[sym]
-                    if p.get("tradingsymbol") in positions_dict:
-                        del positions_dict[p.get("tradingsymbol")]
+                    if cnt_str in positions_dict:
+                        del positions_dict[cnt_str]
+                try:
+                    import trade_db
+                    active_trades = trade_db.get_active_trades(engine)
+                    for at in active_trades:
+                        if at.get("contract") == cnt_str or at.get("symbol") == sym:
+                            trade_db.update_trade_status(at["id"], "CLOSED_EXTERNALLY", details="Zero quantity on broker net positions")
+                            logging.info(f"[KITE_SYNC] Auto-reconciled trade #{at['id']} ({cnt_str or sym}) to CLOSED_EXTERNALLY in trade_db")
+                except Exception:
+                    pass
                 continue
             is_stock = p.get("exchange", "") == "NSE"
             is_opt = is_option_contract(p.get("tradingsymbol", ""))

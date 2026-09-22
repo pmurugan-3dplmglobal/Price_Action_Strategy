@@ -862,6 +862,24 @@ except Exception as e:
     errors.append(f"Index 7-Gate Funnel Invariants Failed: {e}")
     print(f" FAILED [ERR] ({e})", flush=True)
 
+# -------------------------------------------------------------------------
+# TEST 28: Broker Ground Truth Invariant & Ghost Trade Reconciler (ISSUE-074)
+# -------------------------------------------------------------------------
+print("[TEST 28] Testing Broker Ground Truth Invariant & Ghost Trade Reconciler (ISSUE-074)...", end="", flush=True)
+try:
+    import subprocess
+    import paths
+    cmd_gt = [
+        sys.executable,
+        os.path.join(paths.SCRATCH_DIR, "test_portfolio_risk_ghost_trade_reconciliation.py")
+    ]
+    res_gt = subprocess.run(cmd_gt, cwd=paths.PROJECT_ROOT, capture_output=True, text=True)
+    assert res_gt.returncode == 0, f"Ghost trade reconciliation unit tests failed:\nSTDOUT:\n{res_gt.stdout}\nSTDERR:\n{res_gt.stderr}"
+    print(" PASSED [OK]", flush=True)
+except Exception as e:
+    errors.append(f"Broker Ground Truth & Ghost Trade Reconciler Failed: {e}")
+    print(f" FAILED [ERR] ({e})", flush=True)
+
 print("\n" + "=" * 100)
 if not errors:
     print("      ALL REGRESSION TESTS PASSED WITH 100% SUCCESS -- ZERO REGRESSIONS FOUND!")
@@ -870,4 +888,5 @@ else:
     for err in errors:
         print(f"        - {err}")
 print("=" * 100)
+
 

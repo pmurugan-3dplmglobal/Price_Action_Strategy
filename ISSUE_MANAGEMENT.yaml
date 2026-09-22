@@ -2589,5 +2589,94 @@ issues:
   status: RESOLVED
   resolution_date: '2026-09-21'
 
+- id: ISSUE-071
+  title: "Priority Ranking Laws, Safe Option Value Corridor (-5% to +15% VWAP) & Low-DTE Premium Floor"
+  category: OPTION_EXECUTION_GOVERNANCE
+  severity: HIGH
+  date_reported: '2026-09-21'
+  affected_files:
+    - common/resolve.py
+    - common/targets.py
+    - Trade_Option/stock_options_trade_engine.py
+    - scratch/test_priority_ranking_laws.py
+  symptom: |
+    1. Lower-tier momentum setups were prioritized over Tier 1 Gold coiled setups during fast radar sweeps.
+    2. Severe theta decay on deep-decayed options (premium < 5.0) and overextended chasing (> +15% over VWAP).
+  root_cause: |
+    Candidate pools lacked strict tier-ordered sorting and VWAP corridor enforcement.
+  fix_applied: |
+    1. Implemented strict priority ranking: Tier 1 Gold (Priority 1) -> Tier 2 Core (Priority 2) -> Tier 3 Momentum (Priority 3).
+    2. Enforced Safe Option Value Corridor (-5% to +15% of intraday VWAP) and low-DTE floor (< Rs 5.00, or < Rs 40.00 for 0DTE).
+  verification: |
+    scratch/test_priority_ranking_laws.py (PASSED).
+  status: RESOLVED
+  resolution_date: '2026-09-21'
 
+- id: ISSUE-072
+  title: "Fast Bulk-Quote Screener & Instant Auto-Execution Dispatch in Stock Options Engine"
+  category: LATENCY_ELIMINATION_&_SURVEILLANCE
+  severity: HIGH
+  date_reported: '2026-09-21'
+  affected_files:
+    - Trade_Option/stock_options_trade_engine.py
+  symptom: |
+    Full macro scan cycles took over 40 seconds, causing delayed entry triggers on coiled breakouts.
+  root_cause: |
+    Sequential candle downloads across all 210+ F&O stocks blocked the engine thread.
+  fix_applied: |
+    1. Sub-150ms bulk quote screener skips dormant/zero-turnover stocks while strictly preserving incubating, active, and Nifty 50 stocks.
+    2. Instant dispatch on discovery triggers auto-entry immediately when any worker returns a Tier 1 Gold setup with spot confluence.
+  verification: |
+    scratch/run_full_regression_test.py (27/27 suites PASSED).
+  status: RESOLVED
+  resolution_date: '2026-09-21'
 
+- id: ISSUE-073
+  title: "Index Options Engine Modernization: Porting the 7 Execution Gates & Normalized Point Bias Elimination"
+  category: INDEX_ENGINE_PARITY
+  severity: CRITICAL
+  date_reported: '2026-09-22'
+  affected_files:
+    - Trade_Option/index_options_trade_engine.py
+    - common/targets.py
+    - common/trading_core.py
+    - scratch/test_index_7gates_and_instant_dispatch.py
+  symptom: |
+    Index Options Engine lacked the 7 Execution Gates present in the Stock Options Engine, allowing overextended VWAP entries, zero-confluence trades, and point-bias distortions where BANKNIFTY/SENSEX nominal RR crowded out NIFTY.
+  root_cause: |
+    Architectural divergence between stock_options_trade_engine.py and index_options_trade_engine.py.
+  fix_applied: |
+    1. Ported all 7 Execution Gates to index_options_trade_engine.py.
+    2. Centralized normalized candidate ranking (_avg_target_rank) in common/targets.py.
+    3. Decoupled index position surveillance into a dedicated background daemon thread.
+  verification: |
+    scratch/test_index_7gates_and_instant_dispatch.py (7/7 PASSED).
+    scratch/run_full_regression_test.py (27/27 suites PASSED).
+  status: RESOLVED
+  resolution_date: '2026-09-22'
+
+- id: ISSUE-074
+  title: "Broker Ground Truth Invariant & Automatic Ghost Trade Reconciliation in Portfolio Risk Guard"
+  category: RISK_MANAGEMENT_&_BROKER_PARITY
+  severity: CRITICAL
+  date_reported: '2026-09-22'
+  affected_files:
+    - common/portfolio_risk.py
+    - common/resolve.py
+    - scratch/test_portfolio_risk_ghost_trade_reconciliation.py
+    - scratch/run_full_regression_test.py
+  symptom: |
+    Engine blocked valid high-conviction trades with 'MAX_CONCURRENT_POSITIONS_REACHED (6/6 active scripts across portfolio [Capital: Rs 100,000])' even though the user held only 2 to 3 live positions on Zerodha Kite.
+  root_cause: |
+    check_portfolio_risk_caps() performed a blind union between live Kite broker positions and SQLite trade_db active records. When positions closed externally on the broker (e.g. expired or manually closed days ago like NIFTY, SUNPHARMA, UNITDSPR from Sep 18), they remained marked ACTIVE in SQLite. The risk guard counted 3 real positions + 3 ghost DB trades = 6 active scripts, falsely saturating the portfolio cap.
+  fix_applied: |
+    1. Established Broker Ground Truth Invariant in common/portfolio_risk.py: When kite session is available and successfully returns live broker positions, Kite is the single source of truth. Any trade in trade_db or in-memory state that has 0 quantity or is absent on the broker is ignored and auto-reconciled to CLOSED_EXTERNALLY.
+    2. Added 60s in-flight grace window to protect freshly placed orders before broker fill reflection.
+    3. Enhanced sync_kite_positions in common/resolve.py to automatically update trade_db status to CLOSED_EXTERNALLY when broker net quantity is zero.
+    4. Reconciled historical ghost trades in SQLite database.
+  verification: |
+    1. Unit test scratch/test_portfolio_risk_ghost_trade_reconciliation.py (2/2 PASSED).
+    2. Master regression suite scratch/run_full_regression_test.py (28/28 suites PASSED, 100% SUCCESS).
+    3. Live test: check_portfolio_risk_caps() with active Kite session confirmed PORTFOLIO_RISK_APPROVED.
+  status: RESOLVED
+  resolution_date: '2026-09-22'

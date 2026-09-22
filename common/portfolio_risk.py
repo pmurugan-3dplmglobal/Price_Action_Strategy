@@ -192,34 +192,96 @@ def check_portfolio_risk_caps(engine, symbol, candidate_tier=2, capital=100000.0
     sector_counts = {}
 
     # 1A. Live Broker Ground Truth (Kite net positions)
+    broker_positions_fetched = False
+    broker_active_contracts = set()
+    broker_active_symbols = set()
+    broker_holdings = set()
+
     if kite:
         try:
             net_pos = kite.positions().get("net", [])
+            broker_positions_fetched = True
             for p in net_pos:
                 nq = int(p.get("quantity", 0))
                 if nq != 0:
                     cnt = str(p.get("tradingsymbol", "")).strip().upper()
                     if cnt:
                         active_contracts.add(cnt)
+                        broker_active_contracts.add(cnt)
                         raw_sym = _extract_underlying_symbol(cnt)
                         if raw_sym:
                             active_symbols.add(raw_sym)
+                            broker_active_symbols.add(raw_sym)
                             if raw_sym in INDEX_SYMBOLS:
                                 active_index_symbols.add(raw_sym)
                             sec = get_symbol_sector(raw_sym)
                             sector_counts[sec] = sector_counts.get(sec, 0) + 1
+            # Also capture holdings for equity CNC positions
+            try:
+                h_list = kite.holdings()
+                if isinstance(h_list, list):
+                    for h in h_list:
+                        hq = int(h.get("quantity", 0)) + int(h.get("t1_quantity", 0))
+                        if hq > 0:
+                            h_sym = str(h.get("tradingsymbol", "")).strip().upper()
+                            broker_holdings.add(h_sym)
+                            active_contracts.add(h_sym)
+                            raw_h_sym = _extract_underlying_symbol(h_sym)
+                            if raw_h_sym:
+                                active_symbols.add(raw_h_sym)
+                                broker_active_symbols.add(raw_h_sym)
+            except Exception:
+                pass
         except Exception as k_err:
             logging.warning(f"Portfolio risk: Failed to fetch live broker positions: {k_err}")
 
     # 1B. SQLite trade_db Active Records
     if include_db_trades:
         active_db_trades = trade_db.get_active_trades(engine=None)
+        now_dt = get_ist_now(naive=True)
         for t in active_db_trades:
+            tid = t.get("id")
             sym = t.get("symbol")
             cnt = t.get("contract") or sym
             t_eng = str(t.get("engine", "")).lower()
+            pos_type = str(t.get("position_type", "")).lower()
+            c_str = str(cnt).strip().upper() if cnt else ""
+            raw_sym = _extract_underlying_symbol(c_str or sym) or (str(sym).strip().upper() if sym else "")
+
+            # If live broker positions were fetched, Kite is ground truth.
+            # Stale DB trades with 0 quantity on broker must not block new trades.
+            if broker_positions_fetched:
+                is_equity = (pos_type == "stock")
+                held_on_broker = (
+                    c_str in broker_active_contracts
+                    or raw_sym in broker_active_symbols
+                    or (is_equity and (c_str in broker_holdings or raw_sym in broker_holdings))
+                )
+                if not held_on_broker:
+                    # Allow 60s grace period for fresh in-flight orders
+                    is_recent_fill = False
+                    entry_t = t.get("entry_time") or t.get("created_at")
+                    if entry_t:
+                        try:
+                            e_dt = dt.fromisoformat(str(entry_t).split("+")[0].replace("T", " "))
+                            if (now_dt - e_dt).total_seconds() < 60.0:
+                                is_recent_fill = True
+                        except Exception:
+                            pass
+                    if not is_recent_fill:
+                        # Auto-reconcile stale/ghost DB trade
+                        if tid:
+                            try:
+                                trade_db.update_trade_status(
+                                    tid, "CLOSED_EXTERNALLY",
+                                    details="Auto-reconciled: Zero quantity on broker during portfolio risk check"
+                                )
+                                logging.info(f"[PORTFOLIO_RISK_RECONCILE] Auto-closed stale trade #{tid} ({cnt or sym}) in trade_db (not held on broker)")
+                            except Exception as rec_err:
+                                logging.debug(f"Failed auto-closing stale trade #{tid}: {rec_err}")
+                        continue  # Do NOT add ghost trade to active portfolio count!
+
             if sym:
-                raw_sym = _extract_underlying_symbol(sym) or str(sym).strip().upper()
                 if raw_sym not in active_symbols:
                     active_symbols.add(raw_sym)
                     sec = get_symbol_sector(raw_sym)
@@ -227,9 +289,7 @@ def check_portfolio_risk_caps(engine, symbol, candidate_tier=2, capital=100000.0
                 if raw_sym in INDEX_SYMBOLS or t_eng == "index":
                     active_index_symbols.add(raw_sym if raw_sym in INDEX_SYMBOLS else (sym or "INDEX"))
             if cnt:
-                c_str = str(cnt).strip().upper()
                 active_contracts.add(c_str)
-                raw_sym = _extract_underlying_symbol(c_str)
                 if raw_sym and raw_sym not in active_symbols:
                     active_symbols.add(raw_sym)
                     sec = get_symbol_sector(raw_sym)
@@ -242,47 +302,49 @@ def check_portfolio_risk_caps(engine, symbol, candidate_tier=2, capital=100000.0
         for k, v in live_positions.items():
             sym = v.get("symbol") or k
             cnt = v.get("contract") or sym
-            if sym:
-                raw_sym = _extract_underlying_symbol(sym) or str(sym).strip().upper()
+            c_str = str(cnt).strip().upper() if cnt else ""
+            raw_sym = _extract_underlying_symbol(c_str or sym) or (str(sym).strip().upper() if sym else "")
+            if broker_positions_fetched:
+                held_on_broker = (
+                    c_str in broker_active_contracts
+                    or raw_sym in broker_active_symbols
+                    or (c_str in broker_holdings or raw_sym in broker_holdings)
+                )
+                if not held_on_broker:
+                    continue
+            if raw_sym:
                 if raw_sym not in active_symbols:
                     active_symbols.add(raw_sym)
                     sec = get_symbol_sector(raw_sym)
                     sector_counts[sec] = sector_counts.get(sec, 0) + 1
                 if raw_sym in INDEX_SYMBOLS:
                     active_index_symbols.add(raw_sym)
-            if cnt:
-                c_str = str(cnt).strip().upper()
+            if c_str:
                 active_contracts.add(c_str)
-                raw_sym = _extract_underlying_symbol(c_str)
-                if raw_sym and raw_sym not in active_symbols:
-                    active_symbols.add(raw_sym)
-                    sec = get_symbol_sector(raw_sym)
-                    sector_counts[sec] = sector_counts.get(sec, 0) + 1
-                if raw_sym and raw_sym in INDEX_SYMBOLS:
-                    active_index_symbols.add(raw_sym)
     elif isinstance(live_positions, list):
         for v in live_positions:
             if isinstance(v, dict):
                 sym = v.get("symbol")
                 cnt = v.get("contract") or sym
-                if sym:
-                    raw_sym = _extract_underlying_symbol(sym) or str(sym).strip().upper()
+                c_str = str(cnt).strip().upper() if cnt else ""
+                raw_sym = _extract_underlying_symbol(c_str or sym) or (str(sym).strip().upper() if sym else "")
+                if broker_positions_fetched:
+                    held_on_broker = (
+                        c_str in broker_active_contracts
+                        or raw_sym in broker_active_symbols
+                        or (c_str in broker_holdings or raw_sym in broker_holdings)
+                    )
+                    if not held_on_broker:
+                        continue
+                if raw_sym:
                     if raw_sym not in active_symbols:
                         active_symbols.add(raw_sym)
                         sec = get_symbol_sector(raw_sym)
                         sector_counts[sec] = sector_counts.get(sec, 0) + 1
                     if raw_sym in INDEX_SYMBOLS:
                         active_index_symbols.add(raw_sym)
-                if cnt:
-                    c_str = str(cnt).strip().upper()
+                if c_str:
                     active_contracts.add(c_str)
-                    raw_sym = _extract_underlying_symbol(c_str)
-                    if raw_sym and raw_sym not in active_symbols:
-                        active_symbols.add(raw_sym)
-                        sec = get_symbol_sector(raw_sym)
-                        sector_counts[sec] = sector_counts.get(sec, 0) + 1
-                    if raw_sym and raw_sym in INDEX_SYMBOLS:
-                        active_index_symbols.add(raw_sym)
 
     # Count distinct active scripts (underlying symbols) across the entire portfolio
     total_active_count = len(active_symbols) if active_symbols else len(active_contracts)
