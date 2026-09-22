@@ -198,6 +198,61 @@ class TestTierQualityFilters(unittest.TestCase):
         swappable = find_weakest_swappable_position(live_positions, candidate_rr=2.20, kite=None)
         self.assertIsNone(swappable, "Candidate with RR < 3.0 must NOT trigger slot swap!")
 
+    def test_spot_anchor_gate_blocks_counter_trend_illusion(self):
+        """Simulates RBLBANK: Spot is in morning bull run (Higher Lows, EMA13 > EMA44).
+        Candidate 410 PE must be BLOCKED from Tier 1 Gold because spot has NO bearish anchor."""
+        import pandas as pd
+        # Construct 10 bullish 30m candles
+        candles = []
+        base_p = 400.0
+        for i in range(15):
+            o = base_p + i * 0.8
+            c = o + 0.6
+            h = c + 0.3
+            l = o - 0.2
+            candles.append({"open": o, "high": h, "low": l, "close": c, "volume": 10000})
+        df_bull_spot = pd.DataFrame(candles)
+
+        # Checking PE side on bull spot
+        has_anchor, anchor_name = resolve.check_spot_anchor_confirmation(df_bull_spot, "PE")
+        self.assertFalse(has_anchor, "Spot in bull trend must NOT confirm PE anchor!")
+        self.assertEqual(anchor_name, "NO_SPOT_BEAR_ANCHOR")
+
+    def test_spot_anchor_gate_confirms_true_bearish_engulfing(self):
+        """Simulates TRENT: Spot formed Bearish Engulfing anchor on 30m spot chart.
+        Candidate PE MUST be confirmed for Tier 1 Gold promotion."""
+        import pandas as pd
+        candles = []
+        base_p = 2800.0
+        for i in range(10):
+            candles.append({"open": base_p + i * 2, "high": base_p + i * 2 + 5, "low": base_p + i * 2 - 2, "close": base_p + i * 2 + 3, "volume": 10000})
+        # Prior candle: Bullish (open 2820, close 2835, high 2840, low 2818)
+        candles.append({"open": 2820.0, "high": 2840.0, "low": 2818.0, "close": 2835.0, "volume": 15000})
+        # Current candle: Bearish Engulfing (open 2836, close 2810, high 2842, low 2808)
+        candles.append({"open": 2836.0, "high": 2842.0, "low": 2808.0, "close": 2810.0, "volume": 35000})
+        df_bear_spot = pd.DataFrame(candles)
+
+        has_anchor, anchor_name = resolve.check_spot_anchor_confirmation(df_bear_spot, "PE")
+        self.assertTrue(has_anchor, "Spot Bearish Engulfing must confirm PE anchor!")
+        self.assertEqual(anchor_name, "SPOT_BEAR_ENGULFING")
+
+    def test_spot_confluence_physical_wick_rejection(self):
+        """Spot tested VWAP from below and showed physical upper wick selling rejection."""
+        import pandas as pd
+        vwap = 500.0
+        # Candle tests VWAP at high 501.5, rejects and closes at 496.0 (open 497.0, low 495.0)
+        # Upper wick = 501.5 - 497.0 = 4.5 >= 0.3 * body (1.0)
+        c = pd.DataFrame([{
+            "open": 497.0, "high": 501.5, "low": 495.0, "close": 496.0, "volume": 5000
+        }])
+        has_conf, conf_type = resolve.evaluate_spot_confluence(
+            side="PE", is_d2=False, current_spot=496.0, spot_vwap=vwap,
+            spot_sl=505.0, spot_ema_trend=False, df_spot=c
+        )
+        self.assertTrue(has_conf)
+        self.assertEqual(conf_type, "SPOT_VWAP_REJECT")
+
 
 if __name__ == "__main__":
     unittest.main()
+

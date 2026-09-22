@@ -2933,3 +2933,38 @@ issues:
   status: RESOLVED
   resolution_date: '2026-09-22'
 
+- id: ISSUE-080
+  title: "Spot-First Pattern Anchor Gate & Physical Candlestick Wick Confluence"
+  category: SPOT_OPTION_PARITY_AND_ANCHOR_VERIFICATION
+  severity: CRITICAL
+  date_reported: '2026-09-22'
+  affected_files:
+    - common/resolve.py
+    - scratch/test_tier_quality_filters.py
+  symptom: |
+    Option charts formed artificial anchor patterns (e.g. RBLBANK 410 PE formed Two Higher Highs during a temporary morning pullback)
+    while the underlying spot stock was in a strong bullish uptrend (Higher Lows, EMA13 > EMA44). Naive inequality `current_spot <= spot_vwap`
+    awarded `SPOT_VWAP_REJECT` without verifying actual candlestick price action, promoting losing counter-trend option traps to Tier 1 Gold.
+  root_cause: |
+    1. Option premiums reflect derivative volatility fluctuations and IV drift rather than institutional accumulation on the underlying equity.
+       Promoting option candidates to Tier 1 Gold without validating that the underlying spot formed one of the 5 canonical Datta Price Action
+       Anchors (or structural EMA trend alignment) created the "Option Chart Illusion".
+    2. evaluate_spot_confluence checked naive scalar numbers (`current_spot <= spot_vwap`) rather than validating physical candlestick
+       wick rejection geometry against VWAP.
+  fix_applied: |
+    1. Implemented `check_spot_anchor_confirmation(df_spot, side: str)` in common/resolve.py scanning the recent 10-candle anchor window
+       for the 5 canonical Bullish (Engulfing, LL Sweep, Hammer Baby, Harami, Two Higher Highs) or 5 Bearish (Engulfing, HH Sweep,
+       Shooting Star Baby, Harami, Two Lower Lows) Datta Anchors and structural EMA alignment.
+    2. Upgraded `evaluate_spot_confluence(..., df_spot=df_spot)` to validate physical candlestick wick rejection geometry:
+       verifies that the candle physically tested VWAP and printed a rejection wick (>= 30% body size) or directional close.
+    3. Enforced `has_spot_anchor` across both CE and PE candidate execution loops and radar funnel loops in common/resolve.py,
+       preventing unconfirmed option setups from ever entering Tier 1 Gold.
+    4. Expanded unit test suite scratch/test_tier_quality_filters.py with 3 dedicated tests (12/12 PASSED).
+    5. Master regression suite scratch/run_full_regression_test.py: 32/32 suites PASSED with 100% success.
+  verification: |
+    1. Unit tests scratch/test_tier_quality_filters.py (12/12 PASSED).
+    2. Master regression suite scratch/run_full_regression_test.py (32/32 PASSED, zero regressions).
+  status: RESOLVED
+  resolution_date: '2026-09-22'
+
+
