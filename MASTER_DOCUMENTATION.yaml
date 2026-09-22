@@ -49,6 +49,8 @@ meta:
     - Index Engine 7-Gate Parity, Normalized Composite Ranking, Decoupled Surveillance Thread, and Speed Phase Latency Elimination (ISSUE-073)
     - Spread Exit Order Sequencing Inversion, Broker Ground Truth Guard, and Market Order Block Immunity (ISSUE-076)
     - Radar Spot Trend Confluence Gate (All-Day VWAP + EMA13/44 Golden Cross Protection), Pre-Trigger Risk Budget Gate, and Strict Option Contract Matching (ISSUE-077)
+    - Multibagger Tier Quality Filters, Anti-Whipsaw & Dynamic Slot Swap (ISSUE-079)
+    - Spot-First Pattern Anchor Gate, Physical Wick Geometry & Dual-Asset VCP Contraction (ISSUE-080)
 
 architecture:
   diagram: |

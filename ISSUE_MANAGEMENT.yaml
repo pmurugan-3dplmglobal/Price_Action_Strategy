@@ -2952,17 +2952,24 @@ issues:
     2. evaluate_spot_confluence checked naive scalar numbers (`current_spot <= spot_vwap`) rather than validating physical candlestick
        wick rejection geometry against VWAP.
   fix_applied: |
-    1. Implemented `check_spot_anchor_confirmation(df_spot, side: str)` in common/resolve.py scanning the recent 10-candle anchor window
-       for the 5 canonical Bullish (Engulfing, LL Sweep, Hammer Baby, Harami, Two Higher Highs) or 5 Bearish (Engulfing, HH Sweep,
-       Shooting Star Baby, Harami, Two Lower Lows) Datta Anchors and structural EMA alignment.
+    1. Implemented `check_spot_anchor_confirmation(df_spot, side: str, spot_vwap: float)` in common/resolve.py:
+       - Scans recent 10-candle anchor window for 5 Bullish (Engulfing, LL Sweep, Hammer Baby, Harami, Two Higher Highs) or 5 Bearish (Engulfing, HH Sweep, Shooting Star Baby, Harami, Two Lower Lows) Datta Anchors.
+       - Enforces strict Hard Regime Blocks: `BULL_SPOT_REGIME_TRAP` (blocks PE if spot > VWAP * 1.005 & EMA13 > EMA44) and `BEAR_SPOT_REGIME_TRAP` (blocks CE if spot < VWAP * 0.995 & EMA13 < EMA44).
+       - Added directional green/red candle guard on sweeps (`close <= open` for bear sweep).
+       - Enforces RVOL >= 1.2 on Spot EMA trend fallback to guarantee institutional volume participation.
     2. Upgraded `evaluate_spot_confluence(..., df_spot=df_spot)` to validate physical candlestick wick rejection geometry:
-       verifies that the candle physically tested VWAP and printed a rejection wick (>= 30% body size) or directional close.
-    3. Enforced `has_spot_anchor` across both CE and PE candidate execution loops and radar funnel loops in common/resolve.py,
-       preventing unconfirmed option setups from ever entering Tier 1 Gold.
-    4. Expanded unit test suite scratch/test_tier_quality_filters.py with 3 dedicated tests (12/12 PASSED).
-    5. Master regression suite scratch/run_full_regression_test.py: 32/32 suites PASSED with 100% success.
+       - Test Phase: Spot High >= VWAP * 0.997 (for PE) or Low <= VWAP * 1.003 (for CE), ensuring physical proximity to VWAP.
+       - Rejection Wick: Upper wick >= 1.2 * Body (or >= 1.0 * Body with red body) rejecting downward from VWAP (symmetrically lower wick for CE).
+       - Directional Close: Closes below VWAP for PE / above VWAP for CE.
+    3. Implemented Dual-Asset VCP Contraction:
+       - Calculates `spot_atr_ratio` dynamically on `df_spot`.
+       - Requires both Spot AND Option contraction: `is_spot_vcp` (Spot ATR(3)/ATR(14) <= 0.85) AND `is_opt_vcp` (Option ATR(3)/ATR(14) <= 0.85).
+       - Eliminates false coils where an option looks coiled only due to illiquid drift while the underlying equity is undergoing runaway volatility expansion (e.g. APLAPOLLO ATR=1.49, CANBK ATR=1.38).
+    4. Enforced `has_spot_anchor` and Dual-Asset VCP across both CE and PE candidate execution loops and radar funnel loops in common/resolve.py.
+    5. Expanded unit test suite scratch/test_tier_quality_filters.py with 16 comprehensive tests (16/16 PASSED).
+    6. Master regression suite scratch/run_full_regression_test.py: 32/32 suites PASSED with 100% success.
   verification: |
-    1. Unit tests scratch/test_tier_quality_filters.py (12/12 PASSED).
+    1. Unit tests scratch/test_tier_quality_filters.py (16/16 PASSED).
     2. Master regression suite scratch/run_full_regression_test.py (32/32 PASSED, zero regressions).
   status: RESOLVED
   resolution_date: '2026-09-22'

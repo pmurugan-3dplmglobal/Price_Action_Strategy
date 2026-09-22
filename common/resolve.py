@@ -117,12 +117,13 @@ def get_mapped_spot_timeframe(entry_tf):
     }
     return mapping.get(tf_clean, "day")
 
-def check_spot_anchor_confirmation(df_spot, side: str) -> tuple:
+def check_spot_anchor_confirmation(df_spot, side: str, spot_vwap: float = 0.0) -> tuple:
     """
     Evaluates whether the underlying spot stock confirms genuine institutional price action.
     Uses dynamic timeframe of df_spot (as set by user in UI / program config, e.g. 15m, 30m, 60m).
     Scans the recent anchor window (last 10 candles) for the 5 canonical Datta Price Action Anchors,
-    or structural EMA trend alignment.
+    or structural EMA trend alignment with RVOL >= 1.2.
+    Bans derivative-only patterns when spot is trapped in the opposing regime.
 
     Returns:
         (is_confirmed: bool, anchor_name: str)
@@ -130,9 +131,27 @@ def check_spot_anchor_confirmation(df_spot, side: str) -> tuple:
     if df_spot is None or not hasattr(df_spot, "empty") or df_spot.empty or len(df_spot) < 3:
         return True, "SPOT_DATA_UNAVAILABLE_PERMITTED"
 
+    last_c = df_spot.iloc[-1]
+    c_open = float(last_c.get('open', 0.0))
+    c_close = float(last_c.get('close', 0.0))
+    last_price = c_close
+
+    # Calculate EMA13 and EMA44 on Spot
+    ema13 = float(df_spot['close'].ewm(span=13, adjust=False).mean().iloc[-1]) if len(df_spot) >= 13 else last_price
+    ema44 = float(df_spot['close'].ewm(span=44, adjust=False).mean().iloc[-1]) if len(df_spot) >= 44 else ema13
+
+    # Calculate Spot RVOL
+    vol_sma20 = float(df_spot['volume'].rolling(20).mean().iloc[-1]) if len(df_spot) >= 20 and 'volume' in df_spot.columns else (float(df_spot['volume'].mean()) if 'volume' in df_spot.columns else 1.0)
+    cur_vol = float(df_spot['volume'].iloc[-1]) if 'volume' in df_spot.columns else 1.0
+    spot_rvol = (cur_vol / vol_sma20) if vol_sma20 > 0 else 1.0
+
     max_lookback = min(10, len(df_spot) - 2)
 
     if side == "CE":
+        # Hard Regime Block: Spot is in runaway bear trend below VWAP
+        if spot_vwap > 0 and last_price < spot_vwap * 0.995 and ema13 < ema44:
+            return False, "BEAR_SPOT_REGIME_TRAP"
+
         # Check 5 Bullish Anchors on Spot across recent window
         try:
             try:
@@ -166,22 +185,21 @@ def check_spot_anchor_confirmation(df_spot, side: str) -> tuple:
         except Exception:
             pass
 
-        # Check Trend Momentum Alignment: Spot >= EMA13 >= EMA44
+        # Check Trend Momentum Alignment: Spot >= EMA13 >= EMA44 with RVOL >= 1.2
         if len(df_spot) >= 44:
-            ema13 = float(df_spot['close'].ewm(span=13, adjust=False).mean().iloc[-1])
-            ema44 = float(df_spot['close'].ewm(span=44, adjust=False).mean().iloc[-1])
-            last_c = float(df_spot['close'].iloc[-1])
-            if last_c >= ema13 >= ema44:
+            if last_price >= ema13 >= ema44 and spot_rvol >= 1.2:
                 return True, "SPOT_EMA_BULL_ALIGNMENT"
         elif len(df_spot) >= 13:
-            ema13 = float(df_spot['close'].ewm(span=13, adjust=False).mean().iloc[-1])
-            last_c = float(df_spot['close'].iloc[-1])
-            if last_c >= ema13:
+            if last_price >= ema13 and spot_rvol >= 1.2:
                 return True, "SPOT_EMA13_BULL_RECOVERY"
 
         return False, "NO_SPOT_BULL_ANCHOR"
 
     else:  # PE
+        # Hard Regime Block: Spot is in runaway bull trend above VWAP
+        if spot_vwap > 0 and last_price > spot_vwap * 1.005 and ema13 > ema44:
+            return False, "BULL_SPOT_REGIME_TRAP"
+
         # Check 5 Bearish Anchors on Spot across recent window
         try:
             try:
@@ -205,7 +223,10 @@ def check_spot_anchor_confirmation(df_spot, side: str) -> tuple:
                 if find_anchor_bearish_engulfing(sub):
                     return True, "SPOT_BEAR_ENGULFING"
                 if find_anchor_hh_sweep(sub):
-                    return True, "SPOT_HH_SWEEP"
+                    # Guard: HH Sweep must not be in a runaway green candle uptrend
+                    sub_last = sub.iloc[-1]
+                    if float(sub_last.get('close', 0)) <= float(sub_last.get('open', 0)):
+                        return True, "SPOT_HH_SWEEP"
                 if find_anchor_shooting_star_baby(sub):
                     return True, "SPOT_SHOOTING_STAR"
                 if find_anchor_bearish_harami(sub):
@@ -215,17 +236,12 @@ def check_spot_anchor_confirmation(df_spot, side: str) -> tuple:
         except Exception:
             pass
 
-        # Check Trend Momentum Alignment: Spot <= EMA13 <= EMA44
+        # Check Trend Momentum Alignment: Spot <= EMA13 <= EMA44 with RVOL >= 1.2
         if len(df_spot) >= 44:
-            ema13 = float(df_spot['close'].ewm(span=13, adjust=False).mean().iloc[-1])
-            ema44 = float(df_spot['close'].ewm(span=44, adjust=False).mean().iloc[-1])
-            last_c = float(df_spot['close'].iloc[-1])
-            if last_c <= ema13 <= ema44:
+            if last_price <= ema13 <= ema44 and spot_rvol >= 1.2:
                 return True, "SPOT_EMA_BEAR_ALIGNMENT"
         elif len(df_spot) >= 13:
-            ema13 = float(df_spot['close'].ewm(span=13, adjust=False).mean().iloc[-1])
-            last_c = float(df_spot['close'].iloc[-1])
-            if last_c <= ema13:
+            if last_price <= ema13 and spot_rvol >= 1.2:
                 return True, "SPOT_EMA13_BEAR_BREAKDOWN"
 
         return False, "NO_SPOT_BEAR_ANCHOR"
@@ -260,10 +276,14 @@ def evaluate_spot_confluence(side: str, is_d2: bool, current_spot: float, spot_v
                     body_sz = max(0.05, abs(c_close - c_open))
                     lower_wick = min(c_open, c_close) - c_low
 
-                    # Physical VWAP Reclaim: Spot tested VWAP and showed support response
-                    tested_vwap = (c_low <= spot_vwap * 1.005)
-                    has_support_action = (lower_wick >= 0.3 * body_sz) or (c_close >= c_open)
-                    if (current_spot >= spot_vwap * 0.998) and (tested_vwap and has_support_action):
+                    # Physical VWAP Reclaim:
+                    # 1. Test Phase: Candle physically tested/approached VWAP
+                    tested_vwap = (c_low <= spot_vwap * 1.003)
+                    # 2. Support Wick: Lower buying wick defending VWAP
+                    has_support_action = (lower_wick >= 1.0 * body_sz) or (c_close >= c_open and lower_wick >= 0.3 * body_sz)
+                    # 3. Close: Closed above or at VWAP with green/neutral close
+                    closed_above_vwap = (c_close >= spot_vwap * 0.998)
+                    if tested_vwap and has_support_action and closed_above_vwap:
                         return True, "SPOT_VWAP_RECLAIM"
                 elif current_spot >= spot_vwap:
                     return True, "SPOT_VWAP_RECLAIM"
@@ -274,6 +294,7 @@ def evaluate_spot_confluence(side: str, is_d2: bool, current_spot: float, spot_v
             elif spot_ema_trend:
                 return True, "SPOT_EMA_TREND"
             return False, "NONE"
+
     else:  # PE
         if is_d2:
             # D2 Trend Continuation: Requires established downward trend momentum (Spot <= EMA13/44) and Spot below VWAP if available
@@ -291,10 +312,14 @@ def evaluate_spot_confluence(side: str, is_d2: bool, current_spot: float, spot_v
                     body_sz = max(0.05, abs(c_close - c_open))
                     upper_wick = c_high - max(c_open, c_close)
 
-                    # Physical VWAP Reject: Spot tested VWAP and showed selling rejection response
-                    tested_vwap = (c_high >= spot_vwap * 0.995)
-                    has_rejection_action = (upper_wick >= 0.3 * body_sz) or (c_close <= c_open)
-                    if (current_spot <= spot_vwap * 1.002) and (tested_vwap and has_rejection_action):
+                    # Physical VWAP Reject:
+                    # 1. Test Phase: Candle physically tested/approached VWAP
+                    tested_vwap = (c_high >= spot_vwap * 0.997)
+                    # 2. Rejection Wick: Upper selling wick pushing price down from VWAP
+                    has_rejection_action = (upper_wick >= 1.0 * body_sz) or (c_close <= c_open and upper_wick >= 0.3 * body_sz)
+                    # 3. Close: Closed below or at VWAP with red/neutral close
+                    closed_below_vwap = (c_close <= spot_vwap * 1.002)
+                    if tested_vwap and has_rejection_action and closed_below_vwap:
                         return True, "SPOT_VWAP_REJECT"
                 elif current_spot <= spot_vwap:
                     return True, "SPOT_VWAP_REJECT"
@@ -1754,6 +1779,14 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
         except Exception as st_err:
             logging.debug(f"Spot targets calculation error for {symbol}: {st_err}")
 
+    # Compute Spot ATR(3) / ATR(14) ratio for Dual-Asset VCP Contraction (ISSUE-080)
+    spot_atr_ratio = 1.0
+    if df_spot is not None and not df_spot.empty and len(df_spot) >= 14:
+        tr_spot = (df_spot['high'] - df_spot['low']).abs()
+        s_atr3 = float(tr_spot.rolling(3).mean().iloc[-1])
+        s_atr14 = float(tr_spot.rolling(14).mean().iloc[-1])
+        spot_atr_ratio = (s_atr3 / s_atr14) if s_atr14 > 0 else 1.0
+
     is_index_sym = symbol.strip().upper() in ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "SENSEX", "BANKEX"]
 
     for strike in sorted(set(ce_map) & set(pe_map)):
@@ -1904,7 +1937,7 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
 
                         is_d2_ce = ("Setup_2" in name) or any(k in str(result_ce.get("Pattern", "")).upper() for k in ["CONT", "REENTRY", "D2"])
                         spot_conf_ce, spot_conf_type_ce = evaluate_spot_confluence("CE", is_d2_ce, current_spot, spot_vwap, spot_sl_ce, spot_ema_bull, df_spot=df_spot)
-                        has_spot_anchor_ce, spot_anchor_name_ce = check_spot_anchor_confirmation(df_spot, "CE")
+                        has_spot_anchor_ce, spot_anchor_name_ce = check_spot_anchor_confirmation(df_spot, "CE", spot_vwap=spot_vwap)
 
                         tier_ce = int(result_ce.get("tier", 2))
                         tier_label_ce = result_ce.get("tier_label", "TIER_2_CORE")
@@ -1918,16 +1951,19 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                                 tier_label_ce = "TIER_1_GOLD"
                                 tier_badge_ce = "🥇 T1"
 
-                        # VCP Coiled Promotion Gate (ISSUE-071, ISSUE-079)
+                        # Dual-Asset VCP Coiled Promotion Gate (ISSUE-071, ISSUE-079, ISSUE-080)
                         atr_r_cand_ce = float(result_ce.get("atr_ratio") or swing_meta_ce.get("atr_ratio") or 1.0)
                         is_squeeze_cand_ce = bool(result_ce.get("is_squeeze") or swing_meta_ce.get("is_squeeze"))
                         cand_rr_ce = float(result_ce.get("RR") or 0.0)
-                        if tier_ce >= 2 and spot_conf_ce and has_spot_anchor_ce and atr_r_cand_ce <= 0.85 and (atr_r_cand_ce <= 0.65 or is_squeeze_cand_ce) and cand_rr_ce >= 1.80:
+                        is_opt_vcp_ce = (atr_r_cand_ce <= 0.85 and (atr_r_cand_ce <= 0.65 or is_squeeze_cand_ce))
+                        is_spot_vcp_ce = (spot_atr_ratio <= 0.85) if (df_spot is not None and len(df_spot) >= 14) else True
+                        if tier_ce >= 2 and spot_conf_ce and has_spot_anchor_ce and is_spot_vcp_ce and is_opt_vcp_ce and cand_rr_ce >= 1.80:
                             tier_ce = 1
                             tier_label_ce = "TIER_1_GOLD"
                             tier_badge_ce = "🥇 T1"
-                            logging.info(f"[VCP_TIER_PROMO] {symbol} CE promoted to Tier 1 Gold: Spot Anchor={spot_anchor_name_ce}, "
-                                         f"ATR_ratio={atr_r_cand_ce:.2f} <= 0.85, squeeze={is_squeeze_cand_ce}, RR={cand_rr_ce:.2f} >= 1.80, confluence={spot_conf_type_ce}")
+                            logging.info(f"[DUAL_VCP_PROMO] {symbol} CE promoted to Tier 1 Gold: Spot ATR_ratio={spot_atr_ratio:.2f} <= 0.85, "
+                                         f"Opt ATR_ratio={atr_r_cand_ce:.2f} <= 0.85, squeeze={is_squeeze_cand_ce}, RR={cand_rr_ce:.2f} >= 1.80, "
+                                         f"Spot Anchor={spot_anchor_name_ce}, confluence={spot_conf_type_ce}")
 
                         effective_sl_ce = calculate_option_atr_sl(
                             entry_price=result_ce["Close"],
@@ -2007,7 +2043,7 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                                     continue
                                 f_stage = pattern_funnel.STAGE_A_PLUS if stage_ce["stage"] == "STAGE_A_PLUS_READY" else (pattern_funnel.STAGE_A if stage_ce["stage"] == "STAGE_A_READY" else pattern_funnel.STAGE_B)
                                 spot_conf_ce_f, spot_conf_type_ce_f = evaluate_spot_confluence("CE", False, current_spot, spot_vwap, spot_sl_ce, spot_ema_bull, df_spot=df_spot)
-                                has_spot_anchor_ce_f, spot_anchor_name_ce_f = check_spot_anchor_confirmation(df_spot, "CE")
+                                has_spot_anchor_ce_f, spot_anchor_name_ce_f = check_spot_anchor_confirmation(df_spot, "CE", spot_vwap=spot_vwap)
                                 f_tier_ce = int(stage_ce.get("tier", 2))
                                 f_label_ce = stage_ce.get("tier_label", "TIER_2_CORE")
                                 f_badge_ce = stage_ce.get("tier_badge", "🥈 T2")
@@ -2020,11 +2056,13 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                                         f_label_ce = "TIER_1_GOLD"
                                         f_badge_ce = "🥇 T1"
 
-                                # VCP Coiled Promotion Gate (ISSUE-071, ISSUE-079, ISSUE-080)
+                                # Dual-Asset VCP Coiled Promotion Gate (ISSUE-071, ISSUE-079, ISSUE-080)
                                 atr_r_cand_ce_f = float(stage_ce.get("atr_ratio") or 1.0)
                                 is_squeeze_cand_ce_f = bool(stage_ce.get("is_squeeze"))
                                 cand_rr_ce_f = float(stage_ce.get("rr") or 0.0)
-                                if f_tier_ce >= 2 and spot_conf_ce_f and has_spot_anchor_ce_f and atr_r_cand_ce_f <= 0.85 and (atr_r_cand_ce_f <= 0.65 or is_squeeze_cand_ce_f) and cand_rr_ce_f >= 1.80:
+                                is_opt_vcp_ce_f = (atr_r_cand_ce_f <= 0.85 and (atr_r_cand_ce_f <= 0.65 or is_squeeze_cand_ce_f))
+                                is_spot_vcp_f = (spot_atr_ratio <= 0.85) if (df_spot is not None and len(df_spot) >= 14) else True
+                                if f_tier_ce >= 2 and spot_conf_ce_f and has_spot_anchor_ce_f and is_spot_vcp_f and is_opt_vcp_ce_f and cand_rr_ce_f >= 1.80:
                                     f_tier_ce = 1
                                     f_label_ce = "TIER_1_GOLD"
                                     f_badge_ce = "🥇 T1"
@@ -2112,7 +2150,7 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
 
                         is_d2_pe = ("Setup_2" in name) or any(k in str(result_pe.get("Pattern", "")).upper() for k in ["CONT", "REENTRY", "D2"])
                         spot_conf_pe, spot_conf_type_pe = evaluate_spot_confluence("PE", is_d2_pe, current_spot, spot_vwap, spot_sl_pe, spot_ema_bear, df_spot=df_spot)
-                        has_spot_anchor_pe, spot_anchor_name_pe = check_spot_anchor_confirmation(df_spot, "PE")
+                        has_spot_anchor_pe, spot_anchor_name_pe = check_spot_anchor_confirmation(df_spot, "PE", spot_vwap=spot_vwap)
 
                         tier_pe = int(result_pe.get("tier", 2))
                         tier_label_pe = result_pe.get("tier_label", "TIER_2_CORE")
@@ -2126,16 +2164,19 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                                 tier_label_pe = "TIER_1_GOLD"
                                 tier_badge_pe = "🥇 T1"
 
-                        # VCP Coiled Promotion Gate (ISSUE-071, ISSUE-079, ISSUE-080)
+                        # Dual-Asset VCP Coiled Promotion Gate (ISSUE-071, ISSUE-079, ISSUE-080)
                         atr_r_cand_pe = float(result_pe.get("atr_ratio") or swing_meta_pe.get("atr_ratio") or 1.0)
                         is_squeeze_cand_pe = bool(result_pe.get("is_squeeze") or swing_meta_pe.get("is_squeeze"))
                         cand_rr_pe = float(result_pe.get("RR") or 0.0)
-                        if tier_pe >= 2 and spot_conf_pe and has_spot_anchor_pe and atr_r_cand_pe <= 0.85 and (atr_r_cand_pe <= 0.65 or is_squeeze_cand_pe) and cand_rr_pe >= 1.80:
+                        is_opt_vcp_pe = (atr_r_cand_pe <= 0.85 and (atr_r_cand_pe <= 0.65 or is_squeeze_cand_pe))
+                        is_spot_vcp_pe = (spot_atr_ratio <= 0.85) if (df_spot is not None and len(df_spot) >= 14) else True
+                        if tier_pe >= 2 and spot_conf_pe and has_spot_anchor_pe and is_spot_vcp_pe and is_opt_vcp_pe and cand_rr_pe >= 1.80:
                             tier_pe = 1
                             tier_label_pe = "TIER_1_GOLD"
                             tier_badge_pe = "🥇 T1"
-                            logging.info(f"[VCP_TIER_PROMO] {symbol} PE promoted to Tier 1 Gold: Spot Anchor={spot_anchor_name_pe}, "
-                                         f"ATR_ratio={atr_r_cand_pe:.2f} <= 0.85, squeeze={is_squeeze_cand_pe}, RR={cand_rr_pe:.2f} >= 1.80, confluence={spot_conf_type_pe}")
+                            logging.info(f"[DUAL_VCP_PROMO] {symbol} PE promoted to Tier 1 Gold: Spot ATR_ratio={spot_atr_ratio:.2f} <= 0.85, "
+                                         f"Opt ATR_ratio={atr_r_cand_pe:.2f} <= 0.85, squeeze={is_squeeze_cand_pe}, RR={cand_rr_pe:.2f} >= 1.80, "
+                                         f"Spot Anchor={spot_anchor_name_pe}, confluence={spot_conf_type_pe}")
 
                         effective_sl_pe = calculate_option_atr_sl(
                             entry_price=result_pe["Close"],
@@ -2215,7 +2256,7 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                                     continue
                                 f_stage = pattern_funnel.STAGE_A_PLUS if stage_pe["stage"] == "STAGE_A_PLUS_READY" else (pattern_funnel.STAGE_A if stage_pe["stage"] == "STAGE_A_READY" else pattern_funnel.STAGE_B)
                                 spot_conf_pe_f, spot_conf_type_pe_f = evaluate_spot_confluence("PE", False, current_spot, spot_vwap, spot_sl_pe, spot_ema_bear, df_spot=df_spot)
-                                has_spot_anchor_pe_f, spot_anchor_name_pe_f = check_spot_anchor_confirmation(df_spot, "PE")
+                                has_spot_anchor_pe_f, spot_anchor_name_pe_f = check_spot_anchor_confirmation(df_spot, "PE", spot_vwap=spot_vwap)
                                 f_tier_pe = int(stage_pe.get("tier", 2))
                                 f_label_pe = stage_pe.get("tier_label", "TIER_2_CORE")
                                 f_badge_pe = stage_pe.get("tier_badge", "🥈 T2")
@@ -2228,11 +2269,13 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                                         f_label_pe = "TIER_1_GOLD"
                                         f_badge_pe = "🥇 T1"
 
-                                # VCP Coiled Promotion Gate (ISSUE-071, ISSUE-079, ISSUE-080)
+                                # Dual-Asset VCP Coiled Promotion Gate (ISSUE-071, ISSUE-079, ISSUE-080)
                                 atr_r_cand_pe_f = float(stage_pe.get("atr_ratio") or 1.0)
                                 is_squeeze_cand_pe_f = bool(stage_pe.get("is_squeeze"))
                                 cand_rr_pe_f = float(stage_pe.get("rr") or 0.0)
-                                if f_tier_pe >= 2 and spot_conf_pe_f and has_spot_anchor_pe_f and atr_r_cand_pe_f <= 0.85 and (atr_r_cand_pe_f <= 0.65 or is_squeeze_cand_pe_f) and cand_rr_pe_f >= 1.80:
+                                is_opt_vcp_pe_f = (atr_r_cand_pe_f <= 0.85 and (atr_r_cand_pe_f <= 0.65 or is_squeeze_cand_pe_f))
+                                is_spot_vcp_f = (spot_atr_ratio <= 0.85) if (df_spot is not None and len(df_spot) >= 14) else True
+                                if f_tier_pe >= 2 and spot_conf_pe_f and has_spot_anchor_pe_f and is_spot_vcp_f and is_opt_vcp_pe_f and cand_rr_pe_f >= 1.80:
                                     f_tier_pe = 1
                                     f_label_pe = "TIER_1_GOLD"
                                     f_badge_pe = "🥇 T1"

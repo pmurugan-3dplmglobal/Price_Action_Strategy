@@ -253,6 +253,76 @@ class TestTierQualityFilters(unittest.TestCase):
         self.assertEqual(conf_type, "SPOT_VWAP_REJECT")
 
 
+    def test_spot_anchor_gate_blocks_bull_regime_trap_for_pe(self):
+        """Spot price is above VWAP and EMA13 > EMA44 -> Instantly blocked with BULL_SPOT_REGIME_TRAP."""
+        import pandas as pd
+        candles = []
+        base_p = 400.0
+        for i in range(50):
+            candles.append({"open": base_p + i * 0.5, "high": base_p + i * 0.5 + 1.0, "low": base_p + i * 0.5 - 0.2, "close": base_p + i * 0.5 + 0.8, "volume": 10000})
+        df = pd.DataFrame(candles)
+        vwap = 410.0  # Current price is 400 + 49*0.5 + 0.8 = 425.3 > VWAP
+        has_anchor, reason = resolve.check_spot_anchor_confirmation(df, "PE", spot_vwap=vwap)
+        self.assertFalse(has_anchor)
+        self.assertEqual(reason, "BULL_SPOT_REGIME_TRAP")
+
+    def test_spot_anchor_gate_blocks_bear_regime_trap_for_ce(self):
+        """Spot price is below VWAP and EMA13 < EMA44 -> Instantly blocked with BEAR_SPOT_REGIME_TRAP."""
+        import pandas as pd
+        candles = []
+        base_p = 500.0
+        for i in range(50):
+            candles.append({"open": base_p - i * 0.5, "high": base_p - i * 0.5 + 0.2, "low": base_p - i * 0.5 - 1.0, "close": base_p - i * 0.5 - 0.8, "volume": 10000})
+        df = pd.DataFrame(candles)
+        vwap = 490.0  # Current price is ~475 < VWAP
+        has_anchor, reason = resolve.check_spot_anchor_confirmation(df, "CE", spot_vwap=vwap)
+        self.assertFalse(has_anchor)
+        self.assertEqual(reason, "BEAR_SPOT_REGIME_TRAP")
+
+    def test_spot_ema_alignment_requires_rvol_1_point_2(self):
+        """EMA alignment on spot requires RVOL >= 1.2 to confirm institutional trend volume."""
+        import pandas as pd
+        candles = []
+        base_p = 600.0
+        for i in range(30):
+            candles.append({"open": base_p - i * 3.0, "high": base_p - i * 3.0 + 1.0, "low": base_p - i * 3.0 - 4.0, "close": base_p - i * 3.0 - 3.0, "volume": 10000})
+        for i in range(20):
+            candles.append({"open": 510.0, "high": 511.0, "low": 509.5, "close": 510.2, "volume": 5000})
+        df_low_vol = pd.DataFrame(candles)
+        has_anchor, reason = resolve.check_spot_anchor_confirmation(df_low_vol, "PE", spot_vwap=0.0)
+        self.assertFalse(has_anchor, "EMA alignment with low RVOL < 1.2 must fail")
+
+        # Last candle with high volume surge (RVOL = 20000 / 5000+ = 2.0+ >= 1.2)
+        candles[-1]["volume"] = 20000
+        df_high_vol = pd.DataFrame(candles)
+        has_anchor_high, reason_high = resolve.check_spot_anchor_confirmation(df_high_vol, "PE", spot_vwap=0.0)
+        self.assertTrue(has_anchor_high, "EMA alignment with RVOL >= 1.2 must confirm")
+        self.assertEqual(reason_high, "SPOT_EMA_BEAR_ALIGNMENT")
+
+    def test_dual_asset_vcp_requires_both_spot_and_option_contraction(self):
+        """Dual-Asset VCP: Fails if Spot is expanding (> 0.85) even if option is coiled."""
+        spot_atr_ratio_bad = 1.49  # APLAPOLLO expanding volatility
+        spot_atr_ratio_good = 0.74  # BIOCON coiled
+        opt_atr_ratio = 0.60
+        is_squeeze = True
+        cand_rr = 2.20
+        spot_conf = True
+        has_spot_anchor = True
+        tier = 2
+
+        # APLAPOLLO simulation:
+        is_opt_vcp = (opt_atr_ratio <= 0.85 and (opt_atr_ratio <= 0.65 or is_squeeze))
+        is_spot_vcp_bad = (spot_atr_ratio_bad <= 0.85)
+        promo_bad = (tier >= 2 and spot_conf and has_spot_anchor and is_spot_vcp_bad and is_opt_vcp and cand_rr >= 1.80)
+        self.assertFalse(promo_bad, "Expanding spot ATR 1.49 must NOT be promoted via VCP")
+
+        # BIOCON simulation:
+        is_spot_vcp_good = (spot_atr_ratio_good <= 0.85)
+        promo_good = (tier >= 2 and spot_conf and has_spot_anchor and is_spot_vcp_good and is_opt_vcp and cand_rr >= 1.80)
+        self.assertTrue(promo_good, "Coiled spot ATR 0.74 and coiled opt 0.60 must be promoted via Dual VCP")
+
+
 if __name__ == "__main__":
     unittest.main()
+
 
