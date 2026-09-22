@@ -111,6 +111,7 @@ class TestProfitHarvestingAndGuards(unittest.TestCase):
 
         with patch("position_monitor._load_program_config_file", return_value=cfg), \
              patch("position_monitor.fetch_and_resample_candles", return_value=mock_df), \
+             patch("position_monitor.get_contract_days_to_expiry", return_value=10), \
              patch("position_monitor.close_position") as mock_close, \
              patch("trade_db.update_trade"):
 
