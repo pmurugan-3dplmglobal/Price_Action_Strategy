@@ -249,6 +249,51 @@ class TestTradeJournalEnhancements(unittest.TestCase):
         self.assertIn("Bullet Dodged", verdict_drop)
         self.assertIn("-28.0%", verdict_drop)
 
+    def test_clear_journal_creates_backup_and_resets(self):
+        """Verify clear_journal creates a timestamped backup and resets files."""
+        import tempfile
+        import shutil
+        import json
+        import daily_trade_journal
+
+        temp_dir = tempfile.mkdtemp()
+        orig_dir = daily_trade_journal.JOURNAL_DIR
+        orig_json = daily_trade_journal.JOURNAL_JSON_PATH
+        orig_csv = daily_trade_journal.JOURNAL_CSV_PATH
+
+        try:
+            daily_trade_journal.JOURNAL_DIR = temp_dir
+            daily_trade_journal.JOURNAL_JSON_PATH = os.path.join(temp_dir, "daily_trade_journal.json")
+            daily_trade_journal.JOURNAL_CSV_PATH = os.path.join(temp_dir, "daily_trade_journal.csv")
+
+            # Seed dummy entries
+            dummy_entries = [{"Date": "2026-09-21", "Symbol": "NIFTY2692223300PE", "PnL_Rs": 1500.0}]
+            with open(daily_trade_journal.JOURNAL_JSON_PATH, "w", encoding="utf-8") as f:
+                json.dump(dummy_entries, f)
+            with open(daily_trade_journal.JOURNAL_CSV_PATH, "w", encoding="utf-8") as f:
+                f.write(",".join(daily_trade_journal.CSV_HEADER) + "\n2026-09-21,index,NIFTY2692223300PE,BUY,30min,LL_ABCD,T1,2 Waves,09:15,100,09:30,115,85,130,150,170,1,50,1500,+15.0%,TARGET_HIT,15.0,-2.0,WIN_DISCIPLINED_TARGET,0.1,1.8,BULL,0.7,0.8,Remarks,Lesson\n")
+
+            ok, backup_file, msg = daily_trade_journal.clear_journal(create_backup=True)
+            self.assertTrue(ok)
+            self.assertIsNotNone(backup_file)
+            self.assertTrue(os.path.exists(backup_file))
+
+            # Verify JSON was reset to empty list
+            entries = daily_trade_journal.load_journal_entries()
+            self.assertEqual(entries, [])
+
+            # Verify backup contains the original dummy data
+            with open(backup_file, "r", encoding="utf-8") as f:
+                if backup_file.endswith(".json"):
+                    b_data = json.load(f)
+                    self.assertEqual(len(b_data), 1)
+                    self.assertEqual(b_data[0]["Symbol"], "NIFTY2692223300PE")
+        finally:
+            daily_trade_journal.JOURNAL_DIR = orig_dir
+            daily_trade_journal.JOURNAL_JSON_PATH = orig_json
+            daily_trade_journal.JOURNAL_CSV_PATH = orig_csv
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
 
 if __name__ == "__main__":
     unittest.main()

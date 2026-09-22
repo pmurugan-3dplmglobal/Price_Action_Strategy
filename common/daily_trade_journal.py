@@ -70,6 +70,42 @@ def load_journal_entries():
     except Exception:
         return []
 
+def clear_journal(create_backup=True):
+    """
+    Clear the daily trade journal JSON and CSV files.
+    If create_backup is True, creates a timestamped backup before clearing.
+    Returns (success: bool, backup_file: str or None, message: str).
+    """
+    init_journal_files()
+    backup_file = None
+    if create_backup:
+        try:
+            import shutil
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            if os.path.exists(JOURNAL_JSON_PATH) and os.path.getsize(JOURNAL_JSON_PATH) > 10:
+                backup_json = os.path.join(JOURNAL_DIR, f"daily_trade_journal_backup_{ts}.json")
+                shutil.copy2(JOURNAL_JSON_PATH, backup_json)
+                backup_file = backup_json
+            if os.path.exists(JOURNAL_CSV_PATH) and os.path.getsize(JOURNAL_CSV_PATH) > 100:
+                backup_csv = os.path.join(JOURNAL_DIR, f"daily_trade_journal_backup_{ts}.csv")
+                shutil.copy2(JOURNAL_CSV_PATH, backup_csv)
+                if not backup_file:
+                    backup_file = backup_csv
+        except Exception as e:
+            logging.warning(f"Failed to create journal backup before clear: {e}")
+
+    # Reset JSON to empty list
+    with open(JOURNAL_JSON_PATH, "w", encoding="utf-8") as f:
+        json.dump([], f, indent=2)
+
+    # Reset CSV to header only
+    with open(JOURNAL_CSV_PATH, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(CSV_HEADER)
+
+    msg = "Journal cleared successfully." + (f" Backup saved to {os.path.basename(backup_file)}." if backup_file else "")
+    return True, backup_file, msg
+
 def classify_trade_attribution(trade_data, pnl_rs=0.0, outcome=""):
     """
     Classify trade outcome into a structured, machine-readable Attribution Code (FEATURE-041).

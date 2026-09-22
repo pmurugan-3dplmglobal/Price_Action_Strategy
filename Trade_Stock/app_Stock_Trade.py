@@ -1432,6 +1432,12 @@ def api_export_ema():
 
 @app.route("/api/journal/clear", methods=["POST"])
 def api_journal_clear():
+    msg = "Journal cleared successfully."
+    try:
+        from daily_trade_journal import clear_journal
+        ok, bpath, msg = clear_journal(create_backup=True)
+    except Exception as je:
+        logging.warning(f"daily_trade_journal clear failed: {je}")
     try:
         if os.path.exists(JOURNAL_FILE):
             open(JOURNAL_FILE, "w").close()
@@ -1440,7 +1446,7 @@ def api_journal_clear():
     with data_lock:
         cached_data["journal"] = []
         cached_data["stats"] = compute_stats(cached_data.get("positions", {}), [])
-    return jsonify({"ok": True})
+    return jsonify({"ok": True, "message": msg})
 
 @app.route("/api/programs/<prog_id>/start", methods=["POST"])
 def api_start(prog_id):

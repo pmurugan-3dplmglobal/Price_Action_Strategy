@@ -2542,13 +2542,31 @@
         }
 
         async function clearJournal() {
+            if (!confirm("Are you sure you want to clear the Trade Journal? A timestamped backup will be created automatically.")) {
+                return;
+            }
             try {
                 if (window._lastData) window._lastData.journal = [];
                 renderJournalTab();
-                await fetch('/api/journal/clear', {method: 'POST'});
+                const res = await fetch('/api/journal/clear', {method: 'POST'});
+                const data = await res.json();
+                if (data.ok) {
+                    if (typeof showToast === 'function') {
+                        showToast(data.message || 'Trade journal safely archived and cleared!', 'success');
+                    }
+                } else {
+                    if (typeof showToast === 'function') {
+                        showToast('Failed to clear journal: ' + (data.error || 'Unknown error'), 'error');
+                    }
+                }
                 await refreshData();
                 renderJournalTab();
-            } catch(e) { console.log(e); }
+            } catch(e) {
+                console.error(e);
+                if (typeof showToast === 'function') {
+                    showToast('Error clearing journal: ' + e.message, 'error');
+                }
+            }
         }
 
         let _activePollTimer = null;

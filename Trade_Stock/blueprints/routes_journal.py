@@ -27,6 +27,12 @@ def _get_app():
 def api_journal_clear():
     import os
     _app = _get_app()
+    msg = "Journal cleared successfully."
+    try:
+        from daily_trade_journal import clear_journal
+        ok, bpath, msg = clear_journal(create_backup=True)
+    except Exception as je:
+        logging.warning(f"daily_trade_journal clear failed: {je}")
     try:
         if os.path.exists(_app.JOURNAL_FILE):
             open(_app.JOURNAL_FILE, "w").close()
@@ -35,7 +41,7 @@ def api_journal_clear():
     with _app.data_lock:
         _app.cached_data["journal"] = []
         _app.cached_data["stats"] = _app.compute_stats(_app.cached_data.get("positions", {}), [])
-    return jsonify({"ok": True})
+    return jsonify({"ok": True, "message": msg})
 
 
 # ── journal CRUD ──────────────────────────────────────────────────────────────

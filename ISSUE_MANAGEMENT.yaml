@@ -3052,3 +3052,25 @@ issues:
     4. Master regression test suite (32/32 PASSED with 100% success).
   status: RESOLVED
   resolution_date: '2026-09-22'
+
+- id: ISSUE-081
+  title: "Fix Trade Journal Clear Button & Add Automated Timestamped Archive"
+  date: "2026-09-22"
+  severity: MEDIUM
+  component: "common/daily_trade_journal.py, Trade_Option/app_option_Trade.py, Trade_Stock/app_Stock_Trade.py, Trade_Stock/blueprints/routes_journal.py, Trade_Option/templates/index.html, Trade_Stock/templates/index.html"
+  symptoms: |
+    Clicking the "Clear" button in the Trade Journal UI tab appeared non-functional. The table would flicker and immediately repopulate all historical entries.
+  root_cause: |
+    1. /api/journal/clear only truncated JOURNAL_FILE (output/monitor/trade_journal.csv), but completely ignored daily_trade_journal.json and daily_trade_journal.csv.
+    2. Immediately after /api/journal/clear returned, the UI's refreshData() loop loaded journal entries via daily_trade_journal.load_journal_entries(), which reloaded all original records from daily_trade_journal.json.
+    3. No confirmation modal or toast feedback existed on the client side, risking accidental clear without user confirmation.
+  fix_applied: |
+    1. In common/daily_trade_journal.py: Added clear_journal(create_backup=True) which creates a timestamped backup copy (daily_trade_journal_backup_YYYYMMDD_HHMMSS.json / .csv) in the journal directory before resetting JSON to [] and CSV to header-only.
+    2. In Trade_Option/app_option_Trade.py, Trade_Stock/app_Stock_Trade.py, and routes_journal.py: Updated /api/journal/clear endpoint to invoke clear_journal(create_backup=True), truncate JOURNAL_FILE, reset cached_data["journal"] = [], and return a detailed response message.
+    3. In Trade_Option/templates/index.html and Trade_Stock/templates/index.html: Added confirmation prompt before clearing and rendered toast status alerts upon success/failure.
+  verification: |
+    1. scratch/test_trade_journal_enhancements.py: 12/12 unit tests passed including test_clear_journal_creates_backup_and_resets.
+    2. AST syntax check passed across all modified Python files.
+    3. Master regression suite scratch/run_full_regression_test.py (32/32 tests passed).
+  status: RESOLVED
+  resolution_date: '2026-09-22'
