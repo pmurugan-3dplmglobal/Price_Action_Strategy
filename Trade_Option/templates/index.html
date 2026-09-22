@@ -572,9 +572,13 @@
             }
         }
 
-        async function buyScannedTrade(btnEl, symbol, contract, side, entry, sl, t1, t2, t3, engine, timeframe, candle_a_time, entry_time, benchmark, anchor_floor, direction, tier) {
+        async function buyScannedTrade(btnEl, symbol, contract, side, entry, sl, t1, t2, t3, engine, timeframe, candle_a_time, entry_time, benchmark, anchor_floor, direction, tier, riskExceeded) {
             const dispName = contract || symbol;
-            if (!confirm(`Confirm 1-Click BUY for ${dispName}?`)) return;
+            if (riskExceeded) {
+                if (!confirm(`⚠️ HIGH RISK WARNING:\n\n${dispName} was REJECTED by automated risk management because the lot size risk exceeds the capital risk budget.\n\nAre you sure you want to manually override and execute this high-risk trade?`)) return;
+            } else {
+                if (!confirm(`Confirm 1-Click BUY for ${dispName}?`)) return;
+            }
             if (btnEl) {
                 btnEl.disabled = true;
                 btnEl.textContent = 'BUYING...';
@@ -969,7 +973,10 @@
                         const st = evalItemStatus(item);
                         let survStatus = '<span style="color:#3fb950;font-size:11px">⚡ 15s Radar Active</span>';
                         let stageBadge = '<span class="badge" style="background:#5c3a00;color:#ffc554">⚡ A+ Coiled</span>';
-                        if (st.isT1Hit) {
+                        if (item.risk_exceeded) {
+                            stageBadge = '<span class="badge" style="background:#5c0000;color:#ff7b72;border:1px solid #da3633">⚠️ OVER-BUDGET</span>';
+                            survStatus = `<span style="color:#f85149;font-size:11px;font-weight:bold" title="${item.risk_msg || 'Risk exceeds budget'}">⚠️ RISK EXCEEDED</span>`;
+                        } else if (st.isT1Hit) {
                             stageBadge = '<span class="badge" style="background:#5c0000;color:#ff7b72;border:1px solid #da3633">🎯 T1 HIT</span>';
                             survStatus = '<span style="color:#f85149;font-size:11px;font-weight:bold">⛔ DO NOT CHASE</span>';
                         } else if (st.isRunaway) {
@@ -1025,7 +1032,10 @@
                         const st = evalItemStatus(item);
                         let aStatus = '<span style="font-size:11px;color:#8b949e">Awaiting D Breakout</span>';
                         let stageBadge = '<span class="badge" style="background:#0c2d6b;color:#58a6ff">🎯 A Ready</span>';
-                        if (st.isT1Hit) {
+                        if (item.risk_exceeded) {
+                            stageBadge = '<span class="badge" style="background:#5c0000;color:#ff7b72;border:1px solid #da3633">⚠️ OVER-BUDGET</span>';
+                            aStatus = `<span style="color:#f85149;font-size:11px;font-weight:bold" title="${item.risk_msg || 'Risk exceeds budget'}">⚠️ RISK EXCEEDED</span>`;
+                        } else if (st.isT1Hit) {
                             stageBadge = '<span class="badge" style="background:#5c0000;color:#ff7b72;border:1px solid #da3633">🎯 T1 HIT</span>';
                             aStatus = '<span style="color:#f85149;font-size:11px;font-weight:bold">⛔ DO NOT CHASE</span>';
                         } else if (st.isRunaway) {
@@ -1288,6 +1298,8 @@
                     actCell = '<td style="text-align:center"><button disabled class="btn-expired" style="background:' + (isExpired ? '#8957e5' : '#d29922') + ';color:#ffffff;border:none;padding:4px 10px;border-radius:4px;font-weight:bold;cursor:not-allowed;font-size:11px">' + (isExpired ? 'EXPIRED' : 'EXITED') + '</button></td>';
                 } else if (isBought) {
                     actCell = '<td style="text-align:center"><button disabled class="btn-bought" style="background:#238636;color:#ffffff;border:none;padding:4px 10px;border-radius:4px;font-weight:bold;cursor:not-allowed;font-size:11px">BOUGHT</button></td>';
+                } else if (t.risk_exceeded) {
+                    actCell = `<td style="text-align:center"><button class="btn-buy" onclick="buyScannedTrade(this, '${t.symbol||''}', '${t.contract||''}', '${t.side||'CE'}', ${t.entry_spot||0}, ${t.current_sl||t.sl||0}, ${t.t1||0}, ${t.t2||0}, ${t.t3||0}, '${eng}', '${t.timeframe||''}', '${(t.candle_a_time||'').replace(/'/g,"")}', '${(t.entry_time||'').replace(/'/g,"")}', ${t.benchmark||0}, ${t.anchor_floor||0}, '${t.direction||'BULL'}', ${t.tier || 2}, true)" style="background:#da3633;color:#ffffff;border:1px solid #f85149;padding:4px 8px;border-radius:4px;font-weight:bold;cursor:pointer;font-size:10px" title="${t.risk_msg || 'Oversized lot exceeds capital risk budget'}">⚠️ HIGH RISK</button></td>`;
                 } else {
                     actCell = `<td style="text-align:center"><button class="btn-buy" onclick="buyScannedTrade(this, '${t.symbol||''}', '${t.contract||''}', '${t.side||'CE'}', ${t.entry_spot||0}, ${t.current_sl||t.sl||0}, ${t.t1||0}, ${t.t2||0}, ${t.t3||0}, '${eng}', '${t.timeframe||''}', '${(t.candle_a_time||'').replace(/'/g,"")}', '${(t.entry_time||'').replace(/'/g,"")}', ${t.benchmark||0}, ${t.anchor_floor||0}, '${t.direction||'BULL'}', ${t.tier || 2})" style="background:#2ea043;color:#ffffff;border:none;padding:4px 12px;border-radius:4px;font-weight:bold;cursor:pointer;font-size:11px">BUY</button></td>`;
                 }
@@ -1563,13 +1575,17 @@
                 kitePos.forEach(kp => {
                     const c_name = kp.contract || kp.symbol;
                     if (!c_name || seenContracts.has(c_name)) return;
-                    seenContracts.add(c_name);
+                    const kc = (c_name || '').replace(/\s+/g, '').toUpperCase();
+                    const isOptionContract = /[0-9]+[CP]E$/i.test(kc);
                     const dbMatch = allTrades.find(t => {
-                        const tc = (t.contract || '').replace(/\\s+/g, '').toUpperCase();
-                        const ts = (t.symbol || '').replace(/\\s+/g, '').toUpperCase();
-                        const kc = (c_name || '').replace(/\\s+/g, '').toUpperCase();
+                        const tc = (t.contract || '').replace(/\s+/g, '').toUpperCase();
+                        const ts = (t.symbol || '').replace(/\s+/g, '').toUpperCase();
+                        if (isOptionContract) {
+                            return tc && tc === kc;
+                        }
                         return (tc && (tc === kc || kc.includes(tc) || tc.includes(kc))) || (ts && (ts === kc || kc.includes(ts)));
                     });
+                    const liveLtpVal = (kp.ltp !== undefined && kp.ltp !== null && parseFloat(kp.ltp) > 0) ? parseFloat(kp.ltp) : undefined;
                     const item = {
                         symbol: c_name,
                         contract: c_name,
@@ -1578,11 +1594,12 @@
                         entry_spot: kp.entry_price,
                         quantity: kp.quantity,
                         pnl: kp.pnl,
+                        ltp: liveLtpVal,
                         current_sl: kp.current_sl !== undefined ? kp.current_sl : (dbMatch ? dbMatch.current_sl : ''),
                         t1: kp.t1 !== undefined ? kp.t1 : (dbMatch ? dbMatch.t1 : ''),
                         t2: kp.t2 !== undefined ? kp.t2 : (dbMatch ? dbMatch.t2 : ''),
                         t3: kp.t3 !== undefined ? kp.t3 : (dbMatch ? dbMatch.t3 : ''),
-                        token: dbMatch ? (dbMatch.option_token || dbMatch.index_token || '') : (kp.token || ''),
+                        token: (kp.token || kp.instrument_token || '') || (dbMatch ? (dbMatch.option_token || dbMatch.index_token || '') : ''),
                         candle_a_time: dbMatch ? (dbMatch.candle_a_time || '') : (kp.candle_a_time || ''),
                         entry_time: dbMatch ? (dbMatch.entry_time || '') : (kp.entry_time || ''),
                         benchmark: dbMatch ? (dbMatch.benchmark || 0) : (kp.benchmark || 0),
@@ -1672,7 +1689,13 @@
                     }
 
                     if (rawPnl !== null && rawPnl !== undefined) {
-                        const pctPnl = (displayLtp !== '-' && t.entry_spot && t.entry_spot > 0) ? ((parseFloat(displayLtp) - t.entry_spot) / t.entry_spot * 100).toFixed(2) : '0.00';
+                        let pctPnl = '0.00';
+                        if (t.entry_spot && t.entry_spot > 0) {
+                            const investedCap = t.entry_spot * (t.quantity || 1);
+                            pctPnl = (rawPnl / investedCap * 100).toFixed(2);
+                        } else if (displayLtp !== '-' && t.entry_spot && t.entry_spot > 0) {
+                            pctPnl = ((parseFloat(displayLtp) - t.entry_spot) / t.entry_spot * 100).toFixed(2);
+                        }
                         pnlStr = `${rawPnl >= 0 ? '+' : ''}${rawPnl.toFixed(2)} (${pctPnl}%)`;
                     } else if (t.pnl_percent !== undefined && t.pnl_percent !== null) {
                         pnlStr = `${t.pnl_percent}%`;

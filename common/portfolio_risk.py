@@ -237,7 +237,8 @@ def check_portfolio_risk_caps(engine, symbol, candidate_tier=2, capital=100000.0
 
     # 1B. SQLite trade_db Active Records
     if include_db_trades:
-        active_db_trades = trade_db.get_active_trades(engine=None)
+        target_eng = str(engine).lower() if engine else None
+        active_db_trades = trade_db.get_active_trades(engine=target_eng)
         now_dt = get_ist_now(naive=True)
         for t in active_db_trades:
             tid = t.get("id")
@@ -269,7 +270,9 @@ def check_portfolio_risk_caps(engine, symbol, candidate_tier=2, capital=100000.0
                         except Exception:
                             pass
                     if not is_recent_fill:
-                        # Auto-reconcile stale/ghost DB trade
+                        # Auto-reconcile stale/ghost DB trade only for matching engine
+                        if target_eng and t_eng and t_eng != target_eng:
+                            continue
                         if tid:
                             try:
                                 trade_db.update_trade_status(

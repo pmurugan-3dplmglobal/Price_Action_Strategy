@@ -47,6 +47,8 @@ meta:
     - Setup Prioritization Laws, Safe Option Value Buying Corridor & VCP Coiled Promotion (ISSUE-071)
     - End-to-End Integration Robustness — Funnel Eviction Key Parity, Ghost Trade Resurrection Prevention, and Scan Tab Ingestion Field Preservation (ISSUE-072)
     - Index Engine 7-Gate Parity, Normalized Composite Ranking, Decoupled Surveillance Thread, and Speed Phase Latency Elimination (ISSUE-073)
+    - Spread Exit Order Sequencing Inversion, Broker Ground Truth Guard, and Market Order Block Immunity (ISSUE-076)
+    - Radar Spot Trend Confluence Gate (All-Day VWAP + EMA13/44 Golden Cross Protection), Pre-Trigger Risk Budget Gate, and Strict Option Contract Matching (ISSUE-077)
 
 architecture:
   diagram: |
@@ -479,9 +481,12 @@ system_integrity_safeguards:
   spread_exit_inversion: "Inverted Spread Exit Sequence (close_position): In option spread positions (BULL_CALL_SPREAD / BEAR_PUT_SPREAD), Leg 2 Short Leg Cover (BUY) is executed FIRST, and Leg 1 Long Leg Exit (SELL) is executed SECOND. Buying the short leg cover first eliminates naked short exposure and prevents Zerodha RMS margin spikes (5x-10x margin jump) that previously caused margin rejection."
   index_concurrency_cap: "Directional Index Concurrency Cap (portfolio_risk & index_options_trade_engine): Enforces max_concurrent_index_positions = 1 (default 1) across the entire index family (NIFTY, BANKNIFTY, SENSEX, FINNIFTY, MIDCPNIFTY, BANKEX) to prevent correlated duplicate drawdowns during broad market reversals. Fully configurable via index.max_concurrent_positions in program_config.json."
   priority_ranking_and_value_corridor: "Setup Prioritization Laws, Safe Option Value Corridor & VCP Coiled Promotion (ISSUE-071): 1. Mandatory Spot Confluence Gate: Auto-execution in execute_highest_rr_trade strictly requires spot_confluence=True (unbacked setups remain visible on Scans Tab). 2. VCP Coiled Promotion Gate: In resolve.py, setups with tier >= 2, spot_confluence=True, (atr_ratio <= 0.65 or is_squeeze), and R:R >= 1.5 auto-promote to Tier 1 Gold (🥇 T1). 3. Safe Option Value Corridor: Evaluates Option Intraday VWAP stretch between -5.0% and +15.0%; rejects decaying falling knives (stretch < -5.0%, [FALLING_KNIFE_GUARD]) and skips overstretched tops (stretch > 15.0% or STRETCHED, [OPTION_VALUE_GUARD]). 4. Premium Floor Gate: When DTE <= 5, rejects cheap lottery options (benchmark < ₹5.00, [PREMIUM_FLOOR_GATE]). 5. Composite Priority Score: _avg_target_rank weights spot confluence (+2.0) and VCP compression (+0.4 to +1.5) over paper R:R (capped at 5.0), adding +0.5 for safe VWAP accumulation (-5% to 0%) and penalizing breakdowns."
+  radar_spot_trend_and_risk_confluence: "Radar Spot Trend & Pre-Trigger Risk Budget Gate (ISSUE-077): 1. Continuously enforces Spot VWAP alignment across all market hours (removing 09:15-10:30 restriction). 2. Strictly blocks PE triggers when Spot is in a 30m Bullish Golden Cross (Spot > EMA13 > EMA44) and CE triggers when Spot is in a Bearish Death Cross (Spot < EMA13 < EMA44). 3. Pre-Trigger Risk Budget Gate validates calculate_position_size before publishing radar triggers. If risk per lot exceeds capital budget (pos_size <= 0), halts radar trigger, logs [RADAR RISK BUDGET GATE], and badges setup with ⚠️ HIGH RISK / OVER-BUDGET with modal override. 4. Options dashboard enforces strict contract matching (tc === kc), preventing cross-strike token and P&L distortion."
+  spread_exit_marketable_limit_pegging: "Spread Exit Marketable Limit Pegging & Engine Isolation (ISSUE-076): Stock option spread cover and unwinds calculate marketable limit prices pegged to best ask/bid (max(best_ask * 1.02, best_ask + 0.10)), clamped to tick and circuit boundaries, ensuring 100% immunity against broker 'MARKET orders blocked for stock options' rejections. Active trade queries isolate broker reconciliation by target_eng, protecting live trades from test suite pollution."
 
 verification_and_quality_assurance:
-  master_regression_suite: "scratch/run_full_regression_test.py — 26/26 Test Suites Passing (100% Success Rate)"
+  master_regression_suite: "scratch/run_full_regression_test.py — 30/30 Test Suites Passing (100% Success Rate)"
+  radar_trend_risk_confluence_suite: "scratch/test_radar_trend_and_risk_confluence.py — 3/3 Unit Tests Passing (100% Success Rate)"
   priority_ranking_laws_suite: "scratch/test_priority_ranking_laws.py — 19/19 Unit Tests Passing (100% Success Rate)"
   unit_verification_suite: "scratch/test_institutional_enhancements.py — 5/5 Unit Tests Passing (100% Success Rate)"
   parity_alignment_suite: "scratch/test_parity_alignment.py — 4/4 Unit Tests Passing (100% Success Rate)"
@@ -492,6 +497,24 @@ verification_and_quality_assurance:
   spread_exit_and_index_cap_suite: "scratch/test_spread_exit_and_index_cap.py — 6/6 Unit Tests Passing (100% Success Rate)"
   ast_syntax_integrity: "100% Python files parsed with zero syntax errors"
   recent_major_issues_resolved:
+    - id: "ISSUE-077"
+      title: "Radar Spot Trend Confluence Gate (All-Day VWAP + EMA13/44 Golden Cross Protection), Pre-Trigger Risk Budget Gate & UI Option Contract Match Fix"
+      status: "RESOLVED"
+    - id: "ISSUE-076"
+      title: "Spread Exit Order Sequencing Inversion, Market Order Block Immunity & Broker Ground Truth Guard"
+      status: "RESOLVED"
+    - id: "ISSUE-075"
+      title: "Debit Spread Short Leg Limit Pegging, Fractional Strike Normalization & Emergency Unwind"
+      status: "RESOLVED"
+    - id: "ISSUE-074"
+      title: "Broker Ground Truth Invariant & Auto-Reconciliation of Ghost Trades in Portfolio Risk Guard"
+      status: "RESOLVED"
+    - id: "ISSUE-073"
+      title: "Index Engine 7-Gate Parity, Normalized Composite Ranking & Instant Dispatch"
+      status: "RESOLVED"
+    - id: "ISSUE-072"
+      title: "End-to-End Integration Robustness — Funnel Eviction Key Parity & Ghost Resurrection Prevention"
+      status: "RESOLVED"
     - id: "ISSUE-071"
       title: "Setup Prioritization Laws, Safe Option Value Buying Corridor & VCP Coiled Promotion"
       status: "RESOLVED"

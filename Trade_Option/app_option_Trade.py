@@ -656,6 +656,8 @@ def refresh_data(single_run=False):
                                 "entry_price": entry_pr,
                                 "entry_spot": entry_pr,
                                 "ltp": live_ltp,
+                                "token": tok_id,
+                                "instrument_token": tok_id,
                                 "pnl": live_pnl,
                                 "exchange": exch,
                                 "source": "kite"
@@ -2219,8 +2221,12 @@ def api_buy_scanned_trade():
                         leg2_q = safe_kite_call(_kite_session.quote, [leg2_q_key]) if _kite_session else {}
                         leg2_depth = leg2_q.get(leg2_q_key, {}).get("depth", {}).get("buy", [])
                         leg2_bid = float(leg2_depth[0]["price"]) if (leg2_depth and len(leg2_depth) > 0 and leg2_depth[0].get("price", 0) > 0) else float(leg2_q.get(leg2_q_key, {}).get("last_price", 0))
-                        leg2_limit = round(leg2_bid * 0.995, 1) if leg2_bid > 0 else 0
-                        leg2_otype = _kite_session.ORDER_TYPE_LIMIT if leg2_limit > 0 else _kite_session.ORDER_TYPE_MARKET
+                        if leg2_bid > 0:
+                            leg2_limit = round(leg2_bid * 0.995, 1)
+                        else:
+                            leg2_limit = round(float(spread_info.get("leg2", {}).get("entry_price", 10.0)) * 0.8, 1)
+                        leg2_limit = max(0.05, round(round(leg2_limit / 0.05) * 0.05, 2))
+                        leg2_otype = _kite_session.ORDER_TYPE_LIMIT
 
                         from common.position_monitor import slice_quantity_for_freeze
                         leg2_slices = slice_quantity_for_freeze(leg2_c, lot_size)

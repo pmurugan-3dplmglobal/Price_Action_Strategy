@@ -1348,22 +1348,49 @@ def run_fast_radar_check(kite):
                                 spot_ltp = float(q_data.get("last_price") or 0.0)
                                 spot_vwap = float(q_data.get("average_price") or 0.0)
 
-                                # ── MORNING INSTITUTIONAL SURGE GATE (09:15 - 10:30 IST) ──
-                                is_morning_window = ("09:15" <= time_now_str <= "10:30")
+                                # ── ALL-DAY SPOT VWAP & TREND CONFLUENCE GATE ──
                                 side_val = str(item.get("side", "CE")).upper()
                                 dir_val = str(item.get("direction", "BULL")).upper()
                                 c_str = str(item.get("contract", "")).upper()
                                 is_pe = (side_val == "PE" or dir_val == "BEAR" or c_str.endswith("PE"))
 
-                                if is_morning_window and spot_vwap > 0 and spot_ltp > 0:
+                                if spot_vwap > 0 and spot_ltp > 0:
                                     if not is_pe and spot_ltp < (spot_vwap * 0.997):
-                                        logging.info(f"🛡️ [MORNING VWAP REJECT] {sym}: Spot {spot_ltp:.2f} < VWAP {spot_vwap:.2f} (CE) "
-                                                     f"during morning window ({time_now_str}). Lacks institutional buying support. Holding candidate.")
+                                        logging.info(f"🛡️ [SPOT VWAP REJECT] {sym}: Spot {spot_ltp:.2f} < VWAP {spot_vwap:.2f} (CE) "
+                                                     f"at {time_now_str}. Lacks institutional buying support. Holding candidate.")
                                         continue
                                     elif is_pe and spot_ltp > (spot_vwap * 1.003):
-                                        logging.info(f"🛡️ [MORNING VWAP REJECT] {sym}: Spot {spot_ltp:.2f} > VWAP {spot_vwap:.2f} (PE) "
-                                                     f"during morning window ({time_now_str}). Lacks institutional selling pressure. Holding candidate.")
+                                        logging.info(f"🛡️ [SPOT VWAP REJECT] {sym}: Spot {spot_ltp:.2f} > VWAP {spot_vwap:.2f} (PE) "
+                                                     f"at {time_now_str}. Lacks institutional selling pressure. Holding candidate.")
                                         continue
+
+                                # ── SPOT MOVING AVERAGE GOLDEN / DEATH CROSS CONFLUENCE ──
+                                # Protect against buying PEs in a strong Bullish Golden Cross or CEs in a Bearish Death Cross
+                                try:
+                                    df_spot_30m = safe_kite_call(
+                                        fetch_and_resample_candles,
+                                        kite, spot_tok,
+                                        (dt.now() - timedelta(days=5)).strftime('%Y-%m-%d'),
+                                        dt.now().strftime('%Y-%m-%d'),
+                                        "30minute",
+                                        priority=True
+                                    )
+                                    if df_spot_30m is not None and len(df_spot_30m) >= 44:
+                                        s_closes = df_spot_30m['close']
+                                        s_ema13 = float(s_closes.ewm(span=13, adjust=False).mean().iloc[-1])
+                                        s_ema44 = float(s_closes.ewm(span=44, adjust=False).mean().iloc[-1])
+                                        s_last = float(s_closes.iloc[-1])
+
+                                        # Golden Cross: Spot > EMA13 > EMA44 -> STRICTLY BLOCK PE TRIGGERS!
+                                        if is_pe and (s_last > s_ema13 > s_ema44):
+                                            logging.info(f"🛡️ [SPOT GOLDEN CROSS REJECT] {sym}: Spot ({s_last:.2f}) > EMA13 ({s_ema13:.2f}) > EMA44 ({s_ema44:.2f}) is in strong Bullish Golden Cross. Blocking counter-trend PE trigger!")
+                                            continue
+                                        # Death Cross: Spot < EMA13 < EMA44 -> STRICTLY BLOCK CE TRIGGERS!
+                                        elif (not is_pe) and (s_last < s_ema13 < s_ema44):
+                                            logging.info(f"🛡️ [SPOT DEATH CROSS REJECT] {sym}: Spot ({s_last:.2f}) < EMA13 ({s_ema13:.2f}) < EMA44 ({s_ema44:.2f}) is in strong Bearish Death Cross. Blocking counter-trend CE trigger!")
+                                            continue
+                                except Exception as ma_err:
+                                    logging.debug(f"Spot MA confluence error for {sym}: {ma_err}")
 
                                 df_spot_rvol = safe_kite_call(
                                     fetch_and_resample_candles,
@@ -1399,8 +1426,8 @@ def run_fast_radar_check(kite):
                         enable_adx_synergy = bool(item.get("enable_adx_synergy", False))
                         if not enable_adx_synergy:
                             try:
-                                opt_cfg = load_config()
-                                enable_adx_synergy = bool(opt_cfg.get("nifty50", {}).get("ENABLE_ADX_SYNERGY_FILTER", False))
+                                opt_cfg = load_program_config_for_engine("nifty50")
+                                enable_adx_synergy = bool(opt_cfg.get("ENABLE_ADX_SYNERGY_FILTER", False))
                             except Exception:
                                 pass
 
@@ -1421,6 +1448,33 @@ def run_fast_radar_check(kite):
                                 item["tier_label"] = "🥇 T1 Gold (ADX Ignition)"
                                 logging.info(f"🔥 [SYNERGY ADX IGNITION] {sym} ({item.get('contract')}): +DI {curr_plus_di:.1f} >= 26.0! Promoted to 🥇 T1 Gold!")
 
+                        # Check 5: Position Sizing & Risk Budget Sanity Gate
+                        c_tier_val = _parse_candidate_tier(item, default=2)
+                        lot_sz_val = int(item.get("lot_size") or (get_option_lot_size(item.get("contract")) if item.get("contract") else None) or STOCK_REGISTRY.get(sym, {}).get("lot_size", 1) or 1)
+                        cfg_eng_radar = load_program_config_for_engine("nifty50")
+                        cap_val_radar = float(cfg_eng_radar.get("capital") or 100000.0)
+                        allow_conviction_r = bool(cfg_eng_radar.get("allow_single_lot_conviction", True))
+                        max_single_risk_r = float(cfg_eng_radar.get("max_single_lot_risk_pct", 5.0))
+
+                        calc_pos_sz = calculate_position_size(
+                            spot_price=c_now,
+                            stop_loss=sl,
+                            capital=cap_val_radar,
+                            risk_percent=float(cfg_eng_radar.get("MAX_RISK_PERCENT") or 1.0),
+                            lot_size=lot_sz_val,
+                            is_option=True,
+                            tier=c_tier_val,
+                            allow_zero=True,
+                            allow_single_lot_conviction=allow_conviction_r,
+                            max_single_lot_risk_pct=max_single_risk_r
+                        )
+                        if calc_pos_sz <= 0:
+                            risk_amt = abs(c_now - sl) * lot_sz_val
+                            logging.info(f"🛡️ [RADAR RISK BUDGET GATE] {sym} ({item.get('contract')}): Risk per lot (₹{risk_amt:.2f}) exceeds capital risk budget. Holding candidate from radar trigger.")
+                            item["risk_exceeded"] = True
+                            item["risk_msg"] = f"Risk per lot (₹{risk_amt:.0f}) exceeds capital risk budget"
+                            continue
+
                         if is_retest and not is_breakout:
                             trigger_type = "POST_D_RETEST"
                         elif is_80pct_mature and not is_closed_bar:
@@ -1432,6 +1486,7 @@ def run_fast_radar_check(kite):
                         item["entry_spot"] = c_now
                         item["entry_time"] = str(last_candle.get('date', dt.now().isoformat()))
                         item["trigger_type"] = trigger_type
+                        item["risk_exceeded"] = False
                         # Recompute R:R based on exact retest entry price
                         risk_now = abs(c_now - sl)
                         if risk_now > 0 and t1 > 0:

@@ -726,11 +726,14 @@ def close_position(kite, pos, live_market=True, product=None, qty_override=None,
             l2_product = target_product
 
             # 1. Broker position check (GROUND TRUTH)
-            # If broker already shows 0 or positive net quantity on leg 2, short leg is already closed!
+            # If broker already shows 0 or positive net quantity on leg 2, or contract is not found at all,
+            # then short leg is NOT open on the broker! Skip covering to prevent accidental open positions or rejections.
             if kite and live_market:
                 try:
+                    leg2_found = False
                     for p in kite.positions().get("net", []):
                         if p.get("tradingsymbol") == leg2_c:
+                            leg2_found = True
                             live_short_qty = int(p.get("quantity", 0))
                             if p.get("product"):
                                 l2_product = p.get("product")
@@ -741,6 +744,10 @@ def close_position(kite, pos, live_market=True, product=None, qty_override=None,
                             else:
                                 leg2_qty = min(leg2_qty, abs(live_short_qty))
                             break
+                    if not leg2_found:
+                        logging.info(f"[SPREAD EXIT SKIP] Short leg {leg2_c} not found in broker net positions (never held or already flat). Skipping Leg 2 cover order.")
+                        save_executed_exit(leg2_c, "ALREADY_CLOSED", {"status": "NOT_FOUND_ON_BROKER", "qty": 0})
+                        return True
                 except Exception as leg2_check_err:
                     logging.warning(f"Could not verify live net quantity for leg2 {leg2_c}: {leg2_check_err}")
 
@@ -769,7 +776,7 @@ def close_position(kite, pos, live_market=True, product=None, qty_override=None,
                             logging.info(f"[SPREAD EXIT] Leg 2 exit order {leg2_oid} is {o_status} ({elapsed:.0f}s ago). Waiting for fill.")
                             return False  # Still filling, do NOT sell Leg 1 yet!
                         else:
-                            logging.warning(f"[SPREAD EXIT] Leg 2 order {leg2_oid} open > 15s. Cancelling and replacing with Market order...")
+                            logging.warning(f"[SPREAD EXIT] Leg 2 order {leg2_oid} open > 15s. Cancelling and retrying marketable limit order...")
                             try:
                                 kite.cancel_order(variety=kite.VARIETY_REGULAR, order_id=leg2_oid)
                             except Exception:
@@ -785,22 +792,68 @@ def close_position(kite, pos, live_market=True, product=None, qty_override=None,
                 return True
 
             # 3. Execute BUY order to cover short leg
+            # Stock options block MARKET orders on NSE. Determine marketable limit price.
             try:
+                leg2_limit_price = None
+                if kite and live_market:
+                    try:
+                        q_sym = f"{l2_exch}:{leg2_c}"
+                        q_data = kite.quote([q_sym]).get(q_sym, {})
+                        depth_sells = q_data.get("depth", {}).get("sell", [])
+                        best_ask = 0.0
+                        for s_lvl in depth_sells:
+                            if s_lvl.get("price", 0.0) > 0:
+                                best_ask = float(s_lvl.get("price", 0.0))
+                                break
+                        ltp = float(q_data.get("last_price", 0.0))
+                        uc = float(q_data.get("upper_circuit_limit", 0.0))
+                        if best_ask > 0:
+                            calc_p = max(best_ask * 1.02, best_ask + 0.10)
+                            if uc > 0:
+                                calc_p = min(calc_p, uc)
+                            leg2_limit_price = round(round(calc_p / 0.05) * 0.05, 2)
+                        elif ltp > 0:
+                            calc_p = ltp * 1.05
+                            if uc > 0:
+                                calc_p = min(calc_p, uc)
+                            leg2_limit_price = round(round(calc_p / 0.05) * 0.05, 2)
+                        elif uc > 0:
+                            leg2_limit_price = uc
+                    except Exception as q_err:
+                        logging.warning(f"Could not fetch quote for leg2 {leg2_c}: {q_err}")
+
                 leg2_slices = slice_quantity_for_freeze(leg2_c, leg2_qty)
                 leg2_oids = []
                 for l2_s_qty in leg2_slices:
                     if l2_s_qty <= 0:
                         continue
-                    oid_leg2 = kite.place_order(
-                        variety=kite.VARIETY_REGULAR, tradingsymbol=leg2_c,
-                        exchange=l2_exch, transaction_type=kite.TRANSACTION_TYPE_BUY,
-                        quantity=l2_s_qty, order_type=kite.ORDER_TYPE_MARKET,
-                        product=l2_product
-                    )
+                    if leg2_limit_price and leg2_limit_price > 0:
+                        oid_leg2 = kite.place_order(
+                            variety=kite.VARIETY_REGULAR, tradingsymbol=leg2_c,
+                            exchange=l2_exch, transaction_type=kite.TRANSACTION_TYPE_BUY,
+                            quantity=l2_s_qty, order_type=kite.ORDER_TYPE_LIMIT,
+                            price=leg2_limit_price, product=l2_product
+                        )
+                    elif not is_l2_opt or ("NIFTY" in leg2_c_str or "SENSEX" in leg2_c_str or "BANKEX" in leg2_c_str):
+                        oid_leg2 = kite.place_order(
+                            variety=kite.VARIETY_REGULAR, tradingsymbol=leg2_c,
+                            exchange=l2_exch, transaction_type=kite.TRANSACTION_TYPE_BUY,
+                            quantity=l2_s_qty, order_type=kite.ORDER_TYPE_MARKET,
+                            product=l2_product
+                        )
+                    else:
+                        ref_p = float(pos.get("leg2_entry_price") or pos.get("entry_price") or 20.0) * 1.5
+                        fallback_p = round(round(ref_p / 0.05) * 0.05, 2)
+                        oid_leg2 = kite.place_order(
+                            variety=kite.VARIETY_REGULAR, tradingsymbol=leg2_c,
+                            exchange=l2_exch, transaction_type=kite.TRANSACTION_TYPE_BUY,
+                            quantity=l2_s_qty, order_type=kite.ORDER_TYPE_LIMIT,
+                            price=fallback_p, product=l2_product
+                        )
                     leg2_oids.append(str(oid_leg2))
                 if leg2_oids:
-                    save_executed_exit(leg2_c, leg2_oids[0], {"type": "SPREAD_LEG2_EXIT", "qty": leg2_qty, "order_ids": leg2_oids})
-                    logging.info(f"[SPREAD EXIT] Covered short leg {leg2_c} FIRST (Orders: {leg2_oids}, Qty: {leg2_qty})")
+                    save_executed_exit(leg2_c, leg2_oids[0], {"type": "SPREAD_LEG2_EXIT", "qty": leg2_qty, "price": leg2_limit_price, "order_ids": leg2_oids})
+                    logging.info(f"[SPREAD EXIT] Covered short leg {leg2_c} FIRST (Orders: {leg2_oids}, Qty: {leg2_qty}, Price: {leg2_limit_price})")
                 return True
             except Exception as leg2_err:
                 logging.error(f"[SPREAD EXIT ERROR] Failed to exit short leg {leg2_c}: {leg2_err}")

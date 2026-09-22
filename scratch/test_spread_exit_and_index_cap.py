@@ -99,6 +99,18 @@ class TestSpreadExitAndIndexCap(unittest.TestCase):
 
     def tearDown(self):
         EXECUTED_EXITS.clear()
+        try:
+            exit_file = getattr(paths, "EXECUTED_EXIT_ORDERS_FILE", os.path.join(paths.MONITOR_DIR, "executed_exit_orders.json"))
+            if os.path.exists(exit_file):
+                with open(exit_file, "r") as f:
+                    d = json.load(f)
+                rm = [k for k in d if k.startswith("NIFTY26915") or k.startswith("BANKNIFTY26SEP") or (k.startswith("APLAPOLLO") and "OID_" in str(d[k].get("order_id")))]
+                for k in rm:
+                    del d[k]
+                with open(exit_file, "w") as f:
+                    json.dump(d, f, indent=4)
+        except Exception:
+            pass
 
     # -------------------------------------------------------------------------
     # 1. TEST SPREAD EXIT INVERSION (P0)
@@ -149,8 +161,10 @@ class TestSpreadExitAndIndexCap(unittest.TestCase):
                          f"Order 1 must be Leg 2 short leg ({leg2_sym}), got: {first_order['tradingsymbol']}")
         self.assertEqual(first_order["transaction_type"], "BUY",
                          f"Order 1 must be BUY to cover short leg, got: {first_order['transaction_type']}")
-        self.assertEqual(first_order["order_type"], "MARKET",
-                         f"Order 1 short cover must be MARKET order, got: {first_order['order_type']}")
+        self.assertIn(first_order["order_type"], ["LIMIT", "MARKET"],
+                      f"Order 1 short cover must be LIMIT or MARKET order, got: {first_order['order_type']}")
+        if first_order["order_type"] == "LIMIT":
+            self.assertGreater(first_order["price"], 0, "Limit price must be positive")
 
         # Order 2 MUST be Leg 1 Long Leg Exit (SELL)
         self.assertEqual(second_order["tradingsymbol"], leg1_sym,
@@ -193,6 +207,79 @@ class TestSpreadExitAndIndexCap(unittest.TestCase):
         self.assertEqual(len(orders), 1, f"Expected exactly 1 order since leg2 is already closed, got: {orders}")
         self.assertEqual(orders[0]["tradingsymbol"], leg1_sym)
         self.assertEqual(orders[0]["transaction_type"], "SELL")
+
+    @patch("position_monitor.is_market_open", return_value=True)
+    def test_spread_exit_skips_when_leg2_not_in_broker_positions(self, mock_market_open):
+        """
+        ISSUE-076: If Leg 2 was NEVER executed on the broker (not in net positions at all),
+        close_position() must NOT place an order for Leg 2, but safely proceed with Leg 1 exit.
+        """
+        leg1_sym = "APLAPOLLO26SEP2200PE"
+        phantom_leg2 = "APLAPOLLO26SEP2140PE"
+        clear_executed_exit(leg1_sym)
+        clear_executed_exit(phantom_leg2)
+
+        # Broker only holds Leg 1. Leg 2 was never executed!
+        mock_positions = [
+            {"tradingsymbol": leg1_sym, "quantity": 350, "product": "NRML"}
+        ]
+        mock_kite = MockKiteSession(net_positions=mock_positions)
+
+        pos_spread = {
+            "contract": leg1_sym,
+            "position_type": "option_spread",
+            "leg2_contract": phantom_leg2,
+            "quantity": 350,
+            "leg2_qty": 350,
+            "product": "NRML",
+            "entry_spot": 30.0
+        }
+
+        res = close_position(mock_kite, pos_spread, live_market=True)
+        self.assertTrue(res.get("success"), f"Exit failed: {res}")
+
+        orders = mock_kite.placed_orders
+        self.assertEqual(len(orders), 1, f"Expected exactly 1 order since phantom leg2 was not held on broker, got: {orders}")
+        self.assertEqual(orders[0]["tradingsymbol"], leg1_sym)
+        self.assertEqual(orders[0]["transaction_type"], "SELL")
+
+    @patch("position_monitor.is_market_open", return_value=True)
+    def test_spread_exit_stock_option_uses_limit_order(self, mock_market_open):
+        """
+        ISSUE-076: Zerodha blocks MARKET orders on stock options.
+        Verify that covering Leg 2 of a stock option spread uses LIMIT order with marketable price.
+        """
+        leg1_sym = "APLAPOLLO26SEP2200PE"
+        leg2_sym = "APLAPOLLO26SEP2140PE"
+        clear_executed_exit(leg1_sym)
+        clear_executed_exit(leg2_sym)
+
+        mock_positions = [
+            {"tradingsymbol": leg1_sym, "quantity": 350, "product": "NRML"},
+            {"tradingsymbol": leg2_sym, "quantity": -350, "product": "NRML"}
+        ]
+        mock_kite = MockKiteSession(net_positions=mock_positions)
+
+        pos_spread = {
+            "contract": leg1_sym,
+            "position_type": "option_spread",
+            "leg2_contract": leg2_sym,
+            "quantity": 350,
+            "leg2_qty": 350,
+            "product": "NRML",
+            "entry_spot": 30.0
+        }
+
+        res = close_position(mock_kite, pos_spread, live_market=True)
+        self.assertTrue(res.get("success"), f"Exit failed: {res}")
+
+        orders = mock_kite.placed_orders
+        self.assertGreaterEqual(len(orders), 2)
+        leg2_order = orders[0]
+        self.assertEqual(leg2_order["tradingsymbol"], leg2_sym)
+        self.assertEqual(leg2_order["transaction_type"], "BUY")
+        self.assertEqual(leg2_order["order_type"], "LIMIT", "Stock option cover must use LIMIT order")
+        self.assertGreater(leg2_order["price"], 0)
 
     # -------------------------------------------------------------------------
     # 2. TEST INDEX CONCURRENCY CAP (Fix 3)

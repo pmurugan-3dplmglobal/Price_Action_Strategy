@@ -761,13 +761,28 @@ def reconcile_broker_live_positions(kite):
                 if leg2_qty < 0 and kite:
                     abs_qty = abs(leg2_qty)
                     try:
+                        q_sym = f"NFO:{leg2_c}"
+                        q_data = kite.quote([q_sym]).get(q_sym, {})
+                        depth_sells = q_data.get("depth", {}).get("sell", [])
+                        best_ask = 0.0
+                        for s_lvl in depth_sells:
+                            if s_lvl.get("price", 0.0) > 0:
+                                best_ask = float(s_lvl.get("price", 0.0))
+                                break
+                        ltp = float(q_data.get("last_price", 0.0))
+                        uc = float(q_data.get("upper_circuit_limit", 0.0))
+                        cov_p = max(best_ask * 1.05, best_ask + 0.10) if best_ask > 0 else (ltp * 1.05 if ltp > 0 else 50.0)
+                        if uc > 0:
+                            cov_p = min(cov_p, uc)
+                        cov_limit_price = round(round(cov_p / 0.05) * 0.05, 2)
+
                         oid_cover = kite.place_order(
                             variety=kite.VARIETY_REGULAR, tradingsymbol=leg2_c,
                             exchange="NFO", transaction_type=kite.TRANSACTION_TYPE_BUY,
-                            quantity=abs_qty, order_type=kite.ORDER_TYPE_MARKET,
-                            product=p_leg2.get("product", "NRML")
+                            quantity=abs_qty, order_type=kite.ORDER_TYPE_LIMIT,
+                            price=cov_limit_price, product=p_leg2.get("product", "NRML")
                         )
-                        logging.warning(f"[SPREAD AUTO-SAFETY] Long leg {contract} was closed on Kite. Auto-covered orphan short leg {leg2_c} Qty={abs_qty} (Order ID: {oid_cover}) to protect from naked short trap.")
+                        logging.warning(f"[SPREAD AUTO-SAFETY] Long leg {contract} was closed on Kite. Auto-covered orphan short leg {leg2_c} Qty={abs_qty} at Limit {cov_limit_price} (Order ID: {oid_cover}) to protect from naked short trap.")
                     except Exception as cover_err:
                         logging.error(f"[SPREAD AUTO-SAFETY ERROR] Failed auto-covering orphan short leg {leg2_c}: {cover_err}")
 

@@ -898,6 +898,24 @@ except Exception as e:
     errors.append(f"Debit Spread Order Type & Fractional Strike Normalization Failed: {e}")
     print(f" FAILED [ERR] ({e})", flush=True)
 
+# -------------------------------------------------------------------------
+# TEST 30: Spread Exit Inversion, Broker Ground Truth & Market Order Block Immunity (ISSUE-076)
+# -------------------------------------------------------------------------
+print("[TEST 30] Testing Spread Exit Inversion, Broker Ground Truth & Market Order Block Immunity (ISSUE-076)...", end="", flush=True)
+try:
+    import subprocess
+    import paths
+    cmd_se = [
+        sys.executable,
+        os.path.join(paths.SCRATCH_DIR, "test_spread_exit_and_index_cap.py")
+    ]
+    res_se = subprocess.run(cmd_se, cwd=paths.PROJECT_ROOT, capture_output=True, text=True)
+    assert res_se.returncode == 0, f"Spread exit & market order immunity unit tests failed:\nSTDOUT:\n{res_se.stdout}\nSTDERR:\n{res_se.stderr}"
+    print(" PASSED [OK]", flush=True)
+except Exception as e:
+    errors.append(f"Spread Exit Inversion & Market Order Immunity Invariants Failed: {e}")
+    print(f" FAILED [ERR] ({e})", flush=True)
+
 print("\n" + "=" * 100)
 if not errors:
     print("      ALL REGRESSION TESTS PASSED WITH 100% SUCCESS -- ZERO REGRESSIONS FOUND!")
