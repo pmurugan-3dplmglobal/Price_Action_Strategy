@@ -88,6 +88,10 @@ from vix_guard import evaluate_vix_regime
 from portfolio_risk import check_portfolio_risk_caps
 from registries import STOCK_EXPIRY_ROLLOVER_DAYS
 
+# Session-level directional history to detect whipsaw / choppy reversals
+_SYMBOL_DIRECTION_HISTORY = {}  # {symbol: (last_side, last_timestamp)}
+_WHIPSAW_WINDOW_MINUTES = 90.0
+
 def get_mapped_spot_timeframe(entry_tf):
     """
     Spot-Relative Confluence Mapping (Resolves 'Option Chart Illusion'):
@@ -1776,16 +1780,16 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                                 tier_label_ce = "TIER_1_GOLD"
                                 tier_badge_ce = "🥇 T1"
 
-                        # VCP Coiled Promotion Gate (ISSUE-071)
+                        # VCP Coiled Promotion Gate (ISSUE-071, ISSUE-079)
                         atr_r_cand_ce = float(result_ce.get("atr_ratio") or swing_meta_ce.get("atr_ratio") or 1.0)
                         is_squeeze_cand_ce = bool(result_ce.get("is_squeeze") or swing_meta_ce.get("is_squeeze"))
                         cand_rr_ce = float(result_ce.get("RR") or 0.0)
-                        if tier_ce >= 2 and spot_conf_ce and (atr_r_cand_ce <= 0.65 or is_squeeze_cand_ce) and cand_rr_ce >= 1.5:
+                        if tier_ce >= 2 and spot_conf_ce and atr_r_cand_ce <= 0.85 and (atr_r_cand_ce <= 0.65 or is_squeeze_cand_ce) and cand_rr_ce >= 1.80:
                             tier_ce = 1
                             tier_label_ce = "TIER_1_GOLD"
                             tier_badge_ce = "🥇 T1"
-                            logging.info(f"[VCP_TIER_PROMO] {symbol} CE promoted to Tier 1 Gold: ATR_ratio={atr_r_cand_ce:.2f}, "
-                                         f"squeeze={is_squeeze_cand_ce}, RR={cand_rr_ce:.2f}, confluence={spot_conf_type_ce}")
+                            logging.info(f"[VCP_TIER_PROMO] {symbol} CE promoted to Tier 1 Gold: ATR_ratio={atr_r_cand_ce:.2f} <= 0.85, "
+                                         f"squeeze={is_squeeze_cand_ce}, RR={cand_rr_ce:.2f} >= 1.80, confluence={spot_conf_type_ce}")
 
                         effective_sl_ce = calculate_option_atr_sl(
                             entry_price=result_ce["Close"],
@@ -1982,16 +1986,16 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                                 tier_label_pe = "TIER_1_GOLD"
                                 tier_badge_pe = "🥇 T1"
 
-                        # VCP Coiled Promotion Gate (ISSUE-071)
+                        # VCP Coiled Promotion Gate (ISSUE-071, ISSUE-079)
                         atr_r_cand_pe = float(result_pe.get("atr_ratio") or swing_meta_pe.get("atr_ratio") or 1.0)
                         is_squeeze_cand_pe = bool(result_pe.get("is_squeeze") or swing_meta_pe.get("is_squeeze"))
                         cand_rr_pe = float(result_pe.get("RR") or 0.0)
-                        if tier_pe >= 2 and spot_conf_pe and (atr_r_cand_pe <= 0.65 or is_squeeze_cand_pe) and cand_rr_pe >= 1.5:
+                        if tier_pe >= 2 and spot_conf_pe and atr_r_cand_pe <= 0.85 and (atr_r_cand_pe <= 0.65 or is_squeeze_cand_pe) and cand_rr_pe >= 1.80:
                             tier_pe = 1
                             tier_label_pe = "TIER_1_GOLD"
                             tier_badge_pe = "🥇 T1"
-                            logging.info(f"[VCP_TIER_PROMO] {symbol} PE promoted to Tier 1 Gold: ATR_ratio={atr_r_cand_pe:.2f}, "
-                                         f"squeeze={is_squeeze_cand_pe}, RR={cand_rr_pe:.2f}, confluence={spot_conf_type_pe}")
+                            logging.info(f"[VCP_TIER_PROMO] {symbol} PE promoted to Tier 1 Gold: ATR_ratio={atr_r_cand_pe:.2f} <= 0.85, "
+                                         f"squeeze={is_squeeze_cand_pe}, RR={cand_rr_pe:.2f} >= 1.80, confluence={spot_conf_type_pe}")
 
                         effective_sl_pe = calculate_option_atr_sl(
                             entry_price=result_pe["Close"],
@@ -2311,6 +2315,37 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
 
             trend_governed_candidates.append(c)
 
+        # Step 1.5: Directional Conviction Guard (Anti-Whipsaw Filter) (ISSUE-079)
+        # Prevents choppy symbols from retaining Tier 1 Gold status if their detected side flips
+        # within a rolling window (default 90 mins). Protects against whipsaw traps (e.g. RBLBANK).
+        now_ts = get_ist_now(naive=True)
+        prev_dir_info = _SYMBOL_DIRECTION_HISTORY.get(symbol)
+        if prev_dir_info:
+            prev_side, prev_time = prev_dir_info
+            for c in trend_governed_candidates:
+                c_side = c.get("side")
+                c_tier = int(c.get("tier", 2))
+                c_rr = float(c.get("rr") or 0.0)
+                if prev_side != c_side:
+                    time_diff = None
+                    try:
+                        if hasattr(prev_time, "date"):
+                            if prev_time.date() == now_ts.date():
+                                time_diff = (now_ts - prev_time).total_seconds() / 60.0
+                        elif isinstance(prev_time, (int, float)):
+                            time_diff = (time.time() - prev_time) / 60.0
+                    except Exception:
+                        pass
+
+                    conf_type = str(c.get("spot_confluence_type") or "").upper()
+                    is_major_reversal = (c_rr >= 3.0 and ("VWAP_RECLAIM" in conf_type or "VWAP_REJECT" in conf_type))
+                    if time_diff is not None and time_diff <= _WHIPSAW_WINDOW_MINUTES and not is_major_reversal:
+                        if c_tier == 1:
+                            c["tier"] = 2
+                            c["tier_label"] = "TIER_2_CORE"
+                            c["tier_badge"] = "🥈 T2"
+                            logging.info(f"[WHIPSAW_DEMOTION] {symbol} {c.get('contract')}: Demoted Tier 1 -> Tier 2 due to direction flip ({prev_side} -> {c_side}) within {time_diff:.1f}m (< {_WHIPSAW_WINDOW_MINUTES}m window).")
+
         # Priority Pool: 🥇 Tier 1 Gold candidates (including institutional VWAP reversals) get highest priority
         t1_candidates = [c for c in trend_governed_candidates if int(c.get("tier", 2)) == 1]
         preferred_candidates = [c for c in trend_governed_candidates if c.get("side") == macro_bias] if macro_bias else []
@@ -2439,6 +2474,7 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
         else:
             trade_db.stage_cycle_trade(engine_name, best_trade)
             trades.append(best_trade)
+            _SYMBOL_DIRECTION_HISTORY[symbol] = (best_trade.get("side"), now_dt)
             ct_tag = " [CounterTrend]" if best_trade.get("is_counter_trend") else ""
             log_fn(best_trade['contract'], best_trade['pattern'], timeframe_entry,
                    "SCAN_MATCH", "STAGED",

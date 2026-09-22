@@ -486,3 +486,102 @@ def check_portfolio_risk_caps(engine, symbol, candidate_tier=2, capital=100000.0
         "today_unrealized_pnl_inr": today_unrealized_loss_inr,
         "today_total_pnl_inr": today_realized_loss_inr + today_unrealized_loss_inr
     }
+
+
+def find_weakest_swappable_position(live_positions, candidate_rr=3.0, kite=None, min_hold_minutes=45.0):
+    """
+    Identifies if an existing active position is eligible for Dynamic Slot Swap (ISSUE-079).
+    Triggered when portfolio cap (MAX_CONCURRENT_POSITIONS_REACHED) blocks a pristine
+    Tier 1 Gold candidate with high risk-reward (R:R >= 3.0, e.g. KEI).
+
+    Eligibility Criteria for Incumbent to be Swapped Out:
+    1. Held for at least min_hold_minutes (default 45 mins) - not freshly entered.
+    2. Has NOT reached Target 1 or locked Breakeven (trailing_stage == 0).
+    3. Flat or negative MTM (MTM <= +2% of premium, or broker net PnL <= 0).
+    4. Candidate R:R is at least 1.5x the incumbent's original R:R.
+
+    Returns:
+        dict with swappable position details, or None if no candidate qualifies.
+    """
+    if not live_positions or candidate_rr < 3.0:
+        return None
+
+    now_dt = get_ist_now(naive=True)
+    broker_pnl_map = {}
+    if kite:
+        try:
+            net_pos = kite.positions().get("net", [])
+            for p in net_pos:
+                ts = str(p.get("tradingsymbol", "")).strip().upper()
+                broker_pnl_map[ts] = float(p.get("pnl", 0.0))
+        except Exception:
+            pass
+
+    swappable_candidates = []
+
+    pos_items = live_positions.items() if isinstance(live_positions, dict) else [(v.get("symbol", ""), v) for v in live_positions if isinstance(v, dict)]
+
+    for sym_key, pos in pos_items:
+        if not isinstance(pos, dict):
+            continue
+        sym = pos.get("symbol") or sym_key
+        contract = pos.get("contract") or sym
+        c_str = str(contract).strip().upper()
+
+        # Guard 1: Must be at trailing stage 0 (never exit runners that locked profit)
+        stage = int(pos.get("trailing_stage") or 0)
+        if stage > 0:
+            continue
+
+        # Guard 2: Must have been held for at least min_hold_minutes
+        entry_time_val = pos.get("entry_time") or pos.get("staged_time") or pos.get("created_at")
+        hold_minutes = 0.0
+        if entry_time_val:
+            try:
+                if isinstance(entry_time_val, str):
+                    clean_ts = entry_time_val.replace("T", " ")[:19]
+                    e_dt = dt.strptime(clean_ts, "%Y-%m-%d %H:%M:%S")
+                    hold_minutes = max(0.0, (now_dt - e_dt).total_seconds() / 60.0)
+                elif hasattr(entry_time_val, "timestamp"):
+                    hold_minutes = max(0.0, (time.time() - entry_time_val.timestamp()) / 60.0)
+                elif isinstance(entry_time_val, (int, float)):
+                    hold_minutes = max(0.0, (time.time() - entry_time_val) / 60.0)
+            except Exception:
+                hold_minutes = 0.0
+
+        if hold_minutes < min_hold_minutes:
+            continue
+
+        # Guard 3: Broker MTM Check - must not be running in strong green
+        net_pnl = broker_pnl_map.get(c_str, 0.0)
+        entry_p = float(pos.get("entry_spot") or pos.get("entry_price") or 0.0)
+        ltp = float(pos.get("ltp") or pos.get("last_price") or entry_p)
+        pnl_pct = ((ltp - entry_p) / entry_p * 100.0) if entry_p > 0 else 0.0
+
+        # Disqualify if running in solid profit (> 3% or PnL > Rs 500)
+        if pnl_pct > 3.0 or net_pnl > 500.0:
+            continue
+
+        # Guard 4: Candidate RR must be significantly higher
+        incumbent_rr = float(pos.get("rr") or 1.5)
+        if candidate_rr < (incumbent_rr * 1.5) and incumbent_rr >= 2.0:
+            continue
+
+        swappable_candidates.append({
+            "symbol": sym,
+            "contract": contract,
+            "pos": pos,
+            "pnl": net_pnl,
+            "pnl_pct": pnl_pct,
+            "hold_minutes": hold_minutes,
+            "incumbent_rr": incumbent_rr,
+            "reason": f"{sym} ({contract}): Held {hold_minutes:.0f}m, MTM {pnl_pct:+.1f}% (Rs {net_pnl:+.1f}), Stage 0, Incumbent RR {incumbent_rr:.2f} < Candidate RR {candidate_rr:.2f}"
+        })
+
+    if not swappable_candidates:
+        return None
+
+    # Sort by lowest PnL first (weakest performer gets swapped)
+    swappable_candidates.sort(key=lambda x: (x["pnl"], x["pnl_pct"]))
+    return swappable_candidates[0]
+

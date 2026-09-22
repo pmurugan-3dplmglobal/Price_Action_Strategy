@@ -2892,3 +2892,44 @@ issues:
     2. Full regression suite scratch/run_full_regression_test.py (30/30 suites PASSED, 100 percent success).
   status: RESOLVED
   resolution_date: '2026-09-22'
+
+- id: ISSUE-079
+  title: "Multibagger Tier Quality Purification, Anti-Whipsaw Filter & Dynamic Slot Swap"
+  category: TIER_CLASSIFICATION_AND_EXECUTION_GATES
+  severity: HIGH
+  date_reported: '2026-09-22'
+  affected_files:
+    - common/resolve.py
+    - common/vix_guard.py
+    - common/portfolio_risk.py
+    - Trade_Option/stock_options_trade_engine.py
+    - Trade_Option/index_options_trade_engine.py
+    - scratch/test_tier_quality_filters.py
+    - scratch/run_full_regression_test.py
+  symptom: |
+    On low-VIX days (VIX ~11.16-11.21), top multibaggers like TRENT (+100%) and POWERINDIA (+110%) were suppressed by the Low VIX Gate,
+    and KEI (+80%, RR=3.42) was blocked by MAX_CONCURRENT_POSITIONS_REACHED (6/6). Meanwhile, losing setups like RBLBANK (-75.7%)
+    and KALYANKJIL (-21.8%) were promoted to Tier 1 Gold despite exhibiting severe structural flaws (direction whipsaw and expanding volatility).
+  root_cause: |
+    1. VCP Promotion Gate in common/resolve.py used a loose OR condition (atr_ratio <= 0.65 or is_squeeze) without an ATR ceiling,
+       allowing KALYANKJIL with expanding ATR ratio 1.36 and RR 1.50 to get promoted to Tier 1 Gold.
+    2. Lack of directional consistency tracking allowed RBLBANK to flip PE -> CE within 34 minutes in choppy conditions without penalty.
+    3. Low VIX Gate in common/vix_guard.py strictly suppressed Tier 2/3 even when setups had strong Spot VWAP reject + RVOL >= 1.5
+       or were hedged via Debit Spreads (which are immune to Theta decay).
+    4. Portfolio Risk Cap hard-blocked pristine Tier 1 Gold candidates (RR >= 3.0) with no mechanism to replace stale/flat incumbents.
+  fix_applied: |
+    1. Directional Conviction Guard (Anti-Whipsaw Filter) in common/resolve.py: Tracks session direction per symbol; demotes Tier 1 -> Tier 2
+       if direction flips within 90 minutes without exceptional RR (>= 3.0) and VWAP confluence.
+    2. Strict VCP Promotion Guard in common/resolve.py: Added hard ceiling atr_ratio <= 0.85 and raised RR floor to >= 1.80 for CE & PE paths.
+    3. Low VIX Gate Exemption Stack in common/vix_guard.py & engines: Exempted Hedged Debit Spreads (Theta immunity) and Tier 2 setups
+       with confirmed Spot VWAP + RVOL >= 1.5 + EMA alignment (Trend Momentum Override).
+    4. Dynamic Slot Swap in common/portfolio_risk.py & stock_options_trade_engine.py: When portfolio cap is reached, pristine Tier 1 Gold
+       setups (RR >= 3.0) dynamically evaluate and swap out stale incumbents (held >= 45m, MTM <= 2%, stage 0).
+    5. Unit test suite scratch/test_tier_quality_filters.py (9/9 PASSED).
+    6. Master regression suite scratch/run_full_regression_test.py [TEST 32] (32/32 suites PASSED, 100% success).
+  verification: |
+    1. Unit tests scratch/test_tier_quality_filters.py (9/9 PASSED).
+    2. Master regression suite scratch/run_full_regression_test.py (32/32 PASSED, zero regressions).
+  status: RESOLVED
+  resolution_date: '2026-09-22'
+

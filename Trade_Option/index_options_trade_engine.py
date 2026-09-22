@@ -547,7 +547,17 @@ def execute_highest_rr_trade(kite, staged):
 
             if live_ok:
                 from vix_guard import evaluate_vix_regime
-                vix_ok, vix_msg, _ = evaluate_vix_regime(kite, tier_val=c_tier)
+                conf_type = str(best.get("spot_confluence_type") or "").upper()
+                is_vwap_conf = ("VWAP_REJECT" in conf_type) or ("VWAP_RECLAIM" in conf_type)
+                rvol_val = float(best.get("rvol") or best.get("rvol_abs") or 0.0)
+                trend_momentum_ok = is_vwap_conf and (rvol_val >= 1.5 or bool(best.get("direction")))
+
+                vix_ok, vix_msg, _ = evaluate_vix_regime(
+                    kite,
+                    tier_val=c_tier,
+                    is_debit_spread=bool(spread_info),
+                    has_momentum_override=trend_momentum_ok
+                )
                 if not vix_ok:
                     logging.info(f"[VIX_REGIME_GATE] Auto-execution skipped for {best['symbol']} ({best['contract']}): {vix_msg}")
                     continue

@@ -149,12 +149,23 @@ def evaluate_vix_regime(kite=None, tier_val=2, config=None, vix_value=None, **kw
         else:
             return False, f"HIGH_VIX_T2_T3_SUPPRESSED (VIX {vix_val:.2f} > {t2_t3_cutoff:.1f} requires Tier 1 Gold)", vix_val
 
-    # Case 3: Compressed Low-VIX Regime (VIX < 11.5) -> Theta Drag Floor: Only Tier 1 Gold allowed
+    # Case 3: Compressed Low-VIX Regime (VIX < 11.5) -> Theta Drag Floor
     if vix_val < low_vix_floor:
+        # Exemption A: Tier 1 Gold setups are always permitted
         if resolved_tier <= 1:
             return True, f"LOW_VIX_TIER1_APPROVED (VIX {vix_val:.2f} < {low_vix_floor:.1f}, Tier 1 Gold permitted under theta drag floor)", vix_val
-        else:
-            return False, f"LOW_VIX_THETA_FLOOR_SUPPRESSED (VIX {vix_val:.2f} < {low_vix_floor:.1f} compresses option premium velocity; Tier 2/3 suppressed)", vix_val
+
+        # Exemption B: Debit Spreads hedge out Theta decay (short OTM leg decays in our favor) (ISSUE-079)
+        has_spread = bool(kwargs.get("is_debit_spread") or kwargs.get("has_spread") or kwargs.get("spread_info"))
+        if has_spread:
+            return True, f"LOW_VIX_DEBIT_SPREAD_APPROVED (VIX {vix_val:.2f} < {low_vix_floor:.1f}, Hedged debit spread neutralizes Theta decay)", vix_val
+
+        # Exemption C: Trend Momentum Override (Tier 2 setups with confirmed Spot VWAP reject/reclaim + RVOL >= 1.5) (ISSUE-079)
+        has_momentum_override = bool(kwargs.get("has_momentum_override") or kwargs.get("trend_momentum_override"))
+        if resolved_tier <= 2 and has_momentum_override:
+            return True, f"LOW_VIX_TREND_MOMENTUM_OVERRIDE (VIX {vix_val:.2f} < {low_vix_floor:.1f}, T2 permitted via Spot VWAP + RVOL >= 1.5 + EMA alignment)", vix_val
+
+        return False, f"LOW_VIX_THETA_FLOOR_SUPPRESSED (VIX {vix_val:.2f} < {low_vix_floor:.1f} compresses option premium velocity; Tier 2/3 suppressed)", vix_val
 
     # Case 4: Normal Regime (11.5 <= VIX <= 20.0) -> All tiers allowed
     return True, f"NORMAL_VIX_REGIME ({low_vix_floor:.1f} <= VIX {vix_val:.2f} <= {t2_t3_cutoff:.1f})", vix_val

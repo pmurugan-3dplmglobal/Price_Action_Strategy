@@ -934,6 +934,24 @@ except Exception as e:
     errors.append(f"Phantom Exit Guard Invariants Failed: {e}")
     print(f" FAILED [ERR] ({e})", flush=True)
 
+# -------------------------------------------------------------------------
+# TEST 32: Multibagger Tier Quality Filters & Dynamic Slot Swap (ISSUE-079)
+# -------------------------------------------------------------------------
+print("[TEST 32] Testing Multibagger Tier Quality Filters, Anti-Whipsaw & Dynamic Slot Swap (ISSUE-079)...", end="", flush=True)
+try:
+    import subprocess
+    import paths
+    cmd_tq = [
+        sys.executable,
+        os.path.join(paths.SCRATCH_DIR, "test_tier_quality_filters.py")
+    ]
+    res_tq = subprocess.run(cmd_tq, cwd=paths.PROJECT_ROOT, capture_output=True, text=True)
+    assert res_tq.returncode == 0, f"Tier quality & slot swap unit tests failed:\nSTDOUT:\n{res_tq.stdout}\nSTDERR:\n{res_tq.stderr}"
+    print(" PASSED [OK]", flush=True)
+except Exception as e:
+    errors.append(f"Tier Quality Filters & Slot Swap Invariants Failed: {e}")
+    print(f" FAILED [ERR] ({e})", flush=True)
+
 print("\n" + "=" * 100)
 if not errors:
     print("      ALL REGRESSION TESTS PASSED WITH 100% SUCCESS -- ZERO REGRESSIONS FOUND!")

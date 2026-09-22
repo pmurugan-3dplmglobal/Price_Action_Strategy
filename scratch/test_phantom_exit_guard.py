@@ -1,7 +1,7 @@
 import sys
 sys.path.insert(0, 'common')
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 from position_monitor import close_position, clear_executed_exit
 
 class TestPhantomExitGuard(unittest.TestCase):
@@ -55,7 +55,8 @@ class TestPhantomExitGuard(unittest.TestCase):
         self.assertEqual(res.get("status"), "ZERO_QTY")
         self.mock_kite.place_order.assert_not_called()
 
-    def test_real_position_calls_sell(self):
+    @patch("position_monitor.is_market_open", return_value=True)
+    def test_real_position_calls_sell(self, mock_market_open):
         """Verify that a genuine held option executes SELL exit with clamped quantity."""
         self.mock_kite.positions.return_value = {
             "net": [

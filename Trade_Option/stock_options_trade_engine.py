@@ -793,7 +793,18 @@ def execute_highest_rr_trade(kite, staged):
 
             if live_ok:
                 from vix_guard import evaluate_vix_regime
-                vix_ok, vix_msg, _ = evaluate_vix_regime(kite, tier_val=c_tier)
+                conf_type = str(best.get("spot_confluence_type") or "").upper()
+                is_vwap_conf = ("VWAP_REJECT" in conf_type) or ("VWAP_RECLAIM" in conf_type)
+                rvol_val = float(best.get("rvol") or best.get("rvol_abs") or best.get("rvol_projected") or 0.0)
+                has_opt_rvol = bool(best.get("opt_rvol_badge") and "NORMAL" not in str(best.get("opt_rvol_badge")))
+                trend_momentum_ok = is_vwap_conf and (rvol_val >= 1.5 or has_opt_rvol or bool(best.get("direction")))
+
+                vix_ok, vix_msg, _ = evaluate_vix_regime(
+                    kite,
+                    tier_val=c_tier,
+                    is_debit_spread=bool(spread_info),
+                    has_momentum_override=trend_momentum_ok
+                )
                 if not vix_ok:
                     logging.info(f"[VIX_REGIME_GATE] Auto-execution skipped for {sym} ({contract}): {vix_msg}; checking next candidate")
                     continue
@@ -809,8 +820,39 @@ def execute_highest_rr_trade(kite, staged):
                     kite=kite
                 )
                 if not p_ok:
-                    logging.info(f"[PORTFOLIO_RISK_CAP] Auto-execution skipped for {sym} ({contract}): {p_msg}; checking next candidate")
-                    continue
+                    # Dynamic Slot Swap Gate (ISSUE-079):
+                    # If blocked by MAX_CONCURRENT_POSITIONS_REACHED and candidate is pristine Tier 1 Gold (R:R >= 3.0),
+                    # check if a stale/flat incumbent position can be swapped out to capture this high-conviction runner.
+                    cand_rr_val = float(best.get("rr") or 0.0)
+                    if "MAX_CONCURRENT_POSITIONS_REACHED" in str(p_msg) and c_tier <= 1 and cand_rr_val >= 3.0:
+                        from portfolio_risk import find_weakest_swappable_position
+                        with position_lock:
+                            swappable = find_weakest_swappable_position(ACTIVE_POSITIONS, candidate_rr=cand_rr_val, kite=kite)
+                        if swappable:
+                            swap_sym = swappable["symbol"]
+                            logging.info(f"[DYNAMIC_SLOT_SWAP] High-conviction Tier 1 Gold setup {sym} (RR={cand_rr_val:.2f} >= 3.0) triggered Dynamic Slot Swap for stale/flat position {swap_sym} ({swappable['reason']}).")
+                            try:
+                                from position_monitor import close_position
+                                with position_lock:
+                                    pos_to_close = ACTIVE_POSITIONS.get(swap_sym)
+                                if pos_to_close:
+                                    res_exit = close_position(pos_to_close, kite, live_market=True, exit_reason="DYNAMIC_SLOT_SWAP")
+                                    logging.info(f"[DYNAMIC_SLOT_SWAP EXIT] Exited {swap_sym}: {res_exit}")
+                                    # Re-evaluate portfolio risk cap
+                                    p_ok, p_msg, _ = check_portfolio_risk_caps(
+                                        engine="nifty50",
+                                        symbol=sym,
+                                        candidate_tier=c_tier,
+                                        capital=cap_val,
+                                        live_positions=ACTIVE_POSITIONS,
+                                        kite=kite
+                                    )
+                            except Exception as swap_err:
+                                logging.error(f"[DYNAMIC_SLOT_SWAP ERROR] Failed to execute swap for {swap_sym}: {swap_err}")
+
+                    if not p_ok:
+                        logging.info(f"[PORTFOLIO_RISK_CAP] Auto-execution skipped for {sym} ({contract}): {p_msg}; checking next candidate")
+                        continue
 
                 # Gate 4: Premium Floor Gate on Low-DTE (ISSUE-071)
                 # Avoid theta bleed and wide spread slippage on cheap lottery contracts (LTP/Benchmark < 5.0 when DTE <= 5)
