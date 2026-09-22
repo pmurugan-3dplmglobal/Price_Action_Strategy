@@ -1,0 +1,112 @@
+{
+  "failsafe_start_time": "09:50",
+  "pause_morning_circuit_breaker": true,
+  "pause_sl_monitor": false,
+  "trailing_rules": {
+    "option_trail_1_gain_pct": 18.0,
+    "option_trail_1_sl_pct": 10.0,
+    "stock_trail_1_gain_pct": 10.0,
+    "stock_trail_1_sl_pct": 2.0
+  },
+  "vix_guard": {
+    "enable": true,
+    "t2_t3_cutoff": 20.0,
+    "extreme_cutoff": 25.0
+  },
+  "portfolio_risk": {
+    "enable": true,
+    "max_concurrent_positions": 6,
+    "max_daily_loss_pct": 3.0,
+    "max_same_sector_positions": 2
+  },
+  "liquidity_gate": {
+    "enable": true,
+    "max_spread_pct": 0.02,
+    "min_depth_qty": 1
+  },
+  "order_management": {
+    "enable_stale_order_cancellation": true,
+    "unfilled_order_ttl_minutes": 30,
+    "target_reached_buffer_pct": 0.02,
+    "cancel_on_target_reached": true,
+    "cancel_on_sl_breach": true,
+    "cancel_on_ttl_expired": true,
+    "eod_cutoff_time": "15:15"
+  },
+  "nifty50": {
+    "execution_mode": "AUTO",
+    "target_universe": "FNO_ALL",
+    "timeframe_entry": "30minute",
+    "timeframe_anchor": "30minute",
+    "lookback_days": 15,
+    "scan_interval": 900,
+    "capital": 100000,
+    "max_daily_loss_pct": 5.0,
+    "strike_range": 1,
+    "enable_swing_filter": true,
+    "swing_min_waves": 3,
+    "strict_macro_gate": false
+  },
+  "ema_engine": {
+    "timeframe": "1d",
+    "target_universe": "ALL",
+    "scan_interval": 300
+  },
+  "index": {
+    "execution_mode": "DEBIT_SPREAD",
+    "timeframe_entry": "15minute",
+    "timeframe_anchor": "60minute",
+    "capital": 100000,
+    "max_daily_loss_pct": 3,
+    "strike_range": 1,
+    "enable_swing_filter": true,
+    "swing_min_waves": 2,
+    "strict_macro_gate": false
+  },
+  "bear_trade": {
+    "product_type": "CNC",
+    "target_index": "NIFTY_MIDCAP_100",
+    "timeframe": "day",
+    "max_daily_loss_pct": 5.0,
+    "enable_swing_filter": true,
+    "swing_min_waves": 2,
+    "swing_min_r2": 0.55
+  },
+  "daily": {
+    "product_type": "CNC",
+    "target_index": "NIFTY_MIDCAP_100",
+    "timeframe": "day",
+    "max_daily_loss_pct": 5.0,
+    "enable_swing_filter": true,
+    "swing_min_waves": 2,
+    "swing_min_r2": 0.55
+  },
+  "weekly": {
+    "product_type": "CNC",
+    "target_index": "NIFTY_MIDCAP_100",
+    "timeframe": "week",
+    "enable_swing_filter": true,
+    "swing_min_waves": 2,
+    "swing_min_r2": 0.45,
+    "lookback_days": 2000
+  },
+  "weekly_bear": {
+    "product_type": "CNC",
+    "target_index": "NIFTY_MIDCAP_100",
+    "timeframe": "week",
+    "enable_swing_filter": true,
+    "swing_min_waves": 2,
+    "swing_min_r2": 0.45,
+    "lookback_days": 2000
+  },
+  "swing_leg_config": {
+    "default": 3,
+    "min_leg": 2,
+    "max_leg": 5,
+    "volatility_adaptive": true,
+    "overrides": {
+      "NIFTY": 2,
+      "BANKNIFTY": 2
+    }
+  }
+}

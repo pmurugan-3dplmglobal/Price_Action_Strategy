@@ -2809,3 +2809,58 @@ issues:
     3. Live test: check_portfolio_risk_caps() with active Kite session confirmed PORTFOLIO_RISK_APPROVED.
   status: RESOLVED
   resolution_date: '2026-09-22'
+
+- id: ISSUE-075
+  title: "Fractional Strike Step Rounding & Stock Option Leg 2 Market Order Illiquidity Block"
+  category: SPREAD_EXECUTION_AND_STRIKE_RESOLUTION
+  severity: CRITICAL
+  date_reported: '2026-09-22'
+  affected_files:
+    - common/resolve.py
+    - Trade_Option/stock_options_trade_engine.py
+    - scratch/test_debit_spread_and_strike_resolution.py
+    - scratch/run_full_regression_test.py
+  symptom: |
+    CANBK 125 CE trade failed to execute its short hedge leg CANBK 127.5 CE because resolve_option_spread truncated the strike step to integer 2.0 instead of float 2.50.
+  root_cause: |
+    common/resolve.py used integer cast int(diffs[0]) for strike intervals, truncating fractional strikes (e.g. 2.50 to 2.0).
+  fix_applied: |
+    1. Implemented normalize_strike_step() in common/resolve.py preserving valid float strike increments.
+    2. Switched Leg 2 order placement in stock_options_trade_engine.py to ORDER_TYPE_LIMIT pegged at best bid.
+    3. Added emergency auto-unwind guard for Leg 1 if Leg 2 fails.
+  verification: |
+    Unit test scratch/test_debit_spread_and_strike_resolution.py (6/6 PASSED).
+    Master regression suite scratch/run_full_regression_test.py (29/29 PASSED).
+  status: RESOLVED
+  resolution_date: '2026-09-22'
+
+- id: ISSUE-076
+  title: "Option Spread Exit Market Order Block Immunity & Broker Ground Truth Short Leg Protection"
+  category: POSITION_MONITOR_AND_SPREAD_EXIT
+  severity: CRITICAL
+  date_reported: '2026-09-22'
+  affected_files:
+    - common/position_monitor.py
+    - common/trade_db.py
+    - Trade_Option/app_option_Trade.py
+    - output/monitor/stock_positions_state.json
+    - scratch/test_spread_exit_and_index_cap.py
+    - scratch/run_full_regression_test.py
+  symptom: |
+    During position monitor loop, exit order for APLAPOLLO failed with SPREAD EXIT ERROR Failed to exit short leg APLAPOLLO26SEP2140PE MARKET orders are blocked for stock options due to illiquidity. Caused infinite exit retries blocking Leg 1 exit.
+  root_cause: |
+    1. position_monitor.py _cover_spread_leg2() hardcoded ORDER_TYPE_MARKET for covering spread short legs. Zerodha blocks MARKET orders on stock options.
+    2. If spread short leg was never filled on Kite (phantom spread state), the code lacked an else branch when leg2 was not found in broker positions, proceeding to place BUY orders for non-existent short positions.
+    3. trade_db.py and app_option_Trade.py also used ORDER_TYPE_MARKET as fallback for orphan short leg covering.
+  fix_applied: |
+    1. position_monitor.py: Established Broker Ground Truth Check for phantom legs. Implemented Marketable Limit Order Pegging using quote depth best ask with 2 percent buffer.
+    2. trade_db.py: Replaced ORDER_TYPE_MARKET with marketable LIMIT buy in auto-covering orphan short legs.
+    3. app_option_Trade.py: Guaranteed ORDER_TYPE_LIMIT for 1-click UI spread executions.
+    4. Sanitized stock_positions_state.json for APLAPOLLO and cleared stale executed exit orders.
+    5. Added 2 new unit tests in scratch/test_spread_exit_and_index_cap.py (8/8 PASSED).
+    6. Added TEST 30 to scratch/run_full_regression_test.py (30/30 PASSED).
+  verification: |
+    1. Unit tests scratch/test_spread_exit_and_index_cap.py (8/8 PASSED).
+    2. Full regression suite scratch/run_full_regression_test.py (30/30 suites PASSED, 100 percent success).
+  status: RESOLVED
+  resolution_date: '2026-09-22'
