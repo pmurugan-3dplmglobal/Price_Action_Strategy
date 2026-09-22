@@ -2,15 +2,19 @@
 """
 scratch/push_scans_to_vm.py — 1-Click Scan & Radar VM Sync Utility
 
-Transfers local scan displays and radar incubation states from local output/monitor/
-to Oracle Cloud VMs (Bhavni and Poovendan) via SCP in 1 network roundtrip without
+Transfers local scan displays, radar incubation states, and watchlists from local machine
+to Oracle Cloud VMs (Bhavani and Poovendan) via SCP in 1 network roundtrip without
 restarting services.
 
-Fast Radar loops on the VMs continuously poll pattern_funnel.json and
-scan_display.json every 15 seconds, so updated setups are picked up immediately.
+Fast Radar loops on the VMs continuously poll pattern_funnel.json,
+scan_display.json, and watchlist files every 15 seconds, so updated setups are picked up immediately.
+
+SECURITY INVARIANT:
+- Strictly excludes any token files (kite_access_token.txt) so accounts remain 100% isolated.
+- Localhost (Poovendan) token will NEVER overwrite Bhavani VM's credentials.
 
 Usage:
-    python scratch/push_scans_to_vm.py [all|bhavni|poovendan] [--target all|bhavni|poovendan] [--key KEY_PATH]
+    python scratch/push_scans_to_vm.py [all|bhavani|bhavni|poovendan] [--target all|bhavani|bhavni|poovendan] [--key KEY_PATH]
 """
 
 import os
@@ -34,10 +38,11 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 try:
-    from common.paths import PROJECT_ROOT, MONITOR_DIR, SCRATCH_DIR
+    from common.paths import PROJECT_ROOT, MONITOR_DIR, SCRATCH_DIR, EXPORTS_DIR
 except ImportError:
     MONITOR_DIR = os.path.join(PROJECT_ROOT, "output", "monitor")
     SCRATCH_DIR = os.path.join(PROJECT_ROOT, "scratch")
+    EXPORTS_DIR = os.path.join(PROJECT_ROOT, "output", "exports")
 
 DEFAULT_KEY = r"G:\Poovendan\AI\Trading\Cloud\Oracle_Cloud\ssh-key-2026-08-05.key"
 
@@ -46,7 +51,13 @@ IST = timezone(timedelta(hours=5, minutes=30))
 
 SERVERS = {
     "bhavni": {
-        "name": "Bhavni Oracle Cloud VM",
+        "name": "Bhavani Oracle Cloud VM",
+        "host": "opc@129.225.69.131",
+        "public_ip": "129.225.69.131",
+        "remote_dir": "/home/trade/Trade_Kite/Price_Action_Strategy",
+    },
+    "bhavani": {
+        "name": "Bhavani Oracle Cloud VM",
         "host": "opc@129.225.69.131",
         "public_ip": "129.225.69.131",
         "remote_dir": "/home/trade/Trade_Kite/Price_Action_Strategy",
@@ -80,55 +91,84 @@ def format_size(num_bytes):
         return f"{num_bytes / (1024 * 1024):.2f} MB"
 
 
-def get_local_scan_files(monitor_dir):
+def get_local_scan_files(project_root):
     """
-    Identifies scan and radar files to sync from local output/monitor.
-    Specifically:
-      - pattern_funnel.json
-      - scan_display.json
-      - scan_display_stock.json
-      - scan_display_stock_bear.json
-      - scan_display_index.json
-      - scan_display_ema.json
-      - scan_display_trap_adx.json
-      - any other scan_display*.json
-    Strictly excludes runtime DBs, journals, tokens, or log files.
+    Identifies scan, radar, and watchlist files to sync.
+    Returns relative paths from project_root (e.g. output/monitor/scan_display.json).
+
+    Includes:
+      - output/monitor/pattern_funnel.json
+      - output/monitor/scan_display*.json
+      - output/monitor/watchlist_live.json
+      - input/watchlist.json (morning scanned symbols)
+      - output/exports/ today's CSV files (if any)
+
+    STRICT SECURITY INVARIANT:
+      - Explicitly blocks and ignores any token files (kite_access_token.txt),
+        sqlite databases, and lock files.
     """
-    if not os.path.exists(monitor_dir):
-        return []
+    rel_files = []
+    monitor_dir = os.path.join(project_root, "output", "monitor")
 
-    priority_order = [
-        "pattern_funnel.json",
-        "scan_display.json",
-        "scan_display_stock.json",
-        "scan_display_stock_bear.json",
-        "scan_display_index.json",
-        "scan_display_ema.json",
-        "scan_display_trap_adx.json",
-        "scan_display_ema_stock.json",
-        "scan_display_stock_weekly.json",
-        "scan_display_stock_weekly_bear.json",
-    ]
+    if os.path.exists(monitor_dir):
+        priority_order = [
+            "pattern_funnel.json",
+            "scan_display.json",
+            "scan_display_stock.json",
+            "scan_display_stock_bear.json",
+            "scan_display_index.json",
+            "scan_display_ema.json",
+            "scan_display_trap_adx.json",
+            "scan_display_ema_stock.json",
+            "scan_display_stock_weekly.json",
+            "scan_display_stock_weekly_bear.json",
+            "watchlist_live.json",
+        ]
 
-    found = []
-    for fn in priority_order:
-        p = os.path.join(monitor_dir, fn)
-        if os.path.isfile(p):
-            found.append(fn)
-
-    # Detect any additional scan_display*.json not already included
-    for fn in sorted(os.listdir(monitor_dir)):
-        if fn.startswith("scan_display") and fn.endswith(".json") and fn not in found:
+        for fn in priority_order:
             p = os.path.join(monitor_dir, fn)
             if os.path.isfile(p):
-                found.append(fn)
+                rel_p = os.path.join("output", "monitor", fn)
+                rel_files.append(rel_p)
 
-    return found
+        # Detect any additional scan_display*.json not already included
+        for fn in sorted(os.listdir(monitor_dir)):
+            if fn.startswith("scan_display") and fn.endswith(".json"):
+                rel_p = os.path.join("output", "monitor", fn)
+                if rel_p not in rel_files:
+                    p = os.path.join(monitor_dir, fn)
+                    if os.path.isfile(p):
+                        rel_files.append(rel_p)
+
+    # Include input/watchlist.json if present
+    watchlist_path = os.path.join(project_root, "input", "watchlist.json")
+    if os.path.isfile(watchlist_path):
+        rel_files.append(os.path.join("input", "watchlist.json"))
+
+    # Include today's automated exports if present
+    exports_dir = os.path.join(project_root, "output", "exports")
+    if os.path.exists(exports_dir):
+        today_str = datetime.now(tz=IST).strftime("%Y%m%d")
+        for fn in os.listdir(exports_dir):
+            if fn.endswith((".csv", ".xlsx")) and today_str in fn:
+                rel_files.append(os.path.join("output", "exports", fn))
+
+    # FINAL SECURITY FILTER: Never allow any token or sqlite files
+    safe_files = []
+    for rf in rel_files:
+        low = rf.lower()
+        if "token" in low or low.endswith((".sqlite3", ".sqlite3-wal", ".sqlite3-shm", ".lock")):
+            continue
+        safe_files.append(rf)
+
+    return safe_files
 
 
-def inspect_file_details(monitor_dir, fn):
+def inspect_file_details(project_root, rel_fn):
     """Inspect file content to provide high-value trading details."""
-    p = os.path.join(monitor_dir, fn)
+    p = os.path.join(project_root, rel_fn)
+    fn = os.path.basename(rel_fn)
+
     if fn == "pattern_funnel.json":
         try:
             with open(p, "r", encoding="utf-8") as f:
@@ -158,30 +198,46 @@ def inspect_file_details(monitor_dir, fn):
             return ""
         except Exception:
             return ""
+    elif fn == "watchlist.json":
+        try:
+            with open(p, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                return f"{len(data)} Watchlist Symbols"
+            elif isinstance(data, dict):
+                syms = len(data.get("symbols", data.get("watchlist", [])))
+                return f"{syms} Watchlist Symbols"
+            return ""
+        except Exception:
+            return ""
     return ""
 
 
-def create_payload_archive(monitor_dir, files_to_sync, archive_path):
-    """Packages the scan files into a compact gzip tar archive."""
+def create_payload_archive(project_root, rel_files_to_sync, archive_path):
+    """Packages the scan and watchlist files into a compact gzip tar archive."""
     os.makedirs(os.path.dirname(archive_path), exist_ok=True)
     with tarfile.open(archive_path, "w:gz") as tar:
-        for fn in files_to_sync:
-            full_path = os.path.join(monitor_dir, fn)
-            tar.add(full_path, arcname=fn)
+        for rel_p in rel_files_to_sync:
+            # Enforce hard security invariant: No tokens
+            if "token" in rel_p.lower():
+                raise ValueError(f"SECURITY INVARIANT VIOLATION: Token file {rel_p} cannot be included in scan payload!")
+            full_path = os.path.join(project_root, rel_p)
+            # Store in tar with posix forward slashes
+            arcname = rel_p.replace("\\", "/")
+            tar.add(full_path, arcname=arcname)
     return os.path.getsize(archive_path)
 
 
-def sync_to_server(target_key, srv, key_path, payload_path, files_to_sync, local_stats):
+def sync_to_server(target_key, srv, key_path, payload_path, rel_files_to_sync, local_stats):
     """
-    Syncs the payload tar to a single Oracle Cloud VM via SCP and extracts it into output/monitor.
+    Syncs the payload tar to a single Oracle Cloud VM via SCP and extracts it into the VM repo.
     Verifies remote files via SSH stat and returns True if successful.
     """
     print(f"\n{CLR_BOLD}{CLR_CYAN}{'=' * 75}{CLR_RESET}")
     print(f"{CLR_BOLD}{CLR_CYAN} SYNCING TO: {srv['name']} ({srv['public_ip']}){CLR_RESET}")
-    print(f"{CLR_GRAY} Remote Host: {srv['host']} | Directory: {srv['remote_dir']}/output/monitor{CLR_RESET}")
+    print(f"{CLR_GRAY} Remote Host: {srv['host']} | Directory: {srv['remote_dir']}{CLR_RESET}")
     print(f"{CLR_CYAN}{'=' * 75}{CLR_RESET}")
 
-    remote_monitor_dir = f"{srv['remote_dir']}/output/monitor"
     remote_archive = f"{srv['remote_dir']}/.scans_sync_payload.tar.gz"
 
     # Step 1: Upload payload archive via SCP directly to project root
@@ -202,11 +258,11 @@ def sync_to_server(target_key, srv, key_path, payload_path, files_to_sync, local
         return False
     print(f" {CLR_GREEN}-> Upload completed in {upload_time:.2f}s.{CLR_RESET}")
 
-    # Step 2: Extract archive into remote output/monitor and remove temporary archive
-    print(f"\n{CLR_BOLD}[2/3] Extracting files into remote output/monitor...{CLR_RESET}")
+    # Step 2: Extract archive into remote project root and remove temporary archive
+    print(f"\n{CLR_BOLD}[2/3] Extracting files into remote directory...{CLR_RESET}")
     extract_cmd = (
-        f"mkdir -p {remote_monitor_dir} && "
-        f"tar -xzf {remote_archive} -C {remote_monitor_dir} && "
+        f"mkdir -p {srv['remote_dir']}/output/monitor {srv['remote_dir']}/input {srv['remote_dir']}/output/exports && "
+        f"tar -xzf {remote_archive} -C {srv['remote_dir']} && "
         f"rm -f {remote_archive}"
     )
     res_ext = subprocess.run(
@@ -220,8 +276,9 @@ def sync_to_server(target_key, srv, key_path, payload_path, files_to_sync, local
 
     # Step 3: Remote verification via SSH (query filename, size, and epoch seconds %Y)
     print(f"\n{CLR_BOLD}[3/3] Verifying synced files on remote VM...{CLR_RESET}")
-    quoted_files = " ".join(f"'{f}'" for f in files_to_sync)
-    verify_cmd = f"cd {remote_monitor_dir} && stat -c '%n|%s|%Y' {quoted_files}"
+    posix_files = [f.replace("\\", "/") for f in rel_files_to_sync]
+    quoted_files = " ".join(f"'{f}'" for f in posix_files)
+    verify_cmd = f"cd {srv['remote_dir']} && stat -c '%n|%s|%Y' {quoted_files}"
     res_ver = subprocess.run(
         ["ssh", "-i", key_path, "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=10", srv["host"], verify_cmd],
         capture_output=True, text=True, encoding="utf-8", errors="replace"
@@ -232,25 +289,24 @@ def sync_to_server(target_key, srv, key_path, payload_path, files_to_sync, local
         for line in res_ver.stdout.strip().splitlines():
             parts = line.strip().split("|")
             if len(parts) >= 3:
-                r_name = os.path.basename(parts[0].strip())
+                r_rel = parts[0].strip().lstrip("./")
                 try:
                     r_size = int(parts[1].strip())
                     epoch_sec = int(parts[2].strip())
-                    # Convert UTC epoch to IST (UTC+5:30) for reliable display across all VM timezone settings
                     rem_dt = datetime.fromtimestamp(epoch_sec, tz=IST)
                     rem_time = rem_dt.strftime("%Y-%m-%d %H:%M:%S")
-                    remote_file_map[r_name] = {"size": r_size, "time": rem_time}
+                    remote_file_map[r_rel] = {"size": r_size, "time": rem_time}
                 except ValueError:
                     continue
 
     # Print verification table
-    print(f"\n  {CLR_BOLD}{'Filename':<32} {'Local Size':>11} {'Remote Size':>12} {'Remote Modified (IST)':>22}  {'Status':>6}{CLR_RESET}")
-    print(f"  {'-' * 32} {'-' * 11} {'-' * 12} {'-' * 22}  {'-' * 6}")
+    print(f"\n  {CLR_BOLD}{'Relative Path':<36} {'Local Size':>11} {'Remote Size':>12} {'Remote Modified (IST)':>22}  {'Status':>6}{CLR_RESET}")
+    print(f"  {'-' * 36} {'-' * 11} {'-' * 12} {'-' * 22}  {'-' * 6}")
     all_matched = True
-    for fn in files_to_sync:
+    for fn, posix_fn in zip(rel_files_to_sync, posix_files):
         loc_sz = local_stats[fn]["size"]
         loc_sz_str = format_size(loc_sz)
-        rem_info = remote_file_map.get(fn)
+        rem_info = remote_file_map.get(posix_fn)
         if rem_info:
             rem_sz = rem_info["size"]
             rem_sz_str = format_size(rem_sz)
@@ -259,10 +315,10 @@ def sync_to_server(target_key, srv, key_path, payload_path, files_to_sync, local
             if not match:
                 all_matched = False
             status_str = f"{CLR_GREEN}OK{CLR_RESET}" if match else f"{CLR_YELLOW}DIFF{CLR_RESET}"
-            print(f"  {fn:<32} {loc_sz_str:>11} {rem_sz_str:>12} {rem_time:>22}  [{status_str}]")
+            print(f"  {posix_fn:<36} {loc_sz_str:>11} {rem_sz_str:>12} {rem_time:>22}  [{status_str}]")
         else:
             all_matched = False
-            print(f"  {fn:<32} {loc_sz_str:>11} {'MISSING':>12} {'-':>22}  [{CLR_RED}FAIL{CLR_RESET}]")
+            print(f"  {posix_fn:<36} {loc_sz_str:>11} {'MISSING':>12} {'-':>22}  [{CLR_RED}FAIL{CLR_RESET}]")
 
     # Check background service status (informational)
     svc_check_cmd = "systemctl is-active trading-options trading-stock"
@@ -274,7 +330,7 @@ def sync_to_server(target_key, srv, key_path, payload_path, files_to_sync, local
 
     print(f"\n  {CLR_GRAY}Active Surveillance Daemons: {svc_status} (polling funnel every 15s){CLR_RESET}")
     if all_matched:
-        print(f"  {CLR_GREEN}{CLR_BOLD}[SUCCESS] Synced {len(files_to_sync)} scan/radar files to {srv['name']}!{CLR_RESET}")
+        print(f"  {CLR_GREEN}{CLR_BOLD}[SUCCESS] Synced {len(rel_files_to_sync)} scan/radar files to {srv['name']}!{CLR_RESET}")
     else:
         print(f"  {CLR_RED}{CLR_BOLD}[WARNING] One or more files failed verification on {srv['name']}!{CLR_RESET}")
     return all_matched
@@ -287,15 +343,15 @@ def main():
     parser.add_argument(
         "target_pos",
         nargs="?",
-        choices=["bhavni", "poovendan", "all"],
+        choices=["bhavani", "bhavni", "poovendan", "all"],
         default=None,
-        help="Target VM: bhavni, poovendan, or all (default: all)",
+        help="Target VM: bhavani (or bhavni), poovendan, or all (default: all)",
     )
     parser.add_argument(
         "--target",
-        choices=["bhavni", "poovendan", "all"],
+        choices=["bhavani", "bhavni", "poovendan", "all"],
         default=None,
-        help="Target VM: bhavni, poovendan, or all (default: all)",
+        help="Target VM: bhavani (or bhavni), poovendan, or all (default: all)",
     )
     parser.add_argument(
         "--key",
@@ -304,48 +360,48 @@ def main():
     )
 
     args = parser.parse_args()
-    target = args.target or args.target_pos or "all"
+    raw_target = args.target or args.target_pos or "all"
+    target = "bhavni" if raw_target.lower() in ["bhavni", "bhavani"] else raw_target.lower()
     key_path = os.path.abspath(args.key)
 
     print(f"{CLR_BOLD}{CLR_GREEN}{'=' * 75}{CLR_RESET}")
     print(f"{CLR_BOLD}{CLR_GREEN}     PRICE ACTION STRATEGY — 1-CLICK SCAN & RADAR VM SYNC{CLR_RESET}")
     print(f"{CLR_BOLD}{CLR_GREEN}{'=' * 75}{CLR_RESET}")
+    print(f"{CLR_GRAY}  Target VMs:        {target.upper()}{CLR_RESET}")
+    print(f"{CLR_GRAY}  Token Protection:  STRICT (Zero account tokens transferred){CLR_RESET}")
 
     # Validate SSH Key
     if not os.path.exists(key_path):
         print(f"\n{CLR_RED}[ERROR] SSH key not found at:{CLR_RESET} {key_path}")
         sys.exit(1)
 
-    if not os.path.exists(MONITOR_DIR):
-        print(f"\n{CLR_RED}[ERROR] Local monitor directory not found at:{CLR_RESET} {MONITOR_DIR}")
-        sys.exit(1)
-
-    # Discover local scan files
-    files_to_sync = get_local_scan_files(MONITOR_DIR)
+    # Discover local scan and watchlist files
+    files_to_sync = get_local_scan_files(PROJECT_ROOT)
     if not files_to_sync:
-        print(f"\n{CLR_YELLOW}[WARNING] No scan or radar files found in {MONITOR_DIR} to sync.{CLR_RESET}")
+        print(f"\n{CLR_YELLOW}[WARNING] No scan, radar, or watchlist files found to sync.{CLR_RESET}")
         sys.exit(1)
 
-    print(f"\n{CLR_BOLD}[LOCAL] Discovered {len(files_to_sync)} scan & radar files in output/monitor/:{CLR_RESET}")
+    print(f"\n{CLR_BOLD}[LOCAL] Discovered {len(files_to_sync)} files to sync:{CLR_RESET}")
     local_stats = {}
     total_local_bytes = 0
     for fn in files_to_sync:
-        fp = os.path.join(MONITOR_DIR, fn)
+        fp = os.path.join(PROJECT_ROOT, fn)
         st = os.stat(fp)
         sz = st.st_size
         total_local_bytes += sz
         mtime_str = datetime.fromtimestamp(st.st_mtime, tz=IST).strftime("%Y-%m-%d %H:%M:%S")
         local_stats[fn] = {"size": sz, "mtime": mtime_str}
-        details = inspect_file_details(MONITOR_DIR, fn)
+        details = inspect_file_details(PROJECT_ROOT, fn)
         detail_suffix = f" {CLR_GRAY}({details}){CLR_RESET}" if details else ""
-        print(f"  • {CLR_CYAN}{fn:<32}{CLR_RESET} {format_size(sz):>8}  {CLR_GRAY}[{mtime_str}]{CLR_RESET}{detail_suffix}")
+        posix_name = fn.replace("\\", "/")
+        print(f"  • {CLR_CYAN}{posix_name:<36}{CLR_RESET} {format_size(sz):>8}  {CLR_GRAY}[{mtime_str}]{CLR_RESET}{detail_suffix}")
 
     print(f"\n  Total Uncompressed: {CLR_BOLD}{format_size(total_local_bytes)}{CLR_RESET}")
 
     # Package into scratch archive
     payload_path = os.path.join(SCRATCH_DIR, "scans_sync_payload.tar.gz")
     try:
-        archive_size = create_payload_archive(MONITOR_DIR, files_to_sync, payload_path)
+        archive_size = create_payload_archive(PROJECT_ROOT, files_to_sync, payload_path)
         print(f"  Compressed Payload: {CLR_BOLD}{format_size(archive_size)}{CLR_RESET} (Saved {100 - (archive_size / total_local_bytes * 100):.1f}%)")
 
         selected_targets = ["bhavni", "poovendan"] if target == "all" else [target]

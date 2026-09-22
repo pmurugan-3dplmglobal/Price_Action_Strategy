@@ -8,7 +8,13 @@ DEFAULT_KEY = r"G:\Poovendan\AI\Trading\Cloud\Oracle_Cloud\ssh-key-2026-08-05.ke
 
 SERVERS = {
     "bhavni": {
-        "name": "Bhavni Oracle Cloud VM",
+        "name": "Bhavani Oracle Cloud VM",
+        "host": "opc@129.225.69.131",
+        "public_ip": "129.225.69.131",
+        "remote_dir": "/home/trade/Trade_Kite/Price_Action_Strategy",
+    },
+    "bhavani": {
+        "name": "Bhavani Oracle Cloud VM",
         "host": "opc@129.225.69.131",
         "public_ip": "129.225.69.131",
         "remote_dir": "/home/trade/Trade_Kite/Price_Action_Strategy",
@@ -119,7 +125,7 @@ def package_codebase(tar_p):
 
 def main():
     parser = argparse.ArgumentParser(description="Price Action Strategy - Multi-Cloud VM Sync & Deploy")
-    parser.add_argument("--target", choices=["bhavni", "poovendan", "all"], default=None, help="Target Oracle Cloud VM")
+    parser.add_argument("--target", choices=["bhavani", "bhavni", "poovendan", "all"], default=None, help="Target Oracle Cloud VM")
     parser.add_argument("--key", default=DEFAULT_KEY, help="Path to SSH private key")
     parser.add_argument("--status", action="store_true", help="Check status of VMs without syncing")
     args = parser.parse_args()
@@ -129,7 +135,7 @@ def main():
     print("=" * 75)
 
     if args.status:
-        targets = ["bhavni", "poovendan"] if args.target in [None, "all"] else [args.target]
+        targets = ["bhavni", "poovendan"] if args.target in [None, "all"] else ["bhavni" if args.target in ["bhavni", "bhavani"] else args.target]
         for t in targets:
             check_status(t, SERVERS[t], args.key)
         return
@@ -137,7 +143,7 @@ def main():
     target = args.target
     if not target:
         print("\nSelect Deployment Target:")
-        print(" [1] Bhavni VM   (129.225.69.131)")
+        print(" [1] Bhavani VM   (129.225.69.131)")
         print(" [2] Poovendan VM (140.245.197.71)")
         print(" [3] Both VMs (All)")
         print(" [4] Status Check Only")
@@ -156,7 +162,8 @@ def main():
         else:
             target = "all"
 
-    selected_targets = ["bhavni", "poovendan"] if target == "all" else [target]
+    norm_target = "bhavni" if target in ["bhavni", "bhavani"] else target
+    selected_targets = ["bhavni", "poovendan"] if norm_target == "all" else [norm_target]
 
     tar_p = os.path.join(PROJECT_ROOT, "cloud_sync_payload.tar.gz")
     try:

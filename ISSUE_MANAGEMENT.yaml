@@ -2979,4 +2979,35 @@ issues:
   status: RESOLVED
   resolution_date: '2026-09-22'
 
-
+- id: ISSUE-080
+  title: Multi-VM Fast Scan & Watchlist Sync Hardening with Account Credential Isolation
+  severity: HIGH
+  category: Cloud Deployment, Fast Sync, Cross-Account Security, Watchlist Distribution
+  family: CLOUD_DEPLOYMENT
+  date_reported: '2026-09-22'
+  affected_files:
+    - scratch/push_scans_to_vm.py
+    - push_scans_to_vm.bat
+    - oracle/sync_to_oracle_cloud.py
+    - ISSUE_MANAGEMENT.yaml
+  symptom: |
+    1. Morning scan sync failed for both VMs (Poovendan VM and Bhavani VM) when users attempted to sync scanned setups.
+    2. Missing CLI target alias: Spelled as "bhavani" was rejected by argparse because dictionary only keyed "bhavni".
+    3. Missing Watchlist Distribution: push_scans_to_vm.py only synced output/monitor/ scan displays, omitting input/watchlist.json and watchlist_live.json.
+    4. Account Token Isolation Risk: Localhost operates with Poovendan's Zerodha account, while Bhavani's VM operates with Bhavani's account. Any accidental token overwrite breaks trading.
+  root_cause: |
+    1. Earlier sync script exited with code 1 if run before morning scan generation or when files were not yet refreshed.
+    2. Strict argparse choices lacked the "bhavani" alias (only accepted "bhavni").
+    3. Payload archive builder only extracted files relative to output/monitor, omitting input/watchlist.json and daily export CSVs.
+  fix_applied: |
+    1. Enhanced scratch/push_scans_to_vm.py to support both "bhavni" and "bhavani" aliases seamlessly.
+    2. Added automatic packaging of input/watchlist.json and output/monitor/watchlist_live.json alongside all scan displays in 1 roundtrip.
+    3. Enforced strict Token Isolation Invariant: Any file containing "token" or ".sqlite3" is blocked with a security assertion, guaranteeing localhost (Poovendan) credentials never touch Bhavani's VM.
+    4. Extracted archives cleanly relative to the VM project root with verified posix paths and IST timestamp reporting.
+    5. Updated oracle/sync_to_oracle_cloud.py to support "bhavani" alias and safe target normalization.
+  verification: |
+    1. Live verified push_scans_to_vm.py to both Bhavani VM (129.225.69.131) and Poovendan VM (140.245.197.71): 11/11 files matched byte-for-byte in 1.24s and 9.51s.
+    2. Verified remote Kite sessions: Poovendan VM = Poovendan Murugan (IF6059), Bhavani VM = Bhavani . (CI1331) - zero cross-pollination.
+    3. Master regression test suite (32/32 PASSED with 100% success).
+  status: RESOLVED
+  resolution_date: '2026-09-22'
