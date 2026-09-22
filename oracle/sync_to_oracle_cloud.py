@@ -99,10 +99,17 @@ def package_codebase(tar_p):
                 item_path = os.path.join(input_dir, item)
                 tar.add(item_path, arcname=os.path.join("input", item))
         
-        # Add output/monitor directory structure
+        # Add output/monitor directory structure (excluding active runtime SQLite / lock files)
         monitor_dir = os.path.join(PROJECT_ROOT, "output", "monitor")
         if os.path.exists(monitor_dir):
-            tar.add(monitor_dir, arcname="output/monitor")
+            def _monitor_filter(tarinfo):
+                if tarinfo.name.endswith((".sqlite3", ".sqlite3-wal", ".sqlite3-shm", ".lock")):
+                    return None
+                return tarinfo
+            try:
+                tar.add(monitor_dir, arcname="output/monitor", filter=_monitor_filter)
+            except Exception as m_err:
+                print(f" -> Notice on monitor dir: {m_err}")
             
         for fn in ["ISSUE_MANAGEMENT.yaml", "MASTER_DOCUMENTATION.yaml", "AGENTS.md", "AI_CONTEXT_INDEX.md", "Kite_Access_Token_gen.py", "requirements.txt", "deploy_to_cloud.sh", "VERSION.txt"]:
             fp = os.path.join(PROJECT_ROOT, fn)
