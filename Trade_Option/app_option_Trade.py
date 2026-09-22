@@ -1979,16 +1979,29 @@ def api_buy_scanned_trade():
                 try:
                     from vix_guard import evaluate_vix_regime
                     cand_tier = data.get("tier")
+                    is_spread = bool(data.get("is_debit_spread") or data.get("spread_info"))
+                    cand_conf = str(data.get("spot_confluence_type") or "").upper()
+                    cand_rvol = float(data.get("rvol") or data.get("rvol_abs") or 0.0)
+                    has_mom = ("VWAP" in cand_conf) and (cand_rvol >= 1.5)
                     if cand_tier is None:
                         for eng_k in ["nifty50", "index"]:
                             eng_cands = cached_data.get("scan_display", {}).get(eng_k, {}).get("staged_trades", [])
                             for sc in eng_cands:
                                 if sc.get("contract") == contract or sc.get("symbol") == symbol:
                                     cand_tier = sc.get("tier")
+                                    is_spread = is_spread or bool(sc.get("is_debit_spread") or sc.get("spread_info"))
+                                    sc_conf = str(sc.get("spot_confluence_type") or "").upper()
+                                    sc_rvol = float(sc.get("rvol") or sc.get("rvol_abs") or 0.0)
+                                    has_mom = has_mom or (("VWAP" in sc_conf) and (sc_rvol >= 1.5))
                                     break
                             if cand_tier is not None:
                                 break
-                    vix_ok, vix_reason, _ = evaluate_vix_regime(_kite_session, tier_val=cand_tier or 2)
+                    vix_ok, vix_reason, _ = evaluate_vix_regime(
+                        _kite_session,
+                        tier_val=cand_tier or 2,
+                        is_debit_spread=is_spread,
+                        has_momentum_override=has_mom
+                    )
                     if not vix_ok:
                         logging.warning(f"[1-CLICK BUY REJECTED] {symbol} ({contract}): {vix_reason}")
                         return jsonify({"ok": False, "error": f"VIX Regime Gate: {vix_reason}. Set force=true to override."}), 400

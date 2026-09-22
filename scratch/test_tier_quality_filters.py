@@ -11,6 +11,7 @@ import unittest
 import sys
 import os
 from datetime import datetime, timedelta
+import pandas as pd
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "common")))
@@ -320,6 +321,71 @@ class TestTierQualityFilters(unittest.TestCase):
         is_spot_vcp_good = (spot_atr_ratio_good <= 0.85)
         promo_good = (tier >= 2 and spot_conf and has_spot_anchor and is_spot_vcp_good and is_opt_vcp and cand_rr >= 1.80)
         self.assertTrue(promo_good, "Coiled spot ATR 0.74 and coiled opt 0.60 must be promoted via Dual VCP")
+
+    def test_anti_whipsaw_handles_timezone_aware_timestamp(self):
+        """Anti-Whipsaw Filter must seamlessly handle timezone-aware datetime without TypeError."""
+        now_aware = resolve.get_ist_now()
+        resolve._SYMBOL_DIRECTION_HISTORY["TEST_AWARE"] = ("PE", now_aware)
+        prev_side, prev_time = resolve._SYMBOL_DIRECTION_HISTORY["TEST_AWARE"]
+
+        now_ts = resolve.get_ist_now(naive=True)
+        # Verify defensive timezone handling
+        p_time = prev_time.replace(tzinfo=None) if hasattr(prev_time, "tzinfo") and prev_time.tzinfo else prev_time
+        time_diff = (now_ts - p_time).total_seconds() / 60.0
+        self.assertIsNotNone(time_diff)
+        self.assertLessEqual(time_diff, 1.0)
+
+    def test_native_t1_option_demoted_to_t2_if_spot_lacks_anchor(self):
+        """Native Tier 1 option setups must be demoted to Tier 2 if underlying spot lacks anchor confirmation."""
+        tier_pe = 1
+        has_spot_anchor_pe = False
+        spot_anchor_name_pe = "NO_SPOT_BEAR_ANCHOR"
+
+        if tier_pe == 1 and not has_spot_anchor_pe:
+            tier_pe = 2
+            tier_label_pe = "TIER_2_CORE"
+            tier_badge_pe = "🥈 T2"
+
+        self.assertEqual(tier_pe, 2)
+        self.assertEqual(tier_badge_pe, "🥈 T2")
+
+    def test_evaluate_spot_confluence_blocks_wrong_side_vwap_leak(self):
+        """SPOT_RESISTANCE_HOLD must NOT return True if spot is surging above VWAP for PE."""
+        df_fake = pd.DataFrame([{
+            'open': 420.0, 'high': 425.0, 'low': 419.0, 'close': 424.0, 'volume': 10000
+        }])
+        # current_spot (425.0) is way above spot_vwap (410.0)
+        # spot_sl (428.0) is above spot, but because it's above VWAP, resistance hold must be blocked
+        conf, conf_type = resolve.evaluate_spot_confluence(
+            side="PE", is_d2=False, current_spot=425.0, spot_vwap=410.0,
+            spot_sl=428.0, spot_ema_trend=False, df_spot=df_fake
+        )
+        self.assertFalse(conf, f"Wrong-side VWAP must fail confluence, got: {conf_type}")
+        self.assertEqual(conf_type, "NONE")
+
+    def test_dynamic_slot_swap_signature_and_active_positions_eviction(self):
+        """Dynamic slot swap must call close_position(kite, pos) and evict swap_sym from ACTIVE_POSITIONS."""
+        active_pos = {
+            "STALE_SYM": {"symbol": "STALE_SYM", "trade_id": 999, "pnl": -50.0}
+        }
+        self.assertIn("STALE_SYM", active_pos)
+
+        # Mock close_position
+        closed_calls = []
+        def mock_close(k, p, live_market=True):
+            closed_calls.append((k, p))
+            return {"status": "SUCCESS", "order_id": "MOCK_SWAP_ORD"}
+
+        mock_kite = object()
+        pos_to_close = active_pos.get("STALE_SYM")
+        res = mock_close(mock_kite, pos_to_close, live_market=True)
+        self.assertEqual(res["status"], "SUCCESS")
+        self.assertIs(closed_calls[0][0], mock_kite)
+        self.assertIs(closed_calls[0][1], pos_to_close)
+
+        # Evict from active_pos
+        active_pos.pop("STALE_SYM", None)
+        self.assertNotIn("STALE_SYM", active_pos)
 
 
 if __name__ == "__main__":

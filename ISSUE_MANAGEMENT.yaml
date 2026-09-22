@@ -2965,11 +2965,16 @@ issues:
        - Calculates `spot_atr_ratio` dynamically on `df_spot`.
        - Requires both Spot AND Option contraction: `is_spot_vcp` (Spot ATR(3)/ATR(14) <= 0.85) AND `is_opt_vcp` (Option ATR(3)/ATR(14) <= 0.85).
        - Eliminates false coils where an option looks coiled only due to illiquid drift while the underlying equity is undergoing runaway volatility expansion (e.g. APLAPOLLO ATR=1.49, CANBK ATR=1.38).
-    4. Enforced `has_spot_anchor` and Dual-Asset VCP across both CE and PE candidate execution loops and radar funnel loops in common/resolve.py.
-    5. Expanded unit test suite scratch/test_tier_quality_filters.py with 16 comprehensive tests (16/16 PASSED).
-    6. Master regression suite scratch/run_full_regression_test.py: 32/32 suites PASSED with 100% success.
+    4. Enforced `has_spot_anchor` and Dual-Asset VCP across both CE and PE candidate execution loops and radar funnel loops in common/resolve.py. Native Tier 1 option setups lacking spot anchor are automatically demoted to Tier 2. Hard regime traps (`BULL_SPOT_REGIME_TRAP`, `BEAR_SPOT_REGIME_TRAP`) immediately drop candidates.
+    5. Fixed Confluence Leak: Restricted `SPOT_SUPPORT_HOLD` and `SPOT_RESISTANCE_HOLD` in `evaluate_spot_confluence` to require proper VWAP side alignment, preventing wrong-side trades from leaking confluence.
+    6. Fixed Dynamic Slot Swap: Inverted parameters corrected to `close_position(kite, pos)`, removed unsupported kwarg, evicted from `ACTIVE_POSITIONS` under lock, and updated `trade_db` status to `COMPLETED`.
+    7. Fixed Anti-Whipsaw Filter: Timezone-defensive parsing handles both naive and aware datetimes, preventing TypeError exceptions.
+    8. Fixed Low-VIX Trend Momentum Override: Replaced tautological `bool(best.get("direction"))` with actual RVOL and spot EMA trend check across stock and index engines.
+    9. Forwarded Low-VIX override flags in UI 1-Click Buy endpoint in `Trade_Option/app_option_Trade.py`.
+    10. Expanded unit test suite scratch/test_tier_quality_filters.py to 20 comprehensive tests (20/20 PASSED).
+    11. Master regression suite scratch/run_full_regression_test.py: 32/32 suites PASSED with 100% success.
   verification: |
-    1. Unit tests scratch/test_tier_quality_filters.py (16/16 PASSED).
+    1. Unit tests scratch/test_tier_quality_filters.py (20/20 PASSED).
     2. Master regression suite scratch/run_full_regression_test.py (32/32 PASSED, zero regressions).
   status: RESOLVED
   resolution_date: '2026-09-22'

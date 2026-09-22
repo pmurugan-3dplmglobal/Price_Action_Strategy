@@ -681,6 +681,15 @@ def execute_highest_rr_trade(kite, staged):
                              f"setup visible on Scans Tab for manual inspection; evaluating next candidate")
                 continue
 
+            # Strict Opposing Regime Guard (ISSUE-080)
+            spot_anc = str(best.get("spot_anchor_name") or "")
+            if side == "PE" and spot_anc == "BULL_SPOT_REGIME_TRAP":
+                logging.info(f"[REGIME_TRAP_GATE] Auto-execution blocked for {sym} ({best.get('contract')}): Spot is trapped in Bullish Golden Cross above VWAP.")
+                continue
+            if side == "CE" and spot_anc == "BEAR_SPOT_REGIME_TRAP":
+                logging.info(f"[REGIME_TRAP_GATE] Auto-execution blocked for {sym} ({best.get('contract')}): Spot is trapped in Bearish Death Cross below VWAP.")
+                continue
+
             cp = best["entry_spot"]
             avg_rr = best.get("rr", 0)
             strike_step = best.get("strike_step", 50)
@@ -797,7 +806,7 @@ def execute_highest_rr_trade(kite, staged):
                 is_vwap_conf = ("VWAP_REJECT" in conf_type) or ("VWAP_RECLAIM" in conf_type)
                 rvol_val = float(best.get("rvol") or best.get("rvol_abs") or best.get("rvol_projected") or 0.0)
                 has_opt_rvol = bool(best.get("opt_rvol_badge") and "NORMAL" not in str(best.get("opt_rvol_badge")))
-                trend_momentum_ok = is_vwap_conf and (rvol_val >= 1.5 or has_opt_rvol or bool(best.get("direction")))
+                trend_momentum_ok = is_vwap_conf and (rvol_val >= 1.5 or has_opt_rvol) and bool(best.get("spot_ema_trend", True))
 
                 vix_ok, vix_msg, _ = evaluate_vix_regime(
                     kite,
@@ -827,7 +836,8 @@ def execute_highest_rr_trade(kite, staged):
                     if "MAX_CONCURRENT_POSITIONS_REACHED" in str(p_msg) and c_tier <= 1 and cand_rr_val >= 3.0:
                         from portfolio_risk import find_weakest_swappable_position
                         with position_lock:
-                            swappable = find_weakest_swappable_position(ACTIVE_POSITIONS, candidate_rr=cand_rr_val, kite=kite)
+                            pos_snapshot = dict(ACTIVE_POSITIONS)
+                        swappable = find_weakest_swappable_position(pos_snapshot, candidate_rr=cand_rr_val, kite=kite)
                         if swappable:
                             swap_sym = swappable["symbol"]
                             logging.info(f"[DYNAMIC_SLOT_SWAP] High-conviction Tier 1 Gold setup {sym} (RR={cand_rr_val:.2f} >= 3.0) triggered Dynamic Slot Swap for stale/flat position {swap_sym} ({swappable['reason']}).")
@@ -836,8 +846,14 @@ def execute_highest_rr_trade(kite, staged):
                                 with position_lock:
                                     pos_to_close = ACTIVE_POSITIONS.get(swap_sym)
                                 if pos_to_close:
-                                    res_exit = close_position(pos_to_close, kite, live_market=True, exit_reason="DYNAMIC_SLOT_SWAP")
+                                    res_exit = close_position(kite, pos_to_close, live_market=True)
                                     logging.info(f"[DYNAMIC_SLOT_SWAP EXIT] Exited {swap_sym}: {res_exit}")
+                                    with position_lock:
+                                        ACTIVE_POSITIONS.pop(swap_sym, None)
+                                    save_state()
+                                    trade_id_exit = pos_to_close.get("trade_id")
+                                    if trade_id_exit:
+                                        trade_db.update_trade_status(trade_id_exit, "COMPLETED", exit_reason="DYNAMIC_SLOT_SWAP")
                                     # Re-evaluate portfolio risk cap
                                     p_ok, p_msg, _ = check_portfolio_risk_caps(
                                         engine="nifty50",

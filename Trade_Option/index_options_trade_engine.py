@@ -550,7 +550,7 @@ def execute_highest_rr_trade(kite, staged):
                 conf_type = str(best.get("spot_confluence_type") or "").upper()
                 is_vwap_conf = ("VWAP_REJECT" in conf_type) or ("VWAP_RECLAIM" in conf_type)
                 rvol_val = float(best.get("rvol") or best.get("rvol_abs") or 0.0)
-                trend_momentum_ok = is_vwap_conf and (rvol_val >= 1.5 or bool(best.get("direction")))
+                trend_momentum_ok = is_vwap_conf and (rvol_val >= 1.5) and bool(best.get("spot_ema_trend", True))
 
                 vix_ok, vix_msg, _ = evaluate_vix_regime(
                     kite,

@@ -288,7 +288,7 @@ def evaluate_spot_confluence(side: str, is_d2: bool, current_spot: float, spot_v
                 elif current_spot >= spot_vwap:
                     return True, "SPOT_VWAP_RECLAIM"
 
-                if spot_sl > 0 and current_spot >= spot_sl:
+                if spot_sl > 0 and current_spot >= spot_sl and (spot_vwap <= 0 or current_spot >= spot_vwap * 0.998):
                     return True, "SPOT_SUPPORT_HOLD"
                 return False, "NONE"
             elif spot_ema_trend:
@@ -324,7 +324,7 @@ def evaluate_spot_confluence(side: str, is_d2: bool, current_spot: float, spot_v
                 elif current_spot <= spot_vwap:
                     return True, "SPOT_VWAP_REJECT"
 
-                if spot_sl > 0 and current_spot <= spot_sl:
+                if spot_sl > 0 and current_spot <= spot_sl and (spot_vwap <= 0 or current_spot <= spot_vwap * 1.002):
                     return True, "SPOT_RESISTANCE_HOLD"
                 return False, "NONE"
             elif spot_ema_trend:
@@ -1779,13 +1779,26 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
         except Exception as st_err:
             logging.debug(f"Spot targets calculation error for {symbol}: {st_err}")
 
-    # Compute Spot ATR(3) / ATR(14) ratio for Dual-Asset VCP Contraction (ISSUE-080)
+    # Compute Spot ATR(3) / ATR(14) ratio for Dual-Asset VCP Contraction using Wilder True Range (ISSUE-080)
     spot_atr_ratio = 1.0
     if df_spot is not None and not df_spot.empty and len(df_spot) >= 14:
-        tr_spot = (df_spot['high'] - df_spot['low']).abs()
+        prev_close_sp = df_spot['close'].shift(1)
+        tr1 = df_spot['high'] - df_spot['low']
+        tr2 = (df_spot['high'] - prev_close_sp).abs()
+        tr3 = (df_spot['low'] - prev_close_sp).abs()
+        tr_spot = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
         s_atr3 = float(tr_spot.rolling(3).mean().iloc[-1])
         s_atr14 = float(tr_spot.rolling(14).mean().iloc[-1])
         spot_atr_ratio = (s_atr3 / s_atr14) if s_atr14 > 0 else 1.0
+
+    # Precompute symbol-level Spot Anchor & Confluence states once to avoid 100+ redundant calculations per strike
+    has_spot_anchor_ce_sym, spot_anchor_name_ce_sym = check_spot_anchor_confirmation(df_spot, "CE", spot_vwap=spot_vwap)
+    has_spot_anchor_pe_sym, spot_anchor_name_pe_sym = check_spot_anchor_confirmation(df_spot, "PE", spot_vwap=spot_vwap)
+
+    spot_conf_ce_d1, spot_conf_type_ce_d1 = evaluate_spot_confluence("CE", False, current_spot, spot_vwap, spot_sl_ce, spot_ema_bull, df_spot=df_spot)
+    spot_conf_pe_d1, spot_conf_type_pe_d1 = evaluate_spot_confluence("PE", False, current_spot, spot_vwap, spot_sl_pe, spot_ema_bear, df_spot=df_spot)
+    spot_conf_ce_d2, spot_conf_type_ce_d2 = evaluate_spot_confluence("CE", True, current_spot, spot_vwap, spot_sl_ce, spot_ema_bull, df_spot=df_spot)
+    spot_conf_pe_d2, spot_conf_type_pe_d2 = evaluate_spot_confluence("PE", True, current_spot, spot_vwap, spot_sl_pe, spot_ema_bear, df_spot=df_spot)
 
     is_index_sym = symbol.strip().upper() in ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "SENSEX", "BANKEX"]
 
@@ -1936,12 +1949,27 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                             continue
 
                         is_d2_ce = ("Setup_2" in name) or any(k in str(result_ce.get("Pattern", "")).upper() for k in ["CONT", "REENTRY", "D2"])
-                        spot_conf_ce, spot_conf_type_ce = evaluate_spot_confluence("CE", is_d2_ce, current_spot, spot_vwap, spot_sl_ce, spot_ema_bull, df_spot=df_spot)
-                        has_spot_anchor_ce, spot_anchor_name_ce = check_spot_anchor_confirmation(df_spot, "CE", spot_vwap=spot_vwap)
+                        spot_conf_ce = spot_conf_ce_d2 if is_d2_ce else spot_conf_ce_d1
+                        spot_conf_type_ce = spot_conf_type_ce_d2 if is_d2_ce else spot_conf_type_ce_d1
+                        has_spot_anchor_ce = has_spot_anchor_ce_sym
+                        spot_anchor_name_ce = spot_anchor_name_ce_sym
+
+                        # Hard Regime Trap: Block CE if Spot is in runaway bear trend below VWAP
+                        if spot_anchor_name_ce == "BEAR_SPOT_REGIME_TRAP":
+                            logging.info(f"[REGIME_TRAP_DROP] {symbol} {ce['tradingsymbol']}: Opposing spot regime BEAR_SPOT_REGIME_TRAP. Skipping CE candidate.")
+                            continue
 
                         tier_ce = int(result_ce.get("tier", 2))
                         tier_label_ce = result_ce.get("tier_label", "TIER_2_CORE")
                         tier_badge_ce = result_ce.get("tier_badge", "🥈 T2")
+
+                        # Spot-First Pattern Anchor Gate: Native Tier 1 option setups MUST have spot anchor confirmation
+                        if tier_ce == 1 and not has_spot_anchor_ce:
+                            tier_ce = 2
+                            tier_label_ce = "TIER_2_CORE"
+                            tier_badge_ce = "🥈 T2"
+                            logging.info(f"[SPOT_ANCHOR_GATE] {symbol} {ce['tradingsymbol']}: Demoted native Tier 1 -> Tier 2 (Lacks confirmed Spot Bull Anchor, got {spot_anchor_name_ce}).")
+
                         pat_ce = str(result_ce.get("Pattern", ""))
                         is_true_anchor_ce = any(k in pat_ce for k in ["BE_ABCD", "LL_ABCD", "HAMMER_ABCD", "HARAMI_ABCD", "HH_ABCD", "STAR_ABCD"]) and "BASE_ABCD" not in pat_ce
                         has_wyckoff_base_ce = bool(swing_meta_ce.get("terminal_base") or (swing_meta_ce.get("swing_waves", 0) >= 2))
@@ -2042,11 +2070,23 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                                 if dte_ce_f is not None and dte_ce_f <= 0 and float(stage_ce.get("close", 0.0)) < 40.0:
                                     continue
                                 f_stage = pattern_funnel.STAGE_A_PLUS if stage_ce["stage"] == "STAGE_A_PLUS_READY" else (pattern_funnel.STAGE_A if stage_ce["stage"] == "STAGE_A_READY" else pattern_funnel.STAGE_B)
-                                spot_conf_ce_f, spot_conf_type_ce_f = evaluate_spot_confluence("CE", False, current_spot, spot_vwap, spot_sl_ce, spot_ema_bull, df_spot=df_spot)
-                                has_spot_anchor_ce_f, spot_anchor_name_ce_f = check_spot_anchor_confirmation(df_spot, "CE", spot_vwap=spot_vwap)
+                                spot_conf_ce_f = spot_conf_ce_d1
+                                spot_conf_type_ce_f = spot_conf_type_ce_d1
+                                has_spot_anchor_ce_f = has_spot_anchor_ce_sym
+                                spot_anchor_name_ce_f = spot_anchor_name_ce_sym
+
+                                if spot_anchor_name_ce_f == "BEAR_SPOT_REGIME_TRAP":
+                                    continue
+
                                 f_tier_ce = int(stage_ce.get("tier", 2))
                                 f_label_ce = stage_ce.get("tier_label", "TIER_2_CORE")
                                 f_badge_ce = stage_ce.get("tier_badge", "🥈 T2")
+
+                                if f_tier_ce == 1 and not has_spot_anchor_ce_f:
+                                    f_tier_ce = 2
+                                    f_label_ce = "TIER_2_CORE"
+                                    f_badge_ce = "🥈 T2"
+
                                 pat_ce_f = str(stage_ce.get("pattern", ""))
                                 is_true_anchor_ce_f = any(k in pat_ce_f for k in ["BE_ABCD", "LL_ABCD", "HAMMER_ABCD", "HARAMI_ABCD", "HH_ABCD", "STAR_ABCD"]) and "BASE_ABCD" not in pat_ce_f
                                 has_wyckoff_base_ce_f = bool(stage_ce.get("terminal_base") or (stage_ce.get("swing_waves", 0) >= 2))
@@ -2149,12 +2189,27 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                             continue
 
                         is_d2_pe = ("Setup_2" in name) or any(k in str(result_pe.get("Pattern", "")).upper() for k in ["CONT", "REENTRY", "D2"])
-                        spot_conf_pe, spot_conf_type_pe = evaluate_spot_confluence("PE", is_d2_pe, current_spot, spot_vwap, spot_sl_pe, spot_ema_bear, df_spot=df_spot)
-                        has_spot_anchor_pe, spot_anchor_name_pe = check_spot_anchor_confirmation(df_spot, "PE", spot_vwap=spot_vwap)
+                        spot_conf_pe = spot_conf_pe_d2 if is_d2_pe else spot_conf_pe_d1
+                        spot_conf_type_pe = spot_conf_type_pe_d2 if is_d2_pe else spot_conf_type_pe_d1
+                        has_spot_anchor_pe = has_spot_anchor_pe_sym
+                        spot_anchor_name_pe = spot_anchor_name_pe_sym
+
+                        # Hard Regime Trap: Block PE if Spot is in runaway bull trend above VWAP
+                        if spot_anchor_name_pe == "BULL_SPOT_REGIME_TRAP":
+                            logging.info(f"[REGIME_TRAP_DROP] {symbol} {pe['tradingsymbol']}: Opposing spot regime BULL_SPOT_REGIME_TRAP. Skipping PE candidate.")
+                            continue
 
                         tier_pe = int(result_pe.get("tier", 2))
                         tier_label_pe = result_pe.get("tier_label", "TIER_2_CORE")
                         tier_badge_pe = result_pe.get("tier_badge", "🥈 T2")
+
+                        # Spot-First Pattern Anchor Gate: Native Tier 1 option setups MUST have spot anchor confirmation
+                        if tier_pe == 1 and not has_spot_anchor_pe:
+                            tier_pe = 2
+                            tier_label_pe = "TIER_2_CORE"
+                            tier_badge_pe = "🥈 T2"
+                            logging.info(f"[SPOT_ANCHOR_GATE] {symbol} {pe['tradingsymbol']}: Demoted native Tier 1 -> Tier 2 (Lacks confirmed Spot Bear Anchor, got {spot_anchor_name_pe}).")
+
                         pat_pe = str(result_pe.get("Pattern", ""))
                         is_true_anchor_pe = any(k in pat_pe for k in ["BE_ABCD", "LL_ABCD", "HAMMER_ABCD", "HARAMI_ABCD", "HH_ABCD", "STAR_ABCD"]) and "BASE_ABCD" not in pat_pe
                         has_wyckoff_base_pe = bool(swing_meta_pe.get("terminal_base") or (swing_meta_pe.get("swing_waves", 0) >= 2))
@@ -2255,11 +2310,23 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                                 if dte_pe_f is not None and dte_pe_f <= 0 and float(stage_pe.get("close", 0.0)) < 40.0:
                                     continue
                                 f_stage = pattern_funnel.STAGE_A_PLUS if stage_pe["stage"] == "STAGE_A_PLUS_READY" else (pattern_funnel.STAGE_A if stage_pe["stage"] == "STAGE_A_READY" else pattern_funnel.STAGE_B)
-                                spot_conf_pe_f, spot_conf_type_pe_f = evaluate_spot_confluence("PE", False, current_spot, spot_vwap, spot_sl_pe, spot_ema_bear, df_spot=df_spot)
-                                has_spot_anchor_pe_f, spot_anchor_name_pe_f = check_spot_anchor_confirmation(df_spot, "PE", spot_vwap=spot_vwap)
+                                spot_conf_pe_f = spot_conf_pe_d1
+                                spot_conf_type_pe_f = spot_conf_type_pe_d1
+                                has_spot_anchor_pe_f = has_spot_anchor_pe_sym
+                                spot_anchor_name_pe_f = spot_anchor_name_pe_sym
+
+                                if spot_anchor_name_pe_f == "BULL_SPOT_REGIME_TRAP":
+                                    continue
+
                                 f_tier_pe = int(stage_pe.get("tier", 2))
                                 f_label_pe = stage_pe.get("tier_label", "TIER_2_CORE")
                                 f_badge_pe = stage_pe.get("tier_badge", "🥈 T2")
+
+                                if f_tier_pe == 1 and not has_spot_anchor_pe_f:
+                                    f_tier_pe = 2
+                                    f_label_pe = "TIER_2_CORE"
+                                    f_badge_pe = "🥈 T2"
+
                                 pat_pe_f = str(stage_pe.get("pattern", ""))
                                 is_true_anchor_pe_f = any(k in pat_pe_f for k in ["BE_ABCD", "LL_ABCD", "HAMMER_ABCD", "HARAMI_ABCD", "HH_ABCD", "STAR_ABCD"]) and "BASE_ABCD" not in pat_pe_f
                                 has_wyckoff_base_pe_f = bool(stage_pe.get("terminal_base") or (stage_pe.get("swing_waves", 0) >= 2))
@@ -2514,12 +2581,13 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                     time_diff = None
                     try:
                         if hasattr(prev_time, "date"):
-                            if prev_time.date() == now_ts.date():
-                                time_diff = (now_ts - prev_time).total_seconds() / 60.0
+                            p_time = prev_time.replace(tzinfo=None) if hasattr(prev_time, "tzinfo") and prev_time.tzinfo else prev_time
+                            if p_time.date() == now_ts.date():
+                                time_diff = (now_ts - p_time).total_seconds() / 60.0
                         elif isinstance(prev_time, (int, float)):
                             time_diff = (time.time() - prev_time) / 60.0
-                    except Exception:
-                        pass
+                    except Exception as td_err:
+                        logging.debug(f"Time diff calculation error: {td_err}")
 
                     conf_type = str(c.get("spot_confluence_type") or "").upper()
                     is_major_reversal = (c_rr >= 3.0 and ("VWAP_RECLAIM" in conf_type or "VWAP_REJECT" in conf_type))
@@ -2658,7 +2726,7 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
         else:
             trade_db.stage_cycle_trade(engine_name, best_trade)
             trades.append(best_trade)
-            _SYMBOL_DIRECTION_HISTORY[symbol] = (best_trade.get("side"), now_dt)
+            _SYMBOL_DIRECTION_HISTORY[symbol] = (best_trade.get("side"), get_ist_now(naive=True))
             ct_tag = " [CounterTrend]" if best_trade.get("is_counter_trend") else ""
             log_fn(best_trade['contract'], best_trade['pattern'], timeframe_entry,
                    "SCAN_MATCH", "STAGED",
