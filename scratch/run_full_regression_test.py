@@ -916,6 +916,24 @@ except Exception as e:
     errors.append(f"Spread Exit Inversion & Market Order Immunity Invariants Failed: {e}")
     print(f" FAILED [ERR] ({e})", flush=True)
 
+# -------------------------------------------------------------------------
+# TEST 31: Phantom Exit Guard & Zero Holding Shield (ISSUE-078)
+# -------------------------------------------------------------------------
+print("[TEST 31] Testing Phantom Exit Guard & Zero Holding Shield (ISSUE-078)...", end="", flush=True)
+try:
+    import subprocess
+    import paths
+    cmd_pe = [
+        sys.executable,
+        os.path.join(paths.SCRATCH_DIR, "test_phantom_exit_guard.py")
+    ]
+    res_pe = subprocess.run(cmd_pe, cwd=paths.PROJECT_ROOT, capture_output=True, text=True)
+    assert res_pe.returncode == 0, f"Phantom exit guard unit tests failed:\nSTDOUT:\n{res_pe.stdout}\nSTDERR:\n{res_pe.stderr}"
+    print(" PASSED [OK]", flush=True)
+except Exception as e:
+    errors.append(f"Phantom Exit Guard Invariants Failed: {e}")
+    print(f" FAILED [ERR] ({e})", flush=True)
+
 print("\n" + "=" * 100)
 if not errors:
     print("      ALL REGRESSION TESTS PASSED WITH 100% SUCCESS -- ZERO REGRESSIONS FOUND!")

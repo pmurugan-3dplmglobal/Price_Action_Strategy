@@ -641,6 +641,7 @@ def close_position(kite, pos, live_market=True, product=None, qty_override=None,
 
     c_str = str(contract).upper()
     is_option = is_option_contract(c_str)
+    is_short_stock = (not is_option) and (str(pos.get("direction", "")).upper() == "BEAR" or str(pos.get("side", "")).upper() in ["SELL", "BEAR"])
     if "SENSEX" in c_str or "BSE" in c_str or "BANKEX" in c_str:
         target_exch = "BFO" if is_option else "BSE"
     elif is_option:
@@ -658,16 +659,30 @@ def close_position(kite, pos, live_market=True, product=None, qty_override=None,
     if kite:
         try:
             net_positions = kite.positions().get("net", [])
-            for p in net_positions:
-                if p.get("tradingsymbol") == contract:
-                    live_held = int(p.get("quantity", 0))
+            matched_p = next((p for p in net_positions if p.get("tradingsymbol") == contract), None)
+            if matched_p is not None:
+                live_held = int(matched_p.get("quantity", 0))
+                if is_short_stock:
+                    if live_held >= 0:
+                        logging.info(f"[ALREADY CLOSED] Short stock {contract} has {live_held} quantity in Kite net positions (already covered). Skipping exit order.")
+                        save_executed_exit(contract, "ALREADY_CLOSED", {"status": "ZERO_QTY", "qty": live_held})
+                        return {"success": True, "order_id": "ALREADY_CLOSED", "status": "ZERO_QTY"}
+                    qty = min(qty, abs(live_held))
+                    live_market = True
+                else:
                     if live_held <= 0:
                         logging.info(f"[ALREADY CLOSED] {contract} has {live_held} quantity in Kite net positions. Skipping exit order.")
                         save_executed_exit(contract, "ALREADY_CLOSED", {"status": "ZERO_QTY"})
                         return {"success": True, "order_id": "ALREADY_CLOSED", "status": "ZERO_QTY"}
                     qty = min(qty, live_held)
                     live_market = True  # Real broker contracts detected: auto-promote to LIVE exit
-                    break
+            else:
+                # Contract was NEVER held on broker (e.g. unfilled limit order cancelled or phantom position)
+                # For long positions (Options and Long Equity), sending SELL when net quantity is 0 executes an illegal naked short!
+                if is_option or not is_short_stock:
+                    logging.warning(f"[PHANTOM EXIT GUARD] {contract} not found in Kite net positions (never filled or zero holding). Skipping SELL exit to prevent naked short writing!")
+                    save_executed_exit(contract, "ALREADY_CLOSED", {"status": "NOT_FOUND_ON_BROKER", "qty": 0})
+                    return {"success": True, "order_id": "ALREADY_CLOSED", "status": "NOT_FOUND_ON_BROKER"}
         except Exception as p_err:
             logging.warning(f"Could not verify live net quantity for {contract}: {p_err}")
 

@@ -10,6 +10,34 @@ meta:
     recent_archived_batch: [FEATURE-031, FEATURE-030, FEATURE-029, ISSUE-084, ISSUE-083, ISSUE-082, ISSUE-081, ISSUE-080, FEATURE-036, FEATURE-035, FEATURE-034, FEATURE-033, ISSUE-054]
     key_archived_families: [ALGO_AUDIT_CVE, QUANT_ENHANCEMENTS, RADAR_LIFECYCLE, VCP_METRICS, SCANNER_DISCOVERY, SECURITY_CONFIG, ZERO_REGRESSION_AUDIT]
 issues:
+- id: ISSUE-078
+  title: Phantom Exit Order Shield & Ground-Truth Net Holding Verification Before SELL Placement (Prevents Accidental Naked Short Writing)
+  severity: CRITICAL
+  category: Position Monitor, Risk Governance, Order Placement Invariants, Exchange Margins
+  family: RISK_GOVERNANCE
+  date_reported: '2026-09-22'
+  symptom: |
+    1. During candle-close exit evaluation, the system sent order 260922191131608 to SELL 325 x ICICIGI26SEP1500PE @ 19.55. The order was rejected by Zerodha with:
+       'Insufficient funds. Margin required: 81249.01. Margin available: 35320.80. Check orderbook for open orders.'
+    2. The trader owned 0 quantity of ICICIGI26SEP1500PE because the morning entry limit order (260922190855228 @ 16.50) was never filled and was cancelled after 30m TTL expiration.
+    3. Because close_position() did not verify if the contract was present in net_positions before placing a SELL order, it submitted a SELL order for a non-held option, which Zerodha RMS interpreted as an opening naked short sale (writing) requiring full SPAN+Exposure margin (₹81,249).
+  root_cause: |
+    1. close_position() checked net_positions only for live_held <= 0 on matched tradingsymbols. If the contract was NEVER held on the broker, it was absent from net_positions entirely, causing the loop to complete without finding a match.
+    2. The code then fell through to kite.place_order(transaction_type=SELL), attempting a naked short sale on the exchange.
+  affected_files:
+  - common/position_monitor.py
+  - scratch/test_phantom_exit_guard.py
+  - scratch/run_full_regression_test.py
+  fix_applied: |
+    1. Ground-Truth Holding Check in close_position():
+       - Queries live broker net positions via next((p for p in net_positions if p.get("tradingsymbol") == contract), None).
+       - If contract is not found on broker (never filled / cancelled limit order) and transaction is a long exit (all Options or Long Stock), logs [PHANTOM EXIT GUARD], marks exit as ALREADY_CLOSED (NOT_FOUND_ON_BROKER), and suppresses order placement completely.
+       - Clamps exit quantity strictly to live_held, preventing accidental over-selling.
+    2. Regression Testing:
+       - Created scratch/test_phantom_exit_guard.py (3/3 unit tests passed).
+       - Registered as TEST 31 in scratch/run_full_regression_test.py.
+  status: RESOLVED
+
 - id: ISSUE-077
   title: Radar Spot Trend Confluence Gate (All-Day VWAP + EMA13/44 Golden Cross Protection), Pre-Trigger Risk Budget Gate, and Dashboard Option Contract Strict Matching Fix
   severity: HIGH
