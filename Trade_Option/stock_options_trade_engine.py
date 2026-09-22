@@ -68,6 +68,10 @@ MAX_RISK_PERCENT = 1.0
 TOKEN_FILE = paths.TOKEN_FILE
 STATE_FILE = paths.monitor_file("stock_positions_state.json")
 SCAN_INTERVAL_SECONDS = 900
+CORE_SCAN_INTERVAL_SECONDS = 180
+FULL_SCAN_INTERVAL_SECONDS = 900
+ENABLE_2TIER_SCHEDULING = True
+ENABLE_PREMARKET_SEEDING = True
 STRIKE_RANGE = 0
 
 TIMEFRAME_ENTRY = "15minute"
@@ -277,7 +281,7 @@ def _process_stock(kite, symbol, config, from_entry, to_entry, from_anchor, to_a
                        log_to_journal, spot_ltp=spot_ltp)
 
 
-def run_scan_cycle(kite):
+def run_scan_cycle(kite, universe_mode="AUTO"):
     if NFO_INSTRUMENTS.empty:
         sync_instruments(kite)
     cfg_applied = load_program_config_for_engine("nifty50", [("strike_range", "STRIKE_RANGE"), ("strict_macro_gate", "STRICT_MACRO_GATE")])
@@ -383,6 +387,32 @@ def run_scan_cycle(kite):
 
     # Sort descending by priority score; tie-break alphabetically
     scan_order = sorted(base_symbols, key=lambda s: (-_compute_scan_priority(s), s))
+
+    # 2-Tier Universe Filtering (FEATURE-042: 2-Tier Fast Scheduling & Pre-Market Seeding)
+    if universe_mode == "CORE":
+        core_symbols = set()
+        from equity_universe import NIFTY50_SYMBOLS
+        core_symbols.update(incubating_syms)
+        with position_lock:
+            core_symbols.update(ACTIVE_POSITIONS.keys())
+        core_symbols.update(NIFTY50_SYMBOLS)
+        # Add active intraday movers (>=1.0% price move or >=10 Cr turnover)
+        for s in base_symbols:
+            q = spot_quotes.get(f"NSE:{s}", {})
+            lp = float(q.get("last_price") or 0.0)
+            vol = float(q.get("volume") or 0.0)
+            ohlc = q.get("ohlc") or {}
+            prev_close = float(ohlc.get("close") or 0.0)
+            pct_chg = abs(lp - prev_close) / prev_close * 100.0 if prev_close > 0 else 0.0
+            turnover_cr = (vol * lp) / 1e7
+            if pct_chg >= 1.0 or turnover_cr >= 10.0:
+                core_symbols.add(s)
+
+        filtered_core = [s for s in scan_order if s in core_symbols]
+        logging.info(f"[TIER-1 CORE SCAN] Filtered {len(scan_order)} -> {len(filtered_core)} prioritized core & high-velocity stocks (Incubating: {len(incubating_syms)}, Nifty50: {len(NIFTY50_SYMBOLS)}).")
+        scan_order = filtered_core
+    elif universe_mode == "FULL":
+        logging.info(f"[TIER-2 FULL SCAN] Comprehensive macro sweep across all {len(scan_order)} F&O stocks.")
 
     # Fast Bulk-Quote Screener (ISSUE-072 Speed Phase, Pillar 2)
     # Filter out dormant/zero-volume symbols during active market hours to cut scan cycle latency
@@ -1661,13 +1691,30 @@ def write_scan_display_data(staged, active, display_file=SCAN_DISPLAY_FILE, engi
 # ──────────────────────────────────────────────
 
 def main_scan_loop(kite):
+    global _LAST_FUNNEL_CLEANUP_DATE
     _sync_counter = 0
     _cycle_count = 0
+    _pre_market_seeded = False
     while True:
         try:
             ensure_kite_session(kite)
             load_program_config()
             _sync_counter += 1
+            now_ist = get_ist_now(naive=True)
+            t_now = now_ist.time()
+            today_str = now_ist.strftime("%Y-%m-%d")
+            t_str = now_ist.strftime("%H:%M")
+            is_pre_market = t_now < datetime_time(9, 15)
+
+            # Morning pre-flight cleanup of stale runaway setups (runs once per day after 08:00 IST)
+            if _LAST_FUNNEL_CLEANUP_DATE != today_str and t_str >= "08:00":
+                try:
+                    pattern_funnel.purge_stale_prior_day_setups("nifty50", today_str=today_str, purge_scan_display=True)
+                    _LAST_FUNNEL_CLEANUP_DATE = today_str
+                    logging.info(f"[MORNING PRE-FLIGHT PURGE] Cleaned stale runaway setups before morning scanning at {t_str} IST.")
+                except Exception as p_err:
+                    logging.warning(f"Morning pre-flight purge error: {p_err}")
+
             # Fast sync active trades from SQLite trade_db to catch manual/1-Click entries immediately
             try:
                 db_active = trade_db.get_active_trades("nifty50")
@@ -1721,7 +1768,22 @@ def main_scan_loop(kite):
                         save_state()
                 except Exception as e:
                     logging.warning(f"Override apply failed: {e}")
-            logging.info("[BEAT] Starting Nifty 50 scan cycle...")
+
+            # 2-Tier Universe Scheduling & Pre-Market Seeding (FEATURE-042)
+            if is_pre_market:
+                universe_mode = "FULL"
+                if not _pre_market_seeded:
+                    logging.info(f"🌅 [PRE-MARKET LAUNCH] Engine started at {t_str} IST. Initiating full pre-market seeding sweep across F&O universe...")
+            elif ENABLE_2TIER_SCHEDULING:
+                # Every 5th cycle (~15 minutes) or Cycle 0 is FULL; other cycles are fast CORE (3 mins)
+                if _cycle_count % 5 == 0:
+                    universe_mode = "FULL"
+                else:
+                    universe_mode = "CORE"
+            else:
+                universe_mode = "FULL"
+
+            logging.info(f"[BEAT] Starting Nifty 50 scan cycle {_cycle_count + 1} ({universe_mode})...")
             if os.path.exists(ANCHOR_SCAN_REQUEST_FILE):
                 try:
                     with open(ANCHOR_SCAN_REQUEST_FILE) as f:
@@ -1734,8 +1796,9 @@ def main_scan_loop(kite):
                         run_anchor_scan(kite)
                 except Exception:
                     pass
+
             start = time.time()
-            staged = run_scan_cycle(kite)
+            staged = run_scan_cycle(kite, universe_mode=universe_mode)
             if staged:
                 execute_highest_rr_trade(kite, staged)
             else:
@@ -1745,15 +1808,47 @@ def main_scan_loop(kite):
                 shared_write_display(staged or [], dict(ACTIVE_POSITIONS), SCAN_DISPLAY_FILE, "nifty50")
             _cycle_count += 1
             elapsed = time.time() - start
-            sleep = max(0, SCAN_INTERVAL_SECONDS - elapsed)
-            logging.info(f"[CYCLE COMPLETE] {_cycle_count} cycle complete in {elapsed:.2f}s | Found {len(staged or [])} setup(s)")
+
+            # Pre-Market Standby Countdown: Stay awake until 09:15:00 IST open
+            if is_pre_market and ENABLE_PREMARKET_SEEDING:
+                _pre_market_seeded = True
+                funnel_st = pattern_funnel.get_funnel_summary("nifty50")
+                total_seeded = funnel_st.get("count_a_plus", 0) + funnel_st.get("count_a", 0) + funnel_st.get("count_b", 0)
+                market_open_dt = datetime.combine(now_ist.date(), datetime_time(9, 15))
+                secs_to_open = (market_open_dt - get_ist_now(naive=True)).total_seconds()
+                if secs_to_open > 0:
+                    logging.info(f"🎯 [PRE-MARKET SEEDING COMPLETE] Sweep completed in {elapsed:.1f}s | {total_seeded} setups primed in Incubation Funnel (A+:{funnel_st.get('count_a_plus',0)}, A:{funnel_st.get('count_a',0)}, B:{funnel_st.get('count_b',0)}). Fast Surveillance Radar armed and standing by for 09:15:00 IST open ({secs_to_open:.0f}s countdown)...")
+                    while secs_to_open > 5.0:
+                        sleep_step = min(30.0, secs_to_open - 2.0)
+                        time.sleep(sleep_step)
+                        now_check = get_ist_now(naive=True)
+                        secs_to_open = (market_open_dt - now_check).total_seconds()
+                        if secs_to_open > 5.0:
+                            logging.info(f"⏳ [PRE-MARKET COUNTDOWN] {secs_to_open:.0f}s until 09:15:00 IST market open. Radar armed with {total_seeded} setups.")
+                    logging.info("🔔 [OPENING BELL] 09:15:00 IST reached! Transitioning to live market surveillance mode.")
+                    continue
+
+            # Standard / Live Market Sleep Handling
+            target_interval = CORE_SCAN_INTERVAL_SECONDS if (ENABLE_2TIER_SCHEDULING and universe_mode == "CORE") else (FULL_SCAN_INTERVAL_SECONDS if ENABLE_2TIER_SCHEDULING else SCAN_INTERVAL_SECONDS)
+            sleep = max(0, target_interval - elapsed)
+            logging.info(f"[CYCLE COMPLETE] {_cycle_count} ({universe_mode}) cycle complete in {elapsed:.2f}s | Next scan in {sleep:.0f}s | Found {len(staged or [])} setup(s)")
             time.sleep(sleep)
         except Exception as e:
             logging.error(f"Main loop error: {e}")
             time.sleep(10)
 
 def load_program_config():
-    cfg_applied = load_program_config_for_engine("nifty50", [("strike_range", "STRIKE_RANGE"), ("target_universe", "TARGET_UNIVERSE")])
+    cfg_applied = load_program_config_for_engine(
+        "nifty50",
+        [
+            ("strike_range", "STRIKE_RANGE"),
+            ("target_universe", "TARGET_UNIVERSE"),
+            ("core_scan_interval", "CORE_SCAN_INTERVAL_SECONDS"),
+            ("full_scan_interval", "FULL_SCAN_INTERVAL_SECONDS"),
+            ("enable_2tier_scheduling", "ENABLE_2TIER_SCHEDULING"),
+            ("enable_premarket_seeding", "ENABLE_PREMARKET_SEEDING"),
+        ]
+    )
     for k, v in cfg_applied.items():
         if k == "STRIKE_RANGE": globals()["STRIKE_RANGE"] = int(v) if isinstance(v, (int, float)) else v
         elif k in ("TIMEFRAME_ENTRY", "TIMEFRAME_ANCHOR"): globals()[k] = v
@@ -1761,6 +1856,10 @@ def load_program_config():
         elif k == "LIVE_MARKET_DEPLOYMENT": globals()["LIVE_MARKET_DEPLOYMENT"] = v
         elif k == "LOOKBACK_DAYS": globals()["LOOKBACK_DAYS"] = int(v)
         elif k == "SCAN_INTERVAL_SECONDS": globals()["SCAN_INTERVAL_SECONDS"] = int(v)
+        elif k == "CORE_SCAN_INTERVAL_SECONDS": globals()["CORE_SCAN_INTERVAL_SECONDS"] = int(v) if isinstance(v, (int, float)) else globals()["CORE_SCAN_INTERVAL_SECONDS"]
+        elif k == "FULL_SCAN_INTERVAL_SECONDS": globals()["FULL_SCAN_INTERVAL_SECONDS"] = int(v) if isinstance(v, (int, float)) else globals()["FULL_SCAN_INTERVAL_SECONDS"]
+        elif k == "ENABLE_2TIER_SCHEDULING": globals()["ENABLE_2TIER_SCHEDULING"] = bool(v)
+        elif k == "ENABLE_PREMARKET_SEEDING": globals()["ENABLE_PREMARKET_SEEDING"] = bool(v)
         elif k == "MAX_RISK_PERCENT": globals()["MAX_RISK_PERCENT"] = float(v)
         elif k == "INITIAL_CAPITAL": globals()["INITIAL_CAPITAL"] = float(v)
 

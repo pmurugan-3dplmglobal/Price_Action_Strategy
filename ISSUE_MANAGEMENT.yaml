@@ -3074,3 +3074,28 @@ issues:
     3. Master regression suite scratch/run_full_regression_test.py (32/32 tests passed).
   status: RESOLVED
   resolution_date: '2026-09-22'
+
+- id: FEATURE-042
+  title: "2-Tier Fast Universe Scheduling (80/20 Rule) & Pre-Market Institutional Seed Incubation"
+  date: "2026-09-22"
+  severity: ENHANCEMENT
+  component: "Trade_Option/stock_options_trade_engine.py, input/program_config.json"
+  symptoms: |
+    1. 09:15 AM Market Open Cold Start: Radar had 0 setups loaded at market open because the first macro scan cycle took 4-8 minutes across 210 stocks.
+    2. Uniform 15-Minute Scan Latency: Scanning all 210 F&O stocks with equal weight resulted in a 14-minute blind spot for rapidly coiling market leaders.
+  root_cause: |
+    Single-threaded monolithic scan cycle treated all 210 F&O stocks equally without pre-market priming or dynamic universe tiering.
+  fix_applied: |
+    1. Pre-Market Institutional Seed Sweep (08:00 - 09:14 IST): When the engine starts before market open (e.g. 08:30 AM), it executes a full pre-market seeding sweep across the F&O universe using latest closing candles, priming the Incubation Funnel (Category A+, A, B) with 10-25 candidates.
+    2. Pre-Market Standby Countdown: Instead of sleeping for 15 minutes and overshooting market open, the engine maintains a synchronized countdown until 09:15:00 IST open.
+    3. 2-Tier Fast Universe Scheduling (80/20 Rule):
+       - Tier 1 (Core & Velocity Universe ~40-50 stocks: Nifty 50, Incubating setups, Active positions, Intraday movers): Scanned every 180 seconds (3 minutes), completing in ~35 seconds.
+       - Tier 2 (Full Macro Sweep ~210 stocks): Runs every 5th cycle (every 15 minutes) to discover broad consolidation breakouts.
+    4. Configurable Parameters: Added core_scan_interval (180s), full_scan_interval (900s), enable_2tier_scheduling (true), and enable_premarket_seeding (true) to program_config.json and engine loader.
+  verification: |
+    1. Dedicated unit test suite scratch/test_2tier_and_premarket_seeding.py passed 3/3 tests in 0.001s.
+    2. AST syntax check passed on modified stock_options_trade_engine.py.
+    3. Master regression suite scratch/run_full_regression_test.py (32/32 tests passed).
+  status: RESOLVED
+  resolution_date: '2026-09-22'
+
