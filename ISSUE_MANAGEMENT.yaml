@@ -4,12 +4,78 @@ meta:
   last_updated: '2026-09-22'
   purpose: Active operational tracker for v2.1.0-stable failures, root causes, regressions, and enhancements.
   historical_archive: archive/ISSUE_HISTORY_ARCHIVE.yaml (Preserves 119 resolved legacy issues prior to 2026-09-05)
-  total_active_issues: 51
+  total_active_issues: 53
   archived_issues_summary:
     total_archived: 119
     recent_archived_batch: [FEATURE-031, FEATURE-030, FEATURE-029, ISSUE-084, ISSUE-083, ISSUE-082, ISSUE-081, ISSUE-080, FEATURE-036, FEATURE-035, FEATURE-034, FEATURE-033, ISSUE-054]
     key_archived_families: [ALGO_AUDIT_CVE, QUANT_ENHANCEMENTS, RADAR_LIFECYCLE, VCP_METRICS, SCANNER_DISCOVERY, SECURITY_CONFIG, ZERO_REGRESSION_AUDIT]
 issues:
+- id: ISSUE-075
+  title: Debit Spread Short Leg Order Type Fix (Limit Pegging), Fractional Strike Step Normalization, and Orphan Trade Emergency Unwind
+  severity: CRITICAL
+  category: Strategy Execution, Multi-Leg Options, Broker Invariants, Exchange Regulations
+  family: SPREAD_EXECUTION
+  date_reported: '2026-09-22'
+  symptom: |
+    1. During auto-execution of CANBK debit spread (CANBK26SEP125CE / CANBK26SEP130CE), Leg 1 (Long) was bought at limit ₹1.17, while Leg 2 (Short) was rejected with: 'MARKET orders are blocked for stock options due to illiquidity'.
+    2. Rollback attempted to cancel Leg 1, but Leg 1 was already filled/complete. The engine popped CANBK from active memory and marked the trade FAILED in SQLite, leaving an unhedged, unmonitored naked call (6,750 qty) decaying on the broker.
+    3. CANBK (spot ~123.3) strike step is 2.5 (fractional). int(round(spot/step)*step) truncated 122.5 to 122, generating non-existent exchange strikes (119.5, 122.0, 124.5, 127.0) and failing spread resolution until spot briefly crossed 123.75, skipping the true ATM 122.5 CE and jumping to OTM 125 CE.
+    4. benchmark_val in stock_options_trade_engine defaulted to spot price (123.3) rather than actual option premium (1.17), bypassing the Low-DTE Premium Floor Gate (< ₹5.00).
+  root_cause: |
+    1. Leg 2 order placement was hardcoded as ORDER_TYPE_MARKET in stock_options_trade_engine.py line 982, violating SEBI/Zerodha stock option rules.
+    2. Debit spread rollback lacked an emergency limit sell unwind to flatten Leg 1 when Leg 1 had already completed execution.
+    3. Strike rounding in resolve_option_strikes and resolve_option_spread used int() truncation, breaking on half-step stocks (CANBK 2.5, IOC 1.25).
+    4. benchmark_val was not queried from the selected option contract quote.
+  affected_files:
+  - common/resolve.py
+  - Trade_Option/stock_options_trade_engine.py
+  - scratch/test_debit_spread_and_strike_resolution.py
+  - scratch/run_full_regression_test.py
+  fix_applied: |
+    1. Float-Safe Strike Normalization (common/resolve.py):
+       - Implemented normalize_strike_step to preserve exact float strikes (e.g. 122.5, 127.5) while keeping integer strikes as int.
+       - Replaced int() keys with round(float(s['strike']), 4) in strike_map, ensuring ATM (122.5 CE) and target strikes resolve reliably.
+    2. Leg 2 Pegged Limit Order Routing (Trade_Option/stock_options_trade_engine.py):
+       - Replaced ORDER_TYPE_MARKET with ORDER_TYPE_LIMIT pegged at max(0.05, round(leg2_bid * 0.995, 2)).
+       - Added pre-flight liquidity check on Leg 2 prior to placing Leg 1.
+    3. Emergency Unwind & Orphan Guard (Trade_Option/stock_options_trade_engine.py):
+       - If Leg 2 fails and Leg 1 was already filled, automatically places an emergency sell limit order at best bid to flatten Leg 1 cleanly.
+       - If emergency exit fails, retains Leg 1 in ACTIVE_POSITIONS as an active option trade so Position Monitor protects it.
+    4. Option Quote Benchmark Alignment:
+       - Queries live contract LTP to ensure benchmark_val and limit_price reflect the true option premium.
+    5. Regression Testing:
+       - Created scratch/test_debit_spread_and_strike_resolution.py (6/6 tests passed).
+       - Added TEST 29 to run_full_regression_test.py (29/29 suites passed with 100% success).
+  status: RESOLVED
+
+- id: ISSUE-074
+  title: Broker Ground Truth Invariant & Auto-Reconciliation of Ghost Trades in Portfolio Risk Guard
+  severity: HIGH
+  category: Portfolio Risk Governance, Position Lifecycle, Broker State Reconciliation
+  family: PORTFOLIO_RISK
+  date_reported: '2026-09-22'
+  symptom: |
+    1. Stock options engine blocked new trade entries with: 'Auto-execution skipped for X: MAX_CONCURRENT_POSITIONS_REACHED (6/6 active scripts across portfolio [Capital: Rs 100,000])', even though the trader only held 2-3 open positions in Kite.
+    2. Radar tab displayed fewer coiled A+ candidates compared to Scan tab due to active position suppression.
+  root_cause: |
+    1. Portfolio risk guard counted active positions from local SQLite trades table without verifying broker holdings.
+    2. Stale ghost trades from prior sessions (e.g. NIFTY, SUNPHARMA, UNITDSPR) remained marked as OPEN in trades.sqlite3.
+  affected_files:
+  - common/portfolio_risk.py
+  - common/resolve.py
+  - scratch/test_portfolio_risk_ghost_trade_reconciliation.py
+  - scratch/run_full_regression_test.py
+  fix_applied: |
+    1. Enforced Broker Ground Truth Invariant:
+       - In common/portfolio_risk.py, check_portfolio_risk_caps fetches live broker positions from Kite.
+       - Any trade marked OPEN in SQLite but missing or zero-qty on the broker is skipped from the concurrent position count and auto-reconciled to CLOSED_EXTERNALLY.
+    2. Enhanced sync_kite_positions:
+       - In common/resolve.py, syncs broker holdings to eliminate drift between memory and broker state.
+    3. Regression Testing:
+       - Created scratch/test_portfolio_risk_ghost_trade_reconciliation.py (6/6 tests passed).
+       - Added TEST 28 to run_full_regression_test.py.
+  status: RESOLVED
+
 - id: ISSUE-073
   title: Index Engine 7-Gate Execution Parity, Normalized Composite Ranking, Decoupled Surveillance Thread, and Speed Phase Latency Elimination
   severity: HIGH

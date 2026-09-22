@@ -2534,6 +2534,13 @@ def simulate_trade_outcome(kite, trade, target_date, resolve_token_fn=None):
         return {"result": None, "detail": str(e), "entry_time": None, "exit_time": None, "pnl_pct": None}
 
 
+def normalize_strike_step(val, step_size):
+    """Normalize a price/strike to the nearest step size, supporting fractional strike steps (e.g. 2.5, 1.25, 0.5)."""
+    step = float(step_size)
+    rounded = round(float(val) / step) * step
+    return int(rounded) if step.is_integer() and float(rounded).is_integer() else round(rounded, 4)
+
+
 def resolve_option_strikes(nfo_instruments, base_symbol, spot_price, step_size, option_type, n_range=0, dte=None, allow_otm=False):
     """Return ATM strike plus n_range strikes ITM/OTM. nfo_instruments can be None for derived calls.
     For 0DTE (dte <= 0) naked buying, restricts strikes strictly to ATM or 1-step ITM (offsets [0, -1] for CE, [0, 1] for PE).
@@ -2543,7 +2550,7 @@ def resolve_option_strikes(nfo_instruments, base_symbol, spot_price, step_size, 
         return []
     if nfo_instruments is None or nfo_instruments.empty or 'name' not in nfo_instruments.columns:
         return []
-    atm = int(round(spot_price / step_size) * step_size)
+    atm = normalize_strike_step(spot_price, step_size)
     out = []
     seen = set()
 
@@ -2573,7 +2580,7 @@ def resolve_option_strikes(nfo_instruments, base_symbol, spot_price, step_size, 
         offsets = list(range(-n_range, n_range + 1))
 
     for offset in offsets:
-        strike = atm + offset * step_size
+        strike = normalize_strike_step(atm + offset * step_size, step_size)
         if strike in seen:
             continue
         seen.add(strike)
@@ -2653,48 +2660,48 @@ def resolve_option_spread(nfo_instruments, base_symbol, spot_price, step_size, d
     else:
         is_bull = True
         opt_type = "CE"
-    atm_strike = int(round(spot_price / step_size) * step_size)
+    atm_strike = normalize_strike_step(spot_price, step_size)
 
     # Determine desired short leg strike
     if is_bull:
         if target_price and target_price > atm_strike:
-            target_strike = int(round(target_price / step_size) * step_size)
+            target_strike = normalize_strike_step(target_price, step_size)
             if target_strike <= atm_strike:
-                target_strike = atm_strike + spread_width_steps * step_size
+                target_strike = normalize_strike_step(atm_strike + spread_width_steps * step_size, step_size)
         else:
-            target_strike = atm_strike + spread_width_steps * step_size
+            target_strike = normalize_strike_step(atm_strike + spread_width_steps * step_size, step_size)
     else:
         if target_price and target_price < atm_strike:
-            target_strike = int(round(target_price / step_size) * step_size)
+            target_strike = normalize_strike_step(target_price, step_size)
             if target_strike >= atm_strike:
-                target_strike = atm_strike - spread_width_steps * step_size
+                target_strike = normalize_strike_step(atm_strike - spread_width_steps * step_size, step_size)
         else:
-            target_strike = atm_strike - spread_width_steps * step_size
+            target_strike = normalize_strike_step(atm_strike - spread_width_steps * step_size, step_size)
 
-    step_offset = abs(int(round((target_strike - atm_strike) / step_size)))
+    step_offset = abs(int(round((float(target_strike) - float(atm_strike)) / float(step_size))))
     n_range = max(3, step_offset + 1)
 
     strikes_pool = resolve_option_strikes(nfo_instruments, base_symbol, spot_price, step_size, opt_type, n_range=n_range, allow_otm=True)
     if not strikes_pool:
         return None
 
-    strike_map = {int(s["strike"]): s for s in strikes_pool}
-    leg1 = strike_map.get(atm_strike)
+    strike_map = {round(float(s["strike"]), 4): s for s in strikes_pool}
+    leg1 = strike_map.get(round(float(atm_strike), 4))
     if not leg1:
-        closest_strike = min(strike_map.keys(), key=lambda k: abs(k - atm_strike))
+        closest_strike = min(strike_map.keys(), key=lambda k: abs(k - float(atm_strike)))
         leg1 = strike_map[closest_strike]
 
-    leg2 = strike_map.get(target_strike)
+    leg2 = strike_map.get(round(float(target_strike), 4))
     if not leg2:
         if is_bull:
-            otm_candidates = [k for k in strike_map.keys() if k > leg1["strike"]]
+            otm_candidates = [k for k in strike_map.keys() if k > float(leg1["strike"])]
             if otm_candidates:
-                best_otm = min(otm_candidates, key=lambda k: abs(k - target_strike))
+                best_otm = min(otm_candidates, key=lambda k: abs(k - float(target_strike)))
                 leg2 = strike_map[best_otm]
         else:
-            otm_candidates = [k for k in strike_map.keys() if k < leg1["strike"]]
+            otm_candidates = [k for k in strike_map.keys() if k < float(leg1["strike"])]
             if otm_candidates:
-                best_otm = min(otm_candidates, key=lambda k: abs(k - target_strike))
+                best_otm = min(otm_candidates, key=lambda k: abs(k - float(target_strike)))
                 leg2 = strike_map[best_otm]
 
     if not leg1 or not leg2 or leg1["strike"] == leg2["strike"]:

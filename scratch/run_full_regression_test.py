@@ -880,6 +880,24 @@ except Exception as e:
     errors.append(f"Broker Ground Truth & Ghost Trade Reconciler Failed: {e}")
     print(f" FAILED [ERR] ({e})", flush=True)
 
+# -------------------------------------------------------------------------
+# TEST 29: Debit Spread Order Type & Fractional Strike Normalization (ISSUE-075)
+# -------------------------------------------------------------------------
+print("[TEST 29] Testing Debit Spread Order Type & Fractional Strike Normalization (ISSUE-075)...", end="", flush=True)
+try:
+    import subprocess
+    import paths
+    cmd_ds = [
+        sys.executable,
+        os.path.join(paths.SCRATCH_DIR, "test_debit_spread_and_strike_resolution.py")
+    ]
+    res_ds = subprocess.run(cmd_ds, cwd=paths.PROJECT_ROOT, capture_output=True, text=True)
+    assert res_ds.returncode == 0, f"Debit spread & fractional strike unit tests failed:\nSTDOUT:\n{res_ds.stdout}\nSTDERR:\n{res_ds.stderr}"
+    print(" PASSED [OK]", flush=True)
+except Exception as e:
+    errors.append(f"Debit Spread Order Type & Fractional Strike Normalization Failed: {e}")
+    print(f" FAILED [ERR] ({e})", flush=True)
+
 print("\n" + "=" * 100)
 if not errors:
     print("      ALL REGRESSION TESTS PASSED WITH 100% SUCCESS -- ZERO REGRESSIONS FOUND!")

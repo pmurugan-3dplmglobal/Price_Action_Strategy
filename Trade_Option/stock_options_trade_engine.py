@@ -731,10 +731,22 @@ def execute_highest_rr_trade(kite, staged):
                         side=cand_side
                     )
                     if spread_info:
-                        contract = spread_info["leg1"]["contract"]
-                        option_token = spread_info["leg1"]["token"]
-                        target_strike = spread_info["leg1"]["strike"]
-                        logging.info(f"[DEBIT SPREAD RESOLVED] {sym}: Leg 1 (Long)={contract} @ {target_strike} | Leg 2 (Short)={spread_info['leg2']['contract']} @ {spread_info['leg2']['strike']}")
+                        # Pre-flight check: Verify short leg has buy liquidity before accepting spread
+                        leg2_c = spread_info["leg2"]["contract"]
+                        if live_ok and kite:
+                            try:
+                                q_l2 = safe_kite_call(kite.quote, [f"NFO:{leg2_c}"])
+                                l2_bid = float(q_l2.get(f"NFO:{leg2_c}", {}).get("depth", {}).get("buy", [{}])[0].get("price", 0.0) or q_l2.get(f"NFO:{leg2_c}", {}).get("last_price", 0.0))
+                                if l2_bid <= 0:
+                                    logging.warning(f"[SPREAD_LIQUIDITY_GATE] Short leg {leg2_c} has zero buy liquidity (bid={l2_bid}). Falling back to naked contract for {sym}.")
+                                    spread_info = None
+                            except Exception as l2_check_err:
+                                logging.debug(f"Leg 2 liquidity check error for {leg2_c}: {l2_check_err}")
+                        if spread_info:
+                            contract = spread_info["leg1"]["contract"]
+                            option_token = spread_info["leg1"]["token"]
+                            target_strike = spread_info["leg1"]["strike"]
+                            logging.info(f"[DEBIT SPREAD RESOLVED] {sym}: Leg 1 (Long)={contract} @ {target_strike} | Leg 2 (Short)={spread_info['leg2']['contract']} @ {spread_info['leg2']['strike']}")
                 except Exception as spread_err:
                     logging.warning(f"Spread resolution fallback to naked for {sym}: {spread_err}")
 
@@ -766,7 +778,17 @@ def execute_highest_rr_trade(kite, staged):
                 logging.warning(f"[RISK_BUDGET_EXCEEDED] Trade rejected for {sym} ({contract}): Position size is 0 lots (Risk per lot exceeds capital risk budget).")
                 continue
 
-            benchmark_val = float(best.get("benchmark") or cp)
+            contract_quote_val = None
+            if live_ok and contract and kite:
+                try:
+                    q_quote = safe_kite_call(kite.quote, [f"NFO:{contract}"])
+                    c_ltp = float(q_quote.get(f"NFO:{contract}", {}).get("last_price", 0.0))
+                    if c_ltp > 0:
+                        contract_quote_val = c_ltp
+                except Exception:
+                    pass
+
+            benchmark_val = float(contract_quote_val or best.get("benchmark") or cp)
             limit_price = round(benchmark_val * 1.005, 1) if benchmark_val > 0 else round(cp * 1.005, 1)
 
             if live_ok:
@@ -973,17 +995,31 @@ def execute_highest_rr_trade(kite, staged):
                     if spread_info:
                         try:
                             leg2_c = spread_info["leg2"]["contract"]
+                            leg2_q_key = f"NFO:{leg2_c}"
+                            leg2_q = safe_kite_call(kite.quote, [leg2_q_key])
+                            leg2_depth = leg2_q.get(leg2_q_key, {}).get("depth", {}).get("buy", [])
+                            leg2_bid = float(leg2_depth[0]["price"]) if (leg2_depth and len(leg2_depth) > 0 and leg2_depth[0].get("price", 0) > 0) else float(leg2_q.get(leg2_q_key, {}).get("last_price", 0.0))
+                            # Zerodha Kite strictly blocks MARKET orders for Stock Options. Always use LIMIT pegged at best bid (min 0.05).
+                            leg2_limit = round(max(0.05, leg2_bid * 0.995), 2) if leg2_bid > 0 else 0.05
                             leg2_slices = slice_quantity_for_freeze(leg2_c, qty)
                             leg2_placed = []
                             for l2_s_qty in leg2_slices:
                                 oid2 = kite.place_order(
                                     variety=kite.VARIETY_REGULAR, tradingsymbol=leg2_c,
                                     exchange=kite.EXCHANGE_NFO, transaction_type=kite.TRANSACTION_TYPE_SELL,
-                                    quantity=l2_s_qty, order_type=kite.ORDER_TYPE_MARKET,
+                                    quantity=l2_s_qty, order_type=kite.ORDER_TYPE_LIMIT, price=leg2_limit,
                                     product=kite.PRODUCT_NRML
                                 )
                                 leg2_placed.append(str(oid2))
-                            logging.info(f"[DEBIT SPREAD SHORT LEG] Placed {leg2_c} TotalQty={qty} (Orders: {leg2_placed})")
+                            pos["leg2_order_id"] = leg2_placed[0]
+                            pos["leg2_order_ids"] = leg2_placed
+                            with position_lock:
+                                if sym in ACTIVE_POSITIONS:
+                                    ACTIVE_POSITIONS[sym]["leg2_order_id"] = leg2_placed[0]
+                                    ACTIVE_POSITIONS[sym]["leg2_order_ids"] = leg2_placed
+                            if pos.get("trade_id"):
+                                trade_db.update_trade(pos["trade_id"], {"leg2_order_id": leg2_placed[0], "leg2_order_ids": leg2_placed})
+                            logging.info(f"[DEBIT SPREAD SHORT LEG] Placed {leg2_c} TotalQty={qty} @ Limit={leg2_limit} (Orders: {leg2_placed})")
                         except Exception as leg2_err:
                             logging.error(f"[DEBIT SPREAD SHORT LEG FAILED] {spread_info['leg2']['contract']}: {leg2_err}")
                             # ROLLBACK GUARD: Cancel Leg 1 order slices to prevent unhedged naked exposure
@@ -993,6 +1029,33 @@ def execute_highest_rr_trade(kite, staged):
                                     logging.warning(f"[DEBIT SPREAD ROLLBACK] Cancelled Leg 1 order {o_to_cancel} because Leg 2 failed: {leg2_err}")
                                 except Exception as c_err:
                                     logging.error(f"[DEBIT SPREAD ROLLBACK ERROR] Could not cancel Leg 1 order {o_to_cancel}: {c_err}")
+
+                            # Check if Leg 1 was already filled/held on broker
+                            from position_monitor import is_contract_held_on_broker
+                            is_held, held_qty = is_contract_held_on_broker(kite, contract)
+                            if is_held and held_qty > 0:
+                                logging.warning(f"[DEBIT SPREAD EMERGENCY UNWIND] Leg 1 {contract} is held ({held_qty} qty) after Leg 2 failure. Executing emergency sell...")
+                                try:
+                                    q_unw = safe_kite_call(kite.quote, [f"NFO:{contract}"])
+                                    u_bid = float(q_unw.get(f"NFO:{contract}", {}).get("depth", {}).get("buy", [{}])[0].get("price", 0.0) or q_unw.get(f"NFO:{contract}", {}).get("last_price", 0.0))
+                                    u_limit = round(max(0.05, u_bid * 0.98), 2) if u_bid > 0 else limit_price
+                                    kite.place_order(
+                                        variety=kite.VARIETY_REGULAR, tradingsymbol=contract,
+                                        exchange=kite.EXCHANGE_NFO, transaction_type=kite.TRANSACTION_TYPE_SELL,
+                                        quantity=held_qty, order_type=kite.ORDER_TYPE_LIMIT, price=u_limit,
+                                        product=kite.PRODUCT_NRML
+                                    )
+                                    logging.info(f"[DEBIT SPREAD EMERGENCY UNWIND SUCCESS] Sold {contract} Qty={held_qty} @ {u_limit}")
+                                except Exception as unw_err:
+                                    logging.critical(f"[DEBIT SPREAD EMERGENCY UNWIND FAILED] Failed emergency exit for {contract}: {unw_err}. Retaining in ACTIVE_POSITIONS for position monitor protection!")
+                                    with position_lock:
+                                        pos["position_type"] = "option"
+                                        ACTIVE_POSITIONS[sym] = pos
+                                    if pos.get("trade_id"):
+                                        trade_db.update_trade(pos["trade_id"], {"status": "OPEN", "position_type": "option"})
+                                    save_state()
+                                    continue
+
                             with position_lock:
                                 ACTIVE_POSITIONS.pop(sym, None)
                             if pos.get("trade_id"):
