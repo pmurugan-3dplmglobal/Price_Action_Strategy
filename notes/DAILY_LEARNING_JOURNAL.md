@@ -41,6 +41,7 @@ Each day's entry must document:
 | **`MIDCPNIFTY 14550 CE`** | Broken Spread $\to$ Naked CE | ₹106.90 | ₹88.80 | **$-₹2,172.00$** | $-16.93\%$ | ❌ **Opening 09:18 Whipsaw + Margin Rejection**. Leg 2 short was rejected by RMS. Position became unhedged during opening bell volatility; hit Stop-Loss. |
 | **`NAUKRI 1300 PE / 1260 PE`** | Overnight Bearish PE | ₹14.80 | ₹8.35 | **$-₹3,217.50$** | $-43.50\%$ | ❌ **Sector Trend Reversal**. Carried over from prior session. IT and Internet stocks rebounded strongly today, forcing an orderly Stop-Loss exit. |
 | **`SENSEX 74700 CE`** | Scalp CE | ₹237.25 | ₹242.25 | **$+₹100.00$** | $+2.11\%$ | ⚡ **Quick Target Scalp**. Bought and exited with quick profit lock. |
+| **`POWERGRID 265 CE`** | Naked Long CE | ₹7.50 | ₹7.70 | **$+₹380.00$** | **$+2.67\%$** | ⚠️ **Premature Winner Exit**. Scalped at +₹380 after 1 hour hold; option later surged to **₹8.40 (+12.0% / +₹1,710 gain)**. |
 | **`DIXON 13000 CE`** | Monthly Oct CE | ₹490.00 | Open | $-₹250.00$ | $-1.02\%$ | ⏳ **Active Position**. Normal consolidation, SL at ₹410.15 is intact. |
 | **`ULTRACEMCO 11000 PE`**| Monthly Oct PE | ₹193.45 | Open | $-₹422.50$ | $-4.37\%$ | ⏳ **Active Position**. Consolidating at key support, SL at ₹178.90 intact. |
 
@@ -95,7 +96,39 @@ Out of 142 unique candidates incubated and scanned, the top performers experienc
 
 ---
 
-### 5. Pattern Alignment: What Worked vs What Failed
+### 5. Deep Forensic Case Study: `POWERGRID OCT 265 CE` — Anatomy of a Premature Exit
+
+> **The Paradox**: We bought at ₹7.50, sold at ₹7.70 (+₹380 gain), but now the option has surged to **₹8.40 (+12.0% / +₹1,710 gain)**.
+
+#### 1. Trade Chronology & Raw Data
+* **Instrument**: `POWERGRID26OCT265CE` (Lot Size: 1,900)
+* **Setup Pattern**: `BULL_A_Two_Higher_Highs` on 30-Minute Chart (Strong Power Sector tailwind).
+* **Order 1 (10:05:43 AM IST)**: `BUY 1900 qty @ ₹7.50` (Order ID: `260923190343360`) -> **COMPLETE** (Capital deployed: ₹14,250).
+* **Order 2 (11:16:03 AM IST)**: `SELL 1900 qty @ avg ₹7.70 (req_p ₹7.65)` (Order ID: `260923190561872`) -> **COMPLETE** (Gross profit: $+₹380.00$ / $+2.67\%$).
+* **Subsequent Action (12:00 PM IST)**: Option continued surging without looking back, hitting **₹8.40** (+$0.90$ points / $+₹1,710.00$ gain).
+
+#### 2. Root Cause: Why Did We Exit at ₹7.70?
+1. **Manual / 1-Click Scalp Intervention (The Disposition Effect)**:
+   - Automated `executed_exit_orders.json` had **zero record** of triggering an exit for POWERGRID. The position monitor did NOT trigger an SL or T1 exit.
+   - The order `SELL @ 7.65` was executed via Kite UI / Manual Dashboard 1-click at 11:16 AM after holding for 1 hour and 10 minutes.
+   - Psychological root cause: After seeing early drawdowns on `MIDCPNIFTY` and `NAUKRI`, the psychological urge to "take whatever green is on the table" pushed an early exit at $+0.20$ ticks (+₹380).
+2. **Cutting Winners Before Target T1 Expansion**:
+   - For `POWERGRID26OCT265CE` @ entry ₹7.50 with Anchor SL around ₹6.50 (Risk ₹1.00), the calculated Target T1 was **₹9.00 to ₹9.50** (1.5R–2.0R expansion).
+   - The trade was exited at $+2.6\%$, aborting a high-probability institutional 30m trend trade during its initial consolidation before the real expansion wave began.
+3. **Negative Expectancy Trap (Asymmetric Payoff Inversion)**:
+   - In quantitative options trading, taking micro-gains of $+2.6\%$ while absorbing stop-losses of $-15\%$ to $-20\%$ ruins the strategy's expectancy.
+   - **The Golden Rule**: *To pay for inevitable stop-losses, winning trades MUST be held to achieve at least $+15\%$ to $+25\%$ or full Target T1.*
+
+#### 3. Behavioral & System Directive (The "Minimum Hold & Profit Lock" Rule)
+* **Rule 1 (No Premature Scalping)**: Once entered into a confirmed 30-minute setup, do not manually close the trade for micro-profits ($< +10\%$) unless the Anchor Stop-Loss is breached on a candle close.
+* **Rule 2 (The +15% Ratchet Gate)**:
+  * Below $+15\%$ gain: Let the trade breathe with the initial Anchor SL.
+  * At $+15\%$ gain: Automatically trail Stop-Loss to $+8\%$ (locking green P&L).
+  * At $+25\%$ or T1: Exit 50% lot and trail runner to Breakeven (+BE).
+
+---
+
+### 6. Pattern Alignment: What Worked vs What Failed
 
 ```mermaid
 pie title Pattern Win Rate Distribution (Today's Top 20 Gainers)
@@ -114,7 +147,7 @@ pie title Pattern Win Rate Distribution (Today's Top 20 Gainers)
 
 ---
 
-### 6. Strategic Takeaways & Discussion Points for Improvement
+### 7. Strategic Takeaways & Discussion Points for Improvement
 
 1. **Opening Bell Index Delay (09:15 – 09:30 AM)**:
    - *Proposal*: Do not fire automated index entries before 09:30 AM. Allow the 15-minute opening candle to close to establish the benchmark.
