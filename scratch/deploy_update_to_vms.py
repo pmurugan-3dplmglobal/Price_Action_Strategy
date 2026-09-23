@@ -36,9 +36,18 @@ if os.path.exists(p):
     d.setdefault('index', {})['max_concurrent_positions'] = 1
     d.setdefault('index', {})['timeframe_entry'] = '15minute'
     d.setdefault('index', {})['timeframe_anchor'] = '60minute'
+    for k in ['trailing_rules', 'nifty50', 'index']:
+        if k == 'trailing_rules':
+            sub = d.setdefault(k, {})
+        else:
+            sub = d.setdefault(k, {}).setdefault('trailing_rules', {})
+        sub['option_trail_1_gain_pct'] = 15.0
+        sub['option_trail_1_sl_pct'] = 8.0
+        sub['option_trail_2_gain_pct'] = 25.0
+        sub['option_trail_2_sl_pct'] = 15.0
     with open(p, 'w', encoding='utf-8') as f:
         json.dump(d, f, indent=2)
-    print('Updated program_config.json execution_mode to DEBIT_SPREAD, max_pos 1, TF 15m/60m')
+    print('Updated program_config.json: DEBIT_SPREAD, max_pos 1, TF 15m/60m, trailing_rules 15%->8%, 25%->15%')
 else:
     print('No local program_config.json found')
 "
