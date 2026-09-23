@@ -14,8 +14,9 @@ This repository records daily trading logs, execution forensics, pattern perform
   - [5. Forensic Case Study: POWERGRID OCT 265 CE (Manual Exit Audit)](#5-deep-forensic-case-study-powergrid-oct-265-ce--anatomy-of-a-premature-exit)
   - [6. Forensic Case Study: NAUKRI 1300 PE (Rebound Autopsy)](#6-deep-forensic-case-study-naukri-1300-pe--rebound-autopsy-did-we-buy-a-trap-or-exit-early)
   - [7. Structural Invalidation vs Morning Shakeout Decision Matrix](#7-structural-invalidation-vs-temporary-shakeout-the-geometric--quantitative-decision-matrix)
-  - [8. Pattern Alignment: What Worked vs What Failed](#8-pattern-alignment-what-worked-vs-what-failed)
-  - [9. Strategic Directives & System Proposals](#9-strategic-directives--system-proposals-for-codebase)
+  - [8. Forensic Case Study: TMPV OCT 300 PE (Broken Spread & Dynamic Slot Swap)](#8-deep-forensic-case-study-tmpv-oct-300-pe--the-anatomy-of-a-broken-spread--dynamic-slot-swap)
+  - [9. Pattern Alignment: What Worked vs What Failed](#9-pattern-alignment-what-worked-vs-what-failed)
+  - [10. Strategic Directives & System Proposals](#10-strategic-directives--system-proposals-for-codebase)
 
 ---
 
@@ -42,17 +43,21 @@ Each day's entry must document:
 ### 2. Executed Trades & P&L Breakdown (VM 1 Account)
 
 * **Account Capital**: ₹61,584.60 Available Margin.
-* **Net Realized P&L**: $-₹5,024.50$.
+* **Net Realized P&L**: $-₹6,424.50$.
+* **Active Open Positions**: `DIXON` (+₹2,000.00 / +8.16%), `SBICARD` (+₹400.00 / +2.50%), `CIPLA` (-₹1,062.50 / -9.09%).
 
 | Symbol & Strike | Type | Entry | Exit | Net P&L | Return % | Outcome & Trade Reason |
 |---|---|---|---|---|:---:|---|
-| **`ASIANPAINT 2460 CE`** | Naked Long CE | ₹21.15 | ₹24.75 | **$+₹1,037.50$** | **$+19.62\%$** | 🏆 **Clean Win**. Point D breakout confirmation, Target T1 executed with precision at 10:02 AM. |
-| **`MIDCPNIFTY 14550 CE`** | Broken Spread $\to$ Naked CE | ₹106.90 | ₹88.80 | **$-₹2,172.00$** | $-16.93\%$ | ❌ **Opening 09:18 Whipsaw + Margin Rejection**. Leg 2 short was rejected by RMS. Position became unhedged during opening bell volatility; hit Stop-Loss. |
-| **`NAUKRI 1300 PE / 1260 PE`** | Overnight Bearish PE | ₹14.80 | ₹8.35 | **$-₹3,217.50$** | $-43.50\%$ | ❌ **Sector Trend Reversal**. Carried over from prior session. IT and Internet stocks rebounded strongly today, forcing an orderly Stop-Loss exit. |
+| **`ASIANPAINT 2460 CE`** | Naked Long CE | ₹21.15 | ₹24.75 | **$+₹1,037.50$** | **$+19.62\%$** | 🏆 **Clean Win**. Point D breakout confirmation, Target T1 executed at 10:02 AM. |
+| **`MIDCPNIFTY 14550 CE`** | Broken Spread $\to$ Naked CE | ₹106.90 | ₹88.80 | **$-₹2,172.00$** | $-16.93\%$ | ❌ **Opening 09:18 Whipsaw + Margin Rejection**. Leg 2 short rejected by RMS. Position unhedged; hit Stop-Loss. |
+| **`NAUKRI 1300 PE / 1260 PE`** | Overnight Bearish PE | ₹14.80 | ₹8.35 | **$-₹3,217.50$** | $-43.50\%$ | ⚠️ **Premature Manual Exit**. Exited manually at bottom tick (₹8.35); spot collapsed to 1,297 and option exploded to ₹17.70 (+112%). |
 | **`SENSEX 74700 CE`** | Scalp CE | ₹237.25 | ₹242.25 | **$+₹100.00$** | $+2.11\%$ | ⚡ **Quick Target Scalp**. Bought and exited with quick profit lock. |
-| **`POWERGRID 265 CE`** | Naked Long CE | ₹7.50 | ₹7.70 | **$+₹380.00$** | **$+2.67\%$** | ⚠️ **Premature Winner Exit**. Scalped at +₹380 after 1 hour hold; option later surged to **₹8.40 (+12.0% / +₹1,710 gain)**. |
-| **`DIXON 13000 CE`** | Monthly Oct CE | ₹490.00 | Open | $-₹250.00$ | $-1.02\%$ | ⏳ **Active Position**. Normal consolidation, SL at ₹410.15 is intact. |
-| **`ULTRACEMCO 11000 PE`**| Monthly Oct PE | ₹193.45 | Open | $-₹422.50$ | $-4.37\%$ | ⏳ **Active Position**. Consolidating at key support, SL at ₹178.90 intact. |
+| **`POWERGRID 265 CE`** | Naked Long CE | ₹7.50 | ₹7.70 | **$+₹380.00$** | **$+2.67\%$** | ⚠️ **Premature Winner Exit**. Manual exit at +₹380 (+2.67%); option later expanded to ₹9.50 (+26.6% / Target T1 hit). |
+| **`ULTRACEMCO 11000 PE`**| Monthly Oct PE | ₹193.45 | ₹172.25 | **$-₹1,060.00$** | $-10.96\%$ | 🛡️ **Structural Invalidation Saved Loss**. Spot broke 11,100 resistance to 11,198; option plunged to ₹164.00. Exit saved capital! |
+| **`TMPV 300 PE`** | Broken Bear Spread | ₹9.00 | ₹8.25 | **$-₹1,200.00$** | $-8.33\%$ | 🔄 **Dynamic Slot Swap Exit**. Automated engine evicted flat position after 154m to free slot for 🥇 Gold TATACONSUM (R:R 4.06). |
+| **`DIXON 13000 CE`** | Monthly Oct CE | ₹490.00 | Open | **$+₹2,000.00$** | **$+8.16\%$** | ⏳ **Active Position**. Clean expansion wave, LTP ₹530.00. |
+| **`SBICARD 640 CE`** | Monthly Oct CE | ₹20.00 | Open | **$+₹400.00$** | **$+2.50\%$** | ⏳ **Active Position**. Base breakout holding, LTP ₹20.50. |
+| **`CIPLA 1400 CE`** | Monthly Oct CE | ₹27.50 | Open | **$-₹1,062.50$** | $-9.09\%$ | ⏳ **Active Position**. Consolidating near support, SL intact. |
 
 ---
 
@@ -199,7 +204,39 @@ flowchart TD
 
 ---
 
-### 8. Pattern Alignment: What Worked vs What Failed
+### 8. Deep Forensic Case Study: `TMPV OCT 300 PE` — The Anatomy of a Broken Spread & Dynamic Slot Swap
+
+> **The Event**: We entered `TMPV26OCT300PE` (1,600 qty) at ₹9.00, saw it fluctuate between ₹7.85 and ₹8.30 (-₹1,840 drawdown), and exited at **₹8.25 (-₹1,200.00 loss)** at 13:35 PM.
+
+#### 1. Trade Chronology & Broker Reality
+* **Symbol & Entity**: `TMPV` (Tata Motors Passenger Vehicles / Tata Motors F&O contract, Token: `884737`, Lot Size: 1,600).
+* **Setup Pattern**: `HH_ABCD` (Higher High Sweep Bearish Breakdown) on the **30-Minute Timeframe** (🥈 T2 Core setup).
+* **11:01:10 AM (The Spread Execution Disconnect)**:
+  * The automated engine detected a 30m bearish breakdown and attempted to route an automated **Bear Put Debit Spread**:
+    - Leg 1 (Long Put): `BUY TMPV26OCT300PE` @ Pegged Limit ₹9.00 -> **COMPLETE** (Order `#260923190521939`).
+    - Leg 2 (Short Put Hedge): `SELL TMPV26OCT290PE` @ Limit ₹4.97 -> **REJECTED by Zerodha RMS** due to option writing margin requirement.
+  * **Resulting Vulnerability**: The trade intended to have a capped net debit of ₹4.03, but became an **unhedged naked Long Put** requiring full premium risk.
+
+#### 2. Why Did It Drift into Loss (-12.78% / ₹7.85)?
+* **Spot Price Range**: Spot opened at ₹300.10, hit a low of ₹298.70, and hovered around ₹301.40.
+* **Structural Validity**: The system's calculated Spot SL was **₹304.67** (Anchor High resistance).
+  * Spot price **stayed strictly below ₹302.65 all day**, never breaching the Spot SL!
+  * The drop in option premium from ₹9.00 to ₹7.85 was purely **normal intraday theta contraction** during a 2.5-hour consolidation.
+
+#### 3. Why Did the Engine Exit at 13:35:03? (The Dynamic Slot Swap)
+* At 13:34:59 PM, the surveillance radar scanned an exceptional **🥇 Tier 1 Gold setup in `TATACONSUM` with an R:R of 4.06**.
+* Because the portfolio concurrency cap was reached, the algorithm's **Dynamic Slot Swap Engine** evaluated all active positions:
+  - `TMPV` had been held for **154 minutes** in Stage 0 without reaching trailing profit.
+  - Candidate `TATACONSUM` had an $R:R = 4.06$, exceeding incumbent `TMPV`'s $R:R = 1.50$.
+  - The engine automatically evicted the stale incumbent: `SELL TMPV26OCT300PE @ ₹8.25` (Order `#260923190863577`), realizing a controlled loss of **-₹1,200.00 (-8.33%)** to rotate capital into the high-conviction Gold setup.
+
+#### 4. Actionable Lessons from TMPV:
+1. **Basket Margin Order Sequence**: In debit spreads, always submit both legs as a single multi-leg Basket Order, or check writing margin upfront to prevent orphan long legs.
+2. **Dynamic Slot Swap Capital Efficiency**: Evicting flat, low-momentum setups after 2.5 hours to fund Tier 1 Gold trades is mathematically sound and protects against multi-hour theta bleed.
+
+---
+
+### 9. Pattern Alignment: What Worked vs What Failed
 
 ```mermaid
 pie title Pattern Win Rate Distribution (Today's Top 20 Gainers)
@@ -218,7 +255,7 @@ pie title Pattern Win Rate Distribution (Today's Top 20 Gainers)
 
 ---
 
-### 9. Strategic Directives & System Proposals for Codebase
+### 10. Strategic Directives & System Proposals for Codebase
 
 1. **Spot-Based Stop-Loss Guard (`SPOT_SL_GUARD`)**:
    - For all stock option positions, stop-loss triggers must require the **Underlying Spot Price to close a 15m/30m candle beyond the Anchor SL line**.
