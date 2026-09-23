@@ -22,6 +22,7 @@ set -e
 cd "__DIR__"
 
 echo "=== Pulling origin master ==="
+git checkout -- input/watchlist.json 2>/dev/null || true
 git pull origin master
 
 echo "=== Verifying / updating program_config.json ==="

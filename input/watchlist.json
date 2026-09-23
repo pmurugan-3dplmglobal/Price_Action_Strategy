@@ -164,11 +164,11 @@
   {
     "contract": "NIFTY26SEP23350CE",
     "base_symbol": "NIFTY",
-    "entry_price": 145.7,
+    "entry_price": 154.45,
     "exit_price": null,
     "lot_size": 65,
     "tag": "MISSED_OPPORTUNITY",
-    "note": "Skipped by DAILY_DRAWDOWN_CAP_EXCEEDED (Today Realized: Rs -432.39 + Unrealized: Rs 0.00 = Rs -4657.00 <= Max Allowed Loss: Rs -3000.00 [-3.0%]) (R:R=2.39, Tier=1)"
+    "note": "Skipped by DAILY_DRAWDOWN_CAP_EXCEEDED (Today Realized: Rs -1382.02 + Unrealized: Rs 0.00 = Rs -5162.00 <= Max Allowed Loss: Rs -3000.00 [-3.0%]) (R:R=1.81, Tier=1)"
   },
   {
     "contract": "FINNIFTY26SEP25500CE",
@@ -330,7 +330,7 @@
     "exit_price": null,
     "lot_size": 20,
     "tag": "MISSED_OPPORTUNITY",
-    "note": "Skipped by DAILY_DRAWDOWN_CAP_EXCEEDED (Today Realized: Rs -121.40 + Unrealized: Rs 0.00 = Rs -5007.00 <= Max Allowed Loss: Rs -3000.00 [-3.0%]) (R:R=1.59, Tier=2)"
+    "note": "Skipped by DAILY_DRAWDOWN_CAP_EXCEEDED (Today Realized: Rs -1382.02 + Unrealized: Rs 0.00 = Rs -5162.00 <= Max Allowed Loss: Rs -3000.00 [-3.0%]) (R:R=1.59, Tier=2)"
   },
   {
     "contract": "KPITTECH26OCT550PE",
@@ -348,7 +348,7 @@
     "exit_price": null,
     "lot_size": 60,
     "tag": "MISSED_OPPORTUNITY",
-    "note": "Skipped by MAX_INDEX_POSITIONS_REACHED (1/1 active index trade(s) across portfolio: ['SENSEX']) (R:R=1.50, Tier=2)"
+    "note": "Skipped by DAILY_DRAWDOWN_CAP_EXCEEDED (Today Realized: Rs -1382.02 + Unrealized: Rs 0.00 = Rs -5162.00 <= Max Allowed Loss: Rs -3000.00 [-3.0%]) (R:R=1.50, Tier=2)"
   },
   {
     "contract": "TATAELXSI26OCT3250CE",
