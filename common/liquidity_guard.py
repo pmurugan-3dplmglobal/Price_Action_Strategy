@@ -19,6 +19,14 @@ try:
 except ImportError:
     from position_monitor import is_market_open
 
+try:
+    from common.session import safe_kite_call
+except ImportError:
+    try:
+        from session import safe_kite_call
+    except ImportError:
+        safe_kite_call = None
+
 
 def check_bid_ask_spread_liquidity(
     kite,
@@ -52,7 +60,10 @@ def check_bid_ask_spread_liquidity(
 
     q_key = f"{exchange.strip().upper()}:{contract.strip().upper()}"
     try:
-        quote_data = kite.quote([q_key])
+        if safe_kite_call is not None:
+            quote_data = safe_kite_call(kite.quote, [q_key], retries=2, delay=0.5)
+        else:
+            quote_data = kite.quote([q_key])
         if not quote_data or q_key not in quote_data:
             return False, 1.0, f"No quote returned by broker for {q_key}", {}
 
@@ -137,5 +148,5 @@ def check_bid_ask_spread_liquidity(
 
     except Exception as e:
         err_msg = f"Liquidity evaluation exception for {contract}: {e}"
-        logging.error(f"[LIQUIDITY_GATE] {err_msg}")
+        logging.warning(f"[LIQUIDITY_GATE] {err_msg}")
         return False, 1.0, err_msg, {}

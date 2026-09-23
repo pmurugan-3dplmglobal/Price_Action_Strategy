@@ -160,5 +160,347 @@
     "lot_size": 6750,
     "tag": "POST_EXIT_LEARNING",
     "note": "Unwound Unhedged Leg @ 0.83 (-Rs 2,295) | Watching 122.5 support reaction"
+  },
+  {
+    "contract": "NIFTY26SEP23350CE",
+    "base_symbol": "NIFTY",
+    "entry_price": 145.7,
+    "exit_price": null,
+    "lot_size": 65,
+    "tag": "MISSED_OPPORTUNITY",
+    "note": "Skipped by DAILY_DRAWDOWN_CAP_EXCEEDED (Today Realized: Rs -432.39 + Unrealized: Rs 0.00 = Rs -4657.00 <= Max Allowed Loss: Rs -3000.00 [-3.0%]) (R:R=2.39, Tier=1)"
+  },
+  {
+    "contract": "FINNIFTY26SEP25500CE",
+    "base_symbol": "FINNIFTY",
+    "entry_price": 206.55,
+    "exit_price": null,
+    "lot_size": 60,
+    "tag": "MISSED_OPPORTUNITY",
+    "note": "Skipped by DAILY_DRAWDOWN_CAP_EXCEEDED (Today Realized: Rs -1382.02 + Unrealized: Rs 0.00 = Rs -4449.50 <= Max Allowed Loss: Rs -3000.00 [-3.0%]) (R:R=1.56, Tier=2)"
+  },
+  {
+    "contract": "WIPRO26OCT150CE",
+    "base_symbol": "WIPRO",
+    "entry_price": 16.3,
+    "exit_price": null,
+    "lot_size": 3000,
+    "tag": "MISSED_OPPORTUNITY",
+    "note": "Skipped by MAX_CONCURRENT_POSITIONS_REACHED (10/6 active scripts across portfolio [Capital: Rs 100,000]) (R:R=1.62, Tier=2)"
+  },
+  {
+    "contract": "SENSEX26SEP74700CE",
+    "base_symbol": "SENSEX",
+    "entry_price": 296.9,
+    "exit_price": null,
+    "lot_size": 20,
+    "tag": "MISSED_OPPORTUNITY",
+    "note": "Skipped by MAX_INDEX_POSITIONS_REACHED (1/1 active index trade(s) across portfolio: ['MIDCPNIFTY']) (R:R=1.69, Tier=2)"
+  },
+  {
+    "contract": "DIXON26OCT13000CE",
+    "base_symbol": "DIXON",
+    "entry_price": 496.9,
+    "exit_price": null,
+    "lot_size": 50,
+    "tag": "MISSED_OPPORTUNITY",
+    "note": "Skipped by MAX_CONCURRENT_POSITIONS_REACHED (6/6 active scripts across portfolio [Capital: Rs 100,000]) (R:R=4.51, Tier=1)"
+  },
+  {
+    "contract": "ONGC26OCT235CE",
+    "base_symbol": "ONGC",
+    "entry_price": 6.6,
+    "exit_price": null,
+    "lot_size": 2250,
+    "tag": "MISSED_OPPORTUNITY",
+    "note": "Skipped by MAX_CONCURRENT_POSITIONS_REACHED (6/6 active scripts across portfolio [Capital: Rs 100,000]) (R:R=2.14, Tier=1)"
+  },
+  {
+    "contract": "LTM26OCT4150CE",
+    "base_symbol": "LTM",
+    "entry_price": 118.6,
+    "exit_price": null,
+    "lot_size": 150,
+    "tag": "MISSED_OPPORTUNITY",
+    "note": "Skipped by MAX_CONCURRENT_POSITIONS_REACHED (7/6 active scripts across portfolio [Capital: Rs 100,000]) (R:R=3.14, Tier=1)"
+  },
+  {
+    "contract": "DRREDDY26OCT1200PE",
+    "base_symbol": "DRREDDY",
+    "entry_price": 28.6,
+    "exit_price": null,
+    "lot_size": 625,
+    "tag": "MISSED_OPPORTUNITY",
+    "note": "Skipped by MAX_CONCURRENT_POSITIONS_REACHED (7/6 active scripts across portfolio [Capital: Rs 100,000]) (R:R=2.21, Tier=1)"
+  },
+  {
+    "contract": "AUROPHARMA26OCT1700PE",
+    "base_symbol": "AUROPHARMA",
+    "entry_price": 43.2,
+    "exit_price": null,
+    "lot_size": 550,
+    "tag": "MISSED_OPPORTUNITY",
+    "note": "Skipped by MAX_CONCURRENT_POSITIONS_REACHED (6/6 active scripts across portfolio [Capital: Rs 100,000]) (R:R=2.78, Tier=1)"
+  },
+  {
+    "contract": "PIIND26OCT2400PE",
+    "base_symbol": "PIIND",
+    "entry_price": 85.4,
+    "exit_price": null,
+    "lot_size": 175,
+    "tag": "MISSED_OPPORTUNITY",
+    "note": "Skipped by MAX_CONCURRENT_POSITIONS_REACHED (7/6 active scripts across portfolio [Capital: Rs 100,000]) (R:R=3.49, Tier=1)"
+  },
+  {
+    "contract": "TMPV26OCT300PE",
+    "base_symbol": "TMPV",
+    "entry_price": 9.0,
+    "exit_price": null,
+    "lot_size": 1600,
+    "tag": "MISSED_OPPORTUNITY",
+    "note": "Skipped by MAX_CONCURRENT_POSITIONS_REACHED (7/6 active scripts across portfolio [Capital: Rs 100,000]) (R:R=1.50, Tier=2)"
+  },
+  {
+    "contract": "IEX26OCT112.5CE",
+    "base_symbol": "IEX",
+    "entry_price": 16.9,
+    "exit_price": null,
+    "lot_size": 4350,
+    "tag": "MISSED_OPPORTUNITY",
+    "note": "Skipped by MAX_CONCURRENT_POSITIONS_REACHED (6/6 active scripts across portfolio [Capital: Rs 100,000]) (R:R=1.50, Tier=2)"
+  },
+  {
+    "contract": "ADANIGREEN26OCT1320PE",
+    "base_symbol": "ADANIGREEN",
+    "entry_price": 51.7,
+    "exit_price": null,
+    "lot_size": 600,
+    "tag": "MISSED_OPPORTUNITY",
+    "note": "Skipped by MAX_CONCURRENT_POSITIONS_REACHED (6/6 active scripts across portfolio [Capital: Rs 100,000]) (R:R=2.34, Tier=1)"
+  },
+  {
+    "contract": "DRREDDY26OCT1220PE",
+    "base_symbol": "DRREDDY",
+    "entry_price": 41.0,
+    "exit_price": null,
+    "lot_size": 625,
+    "tag": "MISSED_OPPORTUNITY",
+    "note": "Skipped by MAX_CONCURRENT_POSITIONS_REACHED (6/6 active scripts across portfolio [Capital: Rs 100,000]) (R:R=2.21, Tier=1)"
+  },
+  {
+    "contract": "FINNIFTY26SEP25450CE",
+    "base_symbol": "FINNIFTY",
+    "entry_price": 208.4,
+    "exit_price": null,
+    "lot_size": 60,
+    "tag": "MISSED_OPPORTUNITY",
+    "note": "Skipped by DAILY_DRAWDOWN_CAP_EXCEEDED (Today Realized: Rs 556.74 + Unrealized: Rs 0.00 = Rs -4879.50 <= Max Allowed Loss: Rs -3000.00 [-3.0%]) (R:R=2.71, Tier=1)"
+  },
+  {
+    "contract": "HDFCBANK26OCT730PE",
+    "base_symbol": "HDFCBANK",
+    "entry_price": 14.2,
+    "exit_price": null,
+    "lot_size": 650,
+    "tag": "MISSED_OPPORTUNITY",
+    "note": "Skipped by MAX_CONCURRENT_POSITIONS_REACHED (6/6 active scripts across portfolio [Capital: Rs 100,000]) (R:R=2.21, Tier=1)"
+  },
+  {
+    "contract": "RELIANCE26OCT1250CE",
+    "base_symbol": "RELIANCE",
+    "entry_price": 31.7,
+    "exit_price": null,
+    "lot_size": 500,
+    "tag": "MISSED_OPPORTUNITY",
+    "note": "Skipped by MAX_CONCURRENT_POSITIONS_REACHED (6/6 active scripts across portfolio [Capital: Rs 100,000]) (R:R=1.83, Tier=2)"
+  },
+  {
+    "contract": "UPL26OCT550CE",
+    "base_symbol": "UPL",
+    "entry_price": 21.7,
+    "exit_price": null,
+    "lot_size": 1355,
+    "tag": "MISSED_OPPORTUNITY",
+    "note": "Skipped by MAX_CONCURRENT_POSITIONS_REACHED (6/6 active scripts across portfolio [Capital: Rs 100,000]) (R:R=1.01, Tier=2)"
+  },
+  {
+    "contract": "SENSEX26SEP74600CE",
+    "base_symbol": "SENSEX",
+    "entry_price": 364.85,
+    "exit_price": null,
+    "lot_size": 20,
+    "tag": "MISSED_OPPORTUNITY",
+    "note": "Skipped by DAILY_DRAWDOWN_CAP_EXCEEDED (Today Realized: Rs -121.40 + Unrealized: Rs 0.00 = Rs -5007.00 <= Max Allowed Loss: Rs -3000.00 [-3.0%]) (R:R=1.59, Tier=2)"
+  },
+  {
+    "contract": "KPITTECH26OCT550PE",
+    "base_symbol": "KPITTECH",
+    "entry_price": 34.3,
+    "exit_price": null,
+    "lot_size": 775,
+    "tag": "MISSED_OPPORTUNITY",
+    "note": "Skipped by MAX_CONCURRENT_POSITIONS_REACHED (6/6 active scripts across portfolio [Capital: Rs 100,000]) (R:R=1.45, Tier=2)"
+  },
+  {
+    "contract": "FINNIFTY26SEP25550CE",
+    "base_symbol": "FINNIFTY",
+    "entry_price": 185.5,
+    "exit_price": null,
+    "lot_size": 60,
+    "tag": "MISSED_OPPORTUNITY",
+    "note": "Skipped by MAX_INDEX_POSITIONS_REACHED (1/1 active index trade(s) across portfolio: ['SENSEX']) (R:R=1.50, Tier=2)"
+  },
+  {
+    "contract": "TATAELXSI26OCT3250CE",
+    "base_symbol": "TATAELXSI",
+    "entry_price": 133.9,
+    "exit_price": null,
+    "lot_size": 125,
+    "tag": "MISSED_OPPORTUNITY",
+    "note": "Skipped by DAILY_DRAWDOWN_CAP_EXCEEDED (Today Realized: Rs 556.74 + Unrealized: Rs 0.00 = Rs -5514.50 <= Max Allowed Loss: Rs -5000.00 [-5.0%]) (R:R=6.08, Tier=1)"
+  },
+  {
+    "contract": "KALYANKJIL26SEP585CE",
+    "base_symbol": "KALYANKJIL",
+    "entry_price": 9.5,
+    "exit_price": null,
+    "lot_size": 1350,
+    "tag": "MISSED_OPPORTUNITY",
+    "note": "Skipped by MAX_CONCURRENT_POSITIONS_REACHED (6/6 active scripts across portfolio [Capital: Rs 100,000]) (R:R=1.81, Tier=2)"
+  },
+  {
+    "contract": "MARUTI26OCT12200CE",
+    "base_symbol": "MARUTI",
+    "entry_price": 356.8,
+    "exit_price": null,
+    "lot_size": 50,
+    "tag": "MISSED_OPPORTUNITY",
+    "note": "Skipped by MAX_CONCURRENT_POSITIONS_REACHED (6/6 active scripts across portfolio [Capital: Rs 100,000]) (R:R=2.21, Tier=2)"
+  },
+  {
+    "contract": "GVT&D26OCT4400PE",
+    "base_symbol": "GVT&D",
+    "entry_price": 168.8,
+    "exit_price": null,
+    "lot_size": 125,
+    "tag": "MISSED_OPPORTUNITY",
+    "note": "Skipped by MAX_CONCURRENT_POSITIONS_REACHED (6/6 active scripts across portfolio [Capital: Rs 100,000]) (R:R=1.50, Tier=2)"
+  },
+  {
+    "contract": "JIOFIN26OCT230PE",
+    "base_symbol": "JIOFIN",
+    "entry_price": 5.3,
+    "exit_price": null,
+    "lot_size": 2350,
+    "tag": "MISSED_OPPORTUNITY",
+    "note": "Skipped by MAX_CONCURRENT_POSITIONS_REACHED (6/6 active scripts across portfolio [Capital: Rs 100,000]) (R:R=1.66, Tier=2)"
+  },
+  {
+    "contract": "HDFCAMC26OCT2450CE",
+    "base_symbol": "HDFCAMC",
+    "entry_price": 69.5,
+    "exit_price": null,
+    "lot_size": 300,
+    "tag": "MISSED_OPPORTUNITY",
+    "note": "Skipped by MAX_CONCURRENT_POSITIONS_REACHED (6/6 active scripts across portfolio [Capital: Rs 100,000]) (R:R=1.82, Tier=2)"
+  },
+  {
+    "contract": "NHPC26OCT77CE",
+    "base_symbol": "NHPC",
+    "entry_price": 1.7,
+    "exit_price": null,
+    "lot_size": 6950,
+    "tag": "MISSED_OPPORTUNITY",
+    "note": "Skipped by MAX_CONCURRENT_POSITIONS_REACHED (6/6 active scripts across portfolio [Capital: Rs 100,000]) (R:R=1.50, Tier=2)"
+  },
+  {
+    "contract": "ITC26OCT265CE",
+    "base_symbol": "ITC",
+    "entry_price": 7.5,
+    "exit_price": null,
+    "lot_size": 1725,
+    "tag": "MISSED_OPPORTUNITY",
+    "note": "Skipped by MAX_CONCURRENT_POSITIONS_REACHED (6/6 active scripts across portfolio [Capital: Rs 100,000]) (R:R=1.90, Tier=2)"
+  },
+  {
+    "contract": "POWERGRID26OCT265CE",
+    "base_symbol": "POWERGRID",
+    "entry_price": 7.6,
+    "exit_price": null,
+    "lot_size": 1900,
+    "tag": "MISSED_OPPORTUNITY",
+    "note": "Skipped by MAX_CONCURRENT_POSITIONS_REACHED (6/6 active scripts across portfolio [Capital: Rs 100,000]) (R:R=2.04, Tier=2)"
+  },
+  {
+    "contract": "IRFC26OCT80CE",
+    "base_symbol": "IRFC",
+    "entry_price": 2.9,
+    "exit_price": null,
+    "lot_size": 5425,
+    "tag": "MISSED_OPPORTUNITY",
+    "note": "Skipped by MAX_CONCURRENT_POSITIONS_REACHED (6/6 active scripts across portfolio [Capital: Rs 100,000]) (R:R=1.50, Tier=2)"
+  },
+  {
+    "contract": "BANKBARODA26OCT235CE",
+    "base_symbol": "BANKBARODA",
+    "entry_price": 8.0,
+    "exit_price": null,
+    "lot_size": 2925,
+    "tag": "MISSED_OPPORTUNITY",
+    "note": "Skipped by MAX_CONCURRENT_POSITIONS_REACHED (6/6 active scripts across portfolio [Capital: Rs 100,000]) (R:R=1.75, Tier=2)"
+  },
+  {
+    "contract": "FORCEMOT26OCT17000CE",
+    "base_symbol": "FORCEMOT",
+    "entry_price": 852.3,
+    "exit_price": null,
+    "lot_size": 25,
+    "tag": "MISSED_OPPORTUNITY",
+    "note": "Skipped by LOW_VIX_THETA_FLOOR_SUPPRESSED (VIX 10.48 < 11.5 compresses option premium velocity; Tier 2/3 suppressed) (R:R=1.69, Tier=2)"
+  },
+  {
+    "contract": "HDFCBANK26OCT740PE",
+    "base_symbol": "HDFCBANK",
+    "entry_price": 19.2,
+    "exit_price": null,
+    "lot_size": 650,
+    "tag": "MISSED_OPPORTUNITY",
+    "note": "Skipped by DAILY_DRAWDOWN_CAP_EXCEEDED (Today Realized: Rs 556.74 + Unrealized: Rs 0.00 = Rs -5029.50 <= Max Allowed Loss: Rs -5000.00 [-5.0%]) (R:R=2.47, Tier=1)"
+  },
+  {
+    "contract": "NIFTY26SEP23300CE",
+    "base_symbol": "NIFTY",
+    "entry_price": 176.65,
+    "exit_price": null,
+    "lot_size": 65,
+    "tag": "MISSED_OPPORTUNITY",
+    "note": "Skipped by DAILY_DRAWDOWN_CAP_EXCEEDED (Today Realized: Rs 556.74 + Unrealized: Rs 0.00 = Rs -5129.50 <= Max Allowed Loss: Rs -3000.00 [-3.0%]) (R:R=2.04, Tier=1)"
+  },
+  {
+    "contract": "ADANIGREEN26OCT1300PE",
+    "base_symbol": "ADANIGREEN",
+    "entry_price": 40.5,
+    "exit_price": null,
+    "lot_size": 600,
+    "tag": "MISSED_OPPORTUNITY",
+    "note": "Skipped by DAILY_DRAWDOWN_CAP_EXCEEDED (Today Realized: Rs 556.74 + Unrealized: Rs 0.00 = Rs -5514.50 <= Max Allowed Loss: Rs -5000.00 [-5.0%]) (R:R=2.34, Tier=1)"
+  },
+  {
+    "contract": "HDFCLIFE26OCT560PE",
+    "base_symbol": "HDFCLIFE",
+    "entry_price": 14.3,
+    "exit_price": null,
+    "lot_size": 1100,
+    "tag": "MISSED_OPPORTUNITY",
+    "note": "Skipped by MAX_CONCURRENT_POSITIONS_REACHED (10/6 active scripts across portfolio [Capital: Rs 100,000]) (R:R=2.61, Tier=1)"
+  },
+  {
+    "contract": "HAL26OCT4800PE",
+    "base_symbol": "HAL",
+    "entry_price": 108.7,
+    "exit_price": null,
+    "lot_size": 150,
+    "tag": "MISSED_OPPORTUNITY",
+    "note": "Skipped by MAX_SECTOR_POSITIONS_REACHED (2/2 active in sector 'INFRA_CAPGOODS') (R:R=3.34, Tier=1)"
   }
 ]

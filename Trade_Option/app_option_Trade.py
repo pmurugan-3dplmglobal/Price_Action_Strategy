@@ -2045,17 +2045,17 @@ def api_buy_scanned_trade():
                 depth = q.get(q_key, {}).get("depth", {}).get("sell", [])
                 if depth and len(depth) > 0 and depth[0].get("price", 0) > 0:
                     ask = float(depth[0]["price"])
+                from trading_core import INDEX_REGISTRY, STOCK_REGISTRY, get_option_lot_size, check_bid_ask_spread_liquidity, round_to_tick
                 bm = float(data.get("benchmark") or 0)
                 if bm > 0:
-                    price = round(bm * 1.005, 1)
+                    price = round_to_tick(bm * 1.005, 0.05)
                 else:
-                    price = round((ask if ask > 0 else ltp) * 1.005, 1)
+                    price = round_to_tick((ask if ask > 0 else ltp) * 1.005, 0.05)
                     if price <= 0:
-                        price = round(entry_spot * 1.005, 1)
+                        price = round_to_tick(entry_spot * 1.005, 0.05)
                 from position_monitor import clamp_lpp_buy_price
-                price = clamp_lpp_buy_price(price, ask if ask > 0 else ltp)
+                price = round_to_tick(clamp_lpp_buy_price(price, ask if ask > 0 else ltp), 0.05)
                 
-                from trading_core import INDEX_REGISTRY, STOCK_REGISTRY, get_option_lot_size, check_bid_ask_spread_liquidity
                 registry = INDEX_REGISTRY if (engine == "index" or is_index) else STOCK_REGISTRY
                 lot_size = get_option_lot_size(contract) or registry.get(symbol, {}).get("lot_size", 1)
                 prod = _kite_session.PRODUCT_CNC if exch == "NSE" else _kite_session.PRODUCT_NRML
@@ -2158,8 +2158,8 @@ def api_buy_scanned_trade():
                             depth = q.get(q_key, {}).get("depth", {}).get("sell", [])
                             if depth and len(depth) > 0 and depth[0].get("price", 0) > 0:
                                 ask = float(depth[0]["price"])
-                            price = round((ask if ask > 0 else ltp) * 1.005, 1)
-                            price = clamp_lpp_buy_price(price, ask if ask > 0 else ltp)
+                            price = round_to_tick((ask if ask > 0 else ltp) * 1.005, 0.05)
+                            price = round_to_tick(clamp_lpp_buy_price(price, ask if ask > 0 else ltp), 0.05)
                     except Exception as sp_resolve_err:
                         logging.warning(f"1-Click Buy spread resolution error: {sp_resolve_err}")
 

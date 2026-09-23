@@ -25,10 +25,15 @@ try:
     import paths
     from timeframe_utils import get_ist_now
     from display_writer import clean_timestamp
+    from position_monitor import contract_is_expired
 except ImportError:
     from common import paths
     from common.timeframe_utils import get_ist_now
     from common.display_writer import clean_timestamp
+    try:
+        from common.position_monitor import contract_is_expired
+    except ImportError:
+        def contract_is_expired(c): return False
 
 logger = logging.getLogger(__name__)
 
@@ -433,13 +438,16 @@ def purge_invalidated_or_triggered(engine_name, ltp_dict=None, max_runaway_pct=N
             return updated
         return current
 
-def purge_stale_prior_day_setups(engine_name=None, today_str=None, purge_scan_display=True):
+def purge_stale_prior_day_setups(engine_name=None, today_str=None, purge_scan_display=True, force_prior_days=True):
     """
     Automated Morning Funnel Reset & Stale Setup Cleanup:
     Purges prior-day incubation setups from pattern_funnel.json across engines.
     Prevents stale multi-day-old setups from causing eviction floods or false breakouts.
     If engine_name is None, applies across all engines registered in the funnel.
     If purge_scan_display is True, also evicts prior-day staged setups from scan_display.json.
+    If force_prior_days is True, strictly purges any setups from prior trading sessions.
+    If force_prior_days is False (Smart Reconciliation), retains setups up to 3 days old whose
+    Anchor SL remains unbreached and < 80% of Target T1 has been reached.
     """
     with _funnel_lock:
         if today_str is None:
@@ -452,16 +460,63 @@ def purge_stale_prior_day_setups(engine_name=None, today_str=None, purge_scan_di
         engines_to_clean = [engine_name] if engine_name else list(full_state.keys())
         total_evicted = 0
 
+        def _is_current(x):
+            if not isinstance(x, dict):
+                return False
+            # 1. Contract expiry check
+            contract = x.get("contract") or x.get("symbol")
+            if contract and contract_is_expired(contract):
+                return False
+
+            d_str = _get_item_date_str(x)
+
+            # If force_prior_days=True, strictly evict setups from prior calendar days
+            if force_prior_days and d_str:
+                try:
+                    d_obj = dt.strptime(d_str[:10], "%Y-%m-%d").date()
+                    t_obj = dt.strptime(today_str[:10], "%Y-%m-%d").date()
+                    if d_obj < t_obj:
+                        return False
+                except Exception:
+                    pass
+
+            # 2. Lookback age check (max 3 calendar days for smart reconciliation)
+            if d_str:
+                try:
+                    d_obj = dt.strptime(d_str[:10], "%Y-%m-%d").date()
+                    t_obj = dt.strptime(today_str[:10], "%Y-%m-%d").date()
+                    if (t_obj - d_obj).days > 3:
+                        return False
+                except Exception:
+                    pass
+
+            # 3. Structural SL & Target Exhaustion check
+            c_now = float(x.get("entry_spot") or x.get("last_price") or x.get("close") or 0.0)
+            sl = float(x.get("current_sl") or x.get("sl") or 0.0)
+            t1 = float(x.get("t1") or 0.0)
+            bm = float(x.get("benchmark") or 0.0)
+            side = str(x.get("side", "CE")).upper()
+            is_pe = (side == "PE" or "PE" in str(contract).upper() or str(x.get("direction", "")).upper() == "BEAR")
+
+            if c_now > 0 and sl > 0:
+                if not is_pe and c_now <= sl:
+                    return False  # Bull Anchor SL breached
+                elif is_pe and c_now >= sl:
+                    return False  # Bear Anchor SL breached
+
+            if c_now > 0 and bm > 0 and t1 > bm:
+                t1_80 = round(bm + 0.80 * (t1 - bm), 2)
+                if not is_pe and c_now >= t1_80:
+                    return False  # 80% T1 hit
+                elif is_pe and c_now <= t1_80:
+                    return False
+
+            return True
+
         for eng in engines_to_clean:
             eng_data = full_state.get(eng)
             if not isinstance(eng_data, dict):
                 continue
-
-            def _is_current(x):
-                d_str = _get_item_date_str(x)
-                if not d_str:
-                    return True  # Retain if date cannot be resolved
-                return d_str >= today_str
 
             old_a_plus = eng_data.get("category_a_plus", [])
             old_a = eng_data.get("category_a", [])
@@ -476,7 +531,7 @@ def purge_stale_prior_day_setups(engine_name=None, today_str=None, purge_scan_di
             evicted = old_count - new_count
             if evicted > 0:
                 total_evicted += evicted
-                logger.info(f"[FUNNEL MORNING PURGE] {eng}: Evicted {evicted} stale prior-day setup(s) (Retained {new_count}).")
+                logger.info(f"[FUNNEL SMART RECONCILE] {eng}: Evicted {evicted} invalid/stale setup(s) (Retained {new_count} valid).")
                 updated_eng = {
                     "category_a_plus": new_a_plus,
                     "category_a": new_a,
@@ -485,7 +540,7 @@ def purge_stale_prior_day_setups(engine_name=None, today_str=None, purge_scan_di
                 save_funnel_state(eng, updated_eng)
 
         if total_evicted > 0:
-            logger.info(f"[FUNNEL MORNING PURGE COMPLETE] Total stale setups evicted across engines: {total_evicted}")
+            logger.info(f"[FUNNEL SMART RECONCILE COMPLETE] Total setups evicted across engines: {total_evicted}")
 
         # Also purge stale prior-day staged setups from scan_display.json
         if purge_scan_display:
@@ -495,10 +550,7 @@ def purge_stale_prior_day_setups(engine_name=None, today_str=None, purge_scan_di
                         with open(disp_file, "r", encoding="utf-8") as f:
                             disp_data = json.load(f)
                         staged = disp_data.get("staged_trades", [])
-                        fresh_staged = [
-                            t for t in staged
-                            if _get_item_date_str(t) is None or _get_item_date_str(t) >= today_str
-                        ]
+                        fresh_staged = [t for t in staged if _is_current(t)]
                         evicted_disp = len(staged) - len(fresh_staged)
                         if evicted_disp > 0 or disp_data.get("date") != today_str:
                             disp_data["staged_trades"] = fresh_staged
@@ -508,11 +560,25 @@ def purge_stale_prior_day_setups(engine_name=None, today_str=None, purge_scan_di
                             with open(tmp_file, "w", encoding="utf-8") as f:
                                 json.dump(disp_data, f, indent=2)
                             os.replace(tmp_file, disp_file)
-                            logger.info(f"[SCAN DISPLAY MORNING PURGE] Evicted {evicted_disp} stale setups from {os.path.basename(disp_file)}.")
+                            logger.info(f"[SCAN DISPLAY SMART RECONCILE] Evicted {evicted_disp} invalid setups from {os.path.basename(disp_file)} (Retained {len(fresh_staged)} valid).")
                     except Exception as d_err:
                         logger.warning(f"Failed purging stale setups from {disp_file}: {d_err}")
 
         return load_funnel_state(engine_name) if engine_name else load_funnel_state()
+
+
+def reconcile_funnel_and_display_setups(engine_name=None, today_str=None, purge_scan_display=True):
+    """
+    Smart validity reconciliation on engine startup and routine sweeps:
+    Preserves valid incubation setups up to 3 calendar days old whose Anchor SL is intact
+    and has not reached 80% of Target T1 (force_prior_days=False).
+    """
+    return purge_stale_prior_day_setups(
+        engine_name=engine_name,
+        today_str=today_str,
+        purge_scan_display=purge_scan_display,
+        force_prior_days=False
+    )
 
 
 _LAST_AUTO_PURGE_DATE = None

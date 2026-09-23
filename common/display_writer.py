@@ -232,15 +232,25 @@ def write_scan_display_data(staged, active, display_file, engine_name=None):
                 with open(display_file, "r", encoding="utf-8") as fh:
                     old_d = json.load(fh)
                 cleared_at_ts = old_d.get("cleared_at")
-                if old_d.get("date") == today:
-                    raw_old = old_d.get("all_staged_today") or old_d.get("staged_trades") or []
-                    if cleared_at_ts:
-                        for tr in raw_old:
-                            tr_time = str(tr.get("entry_time") or "")
-                            if tr_time > cleared_at_ts:
-                                existing_staged.append(tr)
-                    else:
-                        existing_staged = raw_old
+                raw_old = old_d.get("all_staged_today") or old_d.get("staged_trades") or []
+                for tr in raw_old:
+                    tr_time = str(tr.get("entry_time") or "")
+                    if cleared_at_ts and tr_time <= cleared_at_ts:
+                        continue
+                    # Contract expiry check
+                    tr_c = tr.get("contract") or tr.get("symbol")
+                    if tr_c and contract_is_expired(tr_c):
+                        continue
+                    # Recency check (max 3 days)
+                    tr_d = tr_time[:10]
+                    if tr_d and tr_d != today:
+                        try:
+                            d_diff = (dt.strptime(today, "%Y-%m-%d").date() - dt.strptime(tr_d, "%Y-%m-%d").date()).days
+                            if d_diff > 3:
+                                continue
+                        except Exception:
+                            pass
+                    existing_staged.append(tr)
             except Exception:
                 pass
 

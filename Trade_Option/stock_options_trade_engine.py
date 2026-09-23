@@ -58,7 +58,9 @@ from trading_core import (
     get_option_lot_size,
     calculate_sl_buffer,
     STOCK_EXPIRY_ROLLOVER_DAYS,
-    slice_quantity_for_freeze
+    slice_quantity_for_freeze,
+    round_to_tick,
+    calculate_option_profit_targets
 )
 
 LIVE_MARKET_DEPLOYMENT = True
@@ -89,6 +91,7 @@ SCAN_DISPLAY_FILE = paths.SCAN_DISPLAY_FILE
 SL_TARGET_OVERRIDES_FILE = paths.SL_TARGET_OVERRIDES_FILE
 _RADAR_ACTIVE = threading.Event()
 _LAST_LIQ_WARN = {}
+_RADAR_CANDIDATE_GATE_COOLDOWN = {}
 _LAST_FUNNEL_CLEANUP_DATE = None
 
 class FlushFileHandler(logging.FileHandler):
@@ -962,6 +965,8 @@ def execute_highest_rr_trade(kite, staged):
                     log_to_journal(sym, best.get("pattern", ""), TIMEFRAME_ENTRY, "SKIP_FALLING_KNIFE_VWAP", "REJECTED",
                                    f"Option broken down {v_str:.1f}% below VWAP", entry=limit_price, sl=best.get("current_sl", 0.0), target=best.get("t1"),
                                    event_time=best.get("entry_time"))
+                    _RADAR_CANDIDATE_GATE_COOLDOWN[contract] = time.time() + 90.0
+                    _RADAR_CANDIDATE_GATE_COOLDOWN[sym] = time.time() + 90.0
                     continue
 
                 from liquidity_guard import check_bid_ask_spread_liquidity
@@ -991,6 +996,8 @@ def execute_highest_rr_trade(kite, staged):
                     max_spread_pct=max_spread
                 )
                 if not liq_ok:
+                    _RADAR_CANDIDATE_GATE_COOLDOWN[contract] = time.time() + 90.0
+                    _RADAR_CANDIDATE_GATE_COOLDOWN[sym] = time.time() + 90.0
                     now_epoch = time.time()
                     if now_epoch - _LAST_LIQ_WARN.get(contract, 0) >= 60.0:
                         _LAST_LIQ_WARN[contract] = now_epoch
@@ -1007,7 +1014,7 @@ def execute_highest_rr_trade(kite, staged):
                 best_bid = float(depth_details.get("best_bid", 0.0))
                 best_ask = float(depth_details.get("best_ask", 0.0))
                 if best_bid > 0 and best_ask > 0 and depth_details.get("spread_pct", 0.0) >= 0.8:
-                    mid_price = round((best_bid + best_ask) / 2.0, 1)
+                    mid_price = round_to_tick((best_bid + best_ask) / 2.0, 0.05)
                     if mid_price > 0 and mid_price < limit_price:
                         logging.info(f"[PEGGED_LIMIT_ROUTING] {contract}: Pegging limit at Mid-Price {mid_price:.2f} (Bid={best_bid:.2f}, Ask={best_ask:.2f}, Spread={depth_details.get('spread_pct'):.2f}%) instead of marketable {limit_price:.2f}")
                         limit_price = mid_price
@@ -1015,9 +1022,9 @@ def execute_highest_rr_trade(kite, staged):
                 # Kite Limit Price Protection (LPP) Safety Clamp:
                 from position_monitor import clamp_lpp_buy_price
                 clamped_limit = clamp_lpp_buy_price(limit_price, best_ask if best_ask > 0 else (best_bid if best_bid > 0 else cp))
+                limit_price = round_to_tick(clamped_limit, 0.05)
                 if clamped_limit < limit_price:
                     logging.info(f"[LPP_CLAMP] Clamped limit buy price for {contract} from {limit_price:.2f} to {clamped_limit:.2f} (LTP/Ask={best_ask or cp:.2f})")
-                    limit_price = clamped_limit
 
                 with position_lock:
                     if sym in ACTIVE_POSITIONS:
@@ -1051,6 +1058,20 @@ def execute_highest_rr_trade(kite, staged):
                             "opt_vwap_sigma": round(float(best.get("opt_vwap_sigma", 0.0) or 0.0), 2)
                         }
                     }
+
+                    # Target Integrity Guard: Enforce Target 1 > Entry Price for long options
+                    curr_t1 = float(pos.get("t1") or 0.0)
+                    if curr_t1 <= limit_price or curr_t1 <= 0.0:
+                        calc_t1, calc_t2, calc_t3 = calculate_option_profit_targets(
+                            entry_premium=limit_price,
+                            sl_price=pos["current_sl"],
+                            dte=best.get("dte"),
+                            spot_t1=best.get("spot_t1")
+                        )
+                        pos["t1"] = calc_t1
+                        pos["t2"] = calc_t2
+                        pos["t3"] = calc_t3
+                        logging.info(f"[TARGET INTEGRITY GUARD] Recomputed targets for {sym} ({contract}) based on entry {limit_price:.2f} (SL: {pos['current_sl']}): T1={pos['t1']} T2={pos['t2']} T3={pos['t3']}")
                     if spread_info:
                         pos["spread_type"] = spread_info["spread_type"]
                         pos["leg2_contract"] = spread_info["leg2"]["contract"]
@@ -1123,7 +1144,7 @@ def execute_highest_rr_trade(kite, staged):
                             leg2_depth = leg2_q.get(leg2_q_key, {}).get("depth", {}).get("buy", [])
                             leg2_bid = float(leg2_depth[0]["price"]) if (leg2_depth and len(leg2_depth) > 0 and leg2_depth[0].get("price", 0) > 0) else float(leg2_q.get(leg2_q_key, {}).get("last_price", 0.0))
                             # Zerodha Kite strictly blocks MARKET orders for Stock Options. Always use LIMIT pegged at best bid (min 0.05).
-                            leg2_limit = round(max(0.05, leg2_bid * 0.995), 2) if leg2_bid > 0 else 0.05
+                            leg2_limit = round_to_tick(leg2_bid * 0.995, 0.05) if leg2_bid > 0 else 0.05
                             leg2_slices = slice_quantity_for_freeze(leg2_c, qty)
                             leg2_placed = []
                             for l2_s_qty in leg2_slices:
@@ -1161,7 +1182,7 @@ def execute_highest_rr_trade(kite, staged):
                                 try:
                                     q_unw = safe_kite_call(kite.quote, [f"NFO:{contract}"])
                                     u_bid = float(q_unw.get(f"NFO:{contract}", {}).get("depth", {}).get("buy", [{}])[0].get("price", 0.0) or q_unw.get(f"NFO:{contract}", {}).get("last_price", 0.0))
-                                    u_limit = round(max(0.05, u_bid * 0.98), 2) if u_bid > 0 else limit_price
+                                    u_limit = round_to_tick(u_bid * 0.98, 0.05) if u_bid > 0 else limit_price
                                     kite.place_order(
                                         variety=kite.VARIETY_REGULAR, tradingsymbol=contract,
                                         exchange=kite.EXCHANGE_NFO, transaction_type=kite.TRANSACTION_TYPE_SELL,
@@ -1326,6 +1347,14 @@ def run_fast_radar_check(kite):
                     continue
 
             c_name = item.get("contract")
+            # Gate Cooldown Check: Prevent rapid 15s retry loops on gate-rejected candidates
+            c_gate_key = c_name or sym
+            if c_gate_key in _RADAR_CANDIDATE_GATE_COOLDOWN:
+                if time.time() < _RADAR_CANDIDATE_GATE_COOLDOWN[c_gate_key]:
+                    continue
+                else:
+                    _RADAR_CANDIDATE_GATE_COOLDOWN.pop(c_gate_key, None)
+
             c_str = str(c_name).upper() if c_name else ""
             exch_prefix = "BFO" if ("SENSEX" in c_str or "BSE" in c_str) else "NFO"
             q_k = f"{exch_prefix}:{c_name}" if c_name else f"NSE:{sym}"
@@ -1599,6 +1628,7 @@ def run_fast_radar_check(kite):
                             logging.info(f"🛡️ [RADAR RISK BUDGET GATE] {sym} ({item.get('contract')}): Risk per lot (₹{risk_amt:.2f}) exceeds capital risk budget. Holding candidate from radar trigger.")
                             item["risk_exceeded"] = True
                             item["risk_msg"] = f"Risk per lot (₹{risk_amt:.0f}) exceeds capital risk budget"
+                            _RADAR_CANDIDATE_GATE_COOLDOWN[item.get("contract") or sym] = time.time() + 90.0
                             continue
 
                         if is_retest and not is_breakout:
@@ -1985,7 +2015,7 @@ def main():
             load_state()
             trade_db.run_db_housekeeping()
             try:
-                pattern_funnel.purge_stale_prior_day_setups("nifty50")
+                pattern_funnel.reconcile_funnel_and_display_setups("nifty50")
             except Exception as funnel_init_err:
                 logging.warning(f"Startup pattern funnel purge warning: {funnel_init_err}")
             active = trade_db.get_active_trades("nifty50")
@@ -2110,8 +2140,17 @@ def main():
             except Exception as e:
                 logging.warning(f"Kite position recovery failed: {e}")
             reconcile_positions(kite)
+            # Warm Start: Preserve and reconcile existing staged setups on startup
+            startup_staged = []
+            if os.path.exists(SCAN_DISPLAY_FILE):
+                try:
+                    with open(SCAN_DISPLAY_FILE, "r", encoding="utf-8") as f_disp:
+                        prev_disp = json.load(f_disp)
+                        startup_staged = prev_disp.get("staged_trades") or []
+                except Exception as disp_read_err:
+                    logging.debug(f"Startup staged read error: {disp_read_err}")
             with position_lock:
-                shared_write_display([], dict(ACTIVE_POSITIONS), SCAN_DISPLAY_FILE, "nifty50")
+                shared_write_display(startup_staged, dict(ACTIVE_POSITIONS), SCAN_DISPLAY_FILE, "nifty50")
         if anchor_only:
             run_anchor_scan(kite)
             return

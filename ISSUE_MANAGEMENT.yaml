@@ -3151,3 +3151,30 @@ issues:
   status: RESOLVED
   resolution_date: '2026-09-23'
 
+- id: ISSUE-084
+  title: "Enforce Exchange Tick Size (0.05) Invariant, Radar Gate Cooldown & Smart Validity Sweep Reconciliation"
+  date: "2026-09-23"
+  severity: CRITICAL
+  component: "common/targets.py, common/trading_core.py, common/pattern_funnel.py, common/liquidity_guard.py, common/display_writer.py, Trade_Option/stock_options_trade_engine.py, Trade_Option/index_options_trade_engine.py, Trade_Option/app_option_Trade.py, Trade_Stock/app_Stock_Trade.py"
+  symptoms: |
+    1. Order Rejection on Bhavani VM: Short leg order for BHARTIARTL26OCT1900CE (NRML SELL 475 qty @ 11.89) was REJECTED by Zerodha Kite RMS because 11.89 is not a multiple of the exchange tick size (0.05).
+    2. Radar Loop 429 Flood: Candidates failing liquidity or risk gates (e.g. WIPRO26OCT150CE) were re-triggered every 15 seconds by the fast surveillance radar without cooldown, generating Zerodha API "Too many requests" (HTTP 429) errors.
+    3. Premature Funnel / Staged Trades Wipeout on Engine Restart: Restarting the engine during market hours or running auto-purge wiped all prior staged candidates unconditionally, even if the underlying setup remained fully valid.
+    4. Target Inversion Risk: Leg 1 entry price could exceed T1 if stale target data was inherited from historical scan records.
+  root_cause: |
+    1. Leg 2 debit spread limit price and custom limit formulas lacked canonical rounding to ₹0.05 tick size.
+    2. Fast surveillance radar iteration had no candidate-level cooldown on failed liquidity, risk budget, or falling knife gates, causing rapid-fire quote/order attempts.
+    3. `purge_stale_prior_day_setups` evaluated a hard `d_str < today_str` check without evaluating pattern validity, and `stock_options_trade_engine.py` startup cleared staged setups via `shared_write_display([], ...)`.
+    4. Target calculations did not enforce `curr_t1 > limit_price` invariant prior to order submission.
+  fix_applied: |
+    1. Canonical `round_to_tick(price, 0.05)`: Added to common/targets.py and re-exported in common/trading_core.py; applied across all option engines (stock & index), stock engines, manual orders, and 1-click execution.
+    2. Radar Gate Cooldown (HTTP 429 Fix): Implemented `_RADAR_CANDIDATE_GATE_COOLDOWN` in stock_options_trade_engine.py applying a 90-second backoff to candidates failing liquidity, risk budget, or falling knife gates. Wrapped quote calls in liquidity_guard.py with `safe_kite_call`.
+    3. Target Integrity Guard: Added `curr_t1 <= limit_price` check, dynamically recalculating DTE-adaptive profit targets so T1 > Entry is guaranteed before trade routing.
+    4. Startup Warm Start & Smart Validity Reconciliation: Replaced unconditional wipeout with `reconcile_funnel_and_display_setups`, preserving setups up to 3 days old whose Anchor SL is intact and < 80% T1 has been reached. Staged setups from scan_display.json are loaded on engine startup instead of wiped.
+  verification: |
+    1. Dedicated unit test suite scratch/test_tick_and_gate_cooldown.py: PASSED (4/4 in 0.05s).
+    2. Spread exit inversion and index cap suite scratch/test_spread_exit_and_index_cap.py: PASSED (8/8 in 0.87s).
+    3. Master regression suite scratch/run_full_regression_test.py: PASSED (32/32 tests with 100% success, 0 errors).
+  status: RESOLVED
+  resolution_date: '2026-09-23'
+

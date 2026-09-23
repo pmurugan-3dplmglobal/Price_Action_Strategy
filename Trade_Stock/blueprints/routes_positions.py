@@ -210,7 +210,8 @@ def api_buy_scanned_trade():
                         if price <= 0:
                             price = round(entry_spot * 1.005, 1)
 
-                from common.trading_core import STOCK_REGISTRY, is_market_open, check_bid_ask_spread_liquidity
+                from common.trading_core import STOCK_REGISTRY, is_market_open, check_bid_ask_spread_liquidity, round_to_tick
+                price = round_to_tick(price, 0.05)
                 lot_size = STOCK_REGISTRY.get(symbol, {}).get("lot_size", 1) if exch != "NSE" else 1
 
                 force_order = bool(data.get("force", False))

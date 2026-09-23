@@ -100,7 +100,8 @@ from targets import (
     _avg_target_rank,
     _parse_candidate_tier,
     calculate_composite_rank,
-    parse_candidate_tier
+    parse_candidate_tier,
+    round_to_tick
 )
 
 # ── patterns_bull ──
@@ -142,7 +143,8 @@ from pattern_funnel import (
     clear_funnel,
     get_funnel_summary,
     purge_invalidated_or_triggered,
-    purge_stale_prior_day_setups
+    purge_stale_prior_day_setups,
+    reconcile_funnel_and_display_setups
 )
 
 # ── position_monitor ──

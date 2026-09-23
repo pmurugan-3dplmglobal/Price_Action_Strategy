@@ -33,6 +33,16 @@ def is_option_contract(contract_str):
     return (c.endswith("CE") or c.endswith("PE")) and any(ch.isdigit() for ch in c)
 
 
+def round_to_tick(price: float, tick: float = 0.05) -> float:
+    """
+    Rounds an order price to the valid exchange tick size (default 0.05 for NSE/BSE options & equities).
+    Guarantees price is a positive multiple of tick size and >= tick.
+    """
+    if price is None or price <= 0:
+        return tick
+    return max(tick, round(round(price / tick) * tick, 2))
+
+
 def calculate_option_profit_targets(entry_premium, sl_price, dte=None, spot_t1=None):
     """
     DTE-Adaptive Option Profit Target Calculation.

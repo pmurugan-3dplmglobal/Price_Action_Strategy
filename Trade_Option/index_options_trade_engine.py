@@ -53,7 +53,9 @@ from trading_core import (
     slice_quantity_for_freeze,
     calculate_position_size,
     _avg_target_rank,
-    _parse_candidate_tier
+    _parse_candidate_tier,
+    round_to_tick,
+    calculate_option_profit_targets
 )
 
 LIVE_MARKET_DEPLOYMENT = True
@@ -249,20 +251,20 @@ def execute_index_entry(kite, pos):
         bm = float(pos.get("benchmark") or 0)
         is_spread = pos.get("position_type") == "option_spread"
         if bm > 0 and not is_spread:
-            price = round(bm * 1.005, 1)
+            price = round_to_tick(bm * 1.005, 0.05)
         else:
-            price = round((ask if ask > 0 else ltp) * 1.005, 1)
+            price = round_to_tick((ask if ask > 0 else ltp) * 1.005, 0.05)
 
         # Smart Pegged Limit Order Routing (Passive Mid-Price Peg)
         # If spread >= 0.8%, peg limit order at Mid price between Best Bid and Best Ask to capture spread savings
         if bid > 0 and ask > 0 and (ask - bid) / ask >= 0.008:
-            mid_price = round((bid + ask) / 2.0, 1)
+            mid_price = round_to_tick((bid + ask) / 2.0, 0.05)
             if mid_price > 0 and mid_price < price:
                 logging.info(f"[INDEX PEGGED_LIMIT_ROUTING] {pos['contract']}: Pegging limit at Mid-Price {mid_price:.2f} (Bid={bid:.2f}, Ask={ask:.2f}) instead of {price:.2f}")
                 price = mid_price
 
         from position_monitor import clamp_lpp_buy_price
-        price = clamp_lpp_buy_price(price, ask if ask > 0 else (ltp or price))
+        price = round_to_tick(clamp_lpp_buy_price(price, ask if ask > 0 else (ltp or price)), 0.05)
         lot_sz = pos.get("lot_size") or get_option_lot_size(pos["contract"]) or INDEX_REGISTRY.get(pos.get("symbol", ""), {}).get("lot_size", 1)
 
         cfg_eng = load_program_config_for_engine("index")
@@ -281,6 +283,20 @@ def execute_index_entry(kite, pos):
         if not liq_ok:
             logging.warning(f"[LIQUIDITY_GATE] Entry rejected for {pos['contract']}: {liq_msg}")
             return False
+
+        # Target Integrity Guard: Enforce Target 1 > Entry Price for long options
+        curr_t1 = float(pos.get("t1") or 0.0)
+        if curr_t1 <= price or curr_t1 <= 0.0:
+            calc_t1, calc_t2, calc_t3 = calculate_option_profit_targets(
+                entry_premium=price,
+                sl_price=float(pos.get("current_sl") or 0.0),
+                dte=pos.get("dte"),
+                spot_t1=pos.get("spot_t1")
+            )
+            pos["t1"] = calc_t1
+            pos["t2"] = calc_t2
+            pos["t3"] = calc_t3
+            logging.info(f"[TARGET INTEGRITY GUARD] Recomputed targets for index {pos.get('symbol')} ({pos['contract']}) based on entry {price:.2f} (SL: {pos.get('current_sl')}): T1={pos['t1']} T2={pos['t2']} T3={pos['t3']}")
 
         pos_size = int(pos.get("position_size", 0))
         total_qty = lot_sz * pos_size
@@ -320,8 +336,8 @@ def execute_index_entry(kite, pos):
                 leg2_q = safe_kite_call(kite.quote, [leg2_q_key])
                 leg2_depth = leg2_q.get(leg2_q_key, {}).get("depth", {}).get("buy", [])
                 leg2_bid = float(leg2_depth[0]["price"]) if (leg2_depth and len(leg2_depth) > 0 and leg2_depth[0].get("price", 0) > 0) else float(leg2_q.get(leg2_q_key, {}).get("last_price", 0))
-                leg2_limit = round(leg2_bid * 0.995, 1) if leg2_bid > 0 else 0
-                leg2_otype = kite.ORDER_TYPE_LIMIT if leg2_limit > 0 else kite.ORDER_TYPE_MARKET
+                leg2_limit = round_to_tick(leg2_bid * 0.995, 0.05) if leg2_bid > 0 else 0.05
+                leg2_otype = kite.ORDER_TYPE_LIMIT
 
                 leg2_slices = slice_quantity_for_freeze(leg2_c, total_qty)
                 leg2_placed = []
@@ -330,7 +346,7 @@ def execute_index_entry(kite, pos):
                         variety=kite.VARIETY_REGULAR, tradingsymbol=leg2_c,
                         exchange=target_exch, transaction_type=kite.TRANSACTION_TYPE_SELL,
                         quantity=l2_qty, order_type=leg2_otype,
-                        price=leg2_limit if leg2_limit > 0 else None,
+                        price=leg2_limit,
                         product=kite.PRODUCT_NRML
                     )
                     leg2_placed.append(str(oid2))
@@ -804,8 +820,17 @@ def main_scan_loop(kite):
     except Exception as e:
         logging.warning(f"Kite position recovery failed: {e}")
     shared_reconcile(kite, INDEX_REGISTRY, ACTIVE_POSITIONS, position_lock, "index", TIMEFRAME_ENTRY, TIMEFRAME_ANCHOR, LOOKBACK_DAYS, lambda sym, sp, step, opt, r: shared_resolve_strikes(instrument_dump, sym, sp, step, opt, r))
+    # Warm Start: Preserve and reconcile existing staged setups on startup
+    startup_staged_idx = []
+    if os.path.exists(SCAN_DISPLAY_FILE):
+        try:
+            with open(SCAN_DISPLAY_FILE, "r", encoding="utf-8") as f_disp_idx:
+                prev_disp_idx = json.load(f_disp_idx)
+                startup_staged_idx = prev_disp_idx.get("staged_trades") or []
+        except Exception as disp_idx_err:
+            logging.debug(f"Index startup staged read error: {disp_idx_err}")
     with position_lock:
-        shared_write_display([], dict(ACTIVE_POSITIONS), SCAN_DISPLAY_FILE, "index")
+        shared_write_display(startup_staged_idx, dict(ACTIVE_POSITIONS), SCAN_DISPLAY_FILE, "index")
     cycle = 0
     while True:
         try:

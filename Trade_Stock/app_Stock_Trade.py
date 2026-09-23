@@ -1808,6 +1808,8 @@ def api_buy_scanned_trade():
                         if price <= 0:
                             price = round(entry_spot * 1.005, 1)
 
+                from common.trading_core import is_option_contract, round_to_tick
+                price = round_to_tick(price, 0.05)
                 force_order = bool(data.get("force", False))
                 liq_ok, spread_val, liq_msg, _ = check_bid_ask_spread_liquidity(
                     kite=_kite_session, exchange=exch, contract=contract, max_spread_pct=0.025
@@ -1817,7 +1819,6 @@ def api_buy_scanned_trade():
                     logging.warning(f"[1-CLICK {action_tag} LIQUIDITY WARNING] {contract}: {liq_msg}")
                     return jsonify({"ok": False, "error": f"Liquidity Trap Alert: {liq_msg}"}), 400
 
-                from common.trading_core import is_option_contract
                 market_open = is_market_open()
                 is_opt = is_option_contract(contract) or exch != "NSE"
                 if not market_open and is_opt:
