@@ -1325,13 +1325,6 @@ def run_fast_radar_check(kite):
                 if sym in ACTIVE_POSITIONS:
                     continue
 
-            # Evaluate item setup date against today's date, evicting stale prior-day setups cleanly before Kite API calls
-            item_date = pattern_funnel._get_item_date_str(item)
-            if item_date and item_date < today_str:
-                logging.info(f"[RADAR EVICT: STALE PRIOR-DAY ITEM] {sym} ({item.get('contract')}) setup date {item_date} is prior to {today_str}. Evicting cleanly.")
-                pattern_funnel.evict_item("nifty50", item)
-                continue
-
             c_name = item.get("contract")
             c_str = str(c_name).upper() if c_name else ""
             exch_prefix = "BFO" if ("SENSEX" in c_str or "BSE" in c_str) else "NFO"
@@ -1341,6 +1334,16 @@ def run_fast_radar_check(kite):
             bm = float(item.get("benchmark") or 0.0)
             sl = float(item.get("current_sl") or 0.0)
             t1 = float(item.get("t1") or 0.0)
+
+            # Prior-day stale setup check:
+            # Under Datta Rulebook, prior-day incubation setups (Point A/B/C formed yesterday) are 100% VALID
+            # to trigger at Point D today! They should ONLY be evicted if they ALREADY ran/broke out
+            # prior to today (live_ltp >= benchmark or >= 80% T1).
+            item_date = pattern_funnel._get_item_date_str(item)
+            if item_date and item_date < today_str and live_ltp > 0 and bm > 0 and live_ltp >= (bm * 0.99):
+                logging.info(f"[RADAR EVICT: STALE PRIOR-DAY RUN] {sym} ({item.get('contract')}) prior-day setup ({item_date}) already at/above BM ({live_ltp:.2f} >= {bm:.2f}). Evicting cleanly.")
+                pattern_funnel.evict_item("nifty50", item)
+                continue
 
             # Quote-First Trigger Polling:
             # If live LTP is known from bulk quote and not near benchmark (LTP < Benchmark * 0.995),

@@ -45,7 +45,7 @@ def _get_item_date_str(item):
     """
     if not isinstance(item, dict):
         return None
-    for k in ["date", "candle_c_time", "candle_b_time", "candle_a_time", "entry_time", "promoted_at", "created_at", "timestamp"]:
+    for k in ["date", "promoted_at", "staged_time", "created_at", "timestamp", "entry_time", "candle_c_time", "candle_b_time", "candle_a_time"]:
         v = item.get(k)
         if v:
             try:
