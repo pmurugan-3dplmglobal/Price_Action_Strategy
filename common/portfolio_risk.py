@@ -13,6 +13,7 @@ import logging
 import json
 import os
 import time
+import threading
 from datetime import datetime as dt
 import re
 import paths
@@ -583,4 +584,62 @@ def find_weakest_swappable_position(live_positions, candidate_rr=3.0, kite=None,
     # Sort by lowest PnL first (weakest performer gets swapped)
     swappable_candidates.sort(key=lambda x: (x["pnl"], x["pnl_pct"]))
     return swappable_candidates[0]
+
+
+_LIVE_CASH_CACHE = {
+    "timestamp": 0.0,
+    "cash": 100000.0
+}
+_CASH_LOCK = threading.Lock()
+
+
+def get_live_available_cash(kite, default=100000.0, cache_ttl=15.0):
+    """
+    Query live available broker cash from Zerodha Kite API with thread-safe caching (default 15s TTL).
+    Returns available cash for new equity/derivative margins.
+    Gracefully falls back to default if kite is None or API call fails.
+    """
+    if kite is None:
+        return float(default)
+
+    now_epoch = time.time()
+    with _CASH_LOCK:
+        if (now_epoch - _LIVE_CASH_CACHE["timestamp"]) < cache_ttl:
+            return _LIVE_CASH_CACHE["cash"]
+
+    try:
+        try:
+            from common.trading_core import safe_kite_call
+        except ImportError:
+            from trading_core import safe_kite_call
+
+        m_res = safe_kite_call(kite.margins, "equity")
+        if isinstance(m_res, dict):
+            avail = m_res.get("available", {})
+            live_bal = float(avail.get("live_balance") or avail.get("cash") or m_res.get("net", default) or default)
+            with _CASH_LOCK:
+                _LIVE_CASH_CACHE["timestamp"] = now_epoch
+                _LIVE_CASH_CACHE["cash"] = live_bal
+            return live_bal
+    except Exception as e:
+        logging.warning(f"[PORTFOLIO_RISK] Failed to query live cash margins: {e}. Using cached/default {default}")
+
+    with _CASH_LOCK:
+        return _LIVE_CASH_CACHE["cash"] if _LIVE_CASH_CACHE["timestamp"] > 0 else float(default)
+
+
+def check_capital_affordability(kite, required_capital, max_utilization_pct=0.90, default_capital=100000.0):
+    """
+    Pre-execution capital check: verifies required trade capital does not exceed max_utilization_pct
+    (default 90%) of live broker cash balance.
+    Prevents broker RMS 'Insufficient funds' rejections and radar jamming loops.
+    Returns:
+        (is_affordable: bool, message: str, live_cash: float)
+    """
+    live_cash = get_live_available_cash(kite, default=default_capital)
+    max_budget = live_cash * max_utilization_pct
+    if required_capital > max_budget:
+        msg = f"Required capital ₹{required_capital:,.2f} exceeds {max_utilization_pct*100:.0f}% of available cash ₹{live_cash:,.2f} (budget: ₹{max_budget:,.2f})"
+        return False, msg, live_cash
+    return True, "Affordability check passed", live_cash
 

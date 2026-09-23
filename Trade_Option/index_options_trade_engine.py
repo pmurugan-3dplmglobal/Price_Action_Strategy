@@ -55,7 +55,9 @@ from trading_core import (
     _avg_target_rank,
     _parse_candidate_tier,
     round_to_tick,
-    calculate_option_profit_targets
+    calculate_option_profit_targets,
+    get_live_available_cash,
+    check_capital_affordability
 )
 
 LIVE_MARKET_DEPLOYMENT = True
@@ -401,9 +403,24 @@ def execute_highest_rr_trade(kite, staged):
         logging.info("[INDEX_CUTOFF_GUARD] New index trade entries blocked after 13:30 IST. Skipping cycle execution.")
         return
 
+    # Fix 5: Opening Bell 15-Minute Delay Guard
+    # Suppress automated index entries before 09:30 AM to allow opening 15m candle close, avoiding opening spread/gap traps.
+    from timeframe_utils import get_ist_now
+    from datetime import time as dt_time
+    now_ist = get_ist_now().time()
+    if LIVE_MARKET_DEPLOYMENT and live_execution_enabled(LIVE_EXECUTION_FLAG) and BACKTEST_DATE is None:
+        if now_ist < dt_time(9, 30):
+            logging.info(f"[INDEX_OPENING_BELL_DELAY] Automated index entries suppressed before 09:30 IST (current time: {now_ist.strftime('%H:%M:%S')}) to allow opening 15m candle close and avoid opening spread/whipsaw traps.")
+            return
+
     cfg_eng = load_program_config_for_engine("index")
     exec_mode = str(cfg_eng.get("execution_mode", "DEBIT_SPREAD")).upper()
     use_spread = (exec_mode in ["DEBIT_SPREAD", "SPREAD_ONLY", "AUTO"])
+    cap_val_base = float(cfg_eng.get("capital") or 100000.0)
+    live_cash_avail = get_live_available_cash(kite, default=cap_val_base) if (live_ok and kite) else cap_val_base
+    if use_spread and exec_mode != "SPREAD_ONLY" and live_cash_avail < 200000.0:
+        logging.info(f"[INDEX_SPREAD_MARGIN_GUARD] Available broker cash ₹{live_cash_avail:,.2f} < ₹2,00,000 threshold. Defaulting to clean naked option to prevent sequential short leg margin rejection.")
+        use_spread = False
 
     # Prioritized Candidate Pools: Tier 1 Gold (Priority 1) and Tier 2 Core (Priority 2)
     t1_candidates = []
@@ -615,6 +632,17 @@ def execute_highest_rr_trade(kite, staged):
                     except Exception as w_err:
                         logging.debug(f"[WATCHLIST] Missed opportunity log error: {w_err}")
                     continue
+
+                # Gate 0A: Pre-Execution Capital Affordability Gate (Fix 1)
+                entry_price_val = float(best.get("benchmark") or best.get("entry_spot") or 0.0)
+                required_capital = float(pos_size * lot_sz * entry_price_val)
+                if live_ok and kite:
+                    afford_ok, afford_msg, _ = check_capital_affordability(
+                        kite, required_capital=required_capital, max_utilization_pct=0.90, default_capital=cap_val
+                    )
+                    if not afford_ok:
+                        logging.warning(f"🛡️ [INDEX CAPITAL GATE] Auto-execution skipped for {best['symbol']} ({best.get('contract')}): {afford_msg}.")
+                        continue
 
                 with position_lock:
                     contract_cand = pos.get("contract") or best.get("contract")

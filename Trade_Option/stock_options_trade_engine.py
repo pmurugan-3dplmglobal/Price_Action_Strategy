@@ -60,7 +60,9 @@ from trading_core import (
     STOCK_EXPIRY_ROLLOVER_DAYS,
     slice_quantity_for_freeze,
     round_to_tick,
-    calculate_option_profit_targets
+    calculate_option_profit_targets,
+    get_live_available_cash,
+    check_capital_affordability
 )
 
 LIVE_MARKET_DEPLOYMENT = True
@@ -222,28 +224,29 @@ def resolve_option_contract(symbol, spot, step, opt_type, target_strike=None):
             target = target_strike or round(spot / step) * step
             sub = m[m['strike'] == float(target)].copy()
             if sub.empty:
-                idx = (m['strike'] - spot).abs().idxmin()
-                sel = m.loc[idx]
+                closest_strike = m.loc[(m['strike'] - float(target)).abs().idxmin()]['strike']
+                sub = m[m['strike'] == float(closest_strike)].copy()
+
+            sub['expiry_dt'] = pd.to_datetime(sub['expiry']).dt.date
+            today = get_ist_date()
+            future = sub[sub['expiry_dt'] >= today].sort_values(by='expiry_dt')
+            if future.empty:
+                return None
+
+            expiries = future['expiry_dt'].unique()
+            curr_exp = expiries[0]
+            days_rem = (curr_exp - today).days
+            # 85% Threshold Rule: If <= 6 days remaining to monthly expiry, select NEXT MONTH
+            if days_rem <= STOCK_EXPIRY_ROLLOVER_DAYS and len(expiries) > 1:
+                target_exp = expiries[1]
+                logging.info(f"[STOCK EXPIRY ROLLOVER 85%] {symbol}: {days_rem}d to expiry ({curr_exp}) -> Selected NEXT MONTH ({target_exp})")
+                sel = future[future['expiry_dt'] == target_exp].iloc[0]
+            elif days_rem <= 3:
+                logging.warning(f"[MONTHLY_EXPIRY_72H_GUARD] {symbol}: Only {days_rem}d to monthly expiry ({curr_exp}) with no next-month contract. Skipping to eliminate hyper-gamma decay / physical settlement risk.")
+                return None
             else:
-                sub['expiry_dt'] = pd.to_datetime(sub['expiry']).dt.date
-                today = get_ist_date()
-                future = sub[sub['expiry_dt'] >= today].sort_values(by='expiry_dt')
-                if not future.empty:
-                    expiries = future['expiry_dt'].unique()
-                    curr_exp = expiries[0]
-                    days_rem = (curr_exp - today).days
-                    # 85% Threshold Rule: If <= 6 days remaining to monthly expiry, select NEXT MONTH
-                    if days_rem <= STOCK_EXPIRY_ROLLOVER_DAYS and len(expiries) > 1:
-                        target_exp = expiries[1]
-                        logging.info(f"[STOCK EXPIRY ROLLOVER 85%] {symbol}: {days_rem}d to expiry ({curr_exp}) -> Selected NEXT MONTH ({target_exp})")
-                        sel = future[future['expiry_dt'] == target_exp].iloc[0]
-                    elif days_rem <= 2 and len(expiries) <= 1:
-                        logging.warning(f"[PHYSICAL DELIVERY GUARD] {symbol}: Only {days_rem}d to monthly expiry with no next-month contract. Skipping to prevent physical settlement margin penalty.")
-                        return None
-                    else:
-                        sel = future.iloc[0]
-                else:
-                    sel = sub.iloc[0] if not sub.empty else m.iloc[0]
+                sel = future.iloc[0]
+
             return str(sel['tradingsymbol'])
         except Exception as e:
             logging.error(f"Option resolve error for {symbol}: {e}")
@@ -685,6 +688,11 @@ def execute_highest_rr_trade(kite, staged):
     cfg_eng = load_program_config_for_engine("nifty50")
     exec_mode = str(cfg_eng.get("execution_mode", "AUTO")).upper()
     use_spread = (exec_mode in ["DEBIT_SPREAD", "SPREAD_ONLY"]) or (exec_mode == "AUTO" and TIMEFRAME_ENTRY in ["15minute", "30minute", "60minute", "day"])
+    cap_val_base = float(cfg_eng.get("capital") or 100000.0)
+    live_cash_avail = get_live_available_cash(kite, default=cap_val_base) if (live_ok and kite) else cap_val_base
+    if use_spread and exec_mode != "SPREAD_ONLY" and live_cash_avail < 200000.0:
+        logging.info(f"[SPREAD_MARGIN_GUARD] Available broker cash ₹{live_cash_avail:,.2f} < ₹2,00,000 threshold. Defaulting to clean naked option to prevent sequential limit order hedge delay / RMS rejection on Leg 2.")
+        use_spread = False
 
     for best in sorted_pool:
         try:
@@ -833,6 +841,19 @@ def execute_highest_rr_trade(kite, staged):
             benchmark_val = float(contract_quote_val or best.get("benchmark") or cp)
             limit_price = round(benchmark_val * 1.005, 1) if benchmark_val > 0 else round(cp * 1.005, 1)
 
+            # Gate 0A: Pre-Execution Capital Affordability Gate (Fix 1)
+            # Eliminates 106-rejection radar jamming loops on expensive mega-caps (KPITTECH, MARUTI, RELIANCE, CIPLA, ONGC)
+            required_capital = float((lot_sz * pos_size) * limit_price)
+            if live_ok and kite:
+                afford_ok, afford_msg, _ = check_capital_affordability(
+                    kite, required_capital=required_capital, max_utilization_pct=0.90, default_capital=cap_val
+                )
+                if not afford_ok:
+                    _RADAR_CANDIDATE_GATE_COOLDOWN[contract] = time.time() + 300.0
+                    _RADAR_CANDIDATE_GATE_COOLDOWN[sym] = time.time() + 300.0
+                    logging.warning(f"🛡️ [CAPITAL_AFFORDABILITY_GATE] Auto-execution skipped for {sym} ({contract}): {afford_msg}. Cooldown 300s.")
+                    continue
+
             if live_ok:
                 from vix_guard import evaluate_vix_regime
                 conf_type = str(best.get("spot_confluence_type") or "").upper()
@@ -968,6 +989,26 @@ def execute_highest_rr_trade(kite, staged):
                     _RADAR_CANDIDATE_GATE_COOLDOWN[contract] = time.time() + 90.0
                     _RADAR_CANDIDATE_GATE_COOLDOWN[sym] = time.time() + 90.0
                     continue
+
+                # Gate 4B: 72-Hour Monthly Expiry Rollover Guard (Fix 3)
+                # When within 72 hours of monthly expiry (DTE <= 3), re-resolve to NEXT MONTH contract if not already rolled over.
+                contract_dte = dte_val
+                if contract_dte is not None and contract_dte <= 3:
+                    with instruments_lock:
+                        has_nfo = not NFO_INSTRUMENTS.empty
+                    if has_nfo:
+                        next_cnt = resolve_option_contract(sym, cp, strike_step, opt_type, target_strike)
+                        if next_cnt and next_cnt != contract:
+                            logging.info(f"[MONTHLY_EXPIRY_72H_GUARD] Rolled over {sym} from expiring {contract} (DTE={contract_dte}) to next month {next_cnt}")
+                            contract = next_cnt
+                            option_token = _resolve_option_token(contract)
+                            best["contract"] = next_cnt
+                        else:
+                            _RADAR_CANDIDATE_GATE_COOLDOWN[contract] = time.time() + 300.0
+                            _RADAR_CANDIDATE_GATE_COOLDOWN[sym] = time.time() + 300.0
+                            logging.warning(f"🛡️ [MONTHLY_EXPIRY_72H_GUARD] Auto-execution blocked for {sym} ({contract}): "
+                                            f"Contract DTE={contract_dte} <= 3 with no next-month contract available. Prohibiting entry to prevent hyper-gamma decay.")
+                            continue
 
                 from liquidity_guard import check_bid_ask_spread_liquidity
                 cfg_liq = cfg_eng.get("liquidity_gate", {})
@@ -1630,6 +1671,37 @@ def run_fast_radar_check(kite):
                             item["risk_msg"] = f"Risk per lot (₹{risk_amt:.0f}) exceeds capital risk budget"
                             _RADAR_CANDIDATE_GATE_COOLDOWN[item.get("contract") or sym] = time.time() + 90.0
                             continue
+
+                        # Check 6: Pre-Execution Capital Affordability Gate (Fix 1)
+                        # Prevents 106-rejection radar jamming loops on expensive mega-caps (KPITTECH, MARUTI, RELIANCE, CIPLA, ONGC)
+                        one_lot_cost = float(lot_sz_val * c_now)
+                        if kite and LIVE_MARKET_DEPLOYMENT:
+                            afford_ok, afford_msg, _ = check_capital_affordability(
+                                kite, required_capital=one_lot_cost, max_utilization_pct=0.90, default_capital=cap_val_radar
+                            )
+                            if not afford_ok:
+                                logging.warning(f"🛡️ [RADAR CAPITAL GATE] {sym} ({item.get('contract')}): {afford_msg}. Cooldown 300s.")
+                                item["risk_exceeded"] = True
+                                item["risk_msg"] = afford_msg
+                                _RADAR_CANDIDATE_GATE_COOLDOWN[item.get("contract") or sym] = time.time() + 300.0
+                                continue
+
+                        # Check 7: 72-Hour Monthly Expiry Rollover Guard (Fix 3)
+                        # Prevents hyper-gamma decay traps on current-month expiring stock options
+                        radar_dte = item.get("dte")
+                        if radar_dte is None and item.get("contract"):
+                            try:
+                                from position_monitor import get_contract_days_to_expiry
+                                radar_dte = get_contract_days_to_expiry(item.get("contract"))
+                            except Exception:
+                                pass
+                        if radar_dte is not None and radar_dte <= 3:
+                            with instruments_lock:
+                                has_nfo_r = not NFO_INSTRUMENTS.empty
+                            if has_nfo_r:
+                                logging.warning(f"🛡️ [RADAR EXPIRY GATE] {sym} ({item.get('contract')}): DTE={radar_dte} <= 3 (within 72h of monthly expiry). Cooldown 300s.")
+                                _RADAR_CANDIDATE_GATE_COOLDOWN[item.get("contract") or sym] = time.time() + 300.0
+                                continue
 
                         if is_retest and not is_breakout:
                             trigger_type = "POST_D_RETEST"

@@ -10,6 +10,54 @@ meta:
     recent_archived_batch: [FEATURE-031, FEATURE-030, FEATURE-029, ISSUE-084, ISSUE-083, ISSUE-082, ISSUE-081, ISSUE-080, FEATURE-036, FEATURE-035, FEATURE-034, FEATURE-033, ISSUE-054]
     key_archived_families: [ALGO_AUDIT_CVE, QUANT_ENHANCEMENTS, RADAR_LIFECYCLE, VCP_METRICS, SCANNER_DISCOVERY, SECURITY_CONFIG, ZERO_REGRESSION_AUDIT]
 issues:
+- id: ISSUE-105
+  title: Execution Expectancy Hardening — Live Capital Affordability Gate, Small Account Naked Options (< ₹2L), 72h Monthly Expiry Rollover Guard, +15% Ratchet (+8% SL Lock), and Opening Bell 15m Index Delay
+  severity: CRITICAL
+  category: Risk Governance, Order Placement, Execution Expectancy, Option Greeks & Rollover, Position Monitor
+  family: RISK_GOVERNANCE
+  date_reported: '2026-09-23'
+  symptom: |
+    1. 106-rejection radar jamming loop: Expensive mega-caps (MARUTI, KPITTECH, RELIANCE, CIPLA, ONGC) repeatedly passed radar triggers but failed at Zerodha RMS with 'Insufficient funds' (requiring ₹25k-₹35k while available margin was ~₹8k-₹15k), jamming radar surveillance loops and starving viable ₹5k-₹20k setups.
+    2. Sequential Limit Order Hedge Delay: Accounts under ₹2,00,000 attempting 2-leg debit spreads had Leg 1 BUY placed, but while resting unfilled as LIMIT, Zerodha RMS evaluated Leg 2 SELL as a naked short requiring full ₹1.4L margin and rejected Leg 2 (MIDCPNIFTY, TMPV, TATAPOWER).
+    3. Hyper-Gamma Expiry Decay Trap: NAUKRI 1300 PE entered 1-3 days before monthly expiry suffered extreme gamma acceleration and theta decay when spot consolidated, tempting premature exit right before spot collapsed and option exploded to 17.70 (+112%).
+    4. Premature Manual Scalping vs Systematic Profit Lock: POWERGRID 265 CE was manually scalped for +₹380 (+2.67%) due to fear of losing unrealized gains, leaving +₹3,420 on table as option surged to target T1.
+    5. Opening bell spread trap: MIDCPNIFTY entered during the first 15 minutes was whipsawed by incomplete opening candle and wide spread volatility.
+  root_cause: |
+    1. Neither fast_radar_loop nor execute_highest_rr_trade checked live available cash margins before placement, triggering repeated RMS rejections every 15 seconds.
+    2. Kite API does not support atomic basket orders; sequential 2-leg placement requires accounts to have margin buffer (>= ₹2L) to withstand RMS evaluating Leg 2 independently.
+    3. resolve_option_strikes and resolve_option_contract lacked strict exclusion of current-month stock options within 72 hours of expiry when no next-month series was loaded.
+    4. Default trailing stage 1 required +18% gain and only locked +10% SL, leaving small early gains unprotected; no systematic 50% partial bank at +25% / T1 with +BE runner trail.
+    5. index_options_trade_engine executed trades immediately at 09:15 without waiting for the initial 15-minute candle to close.
+  affected_files:
+  - common/portfolio_risk.py
+  - common/trading_core.py
+  - common/resolve.py
+  - common/position_monitor.py
+  - Trade_Option/stock_options_trade_engine.py
+  - Trade_Option/index_options_trade_engine.py
+  - Trade_Option/input/program_config.json
+  - input/program_config.json
+  - scratch/clean_program_config.json
+  - scratch/test_session_consensus_fixes.py
+  fix_applied: |
+    1. Capital Affordability Pre-Execution Gate:
+       - Created get_live_available_cash(kite, default=100000.0, cache_ttl=15.0) and check_capital_affordability(kite, required_capital, max_utilization_pct=0.90) in common/portfolio_risk.py.
+       - Integrated pre-flight check in fast_radar_loop (1-lot cost > 90% live cash) and execute_highest_rr_trade (order cost > 90% live cash). Candidates failing cooldown for 300s, eliminating the 106-rejection radar jamming loop.
+    2. Default < ₹2L Accounts to Clean Naked Options:
+       - In stock_options_trade_engine.py and index_options_trade_engine.py, if available cash < ₹2,00,000 and execution_mode != 'SPREAD_ONLY', disabled debit spreads (use_spread = False) to prevent sequential limit order hedge delay / RMS rejection on Leg 2.
+    3. 72-Hour Monthly Expiry Rollover Guard:
+       - In resolve_option_strikes (common/resolve.py) and resolve_option_contract (stock_options_trade_engine.py), if days_rem <= 3 (within 72h of monthly expiry), strictly skips/excludes current-month contracts and enforces next-month (OCT) selection.
+       - In execute_highest_rr_trade and fast_radar_loop, automatically rolls over expiring contracts to next-month series or blocks execution with 300s cooldown.
+    4. Systematic +15% Ratchet (+8% SL Lock) & Target T1 Profit Lock:
+       - Updated trailing stage 1 defaults in common/position_monitor.py and program_config.json to option_trail_1_gain_pct: 15.0 -> option_trail_1_sl_pct: 8.0, and option_trail_2_gain_pct: 25.0 -> option_trail_2_sl_pct: 15.0.
+       - Enforced that when +15% is reached, SL ratchets to +8% above entry (green profit guaranteed).
+    5. Opening Bell 15-Minute Index Delay:
+       - In index_options_trade_engine.py execute_highest_rr_trade(), suppressed automated index executions before 09:30 AM IST (now_ist < dt_time(9, 30)) to allow the opening 15m candle to close, avoiding opening spread and whipsaw traps.
+    6. Verification:
+       - Created scratch/test_session_consensus_fixes.py (5/5 unit tests passed).
+       - Full regression suite scratch/run_full_regression_test.py passed with 100% success (32/32 test suites).
+  status: RESOLVED
+
 - id: ISSUE-078
   title: Phantom Exit Order Shield & Ground-Truth Net Holding Verification Before SELL Placement (Prevents Accidental Naked Short Writing)
   severity: CRITICAL

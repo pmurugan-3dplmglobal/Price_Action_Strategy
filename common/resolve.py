@@ -2897,6 +2897,9 @@ def resolve_option_strikes(nfo_instruments, base_symbol, spot_price, step_size, 
                         target_exp = expiries[1]
                         sub = future[future['expiry_dt'] == target_exp]
                         c = sub.iloc[0] if not sub.empty else future.iloc[0]
+                    elif days_rem <= 3:
+                        logging.warning(f"[MONTHLY_EXPIRY_72H_GUARD] {base_symbol} {strike} {option_type}: Only {days_rem}d to monthly expiry ({curr_exp}) with no next-month series. Skipping to eliminate hyper-gamma decay / physical settlement risk.")
+                        continue
                     else:
                         c = future.iloc[0]
                 else:

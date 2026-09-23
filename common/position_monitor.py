@@ -2222,11 +2222,12 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                 atr = entry_s * 0.02
 
             # Feature 5: Trailing Stage 1 & Extended Gain Lock (Near-T1 & Multi-Tier Proximity)
+            # Fix 4: Systematic +15% Ratchet (+8% SL lock) & +25% (+15% SL lock) to eliminate premature manual scalping
             trail_rules = cfg.get("trailing_rules", {}) if isinstance(cfg.get("trailing_rules"), dict) else {}
-            opt_gain_trigger = float(trail_rules.get("option_trail_1_gain_pct", cfg.get("option_trail_1_gain_pct", 12.0)))
-            opt_sl_lock_pct = float(trail_rules.get("option_trail_1_sl_pct", cfg.get("option_trail_1_sl_pct", 3.0)))
-            opt_gain_trigger_2 = float(trail_rules.get("option_trail_2_gain_pct", cfg.get("option_trail_2_gain_pct", 18.0)))
-            opt_sl_lock_pct_2 = float(trail_rules.get("option_trail_2_sl_pct", cfg.get("option_trail_2_sl_pct", 10.0)))
+            opt_gain_trigger = float(trail_rules.get("option_trail_1_gain_pct", cfg.get("option_trail_1_gain_pct", 15.0)))
+            opt_sl_lock_pct = float(trail_rules.get("option_trail_1_sl_pct", cfg.get("option_trail_1_sl_pct", 8.0)))
+            opt_gain_trigger_2 = float(trail_rules.get("option_trail_2_gain_pct", cfg.get("option_trail_2_gain_pct", 25.0)))
+            opt_sl_lock_pct_2 = float(trail_rules.get("option_trail_2_sl_pct", cfg.get("option_trail_2_sl_pct", 15.0)))
             stock_gain_trigger = float(trail_rules.get("stock_trail_1_gain_pct", cfg.get("stock_trail_1_gain_pct", 8.0)))
 
             # Extended Trailing Tiers (Minervini / Datta Spikes Protection)

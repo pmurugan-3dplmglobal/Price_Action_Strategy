@@ -243,7 +243,9 @@ from vix_guard import (
 
 # ── portfolio_risk ──
 from portfolio_risk import (
-    check_portfolio_risk_caps
+    check_portfolio_risk_caps,
+    get_live_available_cash,
+    check_capital_affordability
 )
 
 # ── liquidity_guard ──

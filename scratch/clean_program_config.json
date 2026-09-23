@@ -3,8 +3,10 @@
   "pause_morning_circuit_breaker": true,
   "pause_sl_monitor": false,
   "trailing_rules": {
-    "option_trail_1_gain_pct": 18.0,
-    "option_trail_1_sl_pct": 10.0,
+    "option_trail_1_gain_pct": 15.0,
+    "option_trail_1_sl_pct": 8.0,
+    "option_trail_2_gain_pct": 25.0,
+    "option_trail_2_sl_pct": 15.0,
     "stock_trail_1_gain_pct": 10.0,
     "stock_trail_1_sl_pct": 2.0
   },
