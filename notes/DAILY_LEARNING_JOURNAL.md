@@ -6,7 +6,16 @@ This repository records daily trading logs, execution forensics, pattern perform
 
 ## 📑 Table of Contents
 - [Journal Format & Guidelines](#-journal-format--guidelines)
-- [Session 2026-09-23: Forensic Loss Analysis, Margin Bottlenecks & Scanned List 50%+ Winners](#-session-2026-09-23-forensic-loss-analysis-margin-bottlenecks--scanned-list-50-winners)
+- [Session 2026-09-23: Forensic Loss Analysis, Margin Bottlenecks & Scanned List 50%+ Winners](#-session-2026-09-23-wednesday)
+  - [1. Macro Market Context](#1-macro-market-context)
+  - [2. Executed Trades & P&L Breakdown](#2-executed-trades--pl-breakdown-vm-1-account)
+  - [3. Execution Reality & Critical Broker Margin Discovery](#3-execution-reality--critical-broker-margin-discovery)
+  - [4. Scanned List Performance Audit (50%+ Winners)](#4-scanned-list-performance-audit-did-our-scanners-win)
+  - [5. Forensic Case Study: POWERGRID OCT 265 CE (Manual Exit Audit)](#5-deep-forensic-case-study-powergrid-oct-265-ce--anatomy-of-a-premature-exit)
+  - [6. Forensic Case Study: NAUKRI 1300 PE (Rebound Autopsy)](#6-deep-forensic-case-study-naukri-1300-pe--rebound-autopsy-did-we-buy-a-trap-or-exit-early)
+  - [7. Structural Invalidation vs Morning Shakeout Decision Matrix](#7-structural-invalidation-vs-temporary-shakeout-the-geometric--quantitative-decision-matrix)
+  - [8. Pattern Alignment: What Worked vs What Failed](#8-pattern-alignment-what-worked-vs-what-failed)
+  - [9. Strategic Directives & System Proposals](#9-strategic-directives--system-proposals-for-codebase)
 
 ---
 
@@ -128,7 +137,69 @@ Out of 142 unique candidates incubated and scanned, the top performers experienc
 
 ---
 
-### 6. Pattern Alignment: What Worked vs What Failed
+### 6. Deep Forensic Case Study: `NAUKRI 1300 PE` — Rebound Autopsy (Did We Buy a Trap or Exit Early?)
+
+> **The Paradox**: We bought `NAUKRI26SEP1300PE` at ~₹14.80, took a painful stop-loss exit at **₹8.35 (-₹3,217.50 loss)** at 09:49 AM, but between 11:30 AM and 13:00 PM, NAUKRI spot crashed from 1325 to 1297 and the option skyrocketed to **₹17.70 (+112% rebound from our exit price)**!
+
+#### 1. Detailed Candle-by-Candle Forensic Timeline
+* **Underlying Setup**: Daily / 4H / 30m Bearish Distribution with Point A Anchor at 1335 and Breakout B below 1315.
+* **09:15 – 09:45 AM (The Opening Trap & Counter-Bounce)**:
+  * Broad IT sector opened with a counter-trend morning bounce. NAUKRI spot opened at ₹1,315 and was pushed up to ₹1,325.
+  * In the option contract, this 10-point counter-bounce combined with morning IV compression crushed the `1300 PE` premium from ₹14.80 down to ₹8.35.
+* **09:49 AM (The Premature Shakeout)**:
+  * The position monitor evaluated the option premium drop. Because the trailing stop-loss was calculated on option premium price rather than underlying spot candle close, it fired an exit at **₹8.35**, locking in a $-43.5\%$ loss.
+* **10:00 AM – 12:45 PM (The Institutional Trapping & Downward Collapse)**:
+  * The spot rally to ₹1,325 was **NOT a trend reversal**. It was a textbook **Datta Point C Liquidity Grab / Pullback Retest** into previous breakdown resistance.
+  * Institutional sellers stepped in aggressively at ₹1,325 with declining bull volume. Spot turned around, broke 1,315, sliced through 1,300 support, and plunged to an intraday low of **₹1,297.20**.
+  * **Option Explosion**: The `NAUKRI26SEP1300PE` exploded from **₹8.35 straight to ₹17.70**, which would have yielded a profit of $+₹1,450.00$ instead of a $-₹3,217.50$ loss!
+
+#### 2. Root Cause Verdict: Trap or Early Exit?
+* **Verdict**: **We did NOT buy a trap. The macro setup was 100% correct.** The directional thesis that NAUKRI was heading below 1,300 was completely validated by the market.
+* **The Fatal Flaw**: **Premature Shakeout due to Option-Price SL instead of Spot Structural SL**.
+  1. **Spot Never Breached Invalidation**: The Anchor High / Invalidation Level on NAUKRI was **₹1,335.00**. Spot only reached ₹1,325.00 (a normal 50% Point C Fibonacci retest). The structural setup was NEVER invalidated on a spot candle close.
+  2. **September Expiry Gamma Decay (Final 24-48 Hours)**: Because this was the last 2 days of the September monthly contract, At-The-Money options experience extreme Gamma and Theta volatility. A minor 0.7% counter-bounce in spot caused a 43% collapse in premium.
+
+#### 3. How to Avoid This in the Future (The NAUKRI Rulebook)
+1. **Underlying Spot Closing SL (`SPOT_SL_GUARD`)**:
+   * For stock options, stop-loss MUST be governed by **Spot 15m/30m Candle Close**, NOT tick-by-tick option premium drops. As long as NAUKRI spot stayed below ₹1,335, the trade should have been held.
+2. **Expiry Rollover Threshold (85% Rule)**:
+   * During the final 2-3 trading days before monthly expiry, new or carried swing setups MUST be rolled over into the next month (`OCT 1300 PE`). Next-month contracts do not suffer 40% gamma collapses on morning wicks, allowing the structural trade to play out smoothly.
+
+---
+
+### 7. Structural Invalidation vs Temporary Shakeout: The Geometric & Quantitative Decision Matrix
+
+> **The Fundamental Dilemma**:
+> - Exiting `MIDCPNIFTY` and `ULTRACEMCO` was **good risk management** (prices continued collapsing against the trade, saving thousands).
+> - Exiting `NAUKRI`, `SENSEX`, and `POWERGRID` was **costly and painful** (they immediately reversed and rallied into massive 30% to 110% winners).
+> 
+> *How does the algorithm mathematically and geometrically distinguish between a True Invalidation (must exit immediately) versus a Temporary Opening Shakeout (must hold firmly)?*
+
+```mermaid
+flowchart TD
+    A["Position in Drawdown / Adverse Move"] --> B{"Is Exit Triggered by Spot or Option?"}
+    
+    B -->|"Option Premium Drop Only"| C{"Has Spot 15m Candle Closed Beyond Anchor?"}
+    C -->|"NO (Spot inside corridor)"| D["HOLD FIRM / SHAKEOUT GUARD<br/>(Point C Retest in progress; ignore premium noise)"]
+    C -->|"YES (Spot closed beyond Anchor)"| E["TRUE STRUCTURAL INVALIDATION<br/>(Exit immediately to protect capital)"]
+    
+    B -->|"Spot Breached Level"| F{"Is it a 15m Candle Close or just a Wick?"}
+    F -->|"Intraday Wick only"| G["HOLD / LIQUIDITY SWEEP CHECK<br/>(Wait for candle close at MM:14 or MM:29)"]
+    F -->|"Confirmed Candle Close"| E
+```
+
+#### The 3 Objective Pillars of Distinction
+
+| Evaluation Metric | ❌ True Invalidation (`MIDCPNIFTY`, `ULTRACEMCO`) | 🛡️ Temporary Shakeout (`NAUKRI`, `POWERGRID`, `SENSEX`) |
+|---|---|---|
+| **1. Underlying Spot Anchor Boundary** | Spot **closed a 15m/30m candle beyond Anchor High/Low**. Pattern geometry is broken. | Spot **stayed strictly within the Anchor boundary** (never closed above Anchor High for puts, or below Anchor Low for calls). |
+| **2. EMA 13/44 Alignment & Regime** | 13 EMA crossed against the trade with high volume. Spot accepted on the wrong side of VWAP. | 13/44 EMA ribbon maintained slope in trade direction. Pullback was a low-volume retest to the 13 EMA or VWAP. |
+| **3. Volume & Point C Retest Geometry** | High Institutional Relative Volume (RVOL > 1.8) on the counter-move, signaling institutional institutional reversal. | Declining Volume on the counter-move (dry volume pullback), signaling normal Point C liquidity absorption before continuation. |
+| **Correct Action** | **EXIT IMMEDIATELY**. Capital shield worked 100%. | **HOLD WITH DISCIPLINE**. Let the structural trade breathe until candle close confirmation. |
+
+---
+
+### 8. Pattern Alignment: What Worked vs What Failed
 
 ```mermaid
 pie title Pattern Win Rate Distribution (Today's Top 20 Gainers)
@@ -139,25 +210,29 @@ pie title Pattern Win Rate Distribution (Today's Top 20 Gainers)
 ```
 
 1. **The Ultimate Winner Pattern**:
-   * **`BULL_A_Two_Higher_Highs` on 30-Minute Chart** accounted for **over 60% of all top winning setups today**.
+   * **`BULL_A_Two_Higher_Highs` on 30-Minute Chart** accounted for **over 60% of all top winning setups today** (`SUZLON`, `UNITDSPR`, `360ONE`, `DIVISLAB`, `TATASTEEL`, `PERSISTENT`).
    * *Why?* A 30-minute Two Higher Highs represents institutional continuation above previous resistance with high volume conviction. It completely filters out 3-minute noise.
 2. **What Failed**:
    * **Early morning index entries (09:15 – 09:30 AM)**: `MIDCPNIFTY` entered at 09:18:59 during opening auction volatility and was caught in bid-ask spread expansion.
-   * **Counter-trend sector bets**: `NAUKRI PE` fought against broad IT sector strength.
+   * **Counter-trend sector bets without Spot Closing confirmation**: `NAUKRI PE` was shaken out by a 10-point morning retest before the main breakdown wave.
 
 ---
 
-### 7. Strategic Takeaways & Discussion Points for Improvement
+### 9. Strategic Directives & System Proposals for Codebase
 
-1. **Opening Bell Index Delay (09:15 – 09:30 AM)**:
-   - *Proposal*: Do not fire automated index entries before 09:30 AM. Allow the 15-minute opening candle to close to establish the benchmark.
-2. **Account Capital Affordability Gate**:
-   - *Proposal*: In `stock_options_trade_engine.py`, check `(lot_size * entry_premium) <= available_margin * 0.90` before evaluating gates. If capital is ₹60,000, do not waste cycles on ₹75,000-margin stocks (`RELIANCE`, `CIPLA`). Focus surveillance on liquid, high-performing scripts that fit account capital (e.g. ₹5,000–₹25,000 lots like `ASIANPAINT`, `TATASTEEL`, `VEDL`).
-3. **Weight `Two Higher Highs` & 30m Timeframe in Priority Ranking**:
-   - *Proposal*: Give a boost in composite score rank to setups matching `Two Higher Highs` on 30m or 60m timeframes.
-4. **Intraday +15% Profit Lock Ratchet**:
-   - *Proposal*: When an option trade achieves $+15\%$ gain from entry, ratchet the stop-loss to $+8\%$ (locking green P&L) so intraday spikes do not decay into losses by EOD.
+1. **Spot-Based Stop-Loss Guard (`SPOT_SL_GUARD`)**:
+   - For all stock option positions, stop-loss triggers must require the **Underlying Spot Price to close a 15m/30m candle beyond the Anchor SL line**.
+   - Do not exit stock options on intraday premium ticks alone during the opening 45 minutes unless Spot confirms the structural breach.
+2. **Opening Bell Index Delay (09:15 – 09:30 AM)**:
+   - Do not fire automated index entries before 09:30 AM. Allow the 15-minute opening candle to close to establish the benchmark.
+3. **Account Capital Affordability Gate**:
+   - In `stock_options_trade_engine.py`, check `(lot_size * entry_premium) <= available_margin * 0.90` before evaluating gates. If capital is ₹60,000, do not waste cycles on ₹75,000-margin stocks (`RELIANCE`, `CIPLA`). Focus surveillance on liquid, high-performing scripts that fit account capital (e.g. ₹5,000–₹25,000 lots like `ASIANPAINT`, `TATASTEEL`, `VEDL`).
+4. **Weight `Two Higher Highs` & 30m Timeframe in Priority Ranking**:
+   - Give a boost in composite score rank to setups matching `Two Higher Highs` on 30m or 60m timeframes.
+5. **Intraday +15% Profit Lock Ratchet & Minimum Hold Rule**:
+   - Prohibit manual 1-click scalping for micro-gains ($< +10\%$) like `POWERGRID (+2.6%)`.
+   - When an option trade achieves $+15\%$ gain from entry, ratchet the stop-loss to $+8\%$ (locking green P&L) so intraday spikes do not decay into losses by EOD.
 
 ---
 
-*Log recorded on 2026-09-23. To be reviewed and updated daily.*
+*Log recorded on 2026-09-23. Continuously maintained and synchronized across VM1 and VM2.*
