@@ -3099,3 +3099,28 @@ issues:
   status: RESOLVED
   resolution_date: '2026-09-22'
 
+- id: ISSUE-082
+  title: "Fix Missing datetime_time and datetime Imports in stock_options_trade_engine.py"
+  date: "2026-09-23"
+  severity: HIGH
+  component: "Trade_Option/stock_options_trade_engine.py"
+  symptoms: |
+    Starting the Nifty 50 stock options trade engine during pre-market (before 09:15 IST) immediately threw:
+    "nifty50: Main loop error: name 'datetime_time' is not defined" on every iteration, stalling the main loop.
+  root_cause: |
+    FEATURE-042 introduced pre-market detection (is_pre_market = t_now < datetime_time(9, 15)) and market open countdown
+    (market_open_dt = datetime.combine(now_ist.date(), datetime_time(9, 15))), but Trade_Option/stock_options_trade_engine.py
+    only had `from datetime import datetime as dt, timedelta` without importing `time as datetime_time` or `datetime`.
+  fix_applied: |
+    Updated import statement in Trade_Option/stock_options_trade_engine.py to:
+    `from datetime import datetime, datetime as dt, timedelta, time as datetime_time`
+    providing both `datetime`, `dt`, and `datetime_time`.
+    Added automated unit test assertions in scratch/test_2tier_and_premarket_seeding.py verifying `hasattr(sote, 'datetime_time')`
+    and `hasattr(sote, 'datetime')`.
+  verification: |
+    1. Direct unit verification: python -c "import Trade_Option.stock_options_trade_engine as sote; assert hasattr(sote, 'datetime_time') and hasattr(sote, 'datetime')"
+    2. Real-time pre-market execution simulation: Current IST evaluates is_pre_market correctly without NameError.
+    3. Dedicated unit test suite scratch/test_2tier_and_premarket_seeding.py passed 3/3 tests.
+    4. Master regression test suite scratch/run_full_regression_test.py: 32/32 tests PASSED (100% success).
+  status: RESOLVED
+  resolution_date: '2026-09-23'

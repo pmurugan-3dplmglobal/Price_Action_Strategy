@@ -37,6 +37,8 @@ class Test2TierAndPreMarketSeeding(unittest.TestCase):
         self.assertEqual(sote.FULL_SCAN_INTERVAL_SECONDS, 900)
         self.assertTrue(sote.ENABLE_2TIER_SCHEDULING)
         self.assertTrue(sote.ENABLE_PREMARKET_SEEDING)
+        self.assertTrue(hasattr(sote, "datetime_time"))
+        self.assertTrue(hasattr(sote, "datetime"))
 
     def test_pre_market_detection_logic(self):
         """Test pre-market detection at 08:30 vs market open at 09:15."""

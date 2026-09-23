@@ -11,7 +11,7 @@ for p in [PROJECT_ROOT, COMMON_DIR]:
         sys.path.insert(0, p)
 import paths
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime as dt, timedelta
+from datetime import datetime, datetime as dt, timedelta, time as datetime_time
 import pandas as pd
 
 from kiteconnect import KiteConnect
