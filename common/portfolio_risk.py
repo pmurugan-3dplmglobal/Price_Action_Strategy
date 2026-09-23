@@ -217,6 +217,10 @@ def check_portfolio_risk_caps(engine, symbol, candidate_tier=2, capital=100000.0
                             sec = get_symbol_sector(raw_sym)
                             sector_counts[sec] = sector_counts.get(sec, 0) + 1
             # Also capture holdings for equity CNC positions
+            # NOTE: Demat holdings are only stored in broker_holdings as a ground-truth lookup
+            # for verifying active equity trades in trade_db (line 259). Personal long-term Demat
+            # investments (e.g. SGB, GoldBees, ETFs) must NEVER be directly added to active_symbols /
+            # active_contracts as active algo trading slots.
             try:
                 h_list = kite.holdings()
                 if isinstance(h_list, list):
@@ -225,11 +229,6 @@ def check_portfolio_risk_caps(engine, symbol, candidate_tier=2, capital=100000.0
                         if hq > 0:
                             h_sym = str(h.get("tradingsymbol", "")).strip().upper()
                             broker_holdings.add(h_sym)
-                            active_contracts.add(h_sym)
-                            raw_h_sym = _extract_underlying_symbol(h_sym)
-                            if raw_h_sym:
-                                active_symbols.add(raw_h_sym)
-                                broker_active_symbols.add(raw_h_sym)
             except Exception:
                 pass
         except Exception as k_err:

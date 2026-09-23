@@ -3124,3 +3124,30 @@ issues:
     4. Master regression test suite scratch/run_full_regression_test.py: 32/32 tests PASSED (100% success).
   status: RESOLVED
   resolution_date: '2026-09-23'
+
+- id: ISSUE-083
+  title: "Prevent Personal Demat CNC Holdings from Leaking into Active Portfolio Trading Slots"
+  date: "2026-09-23"
+  severity: CRITICAL
+  component: "common/portfolio_risk.py"
+  symptoms: |
+    On Bhavani Cloud VM (VM 2), all new option trade executions were rejected with:
+    "Auto-execution skipped: MAX_CONCURRENT_POSITIONS_REACHED (7/6 active scripts across portfolio [Capital: Rs 100,000])",
+    even though the user held ZERO active option positions and ZERO open trades in Kite.
+  root_cause: |
+    In common/portfolio_risk.py lines 220-234, the kite.holdings() loop unconditionally added all personal Demat CNC
+    investment holdings (e.g. SGB Sovereign Gold Bonds, GOLDBEES, NIFTYBEES, SILVERBEES, BATAINDIA) directly into
+    `active_contracts` and `active_symbols`. This caused the portfolio risk engine to treat personal long-term investment
+    holdings as active algo trading slots, instantly breaching the max_concurrent_positions limit (6) and starving all new orders.
+  fix_applied: |
+    Modified common/portfolio_risk.py so that `kite.holdings()` only populates `broker_holdings` for ground-truth lookups
+    (verifying whether an active equity trade recorded in trade_db is still held on the broker). Removed the unconditional
+    addition of Demat holdings to `active_contracts` and `active_symbols`. Personal Demat investments no longer count
+    against active F&O and intraday algo position limits.
+  verification: |
+    1. Dedicated unit test scratch/test_holdings_isolation.py: PASSED (1/1 in 0.02s) verifying 7 Demat holdings evaluate to active_count = 0.
+    2. VIX & Portfolio risk test suite scratch/test_vix_portfolio_volume.py: PASSED (47/47 in 1.4s).
+    3. Master regression test suite scratch/run_full_regression_test.py: 32/32 tests PASSED (100% success).
+  status: RESOLVED
+  resolution_date: '2026-09-23'
+
