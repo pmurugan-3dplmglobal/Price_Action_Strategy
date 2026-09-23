@@ -54,6 +54,36 @@ AGY operates with three integrated identities across all tasks:
 - **Dynamic F&O Universe Resolution**: F&O stock & option contracts are dynamically resolved from the NSE/NFO exchange master via `resolve.py` — NOT restricted to a hardcoded static list.
 - **Unlisted Equities**: Symbols like HDBFS (unlisted/pre-IPO) are used for chart demonstrations only; live automated Kite execution only routes listed NSE/BSE cash and F&O symbols.
 
+## Multi-Dimensional Forensic Trade Audit Framework (Win vs Loss Directives)
+
+AGY must perform exhaustive, 8-dimensional forensic audits whenever investigating trade outcomes, P&L variances, or pattern performance. Never evaluate a trade purely by its realized dollar P&L. Every forensic dissection must evaluate:
+
+1. **Broker Order Forensics & Attribution**:
+   - Trace raw Kite order IDs, exact timestamps, variety/type (LIMIT vs MARKET), and fill slippage.
+   - Inspect `tag` and user session `guid`: distinguish automated engine exits (`tag: options_bot/pos_monitor`) from manual interactive interventions (`guid: 199032...` with `tag: null`).
+2. **Spot vs Option Alignment & Opportunity Cost (MFE/MAE)**:
+   - Track Option Range (Day Low ─── Day High) and Spot Range.
+   - Quantify Post-Exit Surge % and "Left on Table" points to detect premature exits versus capital-shield exits.
+3. **Underlying Structural Invalidation vs Shakeout**:
+   - Verify whether Underlying SPOT breached the Anchor High / Anchor Low / Structural SL on a **15m/30m candle close**.
+   - If Spot stayed strictly within the Anchor corridor, the thesis was 100% alive (the drop was an intraday Point C retest or gamma noise).
+   - If Spot closed beyond the boundary, it was a True Invalidation where exiting saved capital (e.g. ULTRACEMCO).
+4. **Multi-Timeframe Trend & Regime (EMA 13/44, VWAP)**:
+   - Verify 15m/30m EMA 13 vs 44 slope and Intraday VWAP acceptance. A Put trade in a stock accepted above VWAP with rising EMA 13 is mathematically doomed.
+5. **Institutional Volume & RVOL Profiling**:
+   - Compare counter-move volume against 20-period average volume. Dry volume pullbacks (RVOL < 0.6x) are liquidity absorption retests (Hold); high RVOL surges (> 1.8x) against the trade confirm institutional reversal (Exit).
+6. **Option Moneyness, Greeks & Expiry Week Risk**:
+   - Enforce 85% Expiry Rollover: Never trade current-month stock options within 72 hours of monthly expiry. Severe Gamma acceleration causes 40%+ drawdowns on normal 1% spot pullbacks, bypassing standard risk thresholds.
+7. **Sector Breadth & Market Regime Correlation**:
+   - Map ticker against its sectoral index (IT, Metal, Power, Auto, Pharma). Correlate whether trade fought sector momentum.
+8. **Categorical Taxonomy Verdict & Actionable Remediation**:
+   - Classify into definitive taxonomy: `CLEAN_WIN_TARGET_HIT`, `STRUCTURAL_INVALIDATION_SAVED_LOSS`, `PREMATURE_OPTION_SL_SHAKEOUT`, `PREMATURE_MANUAL_PROFIT_SCALP`, `OPENING_WHIPSAW_MARGIN_REJECT`, `ACTIVE_POSITION_IN_PROGRESS`.
+   - Formulate concrete remediation rules for the codebase and journal.
+
+- **Canonical Forensic Utility**:
+  - Run `python common/forensic_trade_analyzer.py --symbol <SYM>` or `--contract <CNT>` for deep single-stock analysis.
+  - Run `python common/forensic_trade_analyzer.py --all-today` to audit all executions across the session.
+
 ## Core System Architecture & Entry Points
 
 | Subsystem | Port / Mode | Primary Files | Notes |
