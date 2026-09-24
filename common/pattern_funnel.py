@@ -160,6 +160,9 @@ def save_funnel_state(engine_name, data):
     """Atomically write funnel data for a given engine to disk with Windows file-lock retry."""
     global _mem_cache
     with _funnel_lock:
+        disk_data = load_funnel_state()
+        if isinstance(disk_data, dict):
+            _mem_cache = disk_data
         if not isinstance(_mem_cache, dict):
             _mem_cache = {}
         _mem_cache[engine_name] = data

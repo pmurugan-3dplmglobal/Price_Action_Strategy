@@ -1936,34 +1936,60 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
             if current_sl > 0:
                 sl_floor = get_sl_floor_time(pos)
                 if is_before_failsafe:
-                    # Timeframe Closing Basis Invariant:
-                    # Target monitoring runs from 09:15 AM; all automated SL checks and emergency circuit breakers
-                    # are paused until failsafe_start_str AM (default 09:50 AM) to allow the opening 30-min candle
-                    # to close and settle on closing-basis without opening spread/tick noise whipsaws.
-                    if not pause_morning_circuit:
-                        # True Catastrophic Disaster Shield (only if explicitly unpaused, threshold >= 40%):
-                        if is_fresh_fill:
-                            logging.info(f"[FRESH_FILL_SPREAD_GUARD] Suppressed morning circuit breaker for {sym}: Trade entered {secs_since_entry:.0f}s ago (<120s cooldown).")
-                        elif entry_s > 0 and live_ltp > 0 and not is_outlier_entry:
-                            opt_loss_cap = float(cfg.get("max_option_loss_pct", 28.0)) / 100.0 if not is_stock else 0.15
-                            if is_short_stock and live_ltp >= (entry_s * 1.15):
-                                sl_hit = True
-                                rise_pct = (live_ltp - entry_s) / entry_s * 100.0
-                                sl_reason = f"MORNING_CATASTROPHIC_CIRCUIT_15PCT (Short Stock LTP {live_ltp:.2f} up {rise_pct:.1f}% from entry {entry_s:.2f})"
-                                cp = live_ltp
-                                event_time = last.get('date')
-                            elif not is_short_stock and not is_stock and live_ltp <= (entry_s * (1.0 - opt_loss_cap)):
-                                sl_hit = True
-                                drop_pct = (entry_s - live_ltp) / entry_s * 100.0
-                                sl_reason = f"MORNING_CATASTROPHIC_CIRCUIT_{int(opt_loss_cap*100)}PCT (Option LTP {live_ltp:.2f} down {drop_pct:.1f}% from entry {entry_s:.2f})"
-                                cp = live_ltp
-                                event_time = last.get('date')
-                            elif not is_short_stock and is_stock and live_ltp <= (entry_s * 0.85):
-                                sl_hit = True
-                                drop_pct = (entry_s - live_ltp) / entry_s * 100.0
-                                sl_reason = f"MORNING_CATASTROPHIC_CIRCUIT_15PCT (Stock LTP {live_ltp:.2f} down {drop_pct:.1f}% from entry {entry_s:.2f})"
-                                cp = live_ltp
-                                event_time = last.get('date')
+                    # ISSUE-086: Differentiated Gap Breach Response (Long & Short)
+                    # Within 09:15-09:50 failsafe window, allow immediate exit ONLY for
+                    # catastrophic opening gap breaches (> 2x SL distance beyond SL)
+                    gap_breach_critical = False
+                    gap_magnitude = 0.0
+                    if live_ltp > 0 and current_sl > 0:
+                        sl_distance = abs(entry_s - current_sl) if entry_s > 0 else (current_sl * 0.05)
+                        if is_short_stock and live_ltp > current_sl:
+                            gap_magnitude = live_ltp - current_sl
+                        elif not is_short_stock and live_ltp < current_sl:
+                            gap_magnitude = current_sl - live_ltp
+                        if gap_magnitude > (2.0 * sl_distance):
+                            gap_breach_critical = True
+                            direction_str = "above" if is_short_stock else "below"
+                            logging.warning(
+                                f"[FAILSAFE GAP OVERRIDE] {sym}: LTP {live_ltp:.2f} gapped "
+                                f"{gap_magnitude:.2f} {direction_str} SL {current_sl:.2f} (>{2.0}x SL distance {sl_distance:.2f}). "
+                                f"Triggering immediate exit despite failsafe window."
+                            )
+                    
+                    if gap_breach_critical:
+                        sl_hit = True
+                        sl_reason = f"GAP_BREACH_CRITICAL_OVERRIDE (LTP {live_ltp:.2f} gapped {gap_magnitude:.2f} beyond SL {current_sl:.2f})"
+                        cp = live_ltp
+                        event_time = last.get('date')
+                    else:
+                        # Timeframe Closing Basis Invariant:
+                        # Target monitoring runs from 09:15 AM; all automated SL checks and emergency circuit breakers
+                        # are paused until failsafe_start_str AM (default 09:50 AM) to allow the opening 30-min candle
+                        # to close and settle on closing-basis without opening spread/tick noise whipsaws.
+                        if not pause_morning_circuit:
+                            # True Catastrophic Disaster Shield (only if explicitly unpaused, threshold >= 40%):
+                            if is_fresh_fill:
+                                logging.info(f"[FRESH_FILL_SPREAD_GUARD] Suppressed morning circuit breaker for {sym}: Trade entered {secs_since_entry:.0f}s ago (<120s cooldown).")
+                            elif entry_s > 0 and live_ltp > 0 and not is_outlier_entry:
+                                opt_loss_cap = float(cfg.get("max_option_loss_pct", 28.0)) / 100.0 if not is_stock else 0.15
+                                if is_short_stock and live_ltp >= (entry_s * 1.15):
+                                    sl_hit = True
+                                    rise_pct = (live_ltp - entry_s) / entry_s * 100.0
+                                    sl_reason = f"MORNING_CATASTROPHIC_CIRCUIT_15PCT (Short Stock LTP {live_ltp:.2f} up {rise_pct:.1f}% from entry {entry_s:.2f})"
+                                    cp = live_ltp
+                                    event_time = last.get('date')
+                                elif not is_short_stock and not is_stock and live_ltp <= (entry_s * (1.0 - opt_loss_cap)):
+                                    sl_hit = True
+                                    drop_pct = (entry_s - live_ltp) / entry_s * 100.0
+                                    sl_reason = f"MORNING_CATASTROPHIC_CIRCUIT_{int(opt_loss_cap*100)}PCT (Option LTP {live_ltp:.2f} down {drop_pct:.1f}% from entry {entry_s:.2f})"
+                                    cp = live_ltp
+                                    event_time = last.get('date')
+                                elif not is_short_stock and is_stock and live_ltp <= (entry_s * 0.85):
+                                    sl_hit = True
+                                    drop_pct = (entry_s - live_ltp) / entry_s * 100.0
+                                    sl_reason = f"MORNING_CATASTROPHIC_CIRCUIT_15PCT (Stock LTP {live_ltp:.2f} down {drop_pct:.1f}% from entry {entry_s:.2f})"
+                                    cp = live_ltp
+                                    event_time = last.get('date')
                 elif is_start_failsafe and not is_outlier_entry:
                     # Failsafe Check at failsafe_start_time (09:50 AM):
                     # Trigger ONLY IF previous candle closed in breach AND current live price is in breach.

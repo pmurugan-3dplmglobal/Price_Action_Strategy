@@ -429,8 +429,18 @@ def scan_anchor_bcd_breakout_bearish(df_entry, df_anchor, anchor_tf="", entry_tf
             # Breakdown candle MUST be bearish red (c_close <= c_open) confirming seller expansion
             if i < len(df_entry) - 1:
                 if c_close < a_low and is_red:
-                    d_idx = i
-                    break
+                    # ISSUE-086: Volume Confirmation at Point D — Institutional Breakdown Validation
+                    # Require D-bar volume >= 1.2x of 20-bar average volume for completed candles.
+                    # Dry-volume breakdowns (RVOL < 1.2x) are liquidity traps, not institutional distribution.
+                    d_vol_confirmed = True
+                    if 'volume' in df_entry.columns and i >= 20:
+                        avg_vol_20 = float(df_entry['volume'].iloc[i - 20 : i].mean())
+                        d_vol = float(candle.get('volume', 0))
+                        if avg_vol_20 > 0 and d_vol < (1.2 * avg_vol_20):
+                            d_vol_confirmed = False
+                    if d_vol_confirmed:
+                        d_idx = i
+                        break
 
             # Case B: Current Live Active Forming Candle (near-close >= 80% with dual guards)
             else:

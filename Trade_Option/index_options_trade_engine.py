@@ -237,6 +237,7 @@ def execute_index_entry(kite, pos):
         logging.info(f"[BACKTEST ENTRY] {pos['contract']} ({pos['side']})")
         return True
     try:
+        sym = pos.get("symbol")
         c_str = str(pos['contract']).upper()
         clear_executed_exit(pos['contract'])
         target_exch = "BFO" if ("SENSEX" in c_str or "BSE" in c_str) else "NFO"
@@ -399,6 +400,41 @@ def execute_index_entry(kite, pos):
                         logging.warning(f"[DEBIT SPREAD ROLLBACK] Cancelled Leg 1 order {o_to_cancel} because Leg 2 failed: {leg2_err}")
                     except Exception as c_err:
                         logging.error(f"[DEBIT SPREAD ROLLBACK ERROR] Could not cancel Leg 1 order {o_to_cancel}: {c_err}")
+                
+                # ISSUE-086: Emergency Unwind for Stranded Leg 1 (Ported from stock engine)
+                # If Leg 1 was already COMPLETE, cancel does nothing. Check broker and unwind.
+                try:
+                    from common.position_monitor import is_contract_held_on_broker
+                    held, held_qty = is_contract_held_on_broker(kite, pos["contract"])
+                    if held and held_qty > 0:
+                        logging.warning(f"[DEBIT SPREAD EMERGENCY UNWIND] Leg 1 {pos['contract']} is held ({held_qty} qty) after Leg 2 failure. Executing emergency sell...")
+                        try:
+                            import session
+                            emergency_ltp = session.safe_kite_call(kite.ltp, [f"NFO:{pos['contract']}"])
+                            em_price = float(emergency_ltp.get(f"NFO:{pos['contract']}", {}).get("last_price", 0))
+                            if em_price <= 0:
+                                emergency_ltp = session.safe_kite_call(kite.ltp, [f"BFO:{pos['contract']}"])
+                                em_price = float(emergency_ltp.get(f"BFO:{pos['contract']}", {}).get("last_price", 0))
+                            sell_price = round(max(0.05, em_price * 0.97), 2) if em_price > 0 else 0.05
+                            exchange_for_exit = "BFO" if any(idx in pos["contract"].upper() for idx in ["SENSEX", "BANKEX"]) else "NFO"
+                            session.safe_kite_call(
+                                kite.place_order,
+                                variety="regular",
+                                exchange=exchange_for_exit,
+                                tradingsymbol=pos["contract"],
+                                transaction_type="SELL",
+                                quantity=held_qty,
+                                product="NRML",
+                                order_type="LIMIT",
+                                price=sell_price,
+                                tag="idx_spread_unwind"
+                            )
+                            logging.info(f"[DEBIT SPREAD EMERGENCY UNWIND] Sell order placed for {pos['contract']} x{held_qty} @ {sell_price}")
+                        except Exception as unwind_err:
+                            logging.error(f"[DEBIT SPREAD EMERGENCY UNWIND FAILED] {pos['contract']}: {unwind_err}")
+                except Exception as check_err:
+                    logging.error(f"[DEBIT SPREAD HELD CHECK FAILED] {pos['contract']}: {check_err}")
+
                 if sym and sym in ACTIVE_POSITIONS:
                     with position_lock:
                         ACTIVE_POSITIONS.pop(sym, None)

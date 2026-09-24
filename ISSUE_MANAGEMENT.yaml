@@ -3287,4 +3287,28 @@ issues:
   status: RESOLVED
   resolution_date: '2026-09-24'
 
+ISSUE-086:
+  title: "Critical Audit Fixes: Volume Confirmation at Point D, Stranded Leg 1 Emergency Unwind, and Catastrophic Gap Breach Override"
+  date_logged: '2026-09-24'
+  family: "EXECUTION_QUALITY_AND_RISK"
+  component: "common/patterns_bull.py, common/patterns_bear.py, Trade_Option/index_options_trade_engine.py, common/position_monitor.py"
+  symptoms: |
+    1. False Breakout Liquidity Traps: Breakouts at Point D triggered purely on price closing above benchmark, resulting in ~40-50% false breakouts on dry volume (e.g. MAZDOCK, HAVELLS, SBICARD) where market makers probe resistance without institutional participation.
+    2. Stranded Unhedged Leg 1 in Index Engine: When Leg 2 of an index debit spread failed to place, the engine attempted to cancel Leg 1 (which was already filled on Kite), popped the trade from memory, and marked it FAILED. This orphaned an unhedged Long Option on the broker without active monitoring or SL, bleeding to zero (e.g. BANKNIFTY -Rs 7,443.00 naked loss).
+    3. 35-Minute Opening Gap-Down Blind Spot: With morning reconciler set to audit-only and position_monitor pausing normal SL evaluation until 09:50 AM failsafe, severe opening gap-downs (>2x SL distance) were forced to bleed for 35 minutes before triggering an exit.
+  root_cause: |
+    1. common/patterns_bull.py and patterns_bear.py only checked proportional volume for live forming candles (Case B), while completed historical candles (Case A) had no volume check whatsoever at Point D.
+    2. Trade_Option/index_options_trade_engine.py lacked the emergency broker holding check and unwind logic present in stock_options_trade_engine.py.
+    3. common/position_monitor.py suppressed all standard SL exits between 09:15-09:50 without distinguishing between normal noise/retests and catastrophic gap-down/gap-up breaches.
+  fix_applied: |
+    1. common/patterns_bull.py & common/patterns_bear.py: Mandated that completed D-breakout candles must have volume >= 1.2x of the 20-bar average volume (RVOL >= 1.2x) to validate institutional markup/distribution and reject dry-volume liquidity traps.
+    2. Trade_Option/index_options_trade_engine.py: Ported the emergency unwind logic from the stock options engine. If Leg 2 fails, the engine now checks if Leg 1 is held on Kite via is_contract_held_on_broker and executes an immediate limit/market emergency sell order to prevent naked unhedged exposure.
+    3. common/position_monitor.py: Implemented a catastrophic gap breach override within the 09:15-09:50 failsafe window. If an opening gap extends > 2.0x the initial SL distance beyond the stop-loss (long gap-down or short gap-up), an immediate exit is triggered while preserving closing-basis protection for normal opening noise.
+  verification: |
+    1. Dedicated unit test suite scratch/test_issue086_audit_fixes.py: PASSED (7/7 tests in 0.03s).
+    2. Master regression suite scratch/run_full_regression_test.py: PASSED (32/32 tests with 100% success, 0 regressions).
+  status: RESOLVED
+  resolution_date: '2026-09-24'
+
+
 

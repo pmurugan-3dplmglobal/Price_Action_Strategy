@@ -445,8 +445,18 @@ def scan_anchor_bcd_breakout(df_entry, df_anchor, anchor_tf="", entry_tf="", ena
             # Breakout candle MUST be bullish green (d_close >= d_open) confirming buyer expansion
             if curr_idx < len(df_entry) - 1:
                 if d_close > benchmark and d_close >= d_open:
-                    d_idx = curr_idx
-                    break
+                    # ISSUE-086: Volume Confirmation at Point D — Institutional Breakout Validation
+                    # Require D-bar volume >= 1.2x of 20-bar average volume for completed candles.
+                    # Dry-volume breakouts (RVOL < 1.2x) are liquidity traps, not institutional markup.
+                    d_vol_confirmed = True
+                    if 'volume' in df_entry.columns and curr_idx >= 20:
+                        avg_vol_20 = float(df_entry['volume'].iloc[curr_idx - 20 : curr_idx].mean())
+                        d_vol = float(d_row.get('volume', 0))
+                        if avg_vol_20 > 0 and d_vol < (1.2 * avg_vol_20):
+                            d_vol_confirmed = False
+                    if d_vol_confirmed:
+                        d_idx = curr_idx
+                        break
 
             # Case B: Current Live Active Forming Candle (near-close >= 80% with dual guards)
             else:
