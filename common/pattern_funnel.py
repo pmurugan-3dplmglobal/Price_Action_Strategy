@@ -56,10 +56,10 @@ def _get_item_date_str(item):
             try:
                 if hasattr(v, "strftime"):
                     return v.strftime("%Y-%m-%d")
-                s_v = str(v).strip().replace('/', '-')
-                clean = clean_timestamp(s_v)
-                if len(clean) >= 10 and clean[4] == '-' and clean[7] == '-':
-                    return clean[:10]
+                s_v = str(v).strip().replace('/', '-').replace('T', ' ')
+                p = s_v.split(' ')[0]
+                if len(p) >= 10 and p[4] == '-' and p[7] == '-':
+                    return p[:10]
             except Exception:
                 pass
     return None

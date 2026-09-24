@@ -52,6 +52,7 @@ meta:
     - Multibagger Tier Quality Filters, Anti-Whipsaw & Dynamic Slot Swap (ISSUE-079)
     - Execution Expectancy Hardening (Live Capital Affordability Gate, Small Account Naked Options < ₹2L, 72h Monthly Expiry Rollover Guard, +15% Ratchet to +8% SL Lock, and Opening Bell 15m Index Delay) (ISSUE-105)
     - Spot-First Pattern Anchor Gate, Physical Wick Geometry & Dual-Asset VCP Contraction (ISSUE-080)
+    - Institutional Adaptive Index Entry Window (DTE-Aware 13:30 vs 15:00 IST Cutoff, Late-Day Conviction R:R >= 2.0 Guard & Post-14:00 Spread Preference) (ISSUE-106)
 
 architecture:
   diagram: |

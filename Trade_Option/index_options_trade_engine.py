@@ -398,16 +398,19 @@ def execute_highest_rr_trade(kite, staged):
     """After a scan cycle, evaluate staged candidates in descending order of composite rank and execute the best valid setup (ISSUE-071, ISSUE-073)."""
     if not staged:
         return
-    live_ok = LIVE_MARKET_DEPLOYMENT and live_execution_enabled(LIVE_EXECUTION_FLAG) and is_new_entry_allowed(live_execution_active=True, is_option=True, is_index=True)
-    if LIVE_MARKET_DEPLOYMENT and live_execution_enabled(LIVE_EXECUTION_FLAG) and not is_new_entry_allowed(live_execution_active=True, is_option=True, is_index=True):
-        logging.info("[INDEX_CUTOFF_GUARD] New index trade entries blocked after 13:30 IST. Skipping cycle execution.")
-        return
-
-    # Fix 5: Opening Bell 15-Minute Delay Guard
-    # Suppress automated index entries before 09:30 AM to allow opening 15m candle close, avoiding opening spread/gap traps.
     from timeframe_utils import get_ist_now
     from datetime import time as dt_time
     now_ist = get_ist_now().time()
+    live_ok = LIVE_MARKET_DEPLOYMENT and live_execution_enabled(LIVE_EXECUTION_FLAG)
+
+    # General EOD Hard Cutoff: 15:00:00 IST (never enter any index derivative after 15:00 IST)
+    if LIVE_MARKET_DEPLOYMENT and live_execution_enabled(LIVE_EXECUTION_FLAG) and BACKTEST_DATE is None:
+        if now_ist > dt_time(15, 0):
+            logging.info(f"[INDEX_CUTOFF_GUARD] All new index trade entries blocked after 15:00 IST (current time: {now_ist.strftime('%H:%M:%S')}). Skipping cycle execution.")
+            return
+
+    # Fix 5: Opening Bell 15-Minute Delay Guard
+    # Suppress automated index entries before 09:30 AM to allow opening 15m candle close, avoiding opening spread/gap traps.
     if LIVE_MARKET_DEPLOYMENT and live_execution_enabled(LIVE_EXECUTION_FLAG) and BACKTEST_DATE is None:
         if now_ist < dt_time(9, 30):
             logging.info(f"[INDEX_OPENING_BELL_DELAY] Automated index entries suppressed before 09:30 IST (current time: {now_ist.strftime('%H:%M:%S')}) to allow opening 15m candle close and avoid opening spread/whipsaw traps.")
@@ -416,6 +419,9 @@ def execute_highest_rr_trade(kite, staged):
     cfg_eng = load_program_config_for_engine("index")
     exec_mode = str(cfg_eng.get("execution_mode", "DEBIT_SPREAD")).upper()
     use_spread = (exec_mode in ["DEBIT_SPREAD", "SPREAD_ONLY", "AUTO"])
+    # Rule 3: Late Afternoon (>= 14:00 IST) Spread Preference for Theta-Neutralization
+    if now_ist >= dt_time(14, 0) and exec_mode != "NAKED_ONLY":
+        use_spread = True
     cap_val_base = float(cfg_eng.get("capital") or 100000.0)
     live_cash_avail = get_live_available_cash(kite, default=cap_val_base) if (live_ok and kite) else cap_val_base
     if use_spread and exec_mode != "SPREAD_ONLY" and live_cash_avail < 200000.0:
@@ -452,6 +458,26 @@ def execute_highest_rr_trade(kite, staged):
 
         sym = best.get("symbol", "")
         contract_cand = best.get("contract", "")
+
+        # Gate 0: Adaptive DTE-Aware Cutoff Guard
+        cand_dte = best.get("dte")
+        try:
+            cand_dte = int(cand_dte) if cand_dte is not None else None
+        except (ValueError, TypeError):
+            cand_dte = None
+
+        if LIVE_MARKET_DEPLOYMENT and live_execution_enabled(LIVE_EXECUTION_FLAG) and BACKTEST_DATE is None:
+            # 0DTE / Expiry Day cutoff: strictly blocked after 13:30 IST to prevent lethal gamma/theta decay
+            if (cand_dte is None or cand_dte <= 1) and now_ist > dt_time(13, 30):
+                logging.info(f"[INDEX_0DTE_CUTOFF_GUARD] Candidate {contract_cand} is 0DTE/Expiry (DTE={cand_dte}). Automated entries blocked after 13:30 IST to prevent lethal theta/gamma burn. Evaluating next candidate.")
+                continue
+            # Non-expiry contracts (DTE >= 2) in the 13:30 - 15:00 window require high-conviction R:R >= 2.0
+            if now_ist > dt_time(13, 30):
+                cand_rr = float(best.get("rr") or 0.0)
+                if cand_rr < 2.0:
+                    logging.info(f"[INDEX_LATE_WINDOW_RR_GUARD] Candidate {contract_cand} has RR={cand_rr:.2f} < 2.0 in late-day window ({now_ist.strftime('%H:%M:%S')}). Requires RR >= 2.0. Skipping.")
+                    continue
+                logging.info(f"[INDEX_LATE_WINDOW_APPROVED] Candidate {contract_cand} approved in late-day institutional window ({now_ist.strftime('%H:%M:%S')}): DTE={cand_dte} >= 2, RR={cand_rr:.2f} >= 2.0.")
 
         # Gate 1: Mandatory Spot Confluence Gate (ISSUE-071, ISSUE-073)
         # Auto-execution requires verified spot directional backing (100% win/loss separation).

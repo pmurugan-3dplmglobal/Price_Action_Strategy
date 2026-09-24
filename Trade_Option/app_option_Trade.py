@@ -2062,20 +2062,22 @@ def api_buy_scanned_trade():
 
                 force_order = bool(data.get("force", False))
 
-                # ── 13:30 IST Hard Cutoff Guard for Index Options ──
+                # ── Adaptive DTE-Aware Cutoff Guard for Index Options ──
                 from trading_core import is_market_open, is_option_contract
                 from common.position_monitor import is_new_entry_allowed, get_contract_days_to_expiry
                 market_open = is_market_open()
                 is_opt = is_option_contract(contract) or exch != "NSE"
+                dte_contract = get_contract_days_to_expiry(contract) if is_opt else None
+
                 if is_index and market_open and not force_order:
-                    if not is_new_entry_allowed(live_execution_active=True, is_option=is_opt, is_index=True):
+                    if not is_new_entry_allowed(live_execution_active=True, is_option=is_opt, is_index=True, dte=dte_contract):
+                        cutoff_msg = "after 13:30 IST for 0DTE/expiry contracts" if (dte_contract is None or dte_contract <= 1) else "after 15:00 IST"
                         return jsonify({
                             "ok": False,
-                            "error": "Index Option Entry Cutoff: All new index option entries are blocked after 13:30 IST to prevent late-day expiry chop and EOD traps. Set force=true if you explicitly wish to override."
+                            "error": f"Index Option Entry Cutoff: All new index option entries are blocked {cutoff_msg} to prevent late-day decay and EOD square-off traps. Set force=true if you explicitly wish to override."
                         }), 400
 
                 # ── 0DTE Expiry Rules (11:30 Cutoff & ₹40 Floor) ──
-                dte_contract = get_contract_days_to_expiry(contract) if is_opt else None
                 if is_opt and dte_contract is not None and dte_contract <= 0 and not force_order:
                     if is_index and market_open:
                         from datetime import time as dt_time

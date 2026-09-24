@@ -552,15 +552,17 @@ def is_market_open():
     t_now = now.time()
     return datetime_time(9, 15) <= t_now <= datetime_time(15, 30)
 
-def is_new_entry_allowed(live_execution_active=True, is_option=False, is_index=False):
+def is_new_entry_allowed(live_execution_active=True, is_option=False, is_index=False, dte=None):
     """Check if new trade entries are allowed.
     If global HALT is active (via HALT file or config), unconditionally returns False.
     If live_execution_active is False (offline/scan-only/after-market mode), returns True to allow scanning & research anytime.
     If live_execution_active is True, restricts new entries strictly to Mon-Fri:
     - Options opening 60 seconds (09:15:00 - 09:15:59 IST) restricted: 09:16:00 IST start.
     - Cash equities / normal: 09:15:00 IST start.
-    - Index Options (is_index=True): Hard 13:30:00 IST cutoff! Eliminates late-day expiry chop & EOD square-off traps.
-    - Other instruments: 15:20:00 IST cutoff.
+    - Index Options (is_index=True):
+        * Non-Expiry / Monthly / Next-Week (dte >= 2): Adaptive window extended up to 15:00:00 IST to capture late-day institutional closing breakouts.
+        * 0DTE / Expiry Day / Unspecified (dte <= 1 or None): Strict 13:30:00 IST cutoff to eliminate lethal afternoon gamma/theta decay traps.
+    - Other instruments (cash / stock options): 15:20:00 IST cutoff.
     """
     if is_global_halt():
         logging.warning("[GLOBAL_HALT] All new trade entries blocked: Emergency HALT trigger active")
@@ -572,7 +574,10 @@ def is_new_entry_allowed(live_execution_active=True, is_option=False, is_index=F
         return False
     t_now = now.time()
     start_time = datetime_time(9, 16) if is_option else datetime_time(9, 15)
-    end_time = datetime_time(13, 30) if is_index else datetime_time(15, 20)
+    if is_index:
+        end_time = datetime_time(15, 0) if (dte is not None and dte >= 2) else datetime_time(13, 30)
+    else:
+        end_time = datetime_time(15, 20)
     return start_time <= t_now <= end_time
 
 def get_exchange_freeze_limit(symbol_or_contract: str) -> int:

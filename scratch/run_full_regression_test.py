@@ -528,6 +528,7 @@ print("[TEST 20] Testing Pattern Funnel & Lifecycle Stage (A+, A, B) Invariants.
 try:
     import pattern_funnel
     t_eng = "reg_test_engine"
+    pattern_funnel.clear_funnel(t_eng)
     item = {"symbol": "TESTSYM", "contract": "TESTSYM26SEP100CE", "side": "CE", "pattern": "BE_ABCD", "strike": "100"}
     
     # 1. Register B

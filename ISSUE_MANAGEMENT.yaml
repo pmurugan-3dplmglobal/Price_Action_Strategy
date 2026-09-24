@@ -1,15 +1,52 @@
 meta:
   system: Price Action Unified Strategy System
   version: v2.1.0-stable
-  last_updated: '2026-09-22'
+  last_updated: '2026-09-24'
   purpose: Active operational tracker for v2.1.0-stable failures, root causes, regressions, and enhancements.
   historical_archive: archive/ISSUE_HISTORY_ARCHIVE.yaml (Preserves 119 resolved legacy issues prior to 2026-09-05)
-  total_active_issues: 55
+  total_active_issues: 56
   archived_issues_summary:
     total_archived: 119
     recent_archived_batch: [FEATURE-031, FEATURE-030, FEATURE-029, ISSUE-084, ISSUE-083, ISSUE-082, ISSUE-081, ISSUE-080, FEATURE-036, FEATURE-035, FEATURE-034, FEATURE-033, ISSUE-054]
     key_archived_families: [ALGO_AUDIT_CVE, QUANT_ENHANCEMENTS, RADAR_LIFECYCLE, VCP_METRICS, SCANNER_DISCOVERY, SECURITY_CONFIG, ZERO_REGRESSION_AUDIT]
 issues:
+- id: ISSUE-106
+  title: Institutional Adaptive Index Entry Window — DTE-Aware 13:30 vs 15:00 IST Cutoff, Late-Day Conviction Guard (R:R >= 2.0) & Late-Day Spread Preference
+  severity: HIGH
+  category: Execution Timing, Risk Governance, Index Option Greeks, Time Decay Shielding
+  family: RISK_GOVERNANCE
+  date_reported: '2026-09-24'
+  symptom: |
+    1. On 2026-09-23 between 14:30 and 14:55 IST, pristine A-B-C-D breakdown patterns formed across NIFTY, SENSEX, and MIDCPNIFTY (e.g. SENSEX 74800 PE @ 173.25, NIFTY 23500 PE @ 133.90, MIDCPNIFTY 14575 PE @ 78.95) with confirmed Point D breakouts and R:R > 2.7.
+    2. All entries were completely blocked by a blanket 13:30 IST index entry cutoff in position_monitor.py and index_options_trade_engine.py, missing massive subsequent intraday and overnight directional gains.
+  root_cause: |
+    1. The legacy index cutoff applied a single blunt 13:30 IST limit regardless of contract expiry structure. While 13:30 is essential for 0DTE contracts to avoid lethal intraday gamma whipsaws and terminal theta bleed, monthly and next-week index contracts (DTE >= 2) carry near-zero intraday theta drag and are ideally suited to capture the 14:30–15:00 institutional European closing breakout cascade.
+    2. app_option_Trade.py manual buy endpoint hard-coded a 13:30 index block without resolving contract DTE.
+  affected_files:
+  - common/position_monitor.py
+  - Trade_Option/index_options_trade_engine.py
+  - Trade_Option/app_option_Trade.py
+  - common/pattern_funnel.py
+  - scratch/run_full_regression_test.py
+  - scratch/test_adaptive_index_entry_window.py
+  fix_applied: |
+    1. DTE-Aware is_new_entry_allowed() in common/position_monitor.py:
+       - For is_index=True, if dte >= 2, extends the entry window up to 15:00:00 IST.
+       - If dte <= 1 or dte is None, strictly preserves the 13:30:00 IST cutoff, keeping 0DTE contracts 100% shielded from gamma decay.
+    2. Multi-Gate Late Window in Trade_Option/index_options_trade_engine.py:
+       - Extended cycle-level cutoff to 15:00:00 IST EOD limit.
+       - Candidate Gate 0: If time > 13:30, blocks cand_dte <= 1 (0DTE); for cand_dte >= 2, strictly enforces high conviction R:R >= 2.0.
+       - After 14:00 IST, automatically enforces use_spread = True for accounts with margin >= ₹2L to neutralize late-afternoon theta drag.
+    3. UI Manual Buy Parity in Trade_Option/app_option_Trade.py:
+       - Resolves contract DTE before calling is_new_entry_allowed, allowing manual 1-Click Buy for monthly/next-week contracts (DTE >= 2) up to 15:00 IST while keeping 0DTE blocked after 13:30 IST.
+    4. Fixed _get_item_date_str in common/pattern_funnel.py to parse YYYY-MM-DD cleanly without clean_timestamp NameError, and ensured test fixture isolation in regression suite.
+  verification: |
+    1. scratch/test_adaptive_index_entry_window.py passed 2/2 tests (100% SUCCESS).
+    2. scratch/test_index_spread_and_cutoff.py passed 2/2 tests (100% SUCCESS).
+    3. scratch/run_full_regression_test.py passed all 32 test suites (100% SUCCESS, zero regressions).
+  status: RESOLVED
+  resolution_date: '2026-09-24'
+
 - id: ISSUE-105
   title: Execution Expectancy Hardening — Live Capital Affordability Gate, Small Account Naked Options (< ₹2L), 72h Monthly Expiry Rollover Guard, +15% Ratchet (+8% SL Lock), and Opening Bell 15m Index Delay
   severity: CRITICAL
