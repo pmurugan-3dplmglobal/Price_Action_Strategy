@@ -2235,39 +2235,47 @@ def api_buy_scanned_trade():
 
                 # Leg 2 Execution for Debit Spread (Sell OTM Short Leg)
                 if spread_info and _kite_session:
-                    try:
-                        leg2_c = spread_info["leg2"]["contract"]
-                        leg2_exch = "BFO" if ("SENSEX" in leg2_c.upper() or "BSE" in leg2_c.upper()) else "NFO"
-                        leg2_q_key = f"{leg2_exch}:{leg2_c}"
-                        leg2_q = safe_kite_call(_kite_session.quote, [leg2_q_key]) if _kite_session else {}
-                        leg2_depth = leg2_q.get(leg2_q_key, {}).get("depth", {}).get("buy", [])
-                        leg2_bid = float(leg2_depth[0]["price"]) if (leg2_depth and len(leg2_depth) > 0 and leg2_depth[0].get("price", 0) > 0) else float(leg2_q.get(leg2_q_key, {}).get("last_price", 0))
-                        if leg2_bid > 0:
-                            leg2_limit = round(leg2_bid * 0.995, 1)
-                        else:
-                            leg2_limit = round(float(spread_info.get("leg2", {}).get("entry_price", 10.0)) * 0.8, 1)
-                        leg2_limit = max(0.05, round(round(leg2_limit / 0.05) * 0.05, 2))
-                        leg2_otype = _kite_session.ORDER_TYPE_LIMIT
+                    # P2: Sequential Spread Fill Confirmation
+                    from common.position_monitor import confirm_leg1_order_filled
+                    leg1_ok, _, _, leg1_reason = confirm_leg1_order_filled(
+                        _kite_session, [str(order_id)], timeout_seconds=5.0, poll_interval=0.3
+                    )
+                    if not leg1_ok:
+                        logging.warning(f"[1-CLICK BUY DEBIT SPREAD] Leg 1 {contract} not confirmed filled ({leg1_reason}). Skipping Leg 2 placement to avoid naked short.")
+                    else:
+                        try:
+                            leg2_c = spread_info["leg2"]["contract"]
+                            leg2_exch = "BFO" if ("SENSEX" in leg2_c.upper() or "BSE" in leg2_c.upper()) else "NFO"
+                            leg2_q_key = f"{leg2_exch}:{leg2_c}"
+                            leg2_q = safe_kite_call(_kite_session.quote, [leg2_q_key]) if _kite_session else {}
+                            leg2_depth = leg2_q.get(leg2_q_key, {}).get("depth", {}).get("buy", [])
+                            leg2_bid = float(leg2_depth[0]["price"]) if (leg2_depth and len(leg2_depth) > 0 and leg2_depth[0].get("price", 0) > 0) else float(leg2_q.get(leg2_q_key, {}).get("last_price", 0))
+                            if leg2_bid > 0:
+                                leg2_limit = round(leg2_bid * 0.995, 1)
+                            else:
+                                leg2_limit = round(float(spread_info.get("leg2", {}).get("entry_price", 10.0)) * 0.8, 1)
+                            leg2_limit = max(0.05, round(round(leg2_limit / 0.05) * 0.05, 2))
+                            leg2_otype = _kite_session.ORDER_TYPE_LIMIT
 
-                        from common.position_monitor import slice_quantity_for_freeze
-                        leg2_slices = slice_quantity_for_freeze(leg2_c, lot_size)
-                        leg2_placed = []
-                        for l2_qty in leg2_slices:
-                            oid2 = _kite_session.place_order(
-                                variety=order_variety,
-                                tradingsymbol=leg2_c,
-                                exchange=leg2_exch,
-                                transaction_type=_kite_session.TRANSACTION_TYPE_SELL,
-                                quantity=l2_qty,
-                                order_type=leg2_otype,
-                                price=leg2_limit if leg2_limit > 0 else None,
-                                product=prod
-                            )
-                            leg2_placed.append(str(oid2))
-                        leg2_order_id = leg2_placed[0]
-                        logging.info(f"[1-CLICK BUY DEBIT SPREAD] Leg 2 (Short OTM) placed for {leg2_c} TotalQty={lot_size} @ {leg2_limit} (Orders: {leg2_placed})")
-                    except Exception as leg2_err:
-                        logging.error(f"[1-CLICK BUY DEBIT SPREAD ERROR] Failed to place Leg 2 ({spread_info.get('leg2', {}).get('contract')}): {leg2_err}")
+                            from common.position_monitor import slice_quantity_for_freeze
+                            leg2_slices = slice_quantity_for_freeze(leg2_c, lot_size)
+                            leg2_placed = []
+                            for l2_qty in leg2_slices:
+                                oid2 = _kite_session.place_order(
+                                    variety=order_variety,
+                                    tradingsymbol=leg2_c,
+                                    exchange=leg2_exch,
+                                    transaction_type=_kite_session.TRANSACTION_TYPE_SELL,
+                                    quantity=l2_qty,
+                                    order_type=leg2_otype,
+                                    price=leg2_limit if leg2_limit > 0 else None,
+                                    product=prod
+                                )
+                                leg2_placed.append(str(oid2))
+                            leg2_order_id = leg2_placed[0]
+                            logging.info(f"[1-CLICK BUY DEBIT SPREAD] Leg 2 (Short OTM) placed for {leg2_c} TotalQty={lot_size} @ {leg2_limit} (Orders: {leg2_placed})")
+                        except Exception as leg2_err:
+                            logging.error(f"[1-CLICK BUY DEBIT SPREAD ERROR] Failed to place Leg 2 ({spread_info.get('leg2', {}).get('contract')}): {leg2_err}")
             except Exception as k_err:
                 logging.warning(f"[1-CLICK BUY KITE ORDER WARNING] {contract}: {k_err}")
                 err_msg = str(k_err)

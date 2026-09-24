@@ -126,9 +126,8 @@ with patch("trade_db.get_active_trades", return_value=[pe_trade_breach]), \
      patch.object(morning_reconciler, "close_position") as mock_close_opt:
     rep_pe_breach = morning_reconciler.run_preflight_reconciliation(kite=mock_kite_pe_breach, engines=["index"])
     check('Put Option (PE) Gap-Down correctly triggers breach', any("GAP DOWN BREACH" in str(e) for e in rep_pe_breach["gap_events"]))
-    check('Put Option (PE) Gap-Down calls close_position', mock_close_opt.called)
-    mock_update_status.assert_called_with(502, "SL_HIT", exit_price=75.0, exit_reason="OPENING_GAP_DOWN_BREACH")
-    check('Put Option (PE) Gap-Down records SL_HIT', True)
+    check('Put Option (PE) Gap-Down does NOT call close_position (deferred to position_monitor)', not mock_close_opt.called)
+    check('Put Option (PE) Gap-Down does NOT mark SL_HIT (deferred to position_monitor)', not mock_update_status.called)
 
 # 2.3 Put Option (PE) Gap-Up Windfall (open >= T1)
 pe_trade_windfall = dict(pe_trade_normal, id=503)
@@ -166,9 +165,8 @@ with patch("trade_db.get_active_trades", return_value=[stock_short]), \
      patch.object(morning_reconciler, "close_stock_position") as mock_close_stock:
     rep_short_br = morning_reconciler.run_preflight_reconciliation(kite=mock_kite_short_breach, engines=["daily"])
     check('Bearish short stock detects Gap-Up breach (open 825 >= SL 820)', any("GAP UP BREACH" in str(e) for e in rep_short_br["gap_events"]))
-    check('Bearish short stock calls close_stock_position', mock_close_stock.called)
-    mock_update_status.assert_called_with(601, "SL_HIT", exit_price=825.0, exit_reason="OPENING_GAP_UP_BREACH")
-    check('Bearish short stock status marked SL_HIT', True)
+    check('Bearish short stock does NOT call close_stock_position (deferred to position_monitor)', not mock_close_stock.called)
+    check('Bearish short stock does NOT mark SL_HIT (deferred to position_monitor)', not mock_update_status.called)
 
 mock_kite_short_windfall = MockKiteSession(
     quotes={"NSE:SBIN": {"last_price": 750.0, "ohlc": {"open": 750.0}}},

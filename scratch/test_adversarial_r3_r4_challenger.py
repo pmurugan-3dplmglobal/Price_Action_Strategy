@@ -662,10 +662,10 @@ class TestR4MorningGapAuditBoundary(unittest.TestCase):
             report = morning_reconciler.run_preflight_reconciliation(kite=self.mock_kite, engines=["daily"])
 
             # Verification:
-            # 1. close_stock_position must be executed
-            mock_close_stock.assert_called_once()
-            # 2. trade_db must update status to SL_HIT with OPENING_GAP_DOWN_BREACH
-            mock_update_status.assert_called_with(101, "SL_HIT", exit_price=1742.0, exit_reason="OPENING_GAP_DOWN_BREACH")
+            # 1. Reconciler must NOT close position (deferred to position_monitor)
+            mock_close_stock.assert_not_called()
+            # 2. Reconciler must NOT update status to SL_HIT (deferred to position_monitor)
+            mock_update_status.assert_not_called()
             # 3. Gap event logged
             self.assertTrue(any("GAP DOWN BREACH" in str(evt) for evt in report["gap_events"]))
 
@@ -741,9 +741,9 @@ class TestR4MorningGapAuditBoundary(unittest.TestCase):
             
             report = morning_reconciler.run_preflight_reconciliation(kite=self.mock_kite, engines=["bear_trade"])
 
-            # Must trigger immediate exit to cover short
-            mock_close_stock.assert_called_once()
-            mock_update_status.assert_called_with(201, "SL_HIT", exit_price=826.0, exit_reason="OPENING_GAP_UP_BREACH")
+            # Must NOT close position directly (deferred to position_monitor)
+            mock_close_stock.assert_not_called()
+            mock_update_status.assert_not_called()
             self.assertTrue(any("GAP UP BREACH" in str(evt) for evt in report["gap_events"]))
 
     def test_bearish_short_gap_down_windfall_ratchets_to_be(self):

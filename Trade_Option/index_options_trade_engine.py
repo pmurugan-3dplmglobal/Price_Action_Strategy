@@ -333,6 +333,35 @@ def execute_index_entry(kite, pos):
         # Leg 2 Execution for Debit Spread (Sell OTM Short Leg)
         if pos.get("position_type") == "option_spread" and pos.get("leg2_contract"):
             leg2_c = pos["leg2_contract"]
+
+            # P2: Sequential Spread Fill Confirmation
+            # Verify Leg 1 BUY is filled ('COMPLETE') on Kite before firing Leg 2 SELL
+            # This unlocks Zerodha RMS hedge margin benefits (~₹20k required instead of ~₹1.8L for naked short)
+            from common.position_monitor import confirm_leg1_order_filled
+            leg1_ok, filled_oids, pending_oids, leg1_reason = confirm_leg1_order_filled(
+                kite, placed_oids, timeout_seconds=5.0, poll_interval=0.3
+            )
+            if not leg1_ok:
+                logging.error(f"[INDEX DEBIT SPREAD] Leg 1 {pos['contract']} not confirmed filled ({leg1_reason}). Cancelling resting orders to prevent unhedged exposure.")
+                for p_oid in placed_oids:
+                    try:
+                        kite.cancel_order(variety=kite.VARIETY_REGULAR, order_id=p_oid)
+                    except Exception as c_err:
+                        logging.debug(f"Could not cancel Leg 1 order {p_oid}: {c_err}")
+
+                from common.position_monitor import is_contract_held_on_broker
+                is_held, held_qty = is_contract_held_on_broker(kite, pos["contract"])
+                if not is_held or held_qty <= 0:
+                    if sym and sym in ACTIVE_POSITIONS:
+                        with position_lock:
+                            ACTIVE_POSITIONS.pop(sym, None)
+                    if pos.get("trade_id"):
+                        trade_db.update_trade(pos["trade_id"], {"status": "FAILED", "exit_reason": f"LEG1_NOT_FILLED_{leg1_reason}", "updated_at": dt.now().strftime("%Y-%m-%d %H:%M:%S")})
+                    return False
+                else:
+                    logging.warning(f"[INDEX DEBIT SPREAD PARTIAL] Leg 1 {pos['contract']} partially filled ({held_qty} qty); proceeding with Leg 2 for filled quantity.")
+                    total_qty = held_qty
+
             try:
                 leg2_q_key = f"{target_exch}:{leg2_c}"
                 leg2_q = safe_kite_call(kite.quote, [leg2_q_key])
@@ -424,8 +453,11 @@ def execute_highest_rr_trade(kite, staged):
         use_spread = True
     cap_val_base = float(cfg_eng.get("capital") or 100000.0)
     live_cash_avail = get_live_available_cash(kite, default=cap_val_base) if (live_ok and kite) else cap_val_base
-    if use_spread and exec_mode != "SPREAD_ONLY" and live_cash_avail < 200000.0:
-        logging.info(f"[INDEX_SPREAD_MARGIN_GUARD] Available broker cash ₹{live_cash_avail:,.2f} < ₹2,00,000 threshold. Defaulting to clean naked option to prevent sequential short leg margin rejection.")
+    # Sequential fill confirmation guarantees Leg 1 is COMPLETE before Leg 2 placement,
+    # ensuring Zerodha RMS recognizes hedge margin benefits (~₹20k required instead of ~₹1.8L).
+    # Only fall back to naked option if available cash is below spread minimum margin (~₹25,000).
+    if use_spread and exec_mode != "SPREAD_ONLY" and live_cash_avail < 25000.0:
+        logging.info(f"[INDEX_SPREAD_MARGIN_GUARD] Available broker cash ₹{live_cash_avail:,.2f} < ₹25,000 spread minimum margin threshold. Defaulting to clean naked option.")
         use_spread = False
 
     # Prioritized Candidate Pools: Tier 1 Gold (Priority 1) and Tier 2 Core (Priority 2)

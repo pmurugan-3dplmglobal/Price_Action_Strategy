@@ -3,10 +3,10 @@ common/morning_reconciler.py
 ============================
 Automated Market Open Pre-Flight Reconciler (09:16 AM IST).
 
-Executes every trading day at 09:16 AM IST (1 minute after opening bell):
+Executing every trading day at 09:16 AM IST (1 minute after opening bell):
 1. Reconciles Kite broker net positions vs SQLite trade_db.
 2. Audits overnight price gaps against Stop Loss and Target T1.
-   - Gap-Down Breach: Triggers immediate graceful exit.
+   - Gap Breach: Logged for audit and deferred to position_monitor (no rogue opening liquidation).
    - Gap-Up Windfall: Automatically ratchets trailing stop to Trail 1 (Break-Even).
 3. Verifies account margin health.
 4. Writes status report to output/monitor/preflight_status.json and logs to trade journal.
@@ -168,11 +168,11 @@ def run_preflight_reconciliation(kite=None, engines=("nifty50", "index", "daily"
                         # ── Bearish Short Stock: Inverted SL / Target Dynamics ──
                         # Gap-Up Breach: Market opened above SL (loss for short position)
                         if sl_val > 0 and (ltp >= sl_val or open_price >= sl_val):
-                            gap_msg = f"[GAP UP BREACH] Bearish short {contract} opened at {open_price} (LTP={ltp}) above SL {sl_val}."
+                            gap_msg = f"[GAP UP BREACH] Bearish short {contract} opened at {open_price} (LTP={ltp}) above SL {sl_val}. Retained for position_monitor trailing/candle-close verification."
                             logging.warning(f"[09:16 PRE-FLIGHT] {gap_msg}")
                             report["gap_events"].append(gap_msg)
-                            close_stock_position(kite, trade, live_market=True)
-                            trade_db.update_trade_status(tid, "SL_HIT", exit_price=ltp, exit_reason="OPENING_GAP_UP_BREACH")
+                            # ROGUE EXIT PREVENTION: Reconciler is an audit report tool; stop-loss execution
+                            # belongs strictly to position_monitor.py under 09:50 AM failsafe and candle-close rules.
 
                         # Gap-Down Windfall: Market opened below Target T1 (profit for short position)
                         elif t1_val > 0 and (ltp <= t1_val or open_price <= t1_val):
@@ -190,14 +190,11 @@ def run_preflight_reconciliation(kite=None, engines=("nifty50", "index", "daily"
                         # ── Long Option (CE / PE) or Long Stock: Standard Upward Profit Dynamics ──
                         # Gap-Down Breach: Market opened below SL (loss for long holder)
                         if sl_val > 0 and (ltp <= sl_val or open_price <= sl_val):
-                            gap_msg = f"[GAP DOWN BREACH] {contract} opened at {open_price} (LTP={ltp}) below SL {sl_val}."
+                            gap_msg = f"[GAP DOWN BREACH] {contract} opened at {open_price} (LTP={ltp}) below SL {sl_val}. Retained for position_monitor trailing/candle-close verification."
                             logging.warning(f"[09:16 PRE-FLIGHT] {gap_msg}")
                             report["gap_events"].append(gap_msg)
-                            if pos_type == "stock":
-                                close_stock_position(kite, trade, live_market=True)
-                            else:
-                                close_position(kite, trade, live_market=True)
-                            trade_db.update_trade_status(tid, "SL_HIT", exit_price=ltp, exit_reason="OPENING_GAP_DOWN_BREACH")
+                            # ROGUE EXIT PREVENTION: Reconciler is an audit report tool; stop-loss execution
+                            # belongs strictly to position_monitor.py under 09:50 AM failsafe and candle-close rules.
 
                         # Gap-Up Windfall: Market opened past Target T1 (profit for long holder)
                         elif t1_val > 0 and (ltp >= t1_val or open_price >= t1_val):

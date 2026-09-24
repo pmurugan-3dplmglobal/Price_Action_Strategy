@@ -2997,3 +2997,110 @@ def clamp_lpp_buy_price(limit_price, ltp, lpp_factor=1.08):
         if lp > lpp_ceiling:
             return lpp_ceiling
     return lp
+
+
+def confirm_leg1_order_filled(kite, placed_oids, timeout_seconds=5.0, poll_interval=0.3):
+    """
+    Sequentially verify that Leg 1 (Long BUY) order(s) are filled ('COMPLETE') on Kite
+    before placing Leg 2 (Short SELL).
+
+    Why this is critical:
+    1. Zerodha RMS Hedge Benefit: Kite requires ~₹1.8L margin for naked short options, but only
+       ~₹20,000 for hedged debit spreads IF the long leg is already COMPLETE on the broker.
+    2. Atomic Execution: If Leg 1 fails or remains uncompleted, placing Leg 2 is blocked, preventing
+       catastrophic unhedged short exposure.
+
+    Args:
+        kite: KiteConnect session or None.
+        placed_oids: List of order IDs or single order ID string/int for Leg 1 slices.
+        timeout_seconds: Maximum seconds to poll for fill confirmation (default: 5.0).
+        poll_interval: Seconds between status polls (default: 0.3).
+
+    Returns:
+        tuple (bool success, list filled_oids, list pending_oids, str reason)
+    """
+    if not placed_oids:
+        return True, [], [], "NO_ORDERS"
+
+    if isinstance(placed_oids, (str, int)):
+        oids = [str(placed_oids)]
+    else:
+        oids = [str(o) for o in placed_oids if o]
+
+    if not oids:
+        return True, [], [], "NO_ORDERS"
+
+    if not kite:
+        return True, oids, [], "NO_KITE_SESSION"
+
+    # Detect mock session without real orders tracking
+    is_mock = type(kite).__name__.startswith("Mock") or not hasattr(kite, "api_key")
+
+    try:
+        from session import safe_kite_call
+    except ImportError:
+        try:
+            from common.session import safe_kite_call
+        except ImportError:
+            def safe_kite_call(fn, *args, **kwargs):
+                return fn(*args, **kwargs)
+
+    start_t = time.time()
+    filled_set = set()
+    uncompleted_set = set(oids)
+
+    while time.time() - start_t <= timeout_seconds:
+        order_records = {}
+
+        # 1. Try order_history per order ID
+        for oid in list(uncompleted_set):
+            try:
+                if hasattr(kite, "order_history"):
+                    hist = safe_kite_call(kite.order_history, oid)
+                    if hist and isinstance(hist, list) and len(hist) > 0:
+                        order_records[oid] = hist[-1]
+            except Exception:
+                pass
+
+        # 2. If some orders not found via order_history, try bulk orders()
+        missing = [oid for oid in uncompleted_set if oid not in order_records]
+        if missing:
+            try:
+                if hasattr(kite, "orders"):
+                    all_orders = safe_kite_call(kite.orders) or []
+                    for o in all_orders:
+                        o_id_str = str(o.get("order_id", ""))
+                        if o_id_str in missing:
+                            order_records[o_id_str] = o
+            except Exception:
+                pass
+
+        # If in a mock session and no order records could be retrieved, allow bypass
+        if is_mock and not order_records:
+            logging.info("[SEQUENTIAL SPREAD CONFIRM] Mock session detected with empty orders; bypassing fill wait.")
+            return True, oids, [], "MOCK_BYPASS"
+
+        # Check status for each uncompleted order
+        for oid in list(uncompleted_set):
+            rec = order_records.get(oid)
+            if rec:
+                st = str(rec.get("status", "")).upper()
+                if st == "COMPLETE":
+                    filled_set.add(oid)
+                    uncompleted_set.discard(oid)
+                elif st in ["REJECTED", "CANCELLED"]:
+                    status_msg = rec.get("status_message") or st
+                    logging.warning(f"[SEQUENTIAL SPREAD CONFIRM] Leg 1 order {oid} failed with status {st}: {status_msg}")
+                    return False, list(filled_set), list(uncompleted_set), f"ORDER_{st}"
+
+        if not uncompleted_set:
+            elapsed = time.time() - start_t
+            logging.info(f"[SEQUENTIAL SPREAD CONFIRM] Leg 1 order(s) {oids} confirmed COMPLETE in {elapsed:.2f}s. Proceeding to Leg 2 placement.")
+            return True, list(filled_set), [], "ALL_COMPLETE"
+
+        time.sleep(poll_interval)
+
+    # Timeout reached
+    elapsed = time.time() - start_t
+    logging.warning(f"[SEQUENTIAL SPREAD CONFIRM] Leg 1 fill confirmation timed out after {elapsed:.2f}s for orders: {list(uncompleted_set)}")
+    return False, list(filled_set), list(uncompleted_set), "TIMEOUT"

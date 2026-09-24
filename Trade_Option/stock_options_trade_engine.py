@@ -1178,6 +1178,34 @@ def execute_highest_rr_trade(kite, staged):
                     save_state()
 
                     if spread_info:
+                        # P2: Sequential Spread Fill Confirmation
+                        # Verify Leg 1 BUY is filled ('COMPLETE') on Kite before firing Leg 2 SELL
+                        # This unlocks Zerodha RMS hedge margin benefits (~₹20k required instead of ~₹1.8L for naked short)
+                        from common.position_monitor import confirm_leg1_order_filled
+                        leg1_ok, filled_oids, pending_oids, leg1_reason = confirm_leg1_order_filled(
+                            kite, placed_oids, timeout_seconds=5.0, poll_interval=0.3
+                        )
+                        if not leg1_ok:
+                            logging.error(f"[DEBIT SPREAD REJECTED] Leg 1 {contract} not confirmed filled ({leg1_reason}). Cancelling resting orders to prevent unhedged exposure.")
+                            for o_to_cancel in placed_oids:
+                                try:
+                                    kite.cancel_order(variety=kite.VARIETY_REGULAR, order_id=o_to_cancel)
+                                    logging.warning(f"[DEBIT SPREAD ROLLBACK] Cancelled Leg 1 order {o_to_cancel} because Leg 1 did not fill: {leg1_reason}")
+                                except Exception as c_err:
+                                    logging.error(f"[DEBIT SPREAD ROLLBACK ERROR] Could not cancel Leg 1 order {o_to_cancel}: {c_err}")
+                            from position_monitor import is_contract_held_on_broker
+                            is_held, held_qty = is_contract_held_on_broker(kite, contract)
+                            if not is_held or held_qty <= 0:
+                                with position_lock:
+                                    ACTIVE_POSITIONS.pop(sym, None)
+                                if pos.get("trade_id"):
+                                    trade_db.update_trade(pos["trade_id"], {"status": "FAILED", "exit_reason": f"LEG1_NOT_FILLED_{leg1_reason}"})
+                                save_state()
+                                continue
+                            else:
+                                logging.warning(f"[DEBIT SPREAD PARTIAL] Leg 1 {contract} partially filled ({held_qty} qty); proceeding with Leg 2 for filled quantity.")
+                                qty = held_qty
+
                         try:
                             leg2_c = spread_info["leg2"]["contract"]
                             leg2_q_key = f"NFO:{leg2_c}"

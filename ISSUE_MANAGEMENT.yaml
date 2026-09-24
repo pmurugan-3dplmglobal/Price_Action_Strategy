@@ -3263,3 +3263,28 @@ issues:
   status: RESOLVED
   resolution_date: '2026-09-23'
 
+- id: ISSUE-085
+  title: "Audit-Only Morning Reconciler, Daemon Scheduler State Persistence & Sequential Spread Fill Confirmation"
+  date: "2026-09-24"
+  severity: CRITICAL
+  component: "common/morning_reconciler.py, Trade_Option/run_export_scheduler_daemon.py, common/position_monitor.py, common/trading_core.py, Trade_Option/index_options_trade_engine.py, Trade_Option/stock_options_trade_engine.py, Trade_Option/app_option_Trade.py"
+  symptoms: |
+    1. Premature Opening Bell Liquidation: At 09:16:23 AM IST, BEL (-Rs 1,852.50) and JIOFIN (-Rs 1,222.00) were dumped at market open by morning_reconciler.py on raw opening tick quotes, immediately before rebounding.
+    2. Afternoon Restart Rogue Dump: At 09:29:21 AM IST, MAZDOCK was liquidated at day low (56.85) when run_export_scheduler_daemon.py re-triggered run_preflight_reconciliation() after a service restart.
+    3. Forced Naked Option Loss on BANKNIFTY: BANKNIFTY 26SEP56600CE suffered a -Rs 7,443.00 loss because accounts under Rs 2L were forced into unhedged naked options by an arbitrary live_cash_avail < 200000.0 threshold, bypassing debit spread theta-neutral protection.
+  root_cause: |
+    1. common/morning_reconciler.py called close_position() and close_stock_position() directly on raw opening ticks without candle-close confirmation or failsafe gating, bypassing position_monitor.py.
+    2. Trade_Option/run_export_scheduler_daemon.py held executed_today in-memory only and used an excessively wide 900-second (15-minute) trigger window, causing service restarts to re-fire 09:16 preflight reconciliation.
+    3. Trade engines fired Leg 2 SELL simultaneously or immediately after Leg 1 BUY without waiting for Leg 1 to be COMPLETE on Kite. Without sequential fill confirmation, Zerodha RMS evaluated Leg 2 as an unhedged naked short option requiring ~Rs 1.8L margin instead of ~Rs 20k hedge margin.
+  fix_applied: |
+    1. common/morning_reconciler.py: Converted to strictly audit-only reporting. Removed all market close execution calls (close_position, close_stock_position) and SL_HIT status updates. Gap breaches are recorded in report["gap_events"] and deferred to position_monitor.py for 15m candle-close and 09:50 AM failsafe evaluation.
+    2. Trade_Option/run_export_scheduler_daemon.py: Persisted executed slot keys to output/monitor/export_scheduler_state.json across restarts and narrowed the catch-up trigger window from 900s to 120s (2 minutes).
+    3. common/position_monitor.py & common/trading_core.py: Implemented confirm_leg1_order_filled(kite, placed_oids, timeout_seconds=5.0, poll_interval=0.3) to verify Leg 1 is COMPLETE before placing Leg 2.
+    4. Trade_Option/index_options_trade_engine.py, stock_options_trade_engine.py, and app_option_Trade.py: Enforced sequential fill confirmation and lowered the index spread margin guard threshold from Rs 200,000 to Rs 25,000 spread minimum margin, unlocking hedged debit spreads for normal accounts.
+  verification: |
+    1. Dedicated unit test suite scratch/test_sequential_spread_and_reconciler.py: PASSED (11/11 in 4.79s).
+    2. Master regression suite scratch/run_full_regression_test.py: PASSED (32/32 tests with 100% success, 0 regressions).
+  status: RESOLVED
+  resolution_date: '2026-09-24'
+
+
