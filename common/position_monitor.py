@@ -2123,6 +2123,7 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                         spot_tok = reg_entry
 
                 spot_sl = float(pos.get("spot_sl") or 0.0)
+                df_spot_chk = pos.get("df_spot") if pos.get("df_spot") is not None else pos.get("spot_df")
                 if spot_tok and spot_sl <= 0:
                     try:
                         df_spot_chk = fetch_and_resample_candles(kite, spot_tok, from_date, to_date, pos_tf or timeframe_entry)
@@ -2137,6 +2138,11 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                             pos["spot_sl"] = spot_sl
                     except Exception as derive_spot_err:
                         logging.debug(f"Dynamic spot_sl derivation failed for {sym}: {derive_spot_err}")
+                elif spot_tok and spot_sl > 0 and df_spot_chk is None:
+                    try:
+                        df_spot_chk = fetch_and_resample_candles(kite, spot_tok, from_date, to_date, pos_tf or timeframe_entry)
+                    except Exception as derive_spot_err:
+                        logging.debug(f"Dynamic spot candle fetch failed for {sym}: {derive_spot_err}")
 
                 if spot_tok and spot_sl > 0:
                     try:
@@ -2147,6 +2153,8 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                         else:
                             live_spot = float(pos.get("last_known_spot") or pos.get("spot_entry") or 0.0)
 
+                        latest_spot_close = float(df_spot_chk.iloc[-2]['close']) if (df_spot_chk is not None and len(df_spot_chk) >= 2) else live_spot
+
                         side_str = str(pos.get("side", "CE")).upper()
                         is_bull = side_str in ["CE", "BUY", "BULL"]
                         # Catastrophic option emergency cap: If option drops beyond opt_emergency_cap (28%), exit regardless of spot
@@ -2155,27 +2163,28 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                         curr_opt_p = live_ltp if live_ltp > 0 else cp
                         is_catastrophic_opt = (entry_s > 0 and curr_opt_p > 0 and curr_opt_p <= (entry_s * (1.0 - opt_emergency_cap)) and not is_fresh_fill and not is_outlier_entry)
 
-                        if is_bull and live_spot > spot_sl and not is_catastrophic_opt:
-                            logging.info(f"[SPOT_SL_GUARD] Suppressed premature option SL exit for {sym} ({pos.get('contract')}): Option LTP {live_ltp:.2f} tripped SL, but Underlying Spot ({live_spot:.2f}) is strictly holding above support ({spot_sl:.2f}).")
+                        if is_bull and latest_spot_close > spot_sl and not is_catastrophic_opt:
+                            logging.info(f"[SPOT_SL_GUARD] Suppressed premature option SL exit for {sym} ({pos.get('contract')}): Option LTP {live_ltp:.2f} tripped SL, but Underlying Spot Close ({latest_spot_close:.2f}, Live Tick: {live_spot:.2f}) is strictly holding above support ({spot_sl:.2f}).")
                             sl_hit = False
-                        elif (not is_bull) and live_spot < spot_sl and not is_catastrophic_opt:
-                            logging.info(f"[SPOT_SL_GUARD] Suppressed premature PE option SL exit for {sym} ({pos.get('contract')}): Underlying Spot ({live_spot:.2f}) is strictly below ceiling ({spot_sl:.2f}).")
+                        elif (not is_bull) and latest_spot_close < spot_sl and not is_catastrophic_opt:
+                            logging.info(f"[SPOT_SL_GUARD] Suppressed premature PE option SL exit for {sym} ({pos.get('contract')}): Option LTP {live_ltp:.2f} tripped SL, but Underlying Spot Close ({latest_spot_close:.2f}, Live Tick: {live_spot:.2f}) is strictly below ceiling ({spot_sl:.2f}).")
                             sl_hit = False
                     except Exception as s_err:
                         logging.warning(f"Spot SL guard check error for {sym}: {s_err}")
                         # API Resiliency (Rate-Limit / 429 Shield): Fall back to last_known_spot or spot_entry
                         cached_spot = float(pos.get("last_known_spot") or pos.get("spot_entry") or 0.0)
+                        latest_cached_close = float(df_spot_chk.iloc[-2]['close']) if (df_spot_chk is not None and len(df_spot_chk) >= 2) else cached_spot
                         side_str = str(pos.get("side", "CE")).upper()
                         is_bull = side_str in ["CE", "BUY", "BULL"]
                         opt_emergency_cap = float(cfg.get("max_option_loss_pct", 28.0)) / 100.0
                         curr_opt_p = live_ltp if live_ltp > 0 else cp
                         is_catastrophic_opt = (entry_s > 0 and curr_opt_p > 0 and curr_opt_p <= (entry_s * (1.0 - opt_emergency_cap)) and not is_fresh_fill and not is_outlier_entry)
-                        if cached_spot > 0 and not is_catastrophic_opt:
-                            if is_bull and cached_spot > spot_sl:
-                                logging.info(f"[SPOT_SL_GUARD FAILSAFE] API query error ({s_err}) for {sym}; last known spot ({cached_spot:.2f}) is holding above support ({spot_sl:.2f}). Suppressing premature option SL exit.")
+                        if latest_cached_close > 0 and not is_catastrophic_opt:
+                            if is_bull and latest_cached_close > spot_sl:
+                                logging.info(f"[SPOT_SL_GUARD FAILSAFE] API query error ({s_err}) for {sym}; spot close ({latest_cached_close:.2f}, cached tick: {cached_spot:.2f}) is holding above support ({spot_sl:.2f}). Suppressing premature option SL exit.")
                                 sl_hit = False
-                            elif (not is_bull) and cached_spot < spot_sl:
-                                logging.info(f"[SPOT_SL_GUARD FAILSAFE] API query error ({s_err}) for {sym}; last known spot ({cached_spot:.2f}) is holding below ceiling ({spot_sl:.2f}). Suppressing premature PE option SL exit.")
+                            elif (not is_bull) and latest_cached_close < spot_sl:
+                                logging.info(f"[SPOT_SL_GUARD FAILSAFE] API query error ({s_err}) for {sym}; spot close ({latest_cached_close:.2f}, cached tick: {cached_spot:.2f}) is holding below ceiling ({spot_sl:.2f}). Suppressing premature PE option SL exit.")
                                 sl_hit = False
 
             if sl_hit:
@@ -2583,13 +2592,9 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                         if not is_stock:
                             contract_name = pos.get("contract") or pos.get("symbol") or sym
                             dte = get_contract_days_to_expiry(contract_name)
-                            if dte is not None:
-                                if dte <= 2:
-                                    single_lot_mode = "EXIT_AT_T1"
-                                    logging.info(f"[SINGLE_LOT_POLICY] Contract {contract_name} has DTE={dte} <= 2. Forcing EXIT_AT_T1 to lock profit against theta decay.")
-                                elif dte > 5 and single_lot_mode == "EXIT_AT_T1":
-                                    single_lot_mode = "TRAIL_BE"
-                                    logging.info(f"[SINGLE_LOT_POLICY] Monthly Contract {contract_name} has DTE={dte} > 5. Setting TRAIL_BE to let winner run to T2/T3.")
+                            if dte is not None and dte <= 2:
+                                single_lot_mode = "EXIT_AT_T1"
+                                logging.info(f"[SINGLE_LOT_POLICY] Contract {contract_name} has DTE={dte} <= 2. Forcing EXIT_AT_T1 to lock profit against theta decay.")
 
                         if single_lot_mode in ["EXIT_AT_T1", "BANK_T1", "FULL_EXIT_T1"]:
                             reached_val = lp if is_short_stock else hp

@@ -600,7 +600,7 @@ def get_live_available_cash(kite, default=100000.0, cache_ttl=15.0):
     Gracefully falls back to default if kite is None or API call fails.
     """
     if kite is None:
-        return float(default)
+        return max(0.0, float(default))
 
     now_epoch = time.time()
     with _CASH_LOCK:
@@ -616,7 +616,13 @@ def get_live_available_cash(kite, default=100000.0, cache_ttl=15.0):
         m_res = safe_kite_call(kite.margins, "equity")
         if isinstance(m_res, dict):
             avail = m_res.get("available", {})
-            live_bal = float(avail.get("live_balance") or avail.get("cash") or m_res.get("net", default) or default)
+            avail_cash = avail.get("cash")
+            if avail_cash is not None:
+                live_bal = float(avail_cash)
+            else:
+                live_bal = float(avail.get("live_balance") or m_res.get("net", default) or default)
+            if live_bal < 0:
+                live_bal = 0.0
             with _CASH_LOCK:
                 _LIVE_CASH_CACHE["timestamp"] = now_epoch
                 _LIVE_CASH_CACHE["cash"] = live_bal
@@ -625,7 +631,7 @@ def get_live_available_cash(kite, default=100000.0, cache_ttl=15.0):
         logging.warning(f"[PORTFOLIO_RISK] Failed to query live cash margins: {e}. Using cached/default {default}")
 
     with _CASH_LOCK:
-        return _LIVE_CASH_CACHE["cash"] if _LIVE_CASH_CACHE["timestamp"] > 0 else float(default)
+        return max(0.0, float(_LIVE_CASH_CACHE["cash"])) if _LIVE_CASH_CACHE["timestamp"] > 0 else max(0.0, float(default))
 
 
 def check_capital_affordability(kite, required_capital, max_utilization_pct=0.90, default_capital=100000.0):

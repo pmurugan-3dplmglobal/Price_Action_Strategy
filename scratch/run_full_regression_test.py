@@ -971,6 +971,24 @@ except Exception as e:
     errors.append(f"Debit Spread Rollback & Emergency Unwind Invariants Failed: {e}")
     print(f" FAILED [ERR] ({e})", flush=True)
 
+# -------------------------------------------------------------------------
+# TEST 34: Profit Lock Ratchet, Cash Affordability Gate & Spot Candle-Close SL (ISSUE-088)
+# -------------------------------------------------------------------------
+print("[TEST 34] Testing Profit Lock Ratchet, Cash Affordability Gate & Spot Candle-Close SL (ISSUE-088)...", end="", flush=True)
+try:
+    import subprocess
+    import paths
+    cmd_p88 = [
+        sys.executable,
+        os.path.join(paths.SCRATCH_DIR, "test_profit_lock_and_capital_gate.py")
+    ]
+    res_p88 = subprocess.run(cmd_p88, cwd=paths.PROJECT_ROOT, capture_output=True, text=True)
+    assert res_p88.returncode == 0, f"Profit lock & capital gate unit tests failed:\nSTDOUT:\n{res_p88.stdout}\nSTDERR:\n{res_p88.stderr}"
+    print(" PASSED [OK]", flush=True)
+except Exception as e:
+    errors.append(f"Profit Lock Ratchet, Cash Affordability Gate & Spot Candle-Close SL Invariants Failed: {e}")
+    print(f" FAILED [ERR] ({e})", flush=True)
+
 print("\n" + "=" * 100)
 if not errors:
     print("      ALL REGRESSION TESTS PASSED WITH 100% SUCCESS -- ZERO REGRESSIONS FOUND!")

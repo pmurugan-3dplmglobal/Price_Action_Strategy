@@ -503,8 +503,12 @@ verification_and_quality_assurance:
   vix_portfolio_suite: "scratch/test_vix_portfolio_volume.py — 47/47 Unit Tests Passing (100% Success Rate)"
   spread_exit_and_index_cap_suite: "scratch/test_spread_exit_and_index_cap.py — 6/6 Unit Tests Passing (100% Success Rate)"
   debit_spread_rollback_suite: "scratch/test_issue087_debit_spread_rollback.py — 6/6 Unit Tests Passing (100% Success Rate)"
+  profit_lock_and_capital_gate_suite: "scratch/test_profit_lock_and_capital_gate.py — 6/6 Unit Tests Passing (100% Success Rate)"
   ast_syntax_integrity: "100% Python files parsed with zero syntax errors"
   recent_major_issues_resolved:
+    - id: "ISSUE-088"
+      title: "Intraday +15% Profit Lock Ratchet, Pre-Execution Cash Affordability Gate & Strict Spot-Anchored Candle-Close SL Guard"
+      status: "RESOLVED"
     - id: "ISSUE-108"
       title: "Kite Gateway Error Resilience (502/503/504 & HTML Content-Type Retries), WebSocket Monitor NoneType AttributeError Suppression & Broker Live Reconciliation Rate-Limit Throttling"
       status: "RESOLVED"

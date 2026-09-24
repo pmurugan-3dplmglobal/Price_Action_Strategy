@@ -3436,3 +3436,50 @@ ISSUE-086:
 
 
 
+
+ISSUE-087:
+  title: "Debit Spread 3-Tier Atomic Rollback, Partial Leg 2 Slice Freeze Cancellation and Live Retention Enforcement (ISSUE-107)"
+  date_logged: '2026-09-24'
+  family: "EXECUTION_QUALITY_AND_RISK"
+  component: "Trade_Option/app_option_Trade.py, Trade_Option/stock_options_trade_engine.py, Trade_Option/index_options_trade_engine.py"
+  symptoms: |
+    1. Unhedged Leg 1 Exposure in 1-Click Buy: If Leg 2 failed during manual 1-Click Buy debit spread execution, Leg 1 remained active on the broker without rollback or emergency unwind.
+    2. Partial Freeze Slices Resting: If Leg 2 was split into multiple freeze slices (e.g. 1800 qty in two 900-qty slices) and slice 2 failed, slice 1 orders remained resting or partially filled.
+    3. Premature FAILED Status in DB: When emergency unwind failed and positions were retained in ACTIVE_POSITIONS for position_monitor management, trade_db was erroneously marked FAILED, causing position_monitor to ignore the orphaned leg.
+  root_cause: |
+    1. app_option_Trade.py lacked the 3-tier rollback logic implemented in the engines.
+    2. Freeze slice loops did not cancel resting unfilled Leg 2 orders or execute partial covers upon mid-slice failure.
+    3. Status in SQLite DB was set to FAILED before verifying whether emergency unwind succeeded or position was retained.
+  fix_applied: |
+    1. Implemented uniform 3-tier atomic rollback across app_option_Trade.py, stock_options_trade_engine.py, and index_options_trade_engine.py.
+    2. Added Rollback Guard 2: Iterates through all placed Leg 2 order IDs and cancels resting orders upon failure.
+    3. Added Rollback Guard 3: Verifies partial Leg 2 fills via broker holding check and covers executed short quantity at market/limit.
+    4. Enforced DB status consistency: If emergency unwind fails and trade is retained in memory, DB status is updated to ACTIVE so position_monitor continues managing the position.
+  verification: |
+    1. Dedicated unit test suite scratch/test_issue087_debit_spread_rollback.py: PASSED (9/9 tests in 0.05s).
+    2. Master regression suite scratch/run_full_regression_test.py: PASSED (33/33 tests with 100% success).
+  status: RESOLVED
+  resolution_date: '2026-09-24'
+
+ISSUE-088:
+  title: "Intraday +15% Profit Lock Ratchet, Pre-Execution Cash Affordability Gate, and Strict Spot-Anchored Candle-Close SL"
+  date_logged: '2026-09-24'
+  family: "RISK_AND_TRADE_MANAGEMENT"
+  component: "common/portfolio_risk.py, common/position_monitor.py, scratch/test_profit_lock_and_capital_gate.py"
+  symptoms: |
+    1. 70+ Zerodha RMS Margin Rejection Loops: Broker rejected buy and spread orders with 'Insufficient funds. Margin required: X. Margin available: 630.60', spamming API limits while account held collateral.
+    2. Premature Flash-Wick Option SL Exits: Option positions (e.g. CIPLA 1400 CE, NAUKRI) triggered stop-loss exits during intraday spot flash-dips, even though underlying spot never closed a 15m/30m bar below structural support, subsequently surging +74%.
+    3. Winning Options Round-Tripping to BE/Loss: Single-lot option trades reaching +15% to +25% gains round-tripped into losses because single_lot_mode was forcibly overridden from EXIT_AT_T1 to TRAIL_BE for monthly contracts (DTE > 5).
+  root_cause: |
+    1. common/portfolio_risk.py queried avail.get('live_balance') before avail.get('cash'). For option buying, Zerodha RMS strictly mandates unencumbered cash (avail['cash']); non-cash collateral in live_balance cannot fund option purchase premiums.
+    2. common/position_monitor.py evaluated live_spot > spot_sl on a single tick. Intraday flash wicks broke the check even when the 15m/30m spot candle closed safely above support.
+    3. position_monitor.py line 2590 unconditionally overrode single_lot_mode to TRAIL_BE when DTE > 5, preventing single-lot traders from banking 100% profit at T1.
+  fix_applied: |
+    1. common/portfolio_risk.py: get_live_available_cash() now strictly prioritizes avail.get('cash') over collateral live_balance for option buyers, clamping cash >= 0.0. check_capital_affordability() blocks orders requiring >90% of available cash with a 300s cooldown.
+    2. common/position_monitor.py: Enforced Datta closing-basis invariant in SPOT_SL_GUARD by evaluating latest_spot_close (iloc[-2]['close']) against spot_sl. Momentary flash-wicks below support are suppressed while preserving the 28% catastrophic option loss override.
+    3. common/position_monitor.py: Preserved single_lot_mode='EXIT_AT_T1' for monthly contracts (DTE > 5), enabling single-lot trades to bank 100% profit at T1. Verified intraday +15% ratchet (locks +8% SL) and +25% ratchet (locks +15% SL) with 2% below live LTP physical sanity clamp.
+  verification: |
+    1. Dedicated unit test suite scratch/test_profit_lock_and_capital_gate.py: PASSED (6/6 tests in 0.04s).
+    2. Master regression suite scratch/run_full_regression_test.py: PASSED (34/34 tests with 100% success, zero regressions).
+  status: RESOLVED
+  resolution_date: '2026-09-24'
