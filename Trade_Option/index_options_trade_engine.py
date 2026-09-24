@@ -417,21 +417,32 @@ def execute_index_entry(kite, pos):
                                 em_price = float(emergency_ltp.get(f"BFO:{pos['contract']}", {}).get("last_price", 0))
                             sell_price = round(max(0.05, em_price * 0.97), 2) if em_price > 0 else 0.05
                             exchange_for_exit = "BFO" if any(idx in pos["contract"].upper() for idx in ["SENSEX", "BANKEX"]) else "NFO"
-                            session.safe_kite_call(
-                                kite.place_order,
-                                variety="regular",
-                                exchange=exchange_for_exit,
-                                tradingsymbol=pos["contract"],
-                                transaction_type="SELL",
-                                quantity=held_qty,
-                                product="NRML",
-                                order_type="LIMIT",
-                                price=sell_price,
-                                tag="idx_spread_unwind"
-                            )
-                            logging.info(f"[DEBIT SPREAD EMERGENCY UNWIND] Sell order placed for {pos['contract']} x{held_qty} @ {sell_price}")
+                            u_slices = slice_quantity_for_freeze(pos["contract"], held_qty)
+                            u_placed = []
+                            for u_qty in u_slices:
+                                oid_u = session.safe_kite_call(
+                                    kite.place_order,
+                                    variety="regular",
+                                    exchange=exchange_for_exit,
+                                    tradingsymbol=pos["contract"],
+                                    transaction_type="SELL",
+                                    quantity=u_qty,
+                                    product="NRML",
+                                    order_type="LIMIT",
+                                    price=sell_price,
+                                    tag="idx_spread_unwind"
+                                )
+                                u_placed.append(str(oid_u))
+                            logging.info(f"[DEBIT SPREAD EMERGENCY UNWIND] Sell orders placed for {pos['contract']} x{held_qty} @ {sell_price} (Orders: {u_placed})")
                         except Exception as unwind_err:
-                            logging.error(f"[DEBIT SPREAD EMERGENCY UNWIND FAILED] {pos['contract']}: {unwind_err}")
+                            logging.critical(f"[DEBIT SPREAD EMERGENCY UNWIND FAILED] {pos['contract']}: {unwind_err}. Retaining in ACTIVE_POSITIONS as option for position monitor protection!")
+                            with position_lock:
+                                pos["position_type"] = "option"
+                                if sym:
+                                    ACTIVE_POSITIONS[sym] = pos
+                            if pos.get("trade_id"):
+                                trade_db.update_trade(pos["trade_id"], {"status": "OPEN", "position_type": "option", "updated_at": dt.now().strftime("%Y-%m-%d %H:%M:%S")})
+                            return False
                 except Exception as check_err:
                     logging.error(f"[DEBIT SPREAD HELD CHECK FAILED] {pos['contract']}: {check_err}")
 

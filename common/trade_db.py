@@ -682,33 +682,69 @@ def reconcile_with_executed_exits(exit_orders):
     return closed
 
 
-def reconcile_broker_live_positions(kite):
+# ── Throttle cache for broker reconciliation ──
+_LAST_RECONCILE_TIME = 0.0
+_LAST_RECONCILE_POS_DATA = None
+_LAST_RECONCILE_ORDERS_DATA = None
+_RECONCILE_LOCK = threading.Lock()
+
+
+def reconcile_broker_live_positions(kite, pos_data=None, orders_data=None):
     """Auto-reconcile DB ACTIVE trades against Kite live net positions.
     
     If an ACTIVE trade's underlying contract has net held quantity <= 0 on Kite
     and is not a pending staged entry, transition its status to COMPLETED.
     Returns count of positions reconciled.
     """
-    if kite is None:
-        return 0
-    try:
-        pos_data = kite.positions()
-        net_pos = {p.get("tradingsymbol"): p for p in pos_data.get("net", []) if p.get("tradingsymbol")}
-        day_pos = {p.get("tradingsymbol"): p for p in pos_data.get("day", []) if p.get("tradingsymbol")}
-    except Exception as e:
-        logging.warning(f"[trade_db] reconcile_broker_live_positions failed to fetch Kite positions: {e}")
+    global _LAST_RECONCILE_TIME, _LAST_RECONCILE_POS_DATA, _LAST_RECONCILE_ORDERS_DATA
+    if kite is None and pos_data is None:
         return 0
 
-    open_orders_contracts = set()
-    try:
-        orders_data = kite.orders()
-        open_orders_contracts = {
-            _normalize_contract(o.get("tradingsymbol"))
-            for o in orders_data
-            if o.get("status") in ["OPEN", "TRIGGER PENDING"] and o.get("tradingsymbol")
-        }
-    except Exception as e:
-        logging.debug(f"[trade_db] reconcile_broker_live_positions failed to fetch Kite orders: {e}")
+    now_t = time.time()
+
+    with _RECONCILE_LOCK:
+        # Reuse recently fetched positions/orders if called within 2.5 seconds and not explicitly passed
+        if pos_data is None and (now_t - _LAST_RECONCILE_TIME < 2.5) and _LAST_RECONCILE_POS_DATA is not None:
+            pos_data = _LAST_RECONCILE_POS_DATA
+            if orders_data is None:
+                orders_data = _LAST_RECONCILE_ORDERS_DATA
+
+        try:
+            from session import safe_kite_call
+        except Exception:
+            safe_kite_call = lambda f, *a, **k: f(*a, **k)
+
+        if pos_data is None and kite is not None:
+            try:
+                pos_data = safe_kite_call(kite.positions)
+                _LAST_RECONCILE_POS_DATA = pos_data
+                _LAST_RECONCILE_TIME = now_t
+            except Exception as e:
+                logging.warning(f"[trade_db] reconcile_broker_live_positions failed to fetch Kite positions: {e}")
+                return 0
+
+        if not isinstance(pos_data, dict):
+            pos_data = {}
+
+        if orders_data is None and kite is not None:
+            try:
+                orders_data = safe_kite_call(kite.orders)
+                _LAST_RECONCILE_ORDERS_DATA = orders_data
+            except Exception as e:
+                logging.debug(f"[trade_db] reconcile_broker_live_positions failed to fetch Kite orders: {e}")
+                orders_data = []
+
+        if isinstance(orders_data, list):
+            open_orders_contracts = {
+                _normalize_contract(o.get("tradingsymbol"))
+                for o in orders_data
+                if o.get("status") in ["OPEN", "TRIGGER PENDING"] and o.get("tradingsymbol")
+            }
+        else:
+            open_orders_contracts = set()
+
+    net_pos = {p.get("tradingsymbol"): p for p in pos_data.get("net", []) if p.get("tradingsymbol")}
+    day_pos = {p.get("tradingsymbol"): p for p in pos_data.get("day", []) if p.get("tradingsymbol")}
 
     reconciled = 0
     now_str = get_ist_now().strftime("%Y-%m-%d %H:%M:%S")

@@ -57,6 +57,17 @@ class ActivePositionWebSocketMonitor:
             is_fresh = (age <= max_age_seconds)
             return float(info.get("ltp", 0.0)), is_fresh
 
+    def is_connected(self):
+        """Check if underlying WebSocket is open and connected."""
+        if not self.kws or not self.is_running:
+            return False
+        try:
+            if hasattr(self.kws, "is_connected"):
+                return bool(self.kws.is_connected()) and getattr(self.kws, "ws", None) is not None
+            return getattr(self.kws, "ws", None) is not None
+        except Exception:
+            return False
+
     def start(self):
         """Initialize and start KiteTicker WebSocket connection in background thread."""
         if self.is_running and self.kws:
@@ -79,9 +90,15 @@ class ActivePositionWebSocketMonitor:
 
             def on_connect(ws, response):
                 logging.info("[WEBSOCKET] KiteTicker connected successfully.")
-                if self.subscribed_tokens:
-                    ws.subscribe(list(self.subscribed_tokens))
-                    ws.set_mode(ws.MODE_FULL, list(self.subscribed_tokens))
+                with self._map_lock:
+                    tokens_to_sub = list(self.subscribed_tokens)
+                if tokens_to_sub:
+                    try:
+                        ws.subscribe(tokens_to_sub)
+                        ws.set_mode(ws.MODE_FULL, tokens_to_sub)
+                        logging.info(f"[WEBSOCKET] Connected & subscribed to {len(tokens_to_sub)} active position token(s): {tokens_to_sub}")
+                    except Exception as sub_err:
+                        logging.warning(f"[WEBSOCKET] Subscription in on_connect failed: {sub_err}")
 
             def on_close(ws, code, reason):
                 logging.warning(f"[WEBSOCKET] KiteTicker closed: {code} - {reason}")
@@ -125,20 +142,32 @@ class ActivePositionWebSocketMonitor:
         new_tokens = current_tokens - self.subscribed_tokens
         stale_tokens = self.subscribed_tokens - current_tokens
 
+        with self._map_lock:
+            self.subscribed_tokens = current_tokens
+
+        # If socket is not yet open (e.g. before initial handshake or during reconnection),
+        # skip wire calls. on_connect will dispatch subscriptions when the socket connects.
+        if not self.is_connected():
+            return
+
         if new_tokens:
             try:
                 self.kws.subscribe(list(new_tokens))
                 self.kws.set_mode(self.kws.MODE_FULL, list(new_tokens))
-                self.subscribed_tokens.update(new_tokens)
                 logging.info(f"[WEBSOCKET] Subscribed to {len(new_tokens)} active position token(s): {list(new_tokens)}")
+            except AttributeError:
+                # Underlying ws disconnected/reset mid-call
+                pass
             except Exception as e:
                 logging.warning(f"[WEBSOCKET] Subscription failed: {e}")
 
         if stale_tokens:
             try:
                 self.kws.unsubscribe(list(stale_tokens))
-                self.subscribed_tokens.difference_update(stale_tokens)
                 logging.info(f"[WEBSOCKET] Unsubscribed from {len(stale_tokens)} completed token(s).")
+            except AttributeError:
+                # Underlying ws disconnected/reset mid-call
+                pass
             except Exception as e:
                 logging.warning(f"[WEBSOCKET] Unsubscription failed: {e}")
 

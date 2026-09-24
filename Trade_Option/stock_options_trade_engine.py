@@ -1252,13 +1252,18 @@ def execute_highest_rr_trade(kite, staged):
                                     q_unw = safe_kite_call(kite.quote, [f"NFO:{contract}"])
                                     u_bid = float(q_unw.get(f"NFO:{contract}", {}).get("depth", {}).get("buy", [{}])[0].get("price", 0.0) or q_unw.get(f"NFO:{contract}", {}).get("last_price", 0.0))
                                     u_limit = round_to_tick(u_bid * 0.98, 0.05) if u_bid > 0 else limit_price
-                                    kite.place_order(
-                                        variety=kite.VARIETY_REGULAR, tradingsymbol=contract,
-                                        exchange=kite.EXCHANGE_NFO, transaction_type=kite.TRANSACTION_TYPE_SELL,
-                                        quantity=held_qty, order_type=kite.ORDER_TYPE_LIMIT, price=u_limit,
-                                        product=kite.PRODUCT_NRML
-                                    )
-                                    logging.info(f"[DEBIT SPREAD EMERGENCY UNWIND SUCCESS] Sold {contract} Qty={held_qty} @ {u_limit}")
+                                    u_slices = slice_quantity_for_freeze(contract, held_qty)
+                                    u_placed = []
+                                    for u_s_qty in u_slices:
+                                        oid_u = kite.place_order(
+                                            variety=kite.VARIETY_REGULAR, tradingsymbol=contract,
+                                            exchange=kite.EXCHANGE_NFO, transaction_type=kite.TRANSACTION_TYPE_SELL,
+                                            quantity=u_s_qty, order_type=kite.ORDER_TYPE_LIMIT, price=u_limit,
+                                            product=kite.PRODUCT_NRML,
+                                            tag="spread_unwind"
+                                        )
+                                        u_placed.append(str(oid_u))
+                                    logging.info(f"[DEBIT SPREAD EMERGENCY UNWIND SUCCESS] Sold {contract} Qty={held_qty} @ {u_limit} (Orders: {u_placed})")
                                 except Exception as unw_err:
                                     logging.critical(f"[DEBIT SPREAD EMERGENCY UNWIND FAILED] Failed emergency exit for {contract}: {unw_err}. Retaining in ACTIVE_POSITIONS for position monitor protection!")
                                     with position_lock:

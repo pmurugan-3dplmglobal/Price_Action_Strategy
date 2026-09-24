@@ -953,6 +953,24 @@ except Exception as e:
     errors.append(f"Tier Quality Filters & Slot Swap Invariants Failed: {e}")
     print(f" FAILED [ERR] ({e})", flush=True)
 
+# -------------------------------------------------------------------------
+# TEST 33: Debit Spread Rollback & Emergency Unwind Invariants (ISSUE-107 / ISSUE-087)
+# -------------------------------------------------------------------------
+print("[TEST 33] Testing Leg 1 / Leg 2 Debit Spread Rollback & Emergency Unwind (ISSUE-107 / ISSUE-087)...", end="", flush=True)
+try:
+    import subprocess
+    import paths
+    cmd_sr = [
+        sys.executable,
+        os.path.join(paths.SCRATCH_DIR, "test_issue087_debit_spread_rollback.py")
+    ]
+    res_sr = subprocess.run(cmd_sr, cwd=paths.PROJECT_ROOT, capture_output=True, text=True)
+    assert res_sr.returncode == 0, f"Debit spread rollback unit tests failed:\nSTDOUT:\n{res_sr.stdout}\nSTDERR:\n{res_sr.stderr}"
+    print(" PASSED [OK]", flush=True)
+except Exception as e:
+    errors.append(f"Debit Spread Rollback & Emergency Unwind Invariants Failed: {e}")
+    print(f" FAILED [ERR] ({e})", flush=True)
+
 print("\n" + "=" * 100)
 if not errors:
     print("      ALL REGRESSION TESTS PASSED WITH 100% SUCCESS -- ZERO REGRESSIONS FOUND!")

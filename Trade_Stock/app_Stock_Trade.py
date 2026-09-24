@@ -640,7 +640,7 @@ def refresh_data(single_run=False):
                                 cached_data["ltp"] = ltp
                 except Exception:
                     _kite_session = None
-        if now - _kite_positions_last_fetch > 3:
+        if now - _kite_positions_last_fetch > 10:
             _kite_positions_last_fetch = now
             try:
                 if not _kite_session:
@@ -652,14 +652,20 @@ def refresh_data(single_run=False):
                         ks.set_access_token(td["access_token"])
                         _kite_session = ks
                 if _kite_session:
-                    kite_positions = _kite_session.positions()
+                    try:
+                        from session import safe_kite_call
+                        kite_positions = safe_kite_call(_kite_session.positions)
+                    except Exception as k_err:
+                        logging.warning(f"[REFRESH KITE STOCK POS ERR] {k_err}")
+                        kite_positions = {}
                     merged = []
                     net_pos = [p for p in kite_positions.get("net", []) if p.get("tradingsymbol") and int(p.get("quantity", 0)) != 0]
                     q_keys = [f"{p.get('exchange', 'NSE')}:{p.get('tradingsymbol')}" for p in net_pos]
                     quotes_bulk = {}
                     if q_keys:
                         try:
-                            quotes_bulk = _kite_session.quote(q_keys)
+                            from session import safe_kite_call
+                            quotes_bulk = safe_kite_call(_kite_session.quote, q_keys)
                         except Exception:
                             pass
                     for p in net_pos:

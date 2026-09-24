@@ -285,8 +285,17 @@ def fetch_and_resample_candles(kite, token, from_date, to_date, timeframe_str):
             break
         except Exception as e:
             err_msg = str(e).lower()
-            if "too many requests" in err_msg or "429" in err_msg or "timeout" in err_msg or "connection" in err_msg:
-                time.sleep(0.3 * (attempt + 1))
+            is_transient = any(k in err_msg for k in [
+                "too many requests", "429", "timeout", "connection",
+                "502", "503", "504", "bad gateway", "gateway",
+                "unknown content-type", "server error"
+            ])
+            if is_transient:
+                if attempt < 3:
+                    time.sleep(0.4 * (attempt + 1))
+                else:
+                    logging.warning(f"[KITE_GATEWAY_BLIP] Historical data unavailable for token {token} ({from_date} to {to_date}) after 4 attempts: {e}. Returning empty DataFrame.")
+                    return pd.DataFrame()
             else:
                 raise e
 

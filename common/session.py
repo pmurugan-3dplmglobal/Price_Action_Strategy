@@ -229,9 +229,18 @@ def safe_kite_call(func, *args, retries=3, delay=0.8, priority=False, **kwargs):
             return func(*args, **kwargs)
         except Exception as err:
             err_str = str(err).lower()
-            if "too many" in err_str or "requests" in err_str or "429" in err_str:
-                time.sleep(delay * (attempt + 1.5))
-                _GLOBAL_KITE_RATE_LIMITER.acquire(priority=priority)
+            is_transient = any(k in err_str for k in [
+                "too many", "requests", "429", "timeout", "connection",
+                "502", "503", "504", "bad gateway", "gateway",
+                "unknown content-type", "server error"
+            ])
+            if is_transient:
+                if attempt < retries - 1:
+                    time.sleep(delay * (attempt + 1.5))
+                    _GLOBAL_KITE_RATE_LIMITER.acquire(priority=priority)
+                else:
+                    logging.warning(f"[SAFE_KITE_CALL] Transient gateway/network error after {retries} retries on {getattr(func, '__name__', str(func))}: {err}")
+                    raise err
             elif "access_token" in err_str or "api_key" in err_str:
                 time.sleep(delay)
             else:

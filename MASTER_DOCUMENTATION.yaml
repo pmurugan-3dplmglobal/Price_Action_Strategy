@@ -53,6 +53,7 @@ meta:
     - Execution Expectancy Hardening (Live Capital Affordability Gate, Small Account Naked Options < ₹2L, 72h Monthly Expiry Rollover Guard, +15% Ratchet to +8% SL Lock, and Opening Bell 15m Index Delay) (ISSUE-105)
     - Spot-First Pattern Anchor Gate, Physical Wick Geometry & Dual-Asset VCP Contraction (ISSUE-080)
     - Institutional Adaptive Index Entry Window (DTE-Aware 13:30 vs 15:00 IST Cutoff, Late-Day Conviction R:R >= 2.0 Guard & Post-14:00 Spread Preference) (ISSUE-106)
+    - Leg 1 / Leg 2 Debit Spread Rollback & Freeze-Sliced Emergency Unwind across Manual 1-Click Buy & Auto Engines (ISSUE-107)
 
 architecture:
   diagram: |
@@ -501,8 +502,21 @@ verification_and_quality_assurance:
   cve_fixes_suite: "scratch/test_cve_fixes.py — 5/5 Unit Tests Passing (100% Success Rate)"
   vix_portfolio_suite: "scratch/test_vix_portfolio_volume.py — 47/47 Unit Tests Passing (100% Success Rate)"
   spread_exit_and_index_cap_suite: "scratch/test_spread_exit_and_index_cap.py — 6/6 Unit Tests Passing (100% Success Rate)"
+  debit_spread_rollback_suite: "scratch/test_issue087_debit_spread_rollback.py — 6/6 Unit Tests Passing (100% Success Rate)"
   ast_syntax_integrity: "100% Python files parsed with zero syntax errors"
   recent_major_issues_resolved:
+    - id: "ISSUE-108"
+      title: "Kite Gateway Error Resilience (502/503/504 & HTML Content-Type Retries), WebSocket Monitor NoneType AttributeError Suppression & Broker Live Reconciliation Rate-Limit Throttling"
+      status: "RESOLVED"
+    - id: "ISSUE-107"
+      title: "Leg 1 / Leg 2 Debit Spread Rollback & Emergency Unwind Guard (Eliminates Stranded Naked Longs on Leg 2 RMS Rejections across Manual 1-Click Buy & Auto Engines)"
+      status: "RESOLVED"
+    - id: "ISSUE-106"
+      title: "Institutional Adaptive Index Entry Window — DTE-Aware 13:30 vs 15:00 IST Cutoff, Late-Day Conviction Guard (R:R >= 2.0) & Late-Day Spread Preference"
+      status: "RESOLVED"
+    - id: "ISSUE-105"
+      title: "Execution Expectancy Hardening — Live Capital Affordability Gate, Small Account Naked Options (< ₹2L), 72h Monthly Expiry Rollover Guard, +15% Ratchet (+8% SL Lock), and Opening Bell 15m Index Delay"
+      status: "RESOLVED"
     - id: "ISSUE-078"
       title: "Phantom Exit Order Shield & Ground-Truth Net Holding Verification Before SELL Placement"
       status: "RESOLVED"

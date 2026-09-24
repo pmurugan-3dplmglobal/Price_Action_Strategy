@@ -4,12 +4,96 @@ meta:
   last_updated: '2026-09-24'
   purpose: Active operational tracker for v2.1.0-stable failures, root causes, regressions, and enhancements.
   historical_archive: archive/ISSUE_HISTORY_ARCHIVE.yaml (Preserves 119 resolved legacy issues prior to 2026-09-05)
-  total_active_issues: 56
+  total_active_issues: 58
   archived_issues_summary:
     total_archived: 119
     recent_archived_batch: [FEATURE-031, FEATURE-030, FEATURE-029, ISSUE-084, ISSUE-083, ISSUE-082, ISSUE-081, ISSUE-080, FEATURE-036, FEATURE-035, FEATURE-034, FEATURE-033, ISSUE-054]
     key_archived_families: [ALGO_AUDIT_CVE, QUANT_ENHANCEMENTS, RADAR_LIFECYCLE, VCP_METRICS, SCANNER_DISCOVERY, SECURITY_CONFIG, ZERO_REGRESSION_AUDIT]
 issues:
+- id: ISSUE-108
+  title: Kite Gateway Error Resilience (502/503/504 & HTML Content-Type Retries), WebSocket Monitor NoneType AttributeError Suppression & Broker Live Reconciliation Rate-Limit Throttling
+  severity: HIGH
+  category: Network Resilience, WebSocket Lifecycle, Rate Limiting & Gateway Fault Tolerance
+  family: INFRASTRUCTURE_STABILITY
+  date_reported: '2026-09-24'
+  symptom: |
+    1. During candle fetching / resampling, transient Cloudflare/Kite outages caused: 'Error processing CANBK: Unknown Content-Type (text/html) with response: (b'<html>...502 Bad Gateway...</html>')', causing scanner worker exceptions.
+    2. Logs were flooded with continuous warnings: 'WARNING:root:[WEBSOCKET] Subscription failed: 'NoneType' object has no attribute 'sendMessage''.
+    3. Live positions reconciliation triggered Kite rate limit warnings: 'WARNING:root:[trade_db] reconcile_broker_live_positions failed to fetch Kite positions: Too many requests' (HTTP 429).
+  root_cause: |
+    1. Cloudflare/Kite gateway spikes return HTML 502/503/504 error pages instead of JSON. timeframe_utils.fetch_and_resample_candles and session.safe_kite_call did not recognize HTML content-type errors as transient, failing to retry.
+    2. In common/websocket_monitor.py, update_subscriptions() called self.kws.subscribe() while the underlying KiteTicker WebSocket protocol instance (self.kws.ws) was None (prior to handshake completion or during reconnection).
+    3. In common/trade_db.py, reconcile_broker_live_positions() invoked kite.positions() and kite.orders() directly without caching or rate limiting. Dashboards (app_option_Trade and app_Stock_Trade) called kite.positions() back-to-back with trade_db reconciliation, exceeding Kite's 3 req/sec limit.
+  affected_files:
+  - common/session.py
+  - common/timeframe_utils.py
+  - common/websocket_monitor.py
+  - common/trade_db.py
+  - Trade_Option/app_option_Trade.py
+  - Trade_Stock/app_Stock_Trade.py
+  - scratch/test_gateway_error_resilience.py
+  - scratch/test_ws_and_reconcile_fixes.py
+  fix_applied: |
+    1. Gateway Error Resilience:
+       - In common/timeframe_utils.py and common/session.py, added transient detection for 502, 503, 504, 'bad gateway', 'unknown content-type', and 'server error'.
+       - Implemented 4-attempt exponential backoff retries with graceful empty DataFrame fallback in fetch_and_resample_candles().
+    2. WebSocket Lifecycle Hardening:
+       - In common/websocket_monitor.py, implemented is_connected() guard verifying both self.kws.is_connected() and getattr(self.kws, 'ws', None) is not None.
+       - Synchronized self.subscribed_tokens so that on_connect() automatically subscribes all active tokens upon socket connection or reconnection.
+       - Suppressed transient AttributeError on sendMessage if the socket drops mid-dispatch.
+    3. Broker Live Reconciliation Throttling & Rate-Limiting:
+       - In common/trade_db.py, added a 2.5s TTL cache (_LAST_RECONCILE_POS_DATA and _LAST_RECONCILE_ORDERS_DATA) with thread locking.
+       - Supported optional caller-passed pos_data and orders_data, eliminating redundant API round-trips.
+       - Wrapped broker calls in safe_kite_call() to adhere to _GLOBAL_KITE_RATE_LIMITER.
+       - In Trade_Option/app_option_Trade.py and Trade_Stock/app_Stock_Trade.py, fetched positions via safe_kite_call, passed pos_data to trade_db, and throttled stock positions polling from 3s to 10s.
+  verification: |
+    1. scratch/test_gateway_error_resilience.py passed 2/2 tests (100% SUCCESS).
+    2. scratch/test_ws_and_reconcile_fixes.py passed 2/2 tests (100% SUCCESS).
+    3. scratch/run_full_regression_test.py passed all 33 test suites (100% SUCCESS, zero regressions).
+  status: RESOLVED
+  resolution_date: '2026-09-24'
+
+- id: ISSUE-107
+  title: Leg 1 / Leg 2 Debit Spread Rollback & Emergency Unwind Guard (Eliminates Stranded Naked Longs on Leg 2 RMS Rejections across Manual 1-Click Buy & Auto Engines)
+  severity: CRITICAL
+  category: Execution Safety, Order Lifecycle & RMS Rollback, Debit Spread Parity
+  family: SPREAD_EXECUTION_INTEGRITY
+  date_reported: '2026-09-24'
+  symptom: |
+    1. During 2-leg debit spread execution, if Leg 1 (Long ATM) is placed and filled, but Leg 2 (Short OTM) fails or is rejected by Zerodha RMS (e.g., margin shortfall when broker evaluates Leg 2 without basket credit), Leg 1 remained held on the broker unhedged.
+    2. In manual 1-Click Buy (app_option_Trade.py), Leg 2 exception logged an error and registered the trade or returned 400, leaving Leg 1 stranded as a naked long without automatic emergency unwind or position tracking.
+    3. In automated engines (index_options_trade_engine.py and stock_options_trade_engine.py), emergency unwind sell orders did not apply freeze slicing (slice_quantity_for_freeze), risking RMS rejection on large lot emergency exits. Additionally, in index_options_trade_engine.py, if emergency unwind failed, the trade was dropped from ACTIVE_POSITIONS instead of retaining it as a tracked naked option in trade_db.
+  root_cause: |
+    1. Kite API lacks atomic 2-leg basket orders; debit spreads execute sequentially (Leg 1 BUY -> Leg 2 SELL). If Leg 2 fails, no automatic broker rollback occurs.
+    2. Manual 1-Click Buy lacked resting order cancellation, broker holding verification (is_contract_held_on_broker), and freeze-sliced emergency LIMIT SELL execution.
+    3. Index and stock engines lacked freeze slicing on emergency exit orders, and index engine lacked retention fallback if emergency unwind orders were rejected.
+  affected_files:
+  - Trade_Option/app_option_Trade.py
+  - Trade_Option/index_options_trade_engine.py
+  - Trade_Option/stock_options_trade_engine.py
+  - scratch/test_issue087_debit_spread_rollback.py
+  - scratch/run_full_regression_test.py
+  fix_applied: |
+    1. Hardened Manual 1-Click Buy (Trade_Option/app_option_Trade.py):
+       - Top-level imported trade_db at api_buy_scanned_trade() to eliminate UnboundLocalError under force_order=True.
+       - Applied slice_quantity_for_freeze on Leg 1 order placement.
+       - On confirm_leg1_order_filled failure, cancelled resting Leg 1 orders and queried is_contract_held_on_broker; safely aborted if 0 filled, or adjusted Leg 2 quantity to match filled slices.
+       - On Leg 2 placement failure, cancelled resting orders and verified broker net holding. If held, executed freeze-sliced LIMIT SELL pegged at bid * 0.98 (tag="spread_unwind") to cleanly close Leg 1.
+       - If emergency unwind succeeds, returned clean HTTP 400 failure. If unwind fails (broker rejection), demoted trade to naked option in trade_db (status="OPEN", position_type="option") so position_monitor tracks and protects it, returning HTTP 500 alert.
+    2. Hardened Index Options Trade Engine (Trade_Option/index_options_trade_engine.py):
+       - Applied slice_quantity_for_freeze(pos["contract"], held_qty) on emergency unwind sell orders.
+       - Added fallback if emergency unwind fails: retains position in ACTIVE_POSITIONS as position_type="option" and updates trade_db (status="OPEN", position_type="option") matching stock engine parity.
+    3. Hardened Stock Options Trade Engine (Trade_Option/stock_options_trade_engine.py):
+       - Applied slice_quantity_for_freeze(contract, held_qty) on emergency unwind sell orders with tag="spread_unwind".
+    4. Verification:
+       - Created scratch/test_issue087_debit_spread_rollback.py covering 6 comprehensive test scenarios (100% SUCCESS).
+       - Added TEST 33 to scratch/run_full_regression_test.py (33/33 test suites passing, 100% SUCCESS).
+  verification: |
+    1. scratch/test_issue087_debit_spread_rollback.py passed 6/6 tests (100% SUCCESS).
+    2. scratch/run_full_regression_test.py passed all 33 test suites (100% SUCCESS, zero regressions).
+  status: RESOLVED
+  resolution_date: '2026-09-24'
+
 - id: ISSUE-106
   title: Institutional Adaptive Index Entry Window — DTE-Aware 13:30 vs 15:00 IST Cutoff, Late-Day Conviction Guard (R:R >= 2.0) & Late-Day Spread Preference
   severity: HIGH
