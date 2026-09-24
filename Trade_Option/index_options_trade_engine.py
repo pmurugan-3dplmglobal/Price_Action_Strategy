@@ -362,6 +362,11 @@ def execute_index_entry(kite, pos):
                 else:
                     logging.warning(f"[INDEX DEBIT SPREAD PARTIAL] Leg 1 {pos['contract']} partially filled ({held_qty} qty); proceeding with Leg 2 for filled quantity.")
                     total_qty = held_qty
+                    pos["quantity"] = total_qty
+                    if lot_sz > 0:
+                        pos["position_size"] = max(1, total_qty // lot_sz)
+                    if pos.get("trade_id"):
+                        trade_db.update_trade(pos["trade_id"], {"quantity": total_qty, "lots": max(1, total_qty // lot_sz) if lot_sz > 0 else 1})
 
             try:
                 leg2_q_key = f"{target_exch}:{leg2_c}"
@@ -393,32 +398,69 @@ def execute_index_entry(kite, pos):
                 logging.info(f"[INDEX DEBIT SPREAD] Leg 2 (Short OTM) placed for {leg2_c} TotalQty={total_qty} @ {leg2_limit} (Orders: {leg2_placed})")
             except Exception as leg2_err:
                 logging.error(f"[INDEX DEBIT SPREAD ERROR] Failed to place Leg 2 ({leg2_c}): {leg2_err}")
-                # ROLLBACK GUARD: If Leg 2 fails, immediately cancel Leg 1 resting orders to prevent naked unhedged exposure
+                # ROLLBACK GUARD 1: Cancel any resting Leg 1 orders to prevent unhedged naked exposure
                 for o_to_cancel in placed_oids:
                     try:
-                        kite.cancel_order(variety=kite.VARIETY_REGULAR, order_id=o_to_cancel)
+                        kite.cancel_order(variety=kite.VARIETY_REGULAR, order_id=str(o_to_cancel))
                         logging.warning(f"[DEBIT SPREAD ROLLBACK] Cancelled Leg 1 order {o_to_cancel} because Leg 2 failed: {leg2_err}")
                     except Exception as c_err:
                         logging.error(f"[DEBIT SPREAD ROLLBACK ERROR] Could not cancel Leg 1 order {o_to_cancel}: {c_err}")
-                
-                # ISSUE-086: Emergency Unwind for Stranded Leg 1 (Ported from stock engine)
+
+                # ROLLBACK GUARD 2: Cancel any partially placed Leg 2 slice orders to prevent naked short fills
+                if 'leg2_placed' in locals() and leg2_placed:
+                    for o2_cancel in leg2_placed:
+                        try:
+                            kite.cancel_order(variety=kite.VARIETY_REGULAR, order_id=str(o2_cancel))
+                            logging.warning(f"[DEBIT SPREAD ROLLBACK] Cancelled partially placed Leg 2 order {o2_cancel}: {leg2_err}")
+                        except Exception as c2_err:
+                            logging.debug(f"Could not cancel Leg 2 order {o2_cancel}: {c2_err}")
+
+                # ROLLBACK GUARD 3: If any Leg 2 slice was filled on broker, cover short leg FIRST
+                try:
+                    from common.position_monitor import is_contract_held_on_broker
+                    l2_held, l2_held_qty = is_contract_held_on_broker(kite, leg2_c)
+                    if l2_held and l2_held_qty < 0:
+                        cover_qty = abs(l2_held_qty)
+                        logging.warning(f"[DEBIT SPREAD ROLLBACK] Leg 2 short was partially filled ({l2_held_qty} qty). Executing immediate cover BUY...")
+                        c_slices = slice_quantity_for_freeze(leg2_c, cover_qty)
+                        for c_qty in c_slices:
+                            try:
+                                kite.place_order(
+                                    variety=kite.VARIETY_REGULAR, tradingsymbol=leg2_c,
+                                    exchange=target_exch, transaction_type=kite.TRANSACTION_TYPE_BUY,
+                                    quantity=c_qty, order_type=kite.ORDER_TYPE_LIMIT,
+                                    price=max(0.05, round_to_tick(leg2_limit * 1.05, 0.05)),
+                                    product=kite.PRODUCT_NRML, tag="spread_l2_cover"
+                                )
+                            except Exception as cov_err:
+                                logging.critical(f"[DEBIT SPREAD ROLLBACK] Failed to cover Leg 2 short slice: {cov_err}")
+                except Exception as l2_chk_err:
+                    logging.debug(f"Leg 2 broker holding check skipped: {l2_chk_err}")
+
+                # ISSUE-086 / ISSUE-107: Emergency Unwind for Stranded Leg 1
                 # If Leg 1 was already COMPLETE, cancel does nothing. Check broker and unwind.
                 try:
                     from common.position_monitor import is_contract_held_on_broker
                     held, held_qty = is_contract_held_on_broker(kite, pos["contract"])
                     if held and held_qty > 0:
                         logging.warning(f"[DEBIT SPREAD EMERGENCY UNWIND] Leg 1 {pos['contract']} is held ({held_qty} qty) after Leg 2 failure. Executing emergency sell...")
+                        exchange_for_exit = "BFO" if any(idx in pos["contract"].upper() for idx in ["SENSEX", "BANKEX"]) else "NFO"
+                        em_price = 0.0
                         try:
                             import session
-                            emergency_ltp = session.safe_kite_call(kite.ltp, [f"NFO:{pos['contract']}"])
-                            em_price = float(emergency_ltp.get(f"NFO:{pos['contract']}", {}).get("last_price", 0))
-                            if em_price <= 0:
-                                emergency_ltp = session.safe_kite_call(kite.ltp, [f"BFO:{pos['contract']}"])
-                                em_price = float(emergency_ltp.get(f"BFO:{pos['contract']}", {}).get("last_price", 0))
-                            sell_price = round(max(0.05, em_price * 0.97), 2) if em_price > 0 else 0.05
-                            exchange_for_exit = "BFO" if any(idx in pos["contract"].upper() for idx in ["SENSEX", "BANKEX"]) else "NFO"
-                            u_slices = slice_quantity_for_freeze(pos["contract"], held_qty)
-                            u_placed = []
+                            emergency_ltp = session.safe_kite_call(kite.ltp, [f"{exchange_for_exit}:{pos['contract']}"])
+                            em_price = float(emergency_ltp.get(f"{exchange_for_exit}:{pos['contract']}", {}).get("last_price", 0))
+                        except Exception as q_err:
+                            logging.debug(f"LTP fetch for emergency unwind fallback: {q_err}")
+                        if em_price <= 0:
+                            em_price = float(pos.get("entry_premium") or price or 0.05)
+                        sell_price = round(max(0.05, em_price * 0.97), 2) if em_price > 0 else 0.05
+
+                        u_slices = slice_quantity_for_freeze(pos["contract"], held_qty)
+                        u_placed = []
+                        u_sold_qty = 0
+                        try:
+                            import session
                             for u_qty in u_slices:
                                 oid_u = session.safe_kite_call(
                                     kite.place_order,
@@ -430,19 +472,33 @@ def execute_index_entry(kite, pos):
                                     product="NRML",
                                     order_type="LIMIT",
                                     price=sell_price,
-                                    tag="idx_spread_unwind"
+                                    tag="idx_spread_unwind",
+                                    priority=True
                                 )
                                 u_placed.append(str(oid_u))
+                                u_sold_qty += u_qty
                             logging.info(f"[DEBIT SPREAD EMERGENCY UNWIND] Sell orders placed for {pos['contract']} x{held_qty} @ {sell_price} (Orders: {u_placed})")
                         except Exception as unwind_err:
                             logging.critical(f"[DEBIT SPREAD EMERGENCY UNWIND FAILED] {pos['contract']}: {unwind_err}. Retaining in ACTIVE_POSITIONS as option for position monitor protection!")
-                            with position_lock:
-                                pos["position_type"] = "option"
-                                if sym:
-                                    ACTIVE_POSITIONS[sym] = pos
-                            if pos.get("trade_id"):
-                                trade_db.update_trade(pos["trade_id"], {"status": "OPEN", "position_type": "option", "updated_at": dt.now().strftime("%Y-%m-%d %H:%M:%S")})
-                            return False
+                            rem_held, rem_held_qty = is_contract_held_on_broker(kite, pos["contract"])
+                            rem_qty = rem_held_qty if (rem_held and rem_held_qty > 0) else max(0, held_qty - u_sold_qty)
+                            if rem_qty > 0:
+                                with position_lock:
+                                    pos["position_type"] = "option"
+                                    pos["quantity"] = rem_qty
+                                    if lot_sz > 0:
+                                        pos["position_size"] = max(1, rem_qty // lot_sz)
+                                    if sym:
+                                        ACTIVE_POSITIONS[sym] = pos
+                                if pos.get("trade_id"):
+                                    trade_db.update_trade(pos["trade_id"], {
+                                        "status": "ACTIVE",
+                                        "position_type": "option",
+                                        "quantity": rem_qty,
+                                        "lots": max(1, rem_qty // lot_sz) if lot_sz > 0 else 1,
+                                        "updated_at": dt.now().strftime("%Y-%m-%d %H:%M:%S")
+                                    })
+                                return False
                 except Exception as check_err:
                     logging.error(f"[DEBIT SPREAD HELD CHECK FAILED] {pos['contract']}: {check_err}")
 

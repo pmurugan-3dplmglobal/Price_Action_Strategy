@@ -217,6 +217,8 @@ class TestDebitSpreadRollbackManual1Click(unittest.TestCase):
         mock_create_trade.assert_called_once()
         saved_trade_data = mock_create_trade.call_args[0][2]
         self.assertEqual(saved_trade_data["position_type"], "option")
+        self.assertEqual(saved_trade_data["status"], "ACTIVE")
+        self.assertEqual(saved_trade_data["quantity"], 25)
 
 
 class TestDebitSpreadRollbackAutoEngines(unittest.TestCase):
@@ -279,7 +281,7 @@ class TestDebitSpreadRollbackAutoEngines(unittest.TestCase):
             })
 
     def test_index_engine_leg2_failure_and_unwind_failure_retains_option(self):
-        """Index options trade engine retains position as 'option' if emergency unwind fails."""
+        """Index options trade engine retains position as 'option' with status ACTIVE if emergency unwind fails."""
         import Trade_Option.index_options_trade_engine as idx_engine
 
         mock_kite = MagicMock()
@@ -315,17 +317,182 @@ class TestDebitSpreadRollbackAutoEngines(unittest.TestCase):
             self.assertIn("NIFTY", idx_engine.ACTIVE_POSITIONS)
             self.assertEqual(idx_engine.ACTIVE_POSITIONS["NIFTY"]["position_type"], "option")
             mock_update_trade.assert_called_with(5678, {
-                "status": "OPEN",
+                "status": "ACTIVE",
                 "position_type": "option",
+                "quantity": 25,
+                "lots": 1,
+                "updated_at": unittest.mock.ANY
+            })
+
+    def test_index_engine_sensex_emergency_unwind_bfo_routing(self):
+        """SENSEX index options route emergency unwind to BFO exchange, not NFO."""
+        import Trade_Option.index_options_trade_engine as idx_engine
+
+        mock_kite = MagicMock()
+        mock_kite.place_order.side_effect = [
+            "2001",  # Leg 1 BUY
+            RuntimeError("Leg 2 rejection"),
+            "UNWIND_2001"  # Emergency unwind SELL
+        ]
+        mock_kite.ltp.return_value = {"BFO:SENSEX26SEP80000CE": {"last_price": 250.0}}
+
+        pos = {
+            "symbol": "SENSEX",
+            "contract": "SENSEX26SEP80000CE",
+            "position_type": "option_spread",
+            "leg2_contract": "SENSEX26SEP80500CE",
+            "entry_premium": 250.0,
+            "position_size": 1,
+            "trade_id": 9901
+        }
+
+        with patch("liquidity_guard.check_bid_ask_spread_liquidity", return_value=(True, 0.01, "OK", 0)), \
+             patch("common.position_monitor.confirm_leg1_order_filled", return_value=(True, ["2001"], [], "ALL_COMPLETE")), \
+             patch("common.position_monitor.is_contract_held_on_broker", return_value=(True, 10)), \
+             patch("session.safe_kite_call", side_effect=lambda fn, *a, **kw: fn(*a, **kw)), \
+             patch("Trade_Option.index_options_trade_engine.safe_kite_call", side_effect=lambda fn, *a, **kw: fn(*a, **kw)):
+
+            res = idx_engine.execute_index_entry(mock_kite, pos)
+            self.assertFalse(res)
+
+            # Verify that emergency unwind placed order on BFO exchange
+            unwind_calls = [c for c in mock_kite.place_order.call_args_list if c[1].get("tag") == "idx_spread_unwind"]
+            self.assertEqual(len(unwind_calls), 1)
+            self.assertEqual(unwind_calls[0][1]["exchange"], "BFO")
+            self.assertEqual(unwind_calls[0][1]["tradingsymbol"], "SENSEX26SEP80000CE")
+
+    def test_leg2_failure_cancels_partial_leg2_slices(self):
+        """When Leg 2 fails after placing slice 1, resting Leg 2 slice 1 is cancelled."""
+        import Trade_Option.index_options_trade_engine as idx_engine
+
+        mock_kite = MagicMock()
+        mock_kite.VARIETY_REGULAR = "regular"
+        mock_kite.TRANSACTION_TYPE_BUY = "BUY"
+        mock_kite.TRANSACTION_TYPE_SELL = "SELL"
+        mock_kite.ORDER_TYPE_LIMIT = "LIMIT"
+        mock_kite.PRODUCT_NRML = "NRML"
+
+        leg2_attempts = 0
+        def mock_place_order(**kwargs):
+            nonlocal leg2_attempts
+            tsym = kwargs.get("tradingsymbol")
+            ttype = str(kwargs.get("transaction_type"))
+            if tsym == "NIFTY26SEP24000CE" and ttype == "BUY":
+                return "LEG1_OID"
+            elif tsym == "NIFTY26SEP24200CE" and ttype == "SELL":
+                leg2_attempts += 1
+                if leg2_attempts == 1:
+                    return "LEG2_SLICE1_OID"
+                raise RuntimeError("RMS: Margin Insufficient for Leg 2 slice 2")
+            elif tsym == "NIFTY26SEP24000CE" and ttype == "SELL":
+                return "UNWIND_OID"
+            return "OTHER"
+
+        mock_kite.place_order.side_effect = mock_place_order
+        mock_kite.ltp.return_value = {"NFO:NIFTY26SEP24000CE": {"last_price": 120.0}}
+
+        pos = {
+            "symbol": "NIFTY",
+            "contract": "NIFTY26SEP24000CE",
+            "position_type": "option_spread",
+            "leg2_contract": "NIFTY26SEP24200CE",
+            "entry_premium": 120.0,
+            "lot_size": 25,
+            "position_size": 104,  # 104 * 25 = 2600 qty (two slices: [1755, 845])
+            "trade_id": 8801
+        }
+
+        with patch("liquidity_guard.check_bid_ask_spread_liquidity", return_value=(True, 0.01, "OK", 0)), \
+             patch("common.position_monitor.confirm_leg1_order_filled", return_value=(True, ["LEG1_OID"], [], "ALL_COMPLETE")), \
+             patch("common.position_monitor.is_contract_held_on_broker", return_value=(False, 0)), \
+             patch("session.safe_kite_call", side_effect=lambda fn, *a, **kw: fn(*a, **kw)), \
+             patch("Trade_Option.index_options_trade_engine.safe_kite_call", side_effect=lambda fn, *a, **kw: fn(*a, **kw)):
+
+            res = idx_engine.execute_index_entry(mock_kite, pos)
+            self.assertFalse(res)
+
+            # Verify that Leg 2 slice 1 was cancelled via cancel_order
+            cancel_calls = [str(c[1]["order_id"]) for c in mock_kite.cancel_order.call_args_list]
+            self.assertIn("LEG2_SLICE1_OID", cancel_calls)
+
+    def test_partial_emergency_unwind_failure_updates_remaining_qty(self):
+        """When emergency unwind partially fails on 2nd slice, position is retained with remaining unsold qty."""
+        import Trade_Option.index_options_trade_engine as idx_engine
+
+        mock_kite = MagicMock()
+        mock_kite.VARIETY_REGULAR = "regular"
+        mock_kite.TRANSACTION_TYPE_BUY = "BUY"
+        mock_kite.TRANSACTION_TYPE_SELL = "SELL"
+        mock_kite.ORDER_TYPE_LIMIT = "LIMIT"
+        mock_kite.PRODUCT_NRML = "NRML"
+
+        unwind_attempts = 0
+        def mock_place_order(**kwargs):
+            nonlocal unwind_attempts
+            tsym = kwargs.get("tradingsymbol")
+            ttype = str(kwargs.get("transaction_type"))
+            if tsym == "NIFTY26SEP24000CE" and ttype == "BUY":
+                return "LEG1_OID"
+            elif tsym == "NIFTY26SEP24200CE" and ttype == "SELL":
+                raise RuntimeError("Leg 2 rejection")
+            elif tsym == "NIFTY26SEP24000CE" and ttype == "SELL":
+                unwind_attempts += 1
+                if unwind_attempts == 1:
+                    return "UNWIND_SLICE1_OID"
+                raise RuntimeError("Kite network drop on unwind slice 2")
+            return "OTHER"
+
+        mock_kite.place_order.side_effect = mock_place_order
+        mock_kite.ltp.return_value = {"NFO:NIFTY26SEP24000CE": {"last_price": 120.0}}
+
+        pos = {
+            "symbol": "NIFTY",
+            "contract": "NIFTY26SEP24000CE",
+            "position_type": "option_spread",
+            "leg2_contract": "NIFTY26SEP24200CE",
+            "entry_premium": 120.0,
+            "lot_size": 25,
+            "position_size": 104,  # 2600 qty
+            "trade_id": 8802
+        }
+        idx_engine.ACTIVE_POSITIONS["NIFTY"] = pos
+
+        # On Leg 2 failure, broker held 2600 qty.
+        # After slice 1 sells 1755, broker holds remaining 845 qty.
+        broker_holding_responses = [
+            (False, 0),    # Leg 2 check
+            (True, 2600),  # Initial check on Leg 2 failure
+            (True, 845)    # Check after unwind slice 2 failure
+        ]
+
+        with patch("liquidity_guard.check_bid_ask_spread_liquidity", return_value=(True, 0.01, "OK", 0)), \
+             patch("common.position_monitor.confirm_leg1_order_filled", return_value=(True, ["LEG1_OID"], [], "ALL_COMPLETE")), \
+             patch("common.position_monitor.is_contract_held_on_broker", side_effect=broker_holding_responses), \
+             patch("session.safe_kite_call", side_effect=lambda fn, *a, **kw: fn(*a, **kw)), \
+             patch("Trade_Option.index_options_trade_engine.safe_kite_call", side_effect=lambda fn, *a, **kw: fn(*a, **kw)), \
+             patch("Trade_Option.index_options_trade_engine.trade_db.update_trade") as mock_update_trade:
+
+            res = idx_engine.execute_index_entry(mock_kite, pos)
+            self.assertFalse(res)
+
+            # Position must be retained in ACTIVE_POSITIONS with remaining unsold quantity (845)
+            self.assertIn("NIFTY", idx_engine.ACTIVE_POSITIONS)
+            self.assertEqual(idx_engine.ACTIVE_POSITIONS["NIFTY"]["quantity"], 845)
+            self.assertEqual(idx_engine.ACTIVE_POSITIONS["NIFTY"]["position_size"], 845 // 25)
+
+            # trade_db must be updated with remaining unsold quantity, NOT initial full quantity!
+            mock_update_trade.assert_called_with(8802, {
+                "status": "ACTIVE",
+                "position_type": "option",
+                "quantity": 845,
+                "lots": 845 // 25,
                 "updated_at": unittest.mock.ANY
             })
 
     def test_stock_engine_emergency_unwind_freeze_slicing(self):
         """Stock options trade engine applies freeze slicing to emergency unwind on Leg 2 failure."""
         from common.position_monitor import slice_quantity_for_freeze
-        # Verify slice_quantity_for_freeze handles stock options with large multi-lot quantity
         slices = slice_quantity_for_freeze("RELIANCE26SEP2900CE", 100000)
-        # 100000 with 50000 freeze limit -> [50000, 50000]
         self.assertEqual(slices, [50000, 50000])
 
 

@@ -4,12 +4,52 @@ meta:
   last_updated: '2026-09-24'
   purpose: Active operational tracker for v2.1.0-stable failures, root causes, regressions, and enhancements.
   historical_archive: archive/ISSUE_HISTORY_ARCHIVE.yaml (Preserves 119 resolved legacy issues prior to 2026-09-05)
-  total_active_issues: 58
+  total_active_issues: 59
   archived_issues_summary:
     total_archived: 119
     recent_archived_batch: [FEATURE-031, FEATURE-030, FEATURE-029, ISSUE-084, ISSUE-083, ISSUE-082, ISSUE-081, ISSUE-080, FEATURE-036, FEATURE-035, FEATURE-034, FEATURE-033, ISSUE-054]
     key_archived_families: [ALGO_AUDIT_CVE, QUANT_ENHANCEMENTS, RADAR_LIFECYCLE, VCP_METRICS, SCANNER_DISCOVERY, SECURITY_CONFIG, ZERO_REGRESSION_AUDIT]
 issues:
+- id: ISSUE-107
+  title: Leg 1 / Leg 2 Debit Spread Atomicity, Rollback Guards, Status ACTIVE Parity & Freeze-Sliced Emergency Unwind
+  severity: CRITICAL
+  category: Debit Spreads, Order Atomicity, Risk Management, Rollback & Position Recovery
+  family: EXECUTION_INTEGRITY
+  date_reported: '2026-09-24'
+  symptom: |
+    1. In Manual 1-Click Buy (`Trade_Option/app_option_Trade.py`) and Automated Engines (`index_options_trade_engine.py` and `stock_options_trade_engine.py`), if Leg 2 (short leg) order placement failed (e.g. broker RMS margin rejection or exchange network error) after Leg 1 (long leg) had filled:
+       - Resting Leg 1 limit orders were cancelled, but already filled Leg 1 positions were left unhedged on broker without guaranteed emergency exit.
+       - Partially placed Leg 2 freeze slices were not cancelled, risking partial fills as naked short options without Leg 1 protection.
+       - If emergency unwind partially failed on a second freeze slice, the trade DB retained the position with status "OPEN" instead of "ACTIVE". Because SQLite `trade_db.get_active_trades()` filters strictly by `status='ACTIVE'`, the stranded position was completely invisible to `position_monitor` surveillance!
+       - In Index Options Engine, emergency unwind unconditionally attempted to query Kite LTP via `NFO:{contract}` for BSE SENSEX and BANKEX contracts, raising Kite `InputException: Instrument not found` and aborting the unwind before checking `BFO`.
+       - On partial unwind failure, position size in DB and memory retained the initial full quantity rather than ground-truth remaining broker unsold shares.
+  root_cause: |
+    1. Status Inconsistency: Prior unwind handlers wrote `{"status": "OPEN", "position_type": "option"}` to `trade_db.update_trade()`. In `common/trade_db.py`, `get_active_trades()` runs `SELECT * FROM trades WHERE status='ACTIVE'`. Marking a position `OPEN` orphaned it completely from `position_monitor` and exit watchers.
+    2. Missing Leg 2 Partial Slice Rollback: Debit spreads spanning multiple freeze slices (e.g. NIFTY freeze limit 1755 qty) loop through `qty_slices`. If slice 1 was submitted before slice 2 threw an exception, slice 1 rested on the broker as an uncancelled short.
+    3. BFO Exchange Routing Omission: SENSEX/BANKEX option contracts reside on BSE/BFO, not NFO. Calling `kite.ltp(["NFO:SENSEX..."])` threw `InputException`.
+    4. Broker Holding Discrepancy on Partial Unwind Failure: If slice 1 of emergency unwind executed (e.g. 1755 qty) but slice 2 timed out, memory and DB retained the initial quantity (e.g. 2600 qty) instead of ground-truth remaining broker holding (845 qty).
+  affected_files:
+  - Trade_Option/index_options_trade_engine.py
+  - Trade_Option/stock_options_trade_engine.py
+  - Trade_Option/app_option_Trade.py
+  - scratch/test_issue087_debit_spread_rollback.py
+  - scratch/run_full_regression_test.py
+  - ISSUE_MANAGEMENT.yaml
+  - MASTER_DOCUMENTATION.yaml
+  fix_applied: |
+    1. Rollback Guard 1 (Leg 1 Cancellation): Iterates all placed Leg 1 order IDs and invokes `kite.cancel_order()` to prevent unhedged execution of pending limit slices.
+    2. Rollback Guard 2 (Leg 2 Slice Cancellation): In `index_options_trade_engine.py`, `stock_options_trade_engine.py`, and `app_option_Trade.py`, tracks all submitted `leg2_placed` slice IDs and cancels them immediately upon any Leg 2 exception.
+    3. Rollback Guard 3 (Short Cover Shield): Queries broker holdings for Leg 2 contract; if partially filled as short (`l2_held_qty < 0`), immediately covers short slices via marketable BUY order tagged `spread_l2_cover`.
+    4. Emergency Unwind with BFO Routing: Resolves `target_exch = "BFO"` for SENSEX/BANKEX contracts before querying Kite LTP or placing emergency SELL orders.
+    5. Ground-Truth Remaining Broker Quantity Tracking: If emergency unwind fails or partially succeeds, queries `is_contract_held_on_broker()`. Retains only actual unsold shares (`rem_qty`) in `ACTIVE_POSITIONS` and updates `trade_db` with `quantity=rem_qty`, `lots=rem_qty // lot_sz`, and `status="ACTIVE"`. If all shares were sold, aborts cleanly with 400 without creating orphan DB records.
+  verification: |
+    1. AST syntax check passed 100% on all modified files.
+    2. Dedicated Unit Suite `scratch/test_issue087_debit_spread_rollback.py`: 9/9 tests passed (100% SUCCESS) validating 1-Click abort, 1-Click unwind, 1-Click 500 retention, index engine freeze slicing, SENSEX BFO routing, Leg 2 slice cancellation, and partial unwind remaining quantity update.
+    3. Regression Suite `scratch/test_issue086_audit_fixes.py`: 7/7 tests passed.
+    4. Full Regression Suite `scratch/run_full_regression_test.py`: All 33 test suites passed with zero regressions.
+  status: RESOLVED
+  resolution_date: '2026-09-24'
+
 - id: ISSUE-108
   title: Kite Gateway Error Resilience (502/503/504 & HTML Content-Type Retries), WebSocket Monitor NoneType AttributeError Suppression & Broker Live Reconciliation Rate-Limit Throttling
   severity: HIGH

@@ -2173,7 +2173,6 @@ def api_buy_scanned_trade():
 
                 if not force_order:
                     try:
-                        import trade_db
                         from common.position_monitor import is_contract_held_on_broker
                         if trade_db.is_contract_active(contract):
                             return jsonify({
@@ -2304,7 +2303,7 @@ def api_buy_scanned_trade():
                         logging.info(f"[1-CLICK BUY DEBIT SPREAD] Leg 2 (Short OTM) placed for {leg2_c} TotalQty={lot_size} @ {leg2_limit} (Orders: {leg2_placed})")
                     except Exception as leg2_err:
                         logging.error(f"[1-CLICK BUY DEBIT SPREAD ERROR] Failed to place Leg 2 ({spread_info.get('leg2', {}).get('contract')}): {leg2_err}")
-                        # ROLLBACK GUARD: Cancel any resting Leg 1 orders
+                        # ROLLBACK GUARD 1: Cancel any resting Leg 1 orders
                         for o_to_cancel in placed_leg1_oids:
                             try:
                                 _kite_session.cancel_order(variety=order_variety, order_id=str(o_to_cancel))
@@ -2312,19 +2311,54 @@ def api_buy_scanned_trade():
                             except Exception as c_err:
                                 logging.debug(f"Could not cancel Leg 1 order {o_to_cancel}: {c_err}")
 
+                        # ROLLBACK GUARD 2: Cancel any partially placed Leg 2 slice orders to prevent naked short fills
+                        if 'leg2_placed' in locals() and leg2_placed:
+                            for o2_cancel in leg2_placed:
+                                try:
+                                    _kite_session.cancel_order(variety=order_variety, order_id=str(o2_cancel))
+                                    logging.warning(f"[1-CLICK BUY DEBIT SPREAD ROLLBACK] Cancelled partially placed Leg 2 order {o2_cancel}: {leg2_err}")
+                                except Exception as c2_err:
+                                    logging.debug(f"Could not cancel Leg 2 order {o2_cancel}: {c2_err}")
+
+                        # ROLLBACK GUARD 3: If any Leg 2 slice was filled on broker, cover short leg FIRST
+                        try:
+                            l2_held, l2_held_qty = is_contract_held_on_broker(_kite_session, leg2_c)
+                            if l2_held and l2_held_qty < 0:
+                                cover_qty = abs(l2_held_qty)
+                                logging.warning(f"[1-CLICK BUY DEBIT SPREAD ROLLBACK] Leg 2 short was partially filled ({l2_held_qty} qty). Executing immediate cover BUY...")
+                                c_slices = slice_quantity_for_freeze(leg2_c, cover_qty)
+                                for c_qty in c_slices:
+                                    try:
+                                        _kite_session.place_order(
+                                            variety=_kite_session.VARIETY_REGULAR, tradingsymbol=leg2_c,
+                                            exchange=leg2_exch, transaction_type=_kite_session.TRANSACTION_TYPE_BUY,
+                                            quantity=c_qty, order_type=_kite_session.ORDER_TYPE_LIMIT,
+                                            price=max(0.05, round_to_tick(leg2_limit * 1.05, 0.05)),
+                                            product=prod, tag="spread_l2_cover"
+                                        )
+                                    except Exception as cov_err:
+                                        logging.critical(f"[1-CLICK BUY DEBIT SPREAD ROLLBACK] Failed to cover Leg 2 short slice: {cov_err}")
+                        except Exception as l2_chk_err:
+                            logging.debug(f"Leg 2 broker holding check skipped: {l2_chk_err}")
+
                         # Check if Leg 1 is held on broker
                         is_held, held_qty = is_contract_held_on_broker(_kite_session, contract)
                         if is_held and held_qty > 0:
                             logging.warning(f"[1-CLICK BUY DEBIT SPREAD EMERGENCY UNWIND] Leg 1 {contract} is held ({held_qty} qty) after Leg 2 failure. Executing emergency sell...")
                             try:
                                 leg1_exch = "BFO" if ("SENSEX" in contract.upper() or "BSE" in contract.upper() or "BANKEX" in contract.upper()) else "NFO"
-                                q_unw = safe_kite_call(_kite_session.quote, [f"{leg1_exch}:{contract}"]) if _kite_session else {}
-                                u_depth = q_unw.get(f"{leg1_exch}:{contract}", {}).get("depth", {}).get("buy", [])
-                                u_bid = float(u_depth[0]["price"]) if (u_depth and len(u_depth) > 0 and u_depth[0].get("price", 0) > 0) else float(q_unw.get(f"{leg1_exch}:{contract}", {}).get("last_price", 0.0))
-                                u_limit = max(0.05, round(round(u_bid * 0.98 / 0.05) * 0.05, 2)) if u_bid > 0 else (price if price else 0.05)
+                                u_limit = max(0.05, price if price else 0.05)
+                                try:
+                                    q_unw = safe_kite_call(_kite_session.quote, [f"{leg1_exch}:{contract}"]) if _kite_session else {}
+                                    u_depth = q_unw.get(f"{leg1_exch}:{contract}", {}).get("depth", {}).get("buy", [])
+                                    u_bid = float(u_depth[0]["price"]) if (u_depth and len(u_depth) > 0 and u_depth[0].get("price", 0) > 0) else float(q_unw.get(f"{leg1_exch}:{contract}", {}).get("last_price", 0.0))
+                                    u_limit = max(0.05, round_to_tick(u_bid * 0.98, 0.05)) if u_bid > 0 else max(0.05, price if price else 0.05)
+                                except Exception as q_err:
+                                    logging.debug(f"Quote fetch for 1-Click emergency unwind fallback: {q_err}")
 
                                 u_slices = slice_quantity_for_freeze(contract, held_qty)
                                 u_placed = []
+                                u_sold_qty = 0
                                 for u_qty in u_slices:
                                     u_oid = _kite_session.place_order(
                                         variety=_kite_session.VARIETY_REGULAR,
@@ -2338,6 +2372,7 @@ def api_buy_scanned_trade():
                                         tag="spread_unwind"
                                     )
                                     u_placed.append(str(u_oid))
+                                    u_sold_qty += u_qty
                                 logging.info(f"[1-CLICK BUY DEBIT SPREAD EMERGENCY UNWIND SUCCESS] Sold Leg 1 {contract} Qty={held_qty} @ {u_limit} (Orders: {u_placed})")
                                 return jsonify({
                                     "ok": False,
@@ -2345,9 +2380,19 @@ def api_buy_scanned_trade():
                                 }), 400
                             except Exception as e_unw:
                                 logging.critical(f"[1-CLICK BUY DEBIT SPREAD EMERGENCY UNWIND FAILED] Failed emergency exit for {contract}: {e_unw}!")
-                                spread_info = None  # Demote to naked option for position monitor supervision
-                                unwind_failed_err = str(e_unw)
-                                leg2_err_msg = str(leg2_err)
+                                rem_is_held, rem_held_qty = is_contract_held_on_broker(_kite_session, contract)
+                                rem_qty = rem_held_qty if (rem_is_held and rem_held_qty > 0) else max(0, held_qty - u_sold_qty)
+                                if rem_qty > 0:
+                                    lot_size = rem_qty
+                                    spread_info = None  # Demote to naked option for position monitor supervision
+                                    unwind_failed_err = str(e_unw)
+                                    leg2_err_msg = str(leg2_err)
+                                else:
+                                    logging.info(f"[1-CLICK BUY DEBIT SPREAD] All Leg 1 shares for {contract} were unwound before error. Spread aborted.")
+                                    return jsonify({
+                                        "ok": False,
+                                        "error": f"Debit spread Leg 2 placement failed ({leg2_err}). All Leg 1 shares were cleanly sold on broker to prevent unhedged exposure."
+                                    }), 400
                         else:
                             logging.warning(f"[1-CLICK BUY DEBIT SPREAD] Leg 2 failed ({leg2_err}) and Leg 1 is not held on broker. Spread aborted.")
                             return jsonify({
@@ -2403,6 +2448,7 @@ def api_buy_scanned_trade():
                 logging.info(f"[PRICE ALIGN] Overriding divergent entry_spot {entry_spot} with live option LTP {ltp} for {contract}")
                 entry_spot = ltp
 
+        u_lot = get_option_lot_size(contract) or 1
         trade_data = {
             "contract": contract,
             "entry_spot": entry_spot,
@@ -2415,6 +2461,10 @@ def api_buy_scanned_trade():
             "strategy": "TRAP_ADX" if engine == "trap_adx" else "DATTA_ABCD",
             "timeframe": tf_param,
             "position_type": "option_spread" if spread_info else ("stock" if exch == "NSE" else "option"),
+            "quantity": lot_size,
+            "lot_size": lot_size,
+            "position_size": max(1, lot_size // u_lot) if is_opt else 1,
+            "status": "ACTIVE",
             "user_edited": True,
             "entry_time": dt.now().isoformat()
         }
