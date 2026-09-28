@@ -838,6 +838,18 @@ def execute_highest_rr_trade(kite, staged):
                 except Exception:
                     pass
 
+            # Gate 00: Anti-Chase Ceiling Gate on Scan Cycle Execution
+            # If live quote has already run > 25% of the distance to Target 1, hold candidate for Benchmark Retest
+            orig_bm = float(best.get("benchmark") or cp or 0.0)
+            t1_target = float(best.get("t1") or 0.0)
+            c_ltp_live = float(contract_quote_val or 0.0)
+            if c_ltp_live > 0 and orig_bm > 0 and t1_target > orig_bm:
+                max_chase_limit = round(orig_bm + 0.25 * (t1_target - orig_bm), 2)
+                if c_ltp_live > max_chase_limit:
+                    logging.info(f"🛡️ [ANTI_CHASE_GATE] {sym} ({contract}): Live price ₹{c_ltp_live:.2f} > Max Chase Ceiling ₹{max_chase_limit:.2f} "
+                                 f"(25% to T1 ₹{t1_target:.2f}, BM ₹{orig_bm:.2f}). Holding candidate for Benchmark Retest.")
+                    continue
+
             benchmark_val = float(contract_quote_val or best.get("benchmark") or cp)
             limit_price = round(benchmark_val * 1.005, 1) if benchmark_val > 0 else round(cp * 1.005, 1)
 
@@ -1582,7 +1594,10 @@ def run_fast_radar_check(kite):
                         continue
 
                     # Trigger 1: Breakout / 80% Early D Trigger
-                    is_breakout = (bm > 0 and c_now >= bm)
+                    # Anti-Chase Ceiling: Initial breakout entry is permitted ONLY within 25% of the distance to T1 (or <= 5% above BM).
+                    # If price is already extended (> 25% to T1), it MUST enter via Trigger 2 (Post-D Retest) on a pullback to BM zone.
+                    max_breakout_chase = round(bm + 0.25 * (t1 - bm), 2) if (bm > 0 and t1 > bm) else round(bm * 1.05, 2)
+                    is_breakout = (bm > 0 and bm <= c_now <= max_breakout_chase)
 
                     # Trigger 2: Post-D Retest Entry (D formed, pre-T1, SL intact, retesting Benchmark zone +/- 2.5%)
                     is_retest = False

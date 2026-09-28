@@ -594,7 +594,6 @@ def derive_sl_targets_for_contract(kite, contract, entry_price, timeframe_entry=
         token = None
         if kite:
             try:
-                from session import safe_kite_call
                 q = safe_kite_call(kite.quote, [quote_key])
                 token = q.get(quote_key, {}).get("instrument_token")
                 if not ep:
@@ -1670,7 +1669,6 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
         err_str = str(e).lower()
         if "invalid token" in err_str or "not found" in err_str:
             try:
-                from session import safe_kite_call
                 q = safe_kite_call(kite.quote, [f"NSE:{symbol}"])
                 if f"NSE:{symbol}" in q:
                     real_tok = int(q[f"NSE:{symbol}"]["instrument_token"])

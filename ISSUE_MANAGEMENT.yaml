@@ -10,6 +10,60 @@ meta:
     recent_archived_batch: [FEATURE-031, FEATURE-030, FEATURE-029, ISSUE-084, ISSUE-083, ISSUE-082, ISSUE-081, ISSUE-080, FEATURE-036, FEATURE-035, FEATURE-034, FEATURE-033, ISSUE-054]
     key_archived_families: [ALGO_AUDIT_CVE, QUANT_ENHANCEMENTS, RADAR_LIFECYCLE, VCP_METRICS, SCANNER_DISCOVERY, SECURITY_CONFIG, ZERO_REGRESSION_AUDIT]
 issues:
+- id: ISSUE-110
+  title: Lexical Scope Shadowing of safe_kite_call in common/resolve.py Blocking Live Scans
+  severity: CRITICAL
+  category: Python Lexical Scoping & Scanner Reliability
+  family: SCANNER_DISCOVERY
+  date_reported: '2026-09-28'
+  symptom: |
+    During live scanning sessions, all stock and index scans silently failed with:
+    `WARNING:root:Spot data failed for <SYMBOL>: local variable 'safe_kite_call' referenced before assignment`.
+    Consequently, scanner outputs returned empty candidate lists (`[]`) and zero trades triggered.
+  root_cause: |
+    `common/resolve.py` imported `from session import safe_kite_call` at module top (line 43), but also contained redundant local imports `from session import safe_kite_call` inside `lookup_scan_sl_target` (line 597) and inside the exception block of `scan_symbol` (line 1673). In Python lexical semantics, any assignment or import of a symbol inside a function marks that symbol as a local variable for the ENTIRE function scope. Because lines 1648 and 1662 invoked `safe_kite_call` prior to line 1673, Python raised `UnboundLocalError`.
+  affected_files:
+  - common/resolve.py
+  - ISSUE_MANAGEMENT.yaml
+  fix_applied: |
+    Removed redundant nested imports of `safe_kite_call` from `lookup_scan_sl_target` and `scan_symbol` in `common/resolve.py`. Verified via bytecode inspection (`co_varnames`) that `safe_kite_call` is resolved purely from module global scope.
+  verification: |
+    1. Bytecode inspection confirmed `safe_kite_call in scan_symbol.__code__.co_varnames` is False.
+    2. Single-stock live scanner run on RELIANCE completed with 0 errors and valid candle data.
+    3. Full regression test suite passed 34/34 tests (100% SUCCESS).
+  status: RESOLVED
+  resolution_date: '2026-09-28'
+
+- id: ISSUE-109
+  title: Anti-Chase 25% Entry Ceiling Guard & Index Short-Timeframe BASE_ABCD Chop Shield
+  severity: HIGH
+  category: Execution Quality, Risk:Reward Optimization, False Breakout Prevention & Index Theta Protection
+  family: QUANT_ENHANCEMENTS
+  date_reported: '2026-09-27'
+  symptom: |
+    1. Anti-Chase Inversion: In Fast Surveillance Radar (`stock_options_trade_engine.py`), candidates were evicted only at 80% of Target 1 (`t1_80pct`). Breakout entries (`is_breakout`) could trigger even when price had already surged 60-75% toward Target 1, leaving minimal upside (< 25%) against a full stop-loss and degrading realized R:R to < 0.8x.
+    2. Scan Cycle Chasing: On background scan cycle completion, `execute_highest_rr_trade` priced limit orders using live quote LTP without verifying if the stock had already run past the initial benchmark, causing orders to buy at extended prices.
+    3. Index 3m/5m BASE_ABCD Chop Bleed: In `index_options_trade_engine.py`, horizontal base patterns (`BASE_ABCD`) executed on short timeframes (< 15minute) during 0DTE expiry sessions. Historical audit revealed that 65.1% of all historical strategy losses (-343% out of -527%) originated from 3m index BASE_ABCD setups experiencing severe theta decay chop.
+  root_cause: |
+    1. Lack of an Entry Chase Ceiling: The 80% T1 threshold was designed as an eviction rule for exhausted trades, but was erroneously used as the only boundary for new entries, allowing late-stage entries near target.
+    2. Lack of Timeframe Governance on Index Base Accumulation: `BASE_ABCD` represents institutional accumulation on 15m/30m/daily frames, but represents noise and retail chop on 1m/3m/5m index option charts.
+  affected_files:
+  - Trade_Option/stock_options_trade_engine.py
+  - Trade_Option/index_options_trade_engine.py
+  - scratch/test_anti_chase_and_index_base_shield.py
+  - ISSUE_MANAGEMENT.yaml
+  fix_applied: |
+    1. Anti-Chase 25% Entry Ceiling (Fast Radar): In `stock_options_trade_engine.py`, modified `is_breakout` to enforce `max_breakout_chase = bm + 0.25 * (t1 - bm)`. Initial breakout entry is allowed ONLY within the first 25% of the distance to T1. Extended setups (> 25% to T1) MUST enter via Trigger 2 (`is_retest`) on a pullback to the Benchmark zone [0.98x, 1.025x].
+    2. Anti-Chase Ceiling (Scan Cycle Execution): In `stock_options_trade_engine.py` `execute_highest_rr_trade`, added Gate 00 checking if live LTP > 25% of the distance to T1. If extended, holds the candidate for a benchmark retest rather than placing a marketable order.
+    3. Index BASE_ABCD Short-Timeframe Chop Shield: In `index_options_trade_engine.py`, added Gate 0B disallowing auto-execution of `BASE_ABCD` on short timeframes (< 15minute, e.g. 1m, 3m, 5m), requiring >= 15m structural base or pure momentum anchors (HH, BE, LL, SWEEP).
+    4. Index Anti-Chase Gate: In `index_options_trade_engine.py`, added Gate 0C capping index entry prices within 25% of the distance from Benchmark to Target 1.
+  verification: |
+    1. AST syntax check passed 100% on both engine files.
+    2. Dedicated Unit Suite `scratch/test_anti_chase_and_index_base_shield.py`: 3/3 tests passed (100% SUCCESS) validating breakout bounds, extended retest requirements, 15m vs 5m collision immunity, and fallback chase calculations.
+    3. Master Regression Suite `scratch/run_full_regression_test.py`: 31/31 offline test suites passed (100% SUCCESS) with zero regressions.
+  status: RESOLVED
+  resolution_date: '2026-09-27'
+
 - id: ISSUE-107
   title: Leg 1 / Leg 2 Debit Spread Atomicity, Rollback Guards, Status ACTIVE Parity & Freeze-Sliced Emergency Unwind
   severity: CRITICAL

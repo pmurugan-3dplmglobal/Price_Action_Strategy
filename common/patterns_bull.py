@@ -129,6 +129,9 @@ def find_anchor_ll_sweep(df):
         return None
     if not (float(bounce_candle['close']) > float(sweep_candle['high'])):
         return None
+    # Floor Protection (Datta Image 22): Next candle after L2 does not break L2 low (<< LOW NOT BREAK)
+    if float(bounce_candle['low']) < sweep_low:
+        return None
 
     pattern_name = "BULL_A_LL_Sweep_Var1" if (v1 or v2) else "BULL_A_LL_Sweep_Var2"
 
@@ -530,7 +533,7 @@ def scan_anchor_bcd_breakout(df_entry, df_anchor, anchor_tf="", entry_tf="", ena
                     close_price = latest_close
 
         risk = close_price - sl_val
-        if risk <= 0 or risk < close_price * 0.002 or ((t1 - close_price) / risk) < 1.5:
+        if risk <= 0 or risk < close_price * 0.002 or round((t1 - close_price) / risk, 2) < 1.5:
             continue
 
         rr = (t1 - close_price) / risk if risk > 0 else 0

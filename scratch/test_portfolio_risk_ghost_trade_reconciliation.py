@@ -86,7 +86,8 @@ class TestPortfolioRiskGhostTradeReconciliation(unittest.TestCase):
             symbol="INFY",
             candidate_tier=1,
             capital=100000.0,
-            kite=mock_kite
+            kite=mock_kite,
+            config={"max_daily_loss_pct": 100.0}
         )
 
         # Candidate INFY must be allowed because real broker only has 1 position (RELIANCE)

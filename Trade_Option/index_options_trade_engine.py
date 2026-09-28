@@ -614,6 +614,29 @@ def execute_highest_rr_trade(kite, staged):
                     continue
                 logging.info(f"[INDEX_LATE_WINDOW_APPROVED] Candidate {contract_cand} approved in late-day institutional window ({now_ist.strftime('%H:%M:%S')}): DTE={cand_dte} >= 2, RR={cand_rr:.2f} >= 2.0.")
 
+        # Gate 0B: Index BASE_ABCD Short-Timeframe Chop Shield
+        # In index options, horizontal consolidation bases (BASE_ABCD) on short timeframes (< 15minute)
+        # are proven theta-decay traps with negative mathematical expectancy.
+        # Require either timeframe >= 15minute OR pure institutional momentum anchors (HH, BE, LL, SWEEP).
+        p_name = str(best.get("pattern") or "").upper()
+        tf_cand = str(best.get("timeframe") or TIMEFRAME_ENTRY).lower()
+        is_short_tf = ("3min" in tf_cand or "1min" in tf_cand or ("5min" in tf_cand and "15min" not in tf_cand) or tf_cand in ["1m", "3m", "5m"])
+        if "BASE" in p_name and is_short_tf:
+            logging.info(f"🛡️ [INDEX_BASE_CHOP_GUARD] Blocked {p_name} on short timeframe {tf_cand} for {sym} ({contract_cand}). "
+                         f"Index BASE_ABCD requires >= 15m structural base to prevent theta chop. Evaluating next candidate.")
+            continue
+
+        # Gate 0C: Index Anti-Chase Ceiling Gate
+        orig_bm_idx = float(best.get("benchmark") or best.get("entry_spot") or 0.0)
+        t1_idx = float(best.get("t1") or 0.0)
+        live_idx_ltp = float(best.get("last_price") or best.get("ltp") or 0.0)
+        if live_idx_ltp > 0 and orig_bm_idx > 0 and t1_idx > orig_bm_idx:
+            max_idx_chase = round(orig_bm_idx + 0.25 * (t1_idx - orig_bm_idx), 2)
+            if live_idx_ltp > max_idx_chase:
+                logging.info(f"🛡️ [INDEX_ANTI_CHASE_GUARD] {sym} ({contract_cand}): Live price ₹{live_idx_ltp:.2f} > Max Chase ₹{max_idx_chase:.2f} "
+                             f"(25% to T1 ₹{t1_idx:.2f}, BM ₹{orig_bm_idx:.2f}). Holding candidate for Benchmark Retest.")
+                continue
+
         # Gate 1: Mandatory Spot Confluence Gate (ISSUE-071, ISSUE-073)
         # Auto-execution requires verified spot directional backing (100% win/loss separation).
         if not best.get("spot_confluence"):
@@ -865,13 +888,14 @@ def execute_highest_rr_trade(kite, staged):
             trade_db.record_executed_pattern("index", key, {"contract": pos.get("contract", best.get("contract")), "entry": best["entry_spot"]})
             ok = execute_index_entry(kite, pos)
             if not ok:
-                if live_ok:
-                    with position_lock:
-                        ACTIVE_POSITIONS.pop(best["symbol"], None)
-                if pos.get("trade_id"):
-                    trade_db.update_trade(pos["trade_id"], {"status": "FAILED", "exit_reason": "ORDER_PLACEMENT_FAILED", "updated_at": dt.now().strftime("%Y-%m-%d %H:%M:%S")})
-                logging.warning(f"Order placement failed for {best.get('contract')}. Locked pattern {key} to prevent rate-limit spam loops.")
-                continue
+                if best["symbol"] not in ACTIVE_POSITIONS:
+                    if live_ok:
+                        with position_lock:
+                            ACTIVE_POSITIONS.pop(best["symbol"], None)
+                    if pos.get("trade_id"):
+                        trade_db.update_trade(pos["trade_id"], {"status": "FAILED", "exit_reason": "ORDER_PLACEMENT_FAILED", "updated_at": dt.now().strftime("%Y-%m-%d %H:%M:%S")})
+                    logging.warning(f"Order placement failed for {best.get('contract')}. Locked pattern {key} to prevent rate-limit spam loops.")
+                    continue
 
             profit = round((best.get("t3") or best.get("t1") or 0) - best["entry_spot"], 2)
             rr_best = best.get("rr", "")

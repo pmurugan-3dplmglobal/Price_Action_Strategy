@@ -112,6 +112,9 @@ def find_anchor_hh_sweep(df):
         return None
     if not (float(rejection_candle['close']) < float(sweep_candle['low'])):
         return None
+    # Ceiling Protection (Datta Image 23): Next candle after H2 does not break H2 high (NEXT NOT BREAK H2)
+    if float(rejection_candle['high']) > sweep_high:
+        return None
 
     pattern_name = "BEAR_A_HH_Sweep_Var1" if (v1 or v2) else "BEAR_A_HH_Sweep_Var2"
 
