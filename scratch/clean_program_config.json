@@ -26,6 +26,17 @@
     "max_spread_pct": 0.02,
     "min_depth_qty": 1
   },
+  "macro_market_gate": {
+    "enable": true,
+    "mode": "TREND_FOLLOWING",
+    "nifty_drop_threshold": -0.25,
+    "nifty_surge_threshold": 0.25,
+    "banknifty_drop_threshold": -0.35,
+    "banknifty_surge_threshold": 0.35,
+    "allow_rs_alpha_exception": true,
+    "rs_min_rvol": 2.0,
+    "rs_min_vwap_dist_pct": 1.0
+  },
   "order_management": {
     "enable_stale_order_cancellation": true,
     "unfilled_order_ttl_minutes": 30,
@@ -42,6 +53,10 @@
     "timeframe_anchor": "30minute",
     "lookback_days": 15,
     "scan_interval": 900,
+    "core_scan_interval": 180,
+    "full_scan_interval": 900,
+    "enable_2tier_scheduling": true,
+    "enable_premarket_seeding": true,
     "capital": 100000,
     "max_daily_loss_pct": 5.0,
     "strike_range": 1,
@@ -55,9 +70,9 @@
     "scan_interval": 300
   },
   "index": {
-    "execution_mode": "DEBIT_SPREAD",
-    "timeframe_entry": "15minute",
-    "timeframe_anchor": "60minute",
+    "execution_mode": "AUTO",
+    "timeframe_entry": "5minute",
+    "timeframe_anchor": "15minute",
     "capital": 100000,
     "max_daily_loss_pct": 3,
     "strike_range": 1,

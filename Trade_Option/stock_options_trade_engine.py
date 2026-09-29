@@ -735,10 +735,12 @@ def execute_highest_rr_trade(kite, staged):
             except ImportError:
                 from macro_gate import evaluate_macro_index_gate
 
-            m_ok, m_reason = evaluate_macro_index_gate(kite, side, sym)
+            m_ok, m_reason = evaluate_macro_index_gate(kite, side, sym, candidate_meta=best)
             if not m_ok:
                 logging.info(f"[MACRO_NIFTY_GATE] Auto-execution blocked for {sym} ({best.get('contract') or sym}): {m_reason}")
                 continue
+            elif "RS_ALPHA_BYPASS" in m_reason:
+                logging.info(f"[MACRO_NIFTY_GATE] RS Alpha Outperformer approved for {sym} ({best.get('contract') or sym}): {m_reason}")
 
             # Gate 1: Mandatory Spot Confluence Gate (ISSUE-071)
             # Auto-execution requires verified spot directional backing (100% win/loss separation).
@@ -1527,13 +1529,15 @@ def run_fast_radar_check(kite):
                 from common.macro_gate import evaluate_macro_index_gate
             except ImportError:
                 from macro_gate import evaluate_macro_index_gate
-            m_ok, m_reason = evaluate_macro_index_gate(kite, side_val, sym)
+            m_ok, m_reason = evaluate_macro_index_gate(kite, side_val, sym, candidate_meta=item)
             c_name = item.get("contract")
             c_gate_key = c_name or sym
             if not m_ok:
                 logging.info(f"🛡️ [RADAR MACRO GATE] {sym} ({c_name}): {m_reason}. Holding candidate from radar breakout.")
                 _RADAR_CANDIDATE_GATE_COOLDOWN[c_gate_key] = time.time() + 60.0
                 continue
+            elif "RS_ALPHA_BYPASS" in m_reason:
+                logging.info(f"⚡ [RADAR MACRO GATE] RS Alpha Outperformer triggered for {sym} ({c_name}): {m_reason}")
             # Gate Cooldown Check: Prevent rapid 15s retry loops on gate-rejected candidates
             c_gate_key = c_name or sym
             if c_gate_key in _RADAR_CANDIDATE_GATE_COOLDOWN:

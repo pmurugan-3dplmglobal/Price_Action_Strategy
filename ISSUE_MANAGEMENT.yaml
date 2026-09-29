@@ -43,14 +43,16 @@ issues:
   - ISSUE_MANAGEMENT.yaml
   fix_applied: |
     1. Implemented common/macro_gate.py with 20s TTL caching: blocks CE when NIFTY < -0.25% (or BANKNIFTY < -0.35% for banking stocks); blocks PE when NIFTY > +0.25%. Integrated across resolve.py, stock_options_trade_engine.py (Gate 0B & Fast Radar), and index_options_trade_engine.py.
-    2. Added hard minimum floor on sl_distance in position_monitor.py (max(raw_dist, current_sl * 0.05, 1.50) for options; max(raw_dist, current_sl * 0.01, 2.00) for stocks) to eliminate zero-distance breakeven collapse.
-    3. Enhanced reconcile_and_cancel_stale_orders in position_monitor.py to immediately purge REJECTED, CANCELLED, and EXPIRED orders from positions_dict and mark DB trades as FAILED.
-    4. Updated portfolio_risk.py to compute net liquid cash as min(cash, max(0.0, live_balance - collateral)), perfectly matching both intraday margin consumption and pledged collateral restrictions.
-    5. Derived spread margin floor from 50% of UI capital setting (cap_val_base * spread_floor_pct), configurable via spread_margin_floor_pct in program_config.json.
-    6. Added Entry Window Lock (09:45 - 14:45 IST) in stock engine and fast radar to avoid opening wide spreads and closing theta drag.
-    7. Added pre-market freeze (< 09:15:30 AM) and empty position dictionary guard in trade_db.py to protect against transient broker disconnects.
+    2. Implemented Option 3 (Institutional Relative Strength Alpha Bypass Exception): Permits independent "Decoupled Alpha Outperformers" (🥇 Tier 1 Gold, RVOL >= 2.0x, Spot >= +1.0% VWAP for CE, Spot <= -1.0% VWAP for PE) to bypass macro index blocks when an explosive stock displays overwhelming institutional volume and trend velocity.
+    3. Implemented Option 4 (Configurable Modes & Thresholds): Added macro_market_gate configuration block to input/program_config.json supporting TREND_FOLLOWING (default), CONTRARIAN (reverses direction to exploit oversold dips and overbought peaks), and OFF modes, with dynamic zero-restart file mtime reload and dashboard UI exposure via app_option_Trade.py.
+    4. Added hard minimum floor on sl_distance in position_monitor.py (max(raw_dist, current_sl * 0.05, 1.50) for options; max(raw_dist, current_sl * 0.01, 2.00) for stocks) to eliminate zero-distance breakeven collapse.
+    5. Enhanced reconcile_and_cancel_stale_orders in position_monitor.py to immediately purge REJECTED, CANCELLED, and EXPIRED orders from positions_dict and mark DB trades as FAILED.
+    6. Updated portfolio_risk.py to compute net liquid cash as min(cash, max(0.0, live_balance - collateral)), perfectly matching both intraday margin consumption and pledged collateral restrictions.
+    7. Derived spread margin floor from 50% of UI capital setting (cap_val_base * spread_floor_pct), configurable via spread_margin_floor_pct in program_config.json.
+    8. Added Entry Window Lock (09:45 - 14:45 IST) in stock engine and fast radar to avoid opening wide spreads and closing theta drag.
+    9. Added pre-market freeze (< 09:15:30 AM) and empty position dictionary guard in trade_db.py to protect against transient broker disconnects.
   verification: |
-    1. Unit verification test scratch/test_issue111_macro_gate_and_safety_fixes.py passed 7/7 tests (100% OK).
+    1. Unit verification test scratch/test_issue111_macro_gate_and_safety_fixes.py passed 12/12 tests (100% OK), validating TREND_FOLLOWING, CONTRARIAN, OFF modes, RS Alpha exceptions, TTL caching, sl_distance floors, live cash prioritization, and 50% spread margin floors.
     2. Capital gate & profit lock test scratch/test_profit_lock_and_capital_gate.py passed 6/6 tests (100% OK).
     3. Full regression suite scratch/run_full_regression_test.py passed all 35 test suites (100% SUCCESS, zero regressions).
   status: RESOLVED

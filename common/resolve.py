@@ -2051,7 +2051,14 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                             "spot_confluence_type": spot_conf_type_ce,
                             "twap_c_stable": result_ce.get("twap_c_stable", False),
                             "twap_c_score": result_ce.get("twap_c_score", 0.0),
-                            "twap_c_std": result_ce.get("twap_c_std", 0.0)
+                            "twap_c_std": result_ce.get("twap_c_std", 0.0),
+                            "rvol": float(result_ce.get("vol_d_ratio") or 1.0),
+                            "rvol_abs": float(result_ce.get("vol_d_ratio") or 1.0),
+                            "vol_d_ratio": float(result_ce.get("vol_d_ratio") or 1.0),
+                            "opt_rvol_badge": result_ce.get("opt_rvol_badge", "NORMAL"),
+                            "vol_score": result_ce.get("vol_score", 3),
+                            "vwap_dist_pct": round(((float(current_spot) - float(spot_vwap)) / float(spot_vwap)) * 100.0, 2) if (current_spot and spot_vwap and float(spot_vwap) > 0) else None,
+                            "spot_vwap_dist_pct": round(((float(current_spot) - float(spot_vwap)) / float(spot_vwap)) * 100.0, 2) if (current_spot and spot_vwap and float(spot_vwap) > 0) else None
                         }
                         symbol_candidates.append(trade_data)
                         pattern_funnel.evict_item(engine_name, ce['tradingsymbol'])
@@ -2291,7 +2298,14 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                             "spot_confluence_type": spot_conf_type_pe,
                             "twap_c_stable": result_pe.get("twap_c_stable", False),
                             "twap_c_score": result_pe.get("twap_c_score", 0.0),
-                            "twap_c_std": result_pe.get("twap_c_std", 0.0)
+                            "twap_c_std": result_pe.get("twap_c_std", 0.0),
+                            "rvol": float(result_pe.get("vol_d_ratio") or 1.0),
+                            "rvol_abs": float(result_pe.get("vol_d_ratio") or 1.0),
+                            "vol_d_ratio": float(result_pe.get("vol_d_ratio") or 1.0),
+                            "opt_rvol_badge": result_pe.get("opt_rvol_badge", "NORMAL"),
+                            "vol_score": result_pe.get("vol_score", 3),
+                            "vwap_dist_pct": round(((float(current_spot) - float(spot_vwap)) / float(spot_vwap)) * 100.0, 2) if (current_spot and spot_vwap and float(spot_vwap) > 0) else None,
+                            "spot_vwap_dist_pct": round(((float(current_spot) - float(spot_vwap)) / float(spot_vwap)) * 100.0, 2) if (current_spot and spot_vwap and float(spot_vwap) > 0) else None
                         }
                         symbol_candidates.append(trade_data)
                         pattern_funnel.evict_item(engine_name, pe['tradingsymbol'])
@@ -2612,10 +2626,12 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
             macro_filtered = []
             for c in trend_governed_candidates:
                 c_side = c.get("side", "CE")
-                m_ok, m_reason = evaluate_macro_index_gate(kite, c_side, symbol)
+                m_ok, m_reason = evaluate_macro_index_gate(kite, c_side, symbol, candidate_meta=c)
                 if not m_ok:
                     logging.info(f"[MACRO_INDEX_GATE] Discarded {c_side} candidate {c.get('contract') or symbol}: {m_reason}")
                 else:
+                    if "RS_ALPHA_BYPASS" in m_reason:
+                        logging.info(f"[MACRO_INDEX_GATE] RS Alpha Exception: Permitted {c_side} candidate {c.get('contract') or symbol}: {m_reason}")
                     macro_filtered.append(c)
             trend_governed_candidates = macro_filtered
 

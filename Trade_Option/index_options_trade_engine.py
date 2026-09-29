@@ -244,7 +244,7 @@ def execute_index_entry(kite, pos):
             from common.macro_gate import evaluate_macro_index_gate
         except ImportError:
             from macro_gate import evaluate_macro_index_gate
-        m_ok, m_reason = evaluate_macro_index_gate(kite, side, sym)
+        m_ok, m_reason = evaluate_macro_index_gate(kite, side, sym, candidate_meta=pos)
         if not m_ok:
             logging.info(f"[INDEX MACRO GATE] Blocked index trade for {pos.get('contract')}: {m_reason}")
             return False

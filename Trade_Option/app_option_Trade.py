@@ -126,7 +126,8 @@ PROGRAMS = {
             "strike_range": {"label": "Strike Range (±)", "type": "number", "default": 1},
             "enable_swing_filter": {"label": "Swing Filter", "type": "select", "options": ["true", "false"], "default": "true"},
             "swing_min_waves": {"label": "Min Swings", "type": "number", "default": 2},
-            "strict_macro_gate": {"label": "Strict Macro Gate (13 EMA)", "type": "select", "options": ["false", "true"], "default": "false"}
+            "strict_macro_gate": {"label": "Strict Macro Gate (13 EMA)", "type": "select", "options": ["false", "true"], "default": "false"},
+            "macro_gate_mode": {"label": "Macro Gate Mode", "type": "select", "options": ["TREND_FOLLOWING", "CONTRARIAN", "OFF"], "default": "TREND_FOLLOWING"}
         }
     },
     "nifty50": {
@@ -145,7 +146,8 @@ PROGRAMS = {
             "strike_range": {"label": "Strike Range (±)", "type": "number", "default": 1},
             "enable_swing_filter": {"label": "Swing Filter", "type": "select", "options": ["true", "false"], "default": "true"},
             "swing_min_waves": {"label": "Min Swings", "type": "number", "default": 2},
-            "strict_macro_gate": {"label": "Strict Macro Gate (13 EMA)", "type": "select", "options": ["false", "true"], "default": "false"}
+            "strict_macro_gate": {"label": "Strict Macro Gate (13 EMA)", "type": "select", "options": ["false", "true"], "default": "false"},
+            "macro_gate_mode": {"label": "Macro Gate Mode", "type": "select", "options": ["TREND_FOLLOWING", "CONTRARIAN", "OFF"], "default": "TREND_FOLLOWING"}
         }
     },
     "ema_engine": {
@@ -282,6 +284,14 @@ def save_config(prog_id, data):
         if "portfolio_risk" not in cfg or not isinstance(cfg["portfolio_risk"], dict):
             cfg["portfolio_risk"] = {}
         cfg["portfolio_risk"]["max_daily_loss_pct"] = float(cleaned["max_daily_loss_pct"])
+    if "macro_gate_mode" in cleaned:
+        if "macro_market_gate" not in cfg or not isinstance(cfg["macro_market_gate"], dict):
+            cfg["macro_market_gate"] = {}
+        cfg["macro_market_gate"]["mode"] = str(cleaned["macro_gate_mode"]).upper()
+    if prog_id == "macro_market_gate":
+        if "macro_market_gate" not in cfg or not isinstance(cfg["macro_market_gate"], dict):
+            cfg["macro_market_gate"] = {}
+        cfg["macro_market_gate"].update(cleaned)
     os.makedirs(os.path.dirname(CONFIG_FILE), exist_ok=True)
     with open(CONFIG_FILE, "w") as f:
         json.dump(cfg, f, indent=2)
@@ -1113,10 +1123,13 @@ def api_status():
             }
         cfg = load_config()
         p_risk_dl = float(cfg.get("portfolio_risk", {}).get("max_daily_loss_pct", 3.0))
+        m_mode = str(cfg.get("macro_market_gate", {}).get("mode", "TREND_FOLLOWING")).upper()
         for p_id in ["index", "nifty50"]:
             if p_id in cfg and isinstance(cfg[p_id], dict):
                 if "max_daily_loss_pct" not in cfg[p_id]:
                     cfg[p_id]["max_daily_loss_pct"] = p_risk_dl
+                if "macro_gate_mode" not in cfg[p_id]:
+                    cfg[p_id]["macro_gate_mode"] = m_mode
         return jsonify({
             "programs": prog_status,
             "positions": cached_data["positions"],
@@ -1284,7 +1297,7 @@ def api_backtest_mode():
 
 @app.route("/api/config/<prog_id>", methods=["POST"])
 def api_save_config(prog_id):
-    if prog_id not in PROGRAMS:
+    if prog_id not in PROGRAMS and prog_id != "macro_market_gate":
         return jsonify({"ok": False, "error": "Unknown program"})
     data = request.get_json(force=True, silent=True)
     if not data:
@@ -2019,6 +2032,19 @@ def api_buy_scanned_trade():
                         return jsonify({"ok": False, "error": f"VIX Regime Gate: {vix_reason}. Set force=true to override."}), 400
                 except Exception as vix_err:
                     logging.warning(f"VIX regime check error in 1-Click Buy: {vix_err}")
+
+            # ── Macro Market Regime Gate Check (ISSUE-111 & Option 3/4) ──
+            if not force_order:
+                try:
+                    from common.macro_gate import evaluate_macro_index_gate
+                    m_ok, m_reason = evaluate_macro_index_gate(_kite_session, side, symbol, candidate_meta=data)
+                    if not m_ok:
+                        logging.warning(f"[1-CLICK BUY REJECTED] {symbol} ({contract}): {m_reason}")
+                        return jsonify({"ok": False, "error": f"Macro Regime Gate: {m_reason}. Set force=true to override."}), 400
+                    elif "RS_ALPHA_BYPASS" in m_reason:
+                        logging.info(f"[1-CLICK BUY MACRO BYPASS] {symbol} ({contract}): {m_reason}")
+                except Exception as m_err:
+                    logging.warning(f"Macro regime check error in 1-Click Buy: {m_err}")
 
             # ── Portfolio Risk & Sector Caps Enforcement ──
             try:

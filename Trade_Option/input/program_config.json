@@ -1,6 +1,17 @@
 {
   "api_key": "o8nnw6kxykvrsrhg",
   "api_secret": "9g7d5kktr38d7yvq11njsm4upz8kc6s1",
+  "macro_market_gate": {
+    "enable": true,
+    "mode": "TREND_FOLLOWING",
+    "nifty_drop_threshold": -0.25,
+    "nifty_surge_threshold": 0.25,
+    "banknifty_drop_threshold": -0.35,
+    "banknifty_surge_threshold": 0.35,
+    "allow_rs_alpha_exception": true,
+    "rs_min_rvol": 2.0,
+    "rs_min_vwap_dist_pct": 1.0
+  },
   "nifty50": {
     "target_universe": "FNO_ALL",
     "timeframe_entry": "30minute",
