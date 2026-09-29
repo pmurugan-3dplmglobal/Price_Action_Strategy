@@ -167,7 +167,7 @@ class VmOperations:
 
             # 1. Stash and Pull
             print("1. Pulling latest code from origin/master...")
-            pull_cmd = f"cd {vm['repo_dir']} && sudo git stash && sudo git pull origin master"
+            pull_cmd = f"cd {vm['repo_dir']} && sudo git stash --include-untracked && sudo git pull origin master"
             rc, out, err = self._run_ssh(vm, pull_cmd, timeout=45)
             print(f"   Git pull: {out or err}")
             if rc != 0:
