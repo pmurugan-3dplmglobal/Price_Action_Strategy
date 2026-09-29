@@ -529,5 +529,32 @@
     "lot_size": 625,
     "tag": "MISSED_OPPORTUNITY",
     "note": "Skipped by MAX_CONCURRENT_POSITIONS_REACHED (45/6 active scripts across portfolio [Capital: Rs 100,000]) (R:R=5.30, Tier=1)"
+  },
+  {
+    "contract": "SIEMENS26OCT3800CE",
+    "base_symbol": "SIEMENS",
+    "entry_price": 89.8,
+    "exit_price": null,
+    "lot_size": 175,
+    "tag": "MISSED_OPPORTUNITY",
+    "note": "Skipped by MAX_SECTOR_POSITIONS_REACHED (2/2 active in sector 'INFRA_CAPGOODS') (R:R=2.47, Tier=1)"
+  },
+  {
+    "contract": "ASTRAL26OCT1380CE",
+    "base_symbol": "ASTRAL",
+    "entry_price": 39.8,
+    "exit_price": null,
+    "lot_size": 425,
+    "tag": "MISSED_OPPORTUNITY",
+    "note": "Skipped by MAX_SECTOR_POSITIONS_REACHED (2/2 active in sector 'INFRA_CAPGOODS') (R:R=1.50, Tier=2)"
+  },
+  {
+    "contract": "DLF26OCT670CE",
+    "base_symbol": "DLF",
+    "entry_price": 16.8,
+    "exit_price": null,
+    "lot_size": 950,
+    "tag": "MISSED_OPPORTUNITY",
+    "note": "Skipped by MAX_SECTOR_POSITIONS_REACHED (2/2 active in sector 'INFRA_CAPGOODS') (R:R=4.33, Tier=1)"
   }
 ]

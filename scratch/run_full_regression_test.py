@@ -529,74 +529,89 @@ try:
     import pattern_funnel
     from datetime import datetime as _dt_test20, timedelta as _td_test20
 
-    # Generate a future-month contract suffix so test fixtures never use expired contracts.
-    # Always target 2 months from now to guarantee the contract is unexpired.
-    _future_dt = _dt_test20.now() + _td_test20(days=60)
-    _future_yymth = _future_dt.strftime("%y") + _future_dt.strftime("%b").upper()  # e.g. "27JAN"
+    # Isolate test file so concurrent live background engines do not race on output/monitor/pattern_funnel.json
+    orig_funnel_file = pattern_funnel.paths.PATTERN_FUNNEL_FILE
+    test_funnel_file = os.path.join(os.path.dirname(orig_funnel_file), f"pattern_funnel_test20_{os.getpid()}.json")
+    pattern_funnel.paths.PATTERN_FUNNEL_FILE = test_funnel_file
+    pattern_funnel._mem_cache = {}
 
-    t_eng = "reg_test_engine"
-    pattern_funnel.clear_funnel(t_eng)
-    _test_contract = f"TESTSYM{_future_yymth}100CE"
-    _run_contract = f"RUNSYM{_future_yymth}200CE"
-    item = {"symbol": "TESTSYM", "contract": _test_contract, "side": "CE", "pattern": "BE_ABCD", "strike": "100"}
-    
-    # 1. Register B
-    pattern_funnel.register_partial_pattern(t_eng, item, pattern_funnel.STAGE_B)
-    summ = pattern_funnel.get_funnel_summary(t_eng)
-    assert len(summ["category_b"]) == 1, "Must register into Category B"
-    
-    # 2. Promote to A
-    pattern_funnel.promote_item(t_eng, item, pattern_funnel.STAGE_A)
-    summ = pattern_funnel.get_funnel_summary(t_eng)
-    assert len(summ["category_a"]) == 1 and len(summ["category_b"]) == 0, "Must promote to A and evict from B"
-    
-    # 3. Promote to A+
-    pattern_funnel.promote_item(t_eng, item, pattern_funnel.STAGE_A_PLUS)
-    summ = pattern_funnel.get_funnel_summary(t_eng)
-    assert len(summ["category_a_plus"]) == 1 and len(summ["category_a"]) == 0, "Must promote to A+ and evict from A"
-    
-    # 4. Evict on execution
-    pattern_funnel.evict_item(t_eng, item)
-    summ = pattern_funnel.get_funnel_summary(t_eng)
-    assert len(summ["category_a_plus"]) == 0, "Must evict cleanly from all categories"
+    try:
+        # Generate a future-month contract suffix so test fixtures never use expired contracts.
+        # Always target 2 months from now to guarantee the contract is unexpired.
+        _future_dt = _dt_test20.now() + _td_test20(days=60)
+        _future_yymth = _future_dt.strftime("%y") + _future_dt.strftime("%b").upper()  # e.g. "27JAN"
 
-    # 4b. Evict by 4-part key representation with float strike
-    pattern_funnel.promote_item(t_eng, item, pattern_funnel.STAGE_A)
-    assert len(pattern_funnel.get_funnel_summary(t_eng)["category_a"]) == 1
-    pattern_funnel.evict_item(t_eng, f"{item['symbol']}|{item['pattern']}|{item['side']}|100.0")
-    assert len(pattern_funnel.get_funnel_summary(t_eng)["category_a"]) == 0, "Must evict by 4-part key with float strike"
+        t_eng = "reg_test_engine"
+        pattern_funnel.clear_funnel(t_eng)
+        _test_contract = f"TESTSYM{_future_yymth}100CE"
+        _run_contract = f"RUNSYM{_future_yymth}200CE"
+        item = {"symbol": "TESTSYM", "contract": _test_contract, "side": "CE", "pattern": "BE_ABCD", "strike": "100"}
+        
+        # 1. Register B
+        pattern_funnel.register_partial_pattern(t_eng, item, pattern_funnel.STAGE_B)
+        summ = pattern_funnel.get_funnel_summary(t_eng)
+        assert len(summ["category_b"]) == 1, "Must register into Category B"
+        
+        # 2. Promote to A
+        pattern_funnel.promote_item(t_eng, item, pattern_funnel.STAGE_A)
+        summ = pattern_funnel.get_funnel_summary(t_eng)
+        assert len(summ["category_a"]) == 1 and len(summ["category_b"]) == 0, "Must promote to A and evict from B"
+        
+        # 3. Promote to A+
+        pattern_funnel.promote_item(t_eng, item, pattern_funnel.STAGE_A_PLUS)
+        summ = pattern_funnel.get_funnel_summary(t_eng)
+        assert len(summ["category_a_plus"]) == 1 and len(summ["category_a"]) == 0, "Must promote to A+ and evict from A"
+        
+        # 4. Evict on execution
+        pattern_funnel.evict_item(t_eng, item)
+        summ = pattern_funnel.get_funnel_summary(t_eng)
+        assert len(summ["category_a_plus"]) == 0, "Must evict cleanly from all categories"
 
-    # 4c. Evict by contract string
-    pattern_funnel.promote_item(t_eng, item, pattern_funnel.STAGE_B)
-    assert len(pattern_funnel.get_funnel_summary(t_eng)["category_b"]) == 1
-    pattern_funnel.evict_item(t_eng, item["contract"])
-    assert len(pattern_funnel.get_funnel_summary(t_eng)["category_b"]) == 0, "Must evict by contract"
+        # 4b. Evict by 4-part key representation with float strike
+        pattern_funnel.promote_item(t_eng, item, pattern_funnel.STAGE_A)
+        assert len(pattern_funnel.get_funnel_summary(t_eng)["category_a"]) == 1
+        pattern_funnel.evict_item(t_eng, f"{item['symbol']}|{item['pattern']}|{item['side']}|100.0")
+        assert len(pattern_funnel.get_funnel_summary(t_eng)["category_a"]) == 0, "Must evict by 4-part key with float strike"
 
-    # 5. Verify Automated Purge on 80% T1 Hit and TF Closing SL Policy
-    item_run = {
-        "symbol": "RUNSYM", "contract": _run_contract, "side": "CE",
-        "benchmark": 200.0, "current_sl": 180.0, "t1": 240.0
-    }
-    # 80% T1 = 200 + 0.80 * (240 - 200) = 232.0
-    pattern_funnel.promote_item(t_eng, item_run, pattern_funnel.STAGE_A)
-    assert len(pattern_funnel.get_funnel_summary(t_eng)["category_a"]) == 1, "Must register RUNSYM"
+        # 4c. Evict by contract string
+        pattern_funnel.promote_item(t_eng, item, pattern_funnel.STAGE_B)
+        assert len(pattern_funnel.get_funnel_summary(t_eng)["category_b"]) == 1
+        pattern_funnel.evict_item(t_eng, item["contract"])
+        assert len(pattern_funnel.get_funnel_summary(t_eng)["category_b"]) == 0, "Must evict by contract"
 
-    # 5a. Post-breakout below 80% T1 (e.g. LTP = 215.0) must NOT be evicted (valid breakout / retest zone)
-    pattern_funnel.purge_invalidated_or_triggered(t_eng, ltp_dict={_run_contract: 215.0})
-    assert len(pattern_funnel.get_funnel_summary(t_eng)["category_a"]) == 1, "Must NOT purge setup when LTP < 80% T1 (215.0 < 232.0)"
+        # 5. Verify Automated Purge on 80% T1 Hit and TF Closing SL Policy
+        item_run = {
+            "symbol": "RUNSYM", "contract": _run_contract, "side": "CE",
+            "benchmark": 200.0, "current_sl": 180.0, "t1": 240.0
+        }
+        # 80% T1 = 200 + 0.80 * (240 - 200) = 232.0
+        pattern_funnel.promote_item(t_eng, item_run, pattern_funnel.STAGE_A)
+        assert len(pattern_funnel.get_funnel_summary(t_eng)["category_a"]) == 1, "Must register RUNSYM"
 
-    # 5b. Purge on 80% T1 Hit (LTP = 233.0 >= 232.0)
-    pattern_funnel.purge_invalidated_or_triggered(t_eng, ltp_dict={_run_contract: 233.0})
-    assert len(pattern_funnel.get_funnel_summary(t_eng)["category_a"]) == 0, "Must purge setup when LTP >= 80% T1 (233.0 >= 232.0)"
+        # 5a. Post-breakout below 80% T1 (e.g. LTP = 215.0) must NOT be evicted (valid breakout / retest zone)
+        pattern_funnel.purge_invalidated_or_triggered(t_eng, ltp_dict={_run_contract: 215.0})
+        assert len(pattern_funnel.get_funnel_summary(t_eng)["category_a"]) == 1, "Must NOT purge setup when LTP < 80% T1 (215.0 < 232.0)"
 
-    # 5c. Tick-level SL dips do NOT purge in purge_invalidated_or_triggered (SL evaluated strictly on TF closing basis)
-    pattern_funnel.promote_item(t_eng, item_run, pattern_funnel.STAGE_A)
-    pattern_funnel.purge_invalidated_or_triggered(t_eng, ltp_dict={_run_contract: 175.0})
-    assert len(pattern_funnel.get_funnel_summary(t_eng)["category_a"]) == 1, "Tick-level SL dip must NOT purge; SL is on TF closing basis"
+        # 5b. Purge on 80% T1 Hit (LTP = 233.0 >= 232.0)
+        pattern_funnel.purge_invalidated_or_triggered(t_eng, ltp_dict={_run_contract: 233.0})
+        assert len(pattern_funnel.get_funnel_summary(t_eng)["category_a"]) == 0, "Must purge setup when LTP >= 80% T1 (233.0 >= 232.0)"
 
-    # Clean up test engine
-    pattern_funnel.clear_funnel(t_eng)
-    print(" PASSED [OK]", flush=True)
+        # 5c. Tick-level SL dips do NOT purge in purge_invalidated_or_triggered (SL evaluated strictly on TF closing basis)
+        pattern_funnel.promote_item(t_eng, item_run, pattern_funnel.STAGE_A)
+        pattern_funnel.purge_invalidated_or_triggered(t_eng, ltp_dict={_run_contract: 175.0})
+        assert len(pattern_funnel.get_funnel_summary(t_eng)["category_a"]) == 1, "Tick-level SL dip must NOT purge; SL is on TF closing basis"
+
+        # Clean up test engine
+        pattern_funnel.clear_funnel(t_eng)
+        print(" PASSED [OK]", flush=True)
+    finally:
+        pattern_funnel.paths.PATTERN_FUNNEL_FILE = orig_funnel_file
+        pattern_funnel._mem_cache = {}
+        if os.path.exists(test_funnel_file):
+            try:
+                os.remove(test_funnel_file)
+            except Exception:
+                pass
 except Exception as e:
     errors.append(f"Pattern Funnel Invariants Failed: {e}")
     print(f" FAILED [ERR] ({e})", flush=True)

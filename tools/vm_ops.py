@@ -108,6 +108,30 @@ class VmOperations:
         except Exception as e:
             return -1, "", str(e)
 
+    def _run_ssh_python(self, vm, python_code, timeout=60):
+        """Execute a Python script on the remote VM via stdin, avoiding shell escaping issues."""
+        cmd = [
+            "ssh", "-i", self.key_path,
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "ConnectTimeout=10",
+            f"{vm['user']}@{vm['ip']}",
+            f"{vm['py_cmd']} -"
+        ]
+        try:
+            res = subprocess.run(
+                cmd,
+                input=f"# -*- coding: utf-8 -*-\n{python_code}".encode("utf-8"),
+                capture_output=True,
+                timeout=timeout
+            )
+            out = (res.stdout.decode("utf-8", errors="replace") or "").strip()
+            err = (res.stderr.decode("utf-8", errors="replace") or "").strip()
+            return res.returncode, out, err
+        except subprocess.TimeoutExpired:
+            return -1, "", f"Remote Python script timed out after {timeout}s"
+        except Exception as e:
+            return -1, "", str(e)
+
     def get_target_vms(self, vm_arg):
         """Resolve VM targets based on argument ('1', '2', or 'all')."""
         if vm_arg in ("1", 1):
@@ -176,15 +200,20 @@ class VmOperations:
 
             # 2. AST Smoke Check on VM
             print("2. Verifying AST syntax on VM Python environment...")
-            smoke_py = (
-                "import ast; "
-                "[ast.parse(open(f, encoding='utf-8').read()) for f in ["
-                "'common/macro_gate.py', 'common/portfolio_risk.py', "
-                "'common/position_monitor.py', 'Trade_Option/stock_options_trade_engine.py', "
-                "'Trade_Option/index_options_trade_engine.py'"
-                "]]; print('AST OK')"
-            )
-            rc, out, err = self._run_ssh(vm, f"cd {vm['repo_dir']} && {vm['py_cmd']} -c \"{smoke_py}\"", timeout=30)
+            smoke_py = f"""
+import sys, ast
+sys.path.insert(0, '{vm['repo_dir']}')
+files = [
+    'common/macro_gate.py', 'common/portfolio_risk.py',
+    'common/position_monitor.py', 'Trade_Option/stock_options_trade_engine.py',
+    'Trade_Option/index_options_trade_engine.py'
+]
+for f in files:
+    with open(f"{vm['repo_dir']}/" + f, encoding='utf-8') as fp:
+        ast.parse(fp.read(), filename=f)
+print("AST OK")
+"""
+            rc, out, err = self._run_ssh_python(vm, smoke_py, timeout=30)
             if "AST OK" in out:
                 print("   ✅ AST syntax checks passed on VM.")
             else:
@@ -192,23 +221,7 @@ class VmOperations:
 
             # 3. Clean Ghost Positions
             print("3. Reconciling and purging ghost positions...")
-            clean_cmd = f"cd {vm['repo_dir']} && {vm['py_cmd']} -c \"" + (
-                "import json, sqlite3, os; "
-                "from kiteconnect import KiteConnect; "
-                "from common.session import load_kite_session, ensure_kite_session; "
-                "from common.paths import TOKEN_FILE, monitor_file; "
-                "ak, at = load_kite_session(TOKEN_FILE); "
-                "kite = KiteConnect(api_key=ak); kite.set_access_token(at); "
-                "ensure_kite_session(kite); "
-                "held = {p.get('tradingsymbol'): p.get('quantity') for p in kite.positions().get('net', []) if p.get('quantity', 0) != 0}; "
-                "st_p = monitor_file('stock_positions_state.json'); "
-                "st = json.load(open(st_p)) if os.path.exists(st_p) else {}; "
-                "cleaned = {s: d for s, d in st.items() if d.get('contract') in held}; "
-                "json.dump(cleaned, open(st_p, 'w'), indent=2); "
-                "print(f'Purged {len(st) - len(cleaned)} ghost positions from state file.')"
-            ) + "\""
-            rc, out, err = self._run_ssh(vm, clean_cmd, timeout=30)
-            print(f"   {out or err}")
+            self.clean_ghosts([vm])
 
             # 4. Restart Services
             print("4. Restarting systemd services...")
@@ -282,16 +295,18 @@ class VmOperations:
 
             # Validate Kite session on VM
             print("3. Validating Kite session authentication on VM...")
-            verify_py = (
-                f"import sys; sys.path.insert(0, '{vm['repo_dir']}'); "
-                "from kiteconnect import KiteConnect; "
-                "from common.session import load_kite_session; "
-                "ak, at = load_kite_session(); "
-                "kite = KiteConnect(api_key=ak); kite.set_access_token(at); "
-                "p = kite.profile(); "
-                "print(f\"AUTH_OK: User {p.get('user_id')} ({p.get('user_name')})\")"
-            )
-            rc, out, err = self._run_ssh(vm, f"{vm['py_cmd']} -c \"{verify_py}\"", timeout=30)
+            verify_py = f"""
+import sys
+sys.path.insert(0, '{vm['repo_dir']}')
+from kiteconnect import KiteConnect
+from common.session import load_kite_session
+ak, at = load_kite_session()
+kite = KiteConnect(api_key=ak)
+kite.set_access_token(at)
+p = kite.profile()
+print(f"AUTH_OK: User {{p.get('user_id')}} ({{p.get('user_name')}})")
+"""
+            rc, out, err = self._run_ssh_python(vm, verify_py, timeout=30)
             if "AUTH_OK" in out:
                 print(f"   ✅ {out}")
             else:
@@ -346,37 +361,51 @@ class VmOperations:
             print(f"🧹 PURGING GHOST POSITIONS: {vm['name']} ({vm['ip']})")
             print("=" * 70)
 
-            clean_py = (
-                f"cd {vm['repo_dir']} && {vm['py_cmd']} -c \""
-                "import json, sqlite3, os; "
-                "from kiteconnect import KiteConnect; "
-                "from common.session import load_kite_session, ensure_kite_session; "
-                "from common.paths import TOKEN_FILE, monitor_file; "
-                "ak, at = load_kite_session(TOKEN_FILE); "
-                "kite = KiteConnect(api_key=ak); kite.set_access_token(at); "
-                "ensure_kite_session(kite); "
-                "held = {p.get('tradingsymbol'): p.get('quantity') for p in kite.positions().get('net', []) if p.get('quantity', 0) != 0}; "
-                "print(f'Held on broker: {held}'); "
-                "st_p = monitor_file('stock_positions_state.json'); "
-                "st = json.load(open(st_p)) if os.path.exists(st_p) else {}; "
-                "purged = [s for s, d in st.items() if d.get('contract') not in held]; "
-                "cleaned = {s: d for s, d in st.items() if d.get('contract') in held}; "
-                "json.dump(cleaned, open(st_p, 'w'), indent=2); "
-                "print(f'Purged {len(purged)} ghost positions from state file: {purged}'); "
-                "db_p = monitor_file('trades.sqlite3'); "
-                "conn = sqlite3.connect(db_p); c = conn.cursor(); "
-                "c.execute(\\\"SELECT id, symbol, contract FROM trades WHERE status IN ('ACTIVE', 'OPEN')\\\"); "
-                "rows = c.fetchall(); "
-                "updated = 0; "
-                "for r in rows: "
-                "    if r[2] not in held: "
-                "        c.execute(\\\"UPDATE trades SET status='FAILED' WHERE id=?\\\", (r[0],)); "
-                "        updated += 1; "
-                "conn.commit(); conn.close(); "
-                "print(f'Marked {updated} ghost SQLite trades as FAILED.')\""
-            )
-            rc, out, err = self._run_ssh(vm, clean_py, timeout=30)
-            print(out or err)
+            clean_py = f"""
+import sys, json, sqlite3, os
+sys.path.insert(0, '{vm['repo_dir']}')
+from kiteconnect import KiteConnect
+from common.session import load_kite_session, ensure_kite_session
+from common.paths import TOKEN_FILE, monitor_file
+
+try:
+    ak, at = load_kite_session(TOKEN_FILE)
+    kite = KiteConnect(api_key=ak)
+    kite.set_access_token(at)
+    ensure_kite_session(kite)
+    held = {{p.get('tradingsymbol'): p.get('quantity') for p in kite.positions().get('net', []) if p.get('quantity', 0) != 0}}
+    print(f'Held on broker: {{held}}')
+
+    st_p = monitor_file('stock_positions_state.json')
+    st = json.load(open(st_p)) if os.path.exists(st_p) else {{}}
+    purged = [s for s, d in st.items() if d.get('contract') not in held]
+    cleaned = {{s: d for s, d in st.items() if d.get('contract') in held}}
+    with open(st_p, 'w') as f:
+        json.dump(cleaned, f, indent=2)
+    print(f'Purged {{len(purged)}} ghost positions from state file: {{purged}}')
+
+    db_p = monitor_file('trades.sqlite3')
+    if os.path.exists(db_p):
+        conn = sqlite3.connect(db_p)
+        c = conn.cursor()
+        c.execute("SELECT id, symbol, contract FROM trades WHERE status IN ('ACTIVE', 'OPEN')")
+        rows = c.fetchall()
+        updated = 0
+        for r in rows:
+            if r[2] not in held:
+                c.execute("UPDATE trades SET status='FAILED' WHERE id=?", (r[0],))
+                updated += 1
+        conn.commit()
+        conn.close()
+        print(f'Marked {{updated}} ghost SQLite trades as FAILED.')
+except Exception as e:
+    print(f'Ghost purge error: {{e}}')
+"""
+            rc, out, err = self._run_ssh_python(vm, clean_py, timeout=30)
+            if out:
+                print(out)
+            if err:
+                print(f"[STDERR] {err}")
 
     def exec_cmd(self, vm_targets, command):
         """Run an arbitrary shell command on target VMs."""
