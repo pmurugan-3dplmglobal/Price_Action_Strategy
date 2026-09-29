@@ -313,14 +313,96 @@ class TestIssue111MacroGateAndSafety(unittest.TestCase):
         """Option 4: get_macro_gate_config loads dynamically and reflects input/program_config.json."""
         cfg = get_macro_gate_config(force_reload=True)
         self.assertTrue(cfg.get("enable"))
-        self.assertIn(cfg.get("mode"), ["TREND_FOLLOWING", "CONTRARIAN", "OFF"])
-        self.assertEqual(cfg.get("nifty_drop_threshold"), -0.25)
-        self.assertEqual(cfg.get("nifty_surge_threshold"), 0.25)
-        self.assertEqual(cfg.get("banknifty_drop_threshold"), -0.35)
-        self.assertEqual(cfg.get("banknifty_surge_threshold"), 0.35)
+        self.assertEqual(cfg.get("mode"), "TREND_FOLLOWING")
+        self.assertEqual(cfg.get("nifty_drop_threshold_pct"), -0.5)
+        self.assertEqual(cfg.get("nifty_surge_threshold_pct"), 0.5)
+        self.assertEqual(cfg.get("banknifty_drop_threshold_pct"), -0.75)
+        self.assertEqual(cfg.get("banknifty_surge_threshold_pct"), 0.75)
+        self.assertEqual(cfg.get("nifty_drop_threshold"), -0.5)
+        self.assertEqual(cfg.get("nifty_surge_threshold"), 0.5)
+        self.assertTrue(cfg.get("allow_rs_alpha_bypass"))
         self.assertTrue(cfg.get("allow_rs_alpha_exception"))
+        self.assertEqual(cfg.get("rs_min_tier"), "GOLD")
         self.assertEqual(cfg.get("rs_min_rvol"), 2.0)
+        self.assertEqual(cfg.get("rs_vwap_distance_pct"), 1.0)
         self.assertEqual(cfg.get("rs_min_vwap_dist_pct"), 1.0)
+
+    def test_13_rs_min_tier_configuration(self):
+        """Option 3 & 4: rs_min_tier dynamic qualification (GOLD vs SILVER)."""
+        cand_t2 = {
+            "symbol": "BAJFINANCE",
+            "tier": 2,
+            "tier_label": "TIER_2_CORE",
+            "tier_badge": "🥈 T2",
+            "rvol": 2.5,
+            "vwap_dist_pct": 1.8
+        }
+        # With rs_min_tier="GOLD", T2 is blocked
+        ok_gold, reason_gold = check_rs_alpha_exception(cand_t2, "CE", "BAJFINANCE", rs_min_tier="GOLD")
+        self.assertFalse(ok_gold)
+        self.assertIn("TIER_NOT_GOLD", reason_gold)
+
+        # With rs_min_tier="SILVER", T2 is permitted
+        ok_silver, reason_silver = check_rs_alpha_exception(cand_t2, "CE", "BAJFINANCE", rs_min_tier="SILVER")
+        self.assertTrue(ok_silver)
+        self.assertIn("RS_ALPHA_BYPASS", reason_silver)
+
+    def test_14_allow_rs_alpha_bypass_toggle(self):
+        """Option 4: When allow_rs_alpha_bypass is False, even T1 Gold outlier is blocked."""
+        mock_kite = MagicMock()
+        mock_kite.quote.return_value = {
+            "NSE:NIFTY 50": {"last_price": 24800.0, "ohlc": {"close": 25000.0}},  # -0.80% Crash
+            "NSE:NIFTY BANK": {"last_price": 53000.0, "ohlc": {"close": 53500.0}}
+        }
+        cand_gold = {
+            "symbol": "RELIANCE",
+            "tier": 1,
+            "tier_badge": "🥇 T1",
+            "rvol": 3.0,
+            "vwap_dist_pct": 2.0
+        }
+        # Explicit bypass disabled -> Must block
+        allowed, reason = evaluate_macro_index_gate(
+            mock_kite, "CE", "RELIANCE", candidate_meta=cand_gold,
+            mode="TREND_FOLLOWING", allow_rs_alpha_bypass=False
+        )
+        self.assertFalse(allowed)
+        self.assertIn("NIFTY 50 is down", reason)
+
+    def test_15_end_to_end_resolve_and_gate0b_simulation(self):
+        """End-to-End Simulation: Filtering multiple candidates during macro crash."""
+        mock_kite = MagicMock()
+        mock_kite.quote.return_value = {
+            "NSE:NIFTY 50": {"last_price": 24800.0, "ohlc": {"close": 25000.0}},  # -0.80% (crash < -0.5%)
+            "NSE:NIFTY BANK": {"last_price": 53000.0, "ohlc": {"close": 53500.0}}
+        }
+
+        candidates = [
+            # 1. Normal CE candidate (Tier 2, low RVOL) -> Should be blocked by crash
+            {"contract": "INFY26OCT1800CE", "symbol": "INFY", "side": "CE", "tier": 2, "rvol": 1.1, "vwap_dist_pct": 0.2},
+            # 2. RS Alpha Outperformer CE (Tier 1 Gold, RVOL 2.5x, VWAP +1.5%) -> Should bypass and pass!
+            {"contract": "RELIANCE26OCT3000CE", "symbol": "RELIANCE", "side": "CE", "tier": 1, "tier_badge": "🥇 T1", "rvol": 2.5, "vwap_dist_pct": 1.5},
+            # 3. PE candidate (direction aligned with crash) -> Should pass!
+            {"contract": "TCS26OCT4000PE", "symbol": "TCS", "side": "PE", "tier": 2, "rvol": 1.2, "vwap_dist_pct": -0.8},
+            # 4. Index CE candidate (cannot decouple from itself) -> Should be blocked!
+            {"contract": "NIFTY26OCT25000CE", "symbol": "NIFTY", "side": "CE", "tier": 1, "tier_badge": "🥇 T1", "rvol": 3.0, "vwap_dist_pct": 2.0}
+        ]
+
+        passed = []
+        for c in candidates:
+            ok, reason = evaluate_macro_index_gate(mock_kite, c["side"], c["symbol"], candidate_meta=c)
+            if ok:
+                passed.append((c["contract"], reason))
+
+        passed_contracts = [p[0] for p in passed]
+        self.assertNotIn("INFY26OCT1800CE", passed_contracts, "Ordinary CE must be blocked during crash")
+        self.assertIn("RELIANCE26OCT3000CE", passed_contracts, "RS Alpha CE outperformer must pass during crash")
+        self.assertIn("TCS26OCT4000PE", passed_contracts, "Trend-aligned PE must pass during crash")
+        self.assertNotIn("NIFTY26OCT25000CE", passed_contracts, "Index CE must never decouple from itself")
+
+        # Verify RS Alpha reason string on the outperformer
+        rel_reason = next(r for c, r in passed if c == "RELIANCE26OCT3000CE")
+        self.assertIn("RS_ALPHA_BYPASS", rel_reason)
 
 
 if __name__ == "__main__":

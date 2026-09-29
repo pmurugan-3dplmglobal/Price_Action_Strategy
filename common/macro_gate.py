@@ -36,12 +36,19 @@ _CONFIG_CACHE = {
 DEFAULT_MACRO_GATE_CONFIG = {
     "enable": True,
     "mode": "TREND_FOLLOWING",
-    "nifty_drop_threshold": -0.25,
-    "nifty_surge_threshold": 0.25,
-    "banknifty_drop_threshold": -0.35,
-    "banknifty_surge_threshold": 0.35,
+    "nifty_drop_threshold_pct": -0.5,
+    "nifty_surge_threshold_pct": 0.5,
+    "banknifty_drop_threshold_pct": -0.75,
+    "banknifty_surge_threshold_pct": 0.75,
+    "nifty_drop_threshold": -0.5,
+    "nifty_surge_threshold": 0.5,
+    "banknifty_drop_threshold": -0.75,
+    "banknifty_surge_threshold": 0.75,
+    "allow_rs_alpha_bypass": True,
     "allow_rs_alpha_exception": True,
+    "rs_min_tier": "GOLD",
     "rs_min_rvol": 2.0,
+    "rs_vwap_distance_pct": 1.0,
     "rs_min_vwap_dist_pct": 1.0
 }
 
@@ -69,7 +76,8 @@ def is_index_symbol(sym: str) -> bool:
 def get_macro_gate_config(force_reload: bool = False) -> Dict[str, Any]:
     """
     Loads macro gate configuration from input/program_config.json.
-    Caches parsed config against file mtime for instant, zero-restart configuration updates.
+    Supports both naming conventions (_pct and non-_pct, bypass and exception)
+    and caches parsed config against file mtime for instant, zero-restart updates.
     """
     global _CONFIG_CACHE
     cfg = dict(DEFAULT_MACRO_GATE_CONFIG)
@@ -103,20 +111,68 @@ def get_macro_gate_config(force_reload: bool = False) -> Dict[str, Any]:
 
         raw_gate = full.get("macro_market_gate", {})
         if isinstance(raw_gate, dict):
-            for k in (
-                "nifty_drop_threshold", "nifty_surge_threshold",
-                "banknifty_drop_threshold", "banknifty_surge_threshold",
-                "rs_min_rvol", "rs_min_vwap_dist_pct"
-            ):
-                if k in raw_gate:
+            # 1. NIFTY & BANKNIFTY drop / surge thresholds (support _pct and base keys)
+            for pct_k, base_k, def_val in [
+                ("nifty_drop_threshold_pct", "nifty_drop_threshold", -0.5),
+                ("nifty_surge_threshold_pct", "nifty_surge_threshold", 0.5),
+                ("banknifty_drop_threshold_pct", "banknifty_drop_threshold", -0.75),
+                ("banknifty_surge_threshold_pct", "banknifty_surge_threshold", 0.75)
+            ]:
+                val = None
+                if pct_k in raw_gate:
+                    val = raw_gate[pct_k]
+                elif base_k in raw_gate:
+                    val = raw_gate[base_k]
+                if val is not None:
                     try:
-                        cfg[k] = float(raw_gate[k])
+                        f_val = float(val)
+                        cfg[pct_k] = f_val
+                        cfg[base_k] = f_val
                     except (ValueError, TypeError):
                         pass
-            for k in ("enable", "allow_rs_alpha_exception"):
-                if k in raw_gate:
-                    v = raw_gate[k]
-                    cfg[k] = bool(v) if not isinstance(v, str) else v.lower() == "true"
+
+            # 2. VWAP distance threshold (support distance_pct and dist_pct)
+            vwap_val = None
+            if "rs_vwap_distance_pct" in raw_gate:
+                vwap_val = raw_gate["rs_vwap_distance_pct"]
+            elif "rs_min_vwap_dist_pct" in raw_gate:
+                vwap_val = raw_gate["rs_min_vwap_dist_pct"]
+            if vwap_val is not None:
+                try:
+                    f_vwap = float(vwap_val)
+                    cfg["rs_vwap_distance_pct"] = f_vwap
+                    cfg["rs_min_vwap_dist_pct"] = f_vwap
+                except (ValueError, TypeError):
+                    pass
+
+            # 3. RVOL threshold
+            if "rs_min_rvol" in raw_gate:
+                try:
+                    cfg["rs_min_rvol"] = float(raw_gate["rs_min_rvol"])
+                except (ValueError, TypeError):
+                    pass
+
+            # 4. Enable boolean
+            if "enable" in raw_gate:
+                v = raw_gate["enable"]
+                cfg["enable"] = bool(v) if not isinstance(v, str) else v.lower() == "true"
+
+            # 5. RS Alpha bypass boolean (support allow_rs_alpha_bypass and allow_rs_alpha_exception)
+            bypass_val = None
+            if "allow_rs_alpha_bypass" in raw_gate:
+                bypass_val = raw_gate["allow_rs_alpha_bypass"]
+            elif "allow_rs_alpha_exception" in raw_gate:
+                bypass_val = raw_gate["allow_rs_alpha_exception"]
+            if bypass_val is not None:
+                b_val = bool(bypass_val) if not isinstance(bypass_val, str) else bypass_val.lower() == "true"
+                cfg["allow_rs_alpha_bypass"] = b_val
+                cfg["allow_rs_alpha_exception"] = b_val
+
+            # 6. Minimum Tier
+            if "rs_min_tier" in raw_gate:
+                cfg["rs_min_tier"] = str(raw_gate["rs_min_tier"]).upper()
+
+            # 7. Mode
             if "mode" in raw_gate:
                 cfg["mode"] = str(raw_gate["mode"]).upper()
 
@@ -183,15 +239,16 @@ def get_macro_index_deltas(kite) -> Dict[str, Any]:
 def check_rs_alpha_exception(
     candidate_meta: Dict[str, Any],
     side: str,
-    symbol: str,
+    symbol: str = "",
     rs_min_rvol: float = 2.0,
     rs_min_vwap_dist_pct: float = 1.0,
-    kite = None
+    kite = None,
+    rs_min_tier: Any = "GOLD"
 ) -> Tuple[bool, str]:
     """
     Option 3: Evaluates whether an individual stock qualifies as an independent
     "Decoupled Alpha Outperformer":
-    - Tier 1 Gold (🥇 T1)
+    - Tier qualified (Default: 🥇 Tier 1 Gold; configurable via rs_min_tier)
     - RVOL >= rs_min_rvol (default 2.0x)
     - Spot is >= +rs_min_vwap_dist_pct above VWAP for CE, or <= -rs_min_vwap_dist_pct below VWAP for PE
     - Symbol is not a broad market index
@@ -202,27 +259,45 @@ def check_rs_alpha_exception(
     if not candidate_meta or not isinstance(candidate_meta, dict):
         return False, "NO_CANDIDATE_METADATA"
 
-    sym_clean = str(symbol or candidate_meta.get("symbol") or "").replace(" ", "").upper()
+    sym_candidate = str(candidate_meta.get("symbol") or "").replace(" ", "").upper()
+    sym_passed = str(symbol or "").replace(" ", "").upper()
+    sym_clean = sym_candidate or sym_passed
     if is_index_symbol(sym_clean):
         return False, f"INDEX_SYMBOL_NOT_ELIGIBLE ({sym_clean})"
 
-    # 1. Tier 1 Gold check
+    # 1. Tier check (Dynamic based on rs_min_tier)
     tier_val = candidate_meta.get("tier")
     tier_label = str(candidate_meta.get("tier_label") or "").upper()
     tier_badge = str(candidate_meta.get("tier_badge") or "")
-    is_t1 = (
-        tier_val == 1 or
-        str(tier_val) == "1" or
-        "TIER_1" in tier_label or
-        "GOLD" in tier_label or
-        "🥇" in tier_badge
-    )
-    if not is_t1:
-        return False, f"TIER_NOT_GOLD (tier={tier_val}, label={tier_label})"
+
+    tier_req = str(rs_min_tier or "GOLD").upper()
+    if tier_req in ("GOLD", "TIER_1", "1", "T1"):
+        is_tier_ok = (
+            tier_val == 1 or
+            str(tier_val) == "1" or
+            "TIER_1" in tier_label or
+            "GOLD" in tier_label or
+            "🥇" in tier_badge
+        )
+        tier_desc = "🥇 T1 Gold"
+    elif tier_req in ("SILVER", "TIER_2", "2", "T2"):
+        is_tier_ok = (
+            tier_val in (1, 2) or
+            str(tier_val) in ("1", "2") or
+            any(k in tier_label for k in ("TIER_1", "GOLD", "TIER_2", "SILVER")) or
+            any(k in tier_badge for k in ("🥇", "🥈"))
+        )
+        tier_desc = "🥈 T2 Silver / 🥇 T1 Gold"
+    else:
+        is_tier_ok = True
+        tier_desc = f"Tier {tier_val}"
+
+    if not is_tier_ok:
+        return False, f"TIER_NOT_GOLD (tier={tier_val}, label={tier_label}, required={tier_req})"
 
     # 2. RVOL check (must be >= rs_min_rvol)
     rvol = 0.0
-    for k in ("rvol", "rvol_abs", "vol_d_ratio", "spot_rvol"):
+    for k in ("rvol", "rvol_abs", "rvol_projected", "vol_d_ratio", "spot_rvol", "Spot_RVOL", "opt_rvol"):
         v = candidate_meta.get(k)
         if v is not None:
             try:
@@ -231,7 +306,7 @@ def check_rs_alpha_exception(
                 pass
 
     if rvol == 0.0:
-        badge_str = str(candidate_meta.get("opt_rvol_badge") or candidate_meta.get("rvol_badge") or "")
+        badge_str = str(candidate_meta.get("opt_rvol_badge") or candidate_meta.get("rvol_badge") or candidate_meta.get("badge") or "")
         if "RVOL" in badge_str:
             import re
             m = re.search(r"(\d+(\.\d+)?)x", badge_str, re.IGNORECASE)
@@ -246,7 +321,7 @@ def check_rs_alpha_exception(
 
     # 3. Spot vs intraday VWAP clearance check
     vwap_dist = None
-    for k in ("vwap_dist_pct", "spot_vwap_dist_pct"):
+    for k in ("vwap_dist_pct", "spot_vwap_dist_pct", "vwap_dist", "vwap_distance_pct"):
         v = candidate_meta.get(k)
         if v is not None:
             try:
@@ -260,7 +335,9 @@ def check_rs_alpha_exception(
             candidate_meta.get("spot_entry") or
             candidate_meta.get("spot_ltp") or
             candidate_meta.get("entry_spot") or
-            candidate_meta.get("close")
+            candidate_meta.get("spot_price") or
+            candidate_meta.get("close") or
+            candidate_meta.get("ltp")
         )
         vwap = (
             candidate_meta.get("spot_vwap") or
@@ -283,7 +360,7 @@ def check_rs_alpha_exception(
                 from trading_core import safe_kite_call
             q = safe_kite_call(kite.quote, [f"NSE:{sym_clean}"])
             if isinstance(q, dict):
-                q_item = q.get(f"NSE:{sym_clean}", {})
+                q_item = q.get(f"NSE:{sym_clean}", {}) or q.get(sym_clean, {})
                 ltp = float(q_item.get("last_price") or 0.0)
                 avg_p = float(q_item.get("average_price") or 0.0)
                 if ltp > 0 and avg_p > 0:
@@ -306,7 +383,7 @@ def check_rs_alpha_exception(
 
     # All criteria met!
     return True, (
-        f"RS_ALPHA_BYPASS (Decoupled Alpha Outperformer: {sym_clean} 🥇 T1 Gold, "
+        f"RS_ALPHA_BYPASS (Decoupled Alpha Outperformer: {sym_clean} {tier_desc}, "
         f"RVOL {rvol:.2f}x >= {rs_min_rvol:.2f}x, VWAP dist {vwap_dist:+.2f}% vs {rs_min_vwap_dist_pct:.2f}%; "
         f"macro index direction bypassed)"
     )
@@ -321,7 +398,9 @@ def evaluate_macro_index_gate(
     banknifty_drop_threshold: float = None,
     banknifty_surge_threshold: float = None,
     candidate_meta: Dict[str, Any] = None,
-    mode: str = None
+    mode: str = None,
+    allow_rs_alpha_bypass: bool = None,
+    rs_min_tier: Any = None
 ) -> Tuple[bool, str]:
     """
     Evaluates whether an option trade aligns with the macro market regime.
@@ -376,14 +455,19 @@ def evaluate_macro_index_gate(
     n_delta = deltas.get("NIFTY", 0.0)
     bn_delta = deltas.get("BANKNIFTY", 0.0)
 
-    n_drop = nifty_drop_threshold if nifty_drop_threshold is not None else float(cfg.get("nifty_drop_threshold", -0.25))
-    n_surge = nifty_surge_threshold if nifty_surge_threshold is not None else float(cfg.get("nifty_surge_threshold", 0.25))
-    bn_drop = banknifty_drop_threshold if banknifty_drop_threshold is not None else float(cfg.get("banknifty_drop_threshold", -0.35))
-    bn_surge = banknifty_surge_threshold if banknifty_surge_threshold is not None else float(cfg.get("banknifty_surge_threshold", 0.35))
+    n_drop = nifty_drop_threshold if nifty_drop_threshold is not None else float(cfg.get("nifty_drop_threshold_pct", cfg.get("nifty_drop_threshold", -0.5)))
+    n_surge = nifty_surge_threshold if nifty_surge_threshold is not None else float(cfg.get("nifty_surge_threshold_pct", cfg.get("nifty_surge_threshold", 0.5)))
+    bn_drop = banknifty_drop_threshold if banknifty_drop_threshold is not None else float(cfg.get("banknifty_drop_threshold_pct", cfg.get("banknifty_drop_threshold", -0.75)))
+    bn_surge = banknifty_surge_threshold if banknifty_surge_threshold is not None else float(cfg.get("banknifty_surge_threshold_pct", cfg.get("banknifty_surge_threshold", 0.75)))
 
-    allow_rs = bool(cfg.get("allow_rs_alpha_exception", True))
+    if allow_rs_alpha_bypass is not None:
+        allow_rs = bool(allow_rs_alpha_bypass)
+    else:
+        allow_rs = bool(cfg.get("allow_rs_alpha_bypass", cfg.get("allow_rs_alpha_exception", True)))
+
+    active_rs_tier = rs_min_tier or cfg.get("rs_min_tier", "GOLD")
     rs_min_rvol = float(cfg.get("rs_min_rvol", 2.0))
-    rs_min_vwap_dist = float(cfg.get("rs_min_vwap_dist_pct", 1.0))
+    rs_min_vwap_dist = float(cfg.get("rs_vwap_distance_pct", cfg.get("rs_min_vwap_dist_pct", 1.0)))
 
     blocked = False
     block_msg = ""
@@ -433,7 +517,8 @@ def evaluate_macro_index_gate(
                 symbol=symbol,
                 rs_min_rvol=rs_min_rvol,
                 rs_min_vwap_dist_pct=rs_min_vwap_dist,
-                kite=kite
+                kite=kite,
+                rs_min_tier=active_rs_tier
             )
             if rs_ok:
                 logging.info(f"[MACRO_GATE] RS Alpha Exception granted for {symbol}: {rs_msg}")

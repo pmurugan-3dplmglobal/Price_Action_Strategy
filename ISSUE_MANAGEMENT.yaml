@@ -52,7 +52,7 @@ issues:
     8. Added Entry Window Lock (09:45 - 14:45 IST) in stock engine and fast radar to avoid opening wide spreads and closing theta drag.
     9. Added pre-market freeze (< 09:15:30 AM) and empty position dictionary guard in trade_db.py to protect against transient broker disconnects.
   verification: |
-    1. Unit verification test scratch/test_issue111_macro_gate_and_safety_fixes.py passed 12/12 tests (100% OK), validating TREND_FOLLOWING, CONTRARIAN, OFF modes, RS Alpha exceptions, TTL caching, sl_distance floors, live cash prioritization, and 50% spread margin floors.
+    1. Unit verification test scratch/test_issue111_macro_gate_and_safety_fixes.py passed 15/15 tests (100% OK), validating TREND_FOLLOWING, CONTRARIAN, OFF modes, RS Alpha bypass exceptions, rs_min_tier (GOLD vs SILVER), allow_rs_alpha_bypass toggle, TTL caching, sl_distance floors, live cash prioritization, 50% spread margin floors, and end-to-end candidate filtering.
     2. Capital gate & profit lock test scratch/test_profit_lock_and_capital_gate.py passed 6/6 tests (100% OK).
     3. Full regression suite scratch/run_full_regression_test.py passed all 35 test suites (100% SUCCESS, zero regressions).
   status: RESOLVED
