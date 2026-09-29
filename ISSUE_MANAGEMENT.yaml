@@ -10,6 +10,42 @@ meta:
     recent_archived_batch: [FEATURE-031, FEATURE-030, FEATURE-029, ISSUE-084, ISSUE-083, ISSUE-082, ISSUE-081, ISSUE-080, FEATURE-036, FEATURE-035, FEATURE-034, FEATURE-033, ISSUE-054]
     key_archived_families: [ALGO_AUDIT_CVE, QUANT_ENHANCEMENTS, RADAR_LIFECYCLE, VCP_METRICS, SCANNER_DISCOVERY, SECURITY_CONFIG, ZERO_REGRESSION_AUDIT]
 issues:
+- id: ISSUE-112
+  title: Directional VWAP Alignment, Structural Support Hold, Opening Wick Protection, Stale Expiry Fix & In-Loop RMS Ghost Purge
+  severity: CRITICAL
+  category: Live Execution Governance, Price Action Geometry, Risk Management, Scanner Reliability
+  family: QUANT_ENHANCEMENTS
+  date_reported: '2026-09-29'
+  symptom: |
+    1. Theoretical vs Realized P&L Disconnect: Scanner recorded 74 winners out of 90 setups (82.2% win rate), but live trading accounts incurred net losses due to counter-trend traps (INFY 1000 CE -₹3,720, SBIN 960 CE -₹2,137) and missing explosive runners (MANKIND +146%, POLICYBZR -6% PE +72%, VBL +40%).
+    2. Category B Stale Expiry Bug: MANKIND prior-day anchor on 28-day OCT options was falsely marked as is_stale_expiry_ce=True due to an unindented breakout check in common/resolve.py, suppressing morning incubation.
+    3. Ghost Position Portfolio Lock: When orders were rejected by Zerodha RMS for margin/limits, the engine did not pop them from ACTIVE_POSITIONS. Over 49 ghost positions accumulated, exhausting MAX_CONCURRENT_POSITIONS (6) and triggering MUTUAL_EXCLUSIVITY which permanently blocked opposite-side trades.
+    4. Premature Opening Failsafe Liquidation: GAP_BREACH_CRITICAL_OVERRIDE evaluated at 09:15:03 AM on carried positions, causing wide auction bid-ask spreads to trigger market stopouts before the first 5-min candle stabilized.
+    5. False Directional Stagings: Dead-cat bounces below VWAP triggered loose SPOT_VWAP_RECLAIM (0.998 multiplier), staging crashing stocks like KFINTECH and HAL as Call options.
+    6. Indivisible High-Risk Rejections: For stocks with large lot sizes (MANKIND lot 225, POLICYBZR lot 350), naked option risk exceeded the single-lot 5% risk cap (₹5,000), forcing position_size=0 and discarding trades.
+  root_cause: |
+    1. common/resolve.py lines 2436-2438 were unindented outside `if (exp_d - now_d).days <= 1:`, checking df['high'].max() >= bm on all multi-day options.
+    2. stock_options_trade_engine.py only called reconcile_positions on startup; rejected orders remained in ACTIVE_POSITIONS without order status polling.
+    3. position_monitor.py lacked an opening stabilization delay for carried overnight trades.
+    4. evaluate_spot_confluence allowed c_close >= spot_vwap * 0.998 to qualify as reclaim without requiring a green close.
+    5. Single-lot risk budgeting lacked defined-risk Debit Spread auto-conversion for large-lot stocks.
+  affected_files:
+  - common/resolve.py
+  - Trade_Option/stock_options_trade_engine.py
+  - Trade_Option/app_option_Trade.py
+  - common/position_monitor.py
+  - ISSUE_MANAGEMENT.yaml
+  - MASTER_DOCUMENTATION.yaml
+  fix_applied: |
+    1. Directional Alignment: Enforced strict c_close >= spot_vwap with green close for CE, c_close <= spot_vwap with red close for PE. Added hard spot VWAP filter in scan_symbol unconditionally dropping opposing candidates.
+    2. Intraday EMA & Decoupled Regime Trap: Calculated EMA44 with min_periods=13; decoupled BEAR_SPOT_REGIME_TRAP to trigger whenever spot is below VWAP and below EMA13 (or EMA13 < EMA44).
+    3. Structural Support Hold: Required candle to test support (c_low <= spot_sl * 1.005), close above support with green rejection, and lower wick >= 0.3 * body_sz.
+    4. Order Attribution: Passed tag="options_bot" in all 1-Click Buy / dashboard manual orders.
+    5. Opening Wick Protection: Enforced 5-minute stabilization window (09:15-09:20) suppressing GAP_BREACH_CRITICAL_OVERRIDE on carried positions.
+    6. Stale Expiry Indentation: Indented prior-day breakout checks inside expiry comparison in common/resolve.py.
+    7. In-Loop RMS Ghost Purge & Reconcile: Added 1-second RMS rejection check in stock_options_trade_engine.py, periodic position reconciliation every 3 scan cycles, broker rejected order ID purging in reconcile_positions, and passed kite=kite to check_portfolio_risk_caps.
+    8. Auto-Spread Conversion: Auto-converts setups exceeding the 5% risk cap into defined-risk Debit Spreads, cutting capital risk by 50-60% to fit within budget.
+  status: RESOLVED
 - id: ISSUE-111
   title: Macro Market Regime Gate, Opening Gap Override Floor, Pre-Market Freeze & Ghost Order Purge
   severity: CRITICAL

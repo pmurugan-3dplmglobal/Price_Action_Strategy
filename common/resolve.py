@@ -136,9 +136,9 @@ def check_spot_anchor_confirmation(df_spot, side: str, spot_vwap: float = 0.0) -
     c_close = float(last_c.get('close', 0.0))
     last_price = c_close
 
-    # Calculate EMA13 and EMA44 on Spot
+    # Calculate EMA13 and EMA44 on Spot (using min_periods=13 to avoid collapsing ema44 into ema13 on shorter history)
     ema13 = float(df_spot['close'].ewm(span=13, adjust=False).mean().iloc[-1]) if len(df_spot) >= 13 else last_price
-    ema44 = float(df_spot['close'].ewm(span=44, adjust=False).mean().iloc[-1]) if len(df_spot) >= 44 else ema13
+    ema44 = float(df_spot['close'].ewm(span=44, adjust=False, min_periods=min(13, len(df_spot))).mean().iloc[-1]) if len(df_spot) >= 13 else ema13
 
     # Calculate Spot RVOL
     vol_sma20 = float(df_spot['volume'].rolling(20).mean().iloc[-1]) if len(df_spot) >= 20 and 'volume' in df_spot.columns else (float(df_spot['volume'].mean()) if 'volume' in df_spot.columns else 1.0)
@@ -149,8 +149,9 @@ def check_spot_anchor_confirmation(df_spot, side: str, spot_vwap: float = 0.0) -
 
     if side == "CE":
         # Hard Regime Block: Spot is in runaway bear trend below VWAP
-        if spot_vwap > 0 and last_price < spot_vwap * 0.995 and ema13 < ema44:
-            return False, "BEAR_SPOT_REGIME_TRAP"
+        if spot_vwap > 0 and last_price < spot_vwap:
+            if (last_price < spot_vwap * 0.998 and last_price < ema13) or (ema13 < ema44):
+                return False, "BEAR_SPOT_REGIME_TRAP"
 
         # Check 5 Bullish Anchors on Spot across recent window
         try:
@@ -197,8 +198,9 @@ def check_spot_anchor_confirmation(df_spot, side: str, spot_vwap: float = 0.0) -
 
     else:  # PE
         # Hard Regime Block: Spot is in runaway bull trend above VWAP
-        if spot_vwap > 0 and last_price > spot_vwap * 1.005 and ema13 > ema44:
-            return False, "BULL_SPOT_REGIME_TRAP"
+        if spot_vwap > 0 and last_price > spot_vwap:
+            if (last_price > spot_vwap * 1.002 and last_price > ema13) or (ema13 > ema44):
+                return False, "BULL_SPOT_REGIME_TRAP"
 
         # Check 5 Bearish Anchors on Spot across recent window
         try:
@@ -281,15 +283,23 @@ def evaluate_spot_confluence(side: str, is_d2: bool, current_spot: float, spot_v
                     tested_vwap = (c_low <= spot_vwap * 1.003)
                     # 2. Support Wick: Lower buying wick defending VWAP
                     has_support_action = (lower_wick >= 1.0 * body_sz) or (c_close >= c_open and lower_wick >= 0.3 * body_sz)
-                    # 3. Close: Closed above or at VWAP with green/neutral close
-                    closed_above_vwap = (c_close >= spot_vwap * 0.998)
+                    # 3. Close: Closed above or at VWAP with green close
+                    closed_above_vwap = (c_close >= spot_vwap and c_close >= c_open)
                     if tested_vwap and has_support_action and closed_above_vwap:
                         return True, "SPOT_VWAP_RECLAIM"
                 elif current_spot >= spot_vwap:
                     return True, "SPOT_VWAP_RECLAIM"
 
-                if spot_sl > 0 and current_spot >= spot_sl and (spot_vwap <= 0 or current_spot >= spot_vwap * 0.998):
-                    return True, "SPOT_SUPPORT_HOLD"
+                if spot_sl > 0 and (spot_vwap <= 0 or current_spot >= spot_vwap * 0.998):
+                    if df_spot is not None and not df_spot.empty and len(df_spot) >= 1:
+                        # True Structural Support Hold: Candle tested support, closed above support, green rejection with lower wick
+                        tested_sl = (c_low <= spot_sl * 1.005)
+                        held_sl = (c_close >= spot_sl and current_spot >= spot_sl)
+                        is_green_rejection = (c_close >= c_open and lower_wick >= 0.3 * body_sz)
+                        if (tested_sl or c_low <= spot_sl * 1.01) and held_sl and is_green_rejection:
+                            return True, "SPOT_SUPPORT_HOLD"
+                    elif current_spot >= spot_sl:
+                        return True, "SPOT_SUPPORT_HOLD"
                 return False, "NONE"
             elif spot_ema_trend:
                 return True, "SPOT_EMA_TREND"
@@ -317,15 +327,23 @@ def evaluate_spot_confluence(side: str, is_d2: bool, current_spot: float, spot_v
                     tested_vwap = (c_high >= spot_vwap * 0.997)
                     # 2. Rejection Wick: Upper selling wick pushing price down from VWAP
                     has_rejection_action = (upper_wick >= 1.0 * body_sz) or (c_close <= c_open and upper_wick >= 0.3 * body_sz)
-                    # 3. Close: Closed below or at VWAP with red/neutral close
-                    closed_below_vwap = (c_close <= spot_vwap * 1.002)
+                    # 3. Close: Closed below or at VWAP with red close
+                    closed_below_vwap = (c_close <= spot_vwap and c_close <= c_open)
                     if tested_vwap and has_rejection_action and closed_below_vwap:
                         return True, "SPOT_VWAP_REJECT"
                 elif current_spot <= spot_vwap:
                     return True, "SPOT_VWAP_REJECT"
 
-                if spot_sl > 0 and current_spot <= spot_sl and (spot_vwap <= 0 or current_spot <= spot_vwap * 1.002):
-                    return True, "SPOT_RESISTANCE_HOLD"
+                if spot_sl > 0 and (spot_vwap <= 0 or current_spot <= spot_vwap * 1.002):
+                    if df_spot is not None and not df_spot.empty and len(df_spot) >= 1:
+                        # True Structural Resistance Hold: Candle tested resistance, closed below resistance, red rejection with upper wick
+                        tested_res = (c_high >= spot_sl * 0.995)
+                        held_res = (c_close <= spot_sl and current_spot <= spot_sl)
+                        is_red_rejection = (c_close <= c_open and upper_wick >= 0.3 * body_sz)
+                        if (tested_res or c_high >= spot_sl * 0.99) and held_res and is_red_rejection:
+                            return True, "SPOT_RESISTANCE_HOLD"
+                    elif current_spot <= spot_sl:
+                        return True, "SPOT_RESISTANCE_HOLD"
                 return False, "NONE"
             elif spot_ema_trend:
                 return True, "SPOT_EMA_TREND"
@@ -1332,6 +1350,7 @@ def reconcile_positions(kite, registry, positions_dict, lock, engine, timeframe_
     """Cross-reference ACTIVE_POSITIONS against Kite open positions and DB."""
     today = dt.now().strftime("%Y-%m-%d")
     kite_symbols = set()
+    broker_rejected_oids = set()
     try:
         kite_pos = kite.positions()
         for plist in [kite_pos.get("day", []), kite_pos.get("net", [])]:
@@ -1341,6 +1360,15 @@ def reconcile_positions(kite, registry, positions_dict, lock, engine, timeframe_
                     kite_symbols.add(sym)
     except Exception as e:
         logging.warning(f"Kite position fetch for reconciliation failed: {e}")
+    try:
+        if kite and hasattr(kite, "orders"):
+            b_orders = kite.orders()
+            if isinstance(b_orders, list):
+                for bo in b_orders:
+                    if bo.get("status") in ("REJECTED", "CANCELLED"):
+                        broker_rejected_oids.add(str(bo.get("order_id")))
+    except Exception as bo_err:
+        logging.debug(f"Kite orders fetch for rejected reconciliation: {bo_err}")
     import trade_db
     try:
         trade_db.reconcile_broker_live_positions(kite)
@@ -1362,6 +1390,27 @@ def reconcile_positions(kite, registry, positions_dict, lock, engine, timeframe_
             positions_dict.pop(s, None)
         if stale_zero:
             logging.info(f"[RECONCILE] Purged {len(stale_zero)} ghost positions")
+
+        # Purge ghost positions whose orders were rejected or cancelled by broker RMS
+        if broker_rejected_oids:
+            rejected_ghosts = []
+            for s, p in list(positions_dict.items()):
+                o_id = str(p.get("order_id") or "")
+                o_ids = [str(x) for x in p.get("order_ids") or []]
+                if (o_id and o_id in broker_rejected_oids) or any(oid in broker_rejected_oids for oid in o_ids):
+                    if s not in kite_symbols:
+                        rejected_ghosts.append(s)
+            for s in rejected_ghosts:
+                logging.info(f"[RECONCILE] Purging RMS-rejected ghost position: {s}")
+                tid = positions_dict[s].get("trade_id")
+                if tid:
+                    try:
+                        trade_db.update_trade_status(tid, "FAILED", exit_reason="BROKER_ORDER_REJECTED")
+                    except Exception:
+                        pass
+                positions_dict.pop(s, None)
+            if rejected_ghosts:
+                logging.info(f"[RECONCILE] Purged {len(rejected_ghosts)} RMS-rejected ghost positions")
         stale = [s for s in positions_dict if s not in registry] + \
                 [s for s in positions_dict if s in registry and s not in kite_symbols and s not in db_active]
         for s in stale:
@@ -1959,6 +2008,11 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                             logging.info(f"[REGIME_TRAP_DROP] {symbol} {ce['tradingsymbol']}: Opposing spot regime BEAR_SPOT_REGIME_TRAP. Skipping CE candidate.")
                             continue
 
+                        # Directional Alignment Hard Gate: Block CE if Spot is below VWAP
+                        if spot_vwap > 0 and float(current_spot) < float(spot_vwap) * 0.998:
+                            logging.info(f"[DIRECTIONAL_ALIGNMENT_DROP] {symbol} {ce['tradingsymbol']}: Spot {current_spot:.2f} < Spot VWAP {spot_vwap:.2f} (-{abs((current_spot-spot_vwap)/spot_vwap)*100:.2f}%). Strictly blocking CE candidate.")
+                            continue
+
                         tier_ce = int(result_ce.get("tier", 2))
                         tier_label_ce = result_ce.get("tier_label", "TIER_2_CORE")
                         tier_badge_ce = result_ce.get("tier_badge", "🥈 T2")
@@ -2082,7 +2136,7 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                                 has_spot_anchor_ce_f = has_spot_anchor_ce_sym
                                 spot_anchor_name_ce_f = spot_anchor_name_ce_sym
 
-                                if spot_anchor_name_ce_f == "BEAR_SPOT_REGIME_TRAP":
+                                if spot_anchor_name_ce_f == "BEAR_SPOT_REGIME_TRAP" or (spot_vwap > 0 and float(current_spot) < float(spot_vwap) * 0.998):
                                     continue
 
                                 f_tier_ce = int(stage_ce.get("tier", 2))
@@ -2204,6 +2258,11 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                         # Hard Regime Trap: Block PE if Spot is in runaway bull trend above VWAP
                         if spot_anchor_name_pe == "BULL_SPOT_REGIME_TRAP":
                             logging.info(f"[REGIME_TRAP_DROP] {symbol} {pe['tradingsymbol']}: Opposing spot regime BULL_SPOT_REGIME_TRAP. Skipping PE candidate.")
+                            continue
+
+                        # Directional Alignment Hard Gate: Block PE if Spot is above VWAP
+                        if spot_vwap > 0 and float(current_spot) > float(spot_vwap) * 1.002:
+                            logging.info(f"[DIRECTIONAL_ALIGNMENT_DROP] {symbol} {pe['tradingsymbol']}: Spot {current_spot:.2f} > Spot VWAP {spot_vwap:.2f} (+{abs((current_spot-spot_vwap)/spot_vwap)*100:.2f}%). Strictly blocking PE candidate.")
                             continue
 
                         tier_pe = int(result_pe.get("tier", 2))
@@ -2329,7 +2388,7 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                                 has_spot_anchor_pe_f = has_spot_anchor_pe_sym
                                 spot_anchor_name_pe_f = spot_anchor_name_pe_sym
 
-                                if spot_anchor_name_pe_f == "BULL_SPOT_REGIME_TRAP":
+                                if spot_anchor_name_pe_f == "BULL_SPOT_REGIME_TRAP" or (spot_vwap > 0 and float(current_spot) > float(spot_vwap) * 1.002):
                                     continue
 
                                 f_tier_pe = int(stage_pe.get("tier", 2))
@@ -2432,10 +2491,9 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                             if opt_exp_ce:
                                 exp_d = dt.strptime(opt_exp_ce[:10], "%Y-%m-%d").date()
                                 if (exp_d - now_d).days <= 1:
-                                    is_stale_expiry_ce = True
-                            bm_ce = res_ce.get("AnchorHigh", res_ce["Close"])
-                            if not df_ce_a.empty and (float(df_ce_a.iloc[-1]["close"]) >= bm_ce or float(df_ce_a["high"].max()) >= bm_ce):
-                                is_stale_expiry_ce = True
+                                    bm_ce = res_ce.get("AnchorHigh", res_ce["Close"])
+                                    if not df_ce_a.empty and (float(df_ce_a.iloc[-1]["close"]) >= bm_ce or float(df_ce_a["high"].max()) >= bm_ce):
+                                        is_stale_expiry_ce = True
                     except Exception:
                         pass
 
@@ -2495,10 +2553,9 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                             if opt_exp_pe:
                                 exp_d = dt.strptime(opt_exp_pe[:10], "%Y-%m-%d").date()
                                 if (exp_d - now_d).days <= 1:
-                                    is_stale_expiry_pe = True
-                            bm_pe = res_pe.get("AnchorHigh", res_pe["Close"])
-                            if not df_pe_a.empty and (float(df_pe_a.iloc[-1]["close"]) >= bm_pe or float(df_pe_a["high"].max()) >= bm_pe):
-                                is_stale_expiry_pe = True
+                                    bm_pe = res_pe.get("AnchorHigh", res_pe["Close"])
+                                    if not df_pe_a.empty and (float(df_pe_a.iloc[-1]["close"]) >= bm_pe or float(df_pe_a["high"].max()) >= bm_pe):
+                                        is_stale_expiry_pe = True
                     except Exception:
                         pass
 
@@ -2739,7 +2796,8 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
             symbol=symbol,
             candidate_tier=best_trade.get("tier", 2),
             capital=cap_amount,
-            live_positions=active_positions
+            live_positions=active_positions,
+            kite=kite
         )
         best_trade["portfolio_risk_allowed"] = p_allowed
         best_trade["portfolio_risk_reason"] = p_reason

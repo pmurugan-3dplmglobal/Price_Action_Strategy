@@ -1976,6 +1976,18 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                     # catastrophic opening gap breaches (> 2x SL distance beyond SL)
                     gap_breach_critical = False
                     gap_magnitude = 0.0
+
+                    # ISSUE-112: Opening Wick Protection (09:15-09:20 Stabilization Window)
+                    # For carried positions (entry_date < today), suppress GAP_BREACH_CRITICAL_OVERRIDE
+                    # until 09:20:00 to prevent early opening auction spread spikes and single-tick outliers
+                    # from triggering false panic liquidations before the first 5-min candle stabilizes.
+                    is_opening_stabilization = False
+                    entry_date_str = str(pos.get("entry_time") or pos.get("staged_time") or "")[:10]
+                    today_str = get_ist_now(naive=True).strftime("%Y-%m-%d")
+                    now_hm = get_ist_now().strftime("%H:%M")
+                    if entry_date_str and entry_date_str < today_str and now_hm < "09:20":
+                        is_opening_stabilization = True
+
                     if live_ltp > 0 and current_sl > 0:
                         raw_dist = abs(entry_s - current_sl) if entry_s > 0 else (current_sl * 0.05)
                         if not is_stock:
@@ -1991,13 +2003,20 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                         elif not is_short_stock and live_ltp < current_sl:
                             gap_magnitude = current_sl - live_ltp
                         if gap_magnitude > (2.0 * sl_distance):
-                            gap_breach_critical = True
-                            direction_str = "above" if is_short_stock else "below"
-                            logging.warning(
-                                f"[FAILSAFE GAP OVERRIDE] {sym}: LTP {live_ltp:.2f} gapped "
-                                f"{gap_magnitude:.2f} {direction_str} SL {current_sl:.2f} (>{2.0}x SL distance {sl_distance:.2f}). "
-                                f"Triggering immediate exit despite failsafe window."
-                            )
+                            if is_opening_stabilization:
+                                logging.info(
+                                    f"[OPENING_STABILIZATION_GUARD] Suppressed early gap breach exit for carried position {sym} "
+                                    f"between 09:15-09:20 (now {now_hm}, gap {gap_magnitude:.2f} beyond SL {current_sl:.2f}). "
+                                    f"Waiting for opening 5m candle stabilization."
+                                )
+                            else:
+                                gap_breach_critical = True
+                                direction_str = "above" if is_short_stock else "below"
+                                logging.warning(
+                                    f"[FAILSAFE GAP OVERRIDE] {sym}: LTP {live_ltp:.2f} gapped "
+                                    f"{gap_magnitude:.2f} {direction_str} SL {current_sl:.2f} (>{2.0}x SL distance {sl_distance:.2f}). "
+                                    f"Triggering immediate exit despite failsafe window."
+                                )
                     
                     if gap_breach_critical:
                         sl_hit = True

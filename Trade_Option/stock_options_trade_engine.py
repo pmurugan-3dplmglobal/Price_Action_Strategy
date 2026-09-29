@@ -287,7 +287,16 @@ def _process_stock(kite, symbol, config, from_entry, to_entry, from_anchor, to_a
                        log_to_journal, spot_ltp=spot_ltp)
 
 
+_SCAN_CYCLE_COUNTER = 0
+
 def run_scan_cycle(kite, universe_mode="AUTO"):
+    global _SCAN_CYCLE_COUNTER
+    _SCAN_CYCLE_COUNTER += 1
+    if _SCAN_CYCLE_COUNTER % 3 == 0:
+        try:
+            reconcile_positions(kite)
+        except Exception as rec_err:
+            logging.debug(f"[PERIODIC_RECONCILE] Scan cycle reconcile error: {rec_err}")
     if NFO_INSTRUMENTS.empty:
         sync_instruments(kite)
     cfg_applied = load_program_config_for_engine("nifty50", [("strike_range", "STRIKE_RANGE"), ("strict_macro_gate", "STRICT_MACRO_GATE")])
@@ -854,6 +863,54 @@ def execute_highest_rr_trade(kite, staged):
                 max_single_lot_risk_pct=max_single_risk
             ))
 
+            if pos_size <= 0 and not spread_info:
+                # High-Risk Auto-Spread Conversion:
+                # If naked option risk per lot exceeds the 5% budget cap (e.g. MANKIND, POLICYBZR),
+                # attempt auto-converting to a defined-risk Debit Spread (buying ATM and selling OTM).
+                # This caps maximum risk to net debit, unlocking execution for high-conviction runners.
+                try:
+                    cand_dir = best.get("direction", "BULL")
+                    cand_side = best.get("side", "CE")
+                    sp_info_conv = resolve_option_spread(
+                        nfo_instruments=nfo_df,
+                        base_symbol=sym,
+                        spot_price=real_spot,
+                        step_size=strike_step,
+                        direction=cand_dir,
+                        target_price=real_spot_t1,
+                        side=cand_side
+                    )
+                    if sp_info_conv:
+                        leg2_c = sp_info_conv["leg2"]["contract"]
+                        l2_bid = 1.0
+                        if live_ok and kite:
+                            q_l2 = safe_kite_call(kite.quote, [f"NFO:{leg2_c}"])
+                            l2_bid = float(q_l2.get(f"NFO:{leg2_c}", {}).get("depth", {}).get("buy", [{}])[0].get("price", 0.0) or q_l2.get(f"NFO:{leg2_c}", {}).get("last_price", 0.0))
+                        if l2_bid > 0:
+                            spread_info = sp_info_conv
+                            contract = spread_info["leg1"]["contract"]
+                            option_token = spread_info["leg1"]["token"]
+                            target_strike = spread_info["leg1"]["strike"]
+                            l1_p = float(spread_info.get("leg1", {}).get("entry_price", cp))
+                            l2_p = float(spread_info.get("leg2", {}).get("entry_price", 0.0))
+                            net_debit = max(1.0, l1_p - l2_p)
+                            pos_size = calculate_position_size(
+                                spot_price=l1_p,
+                                stop_loss=l2_p,
+                                capital=cap_val,
+                                risk_percent=float(cfg_eng.get("MAX_RISK_PERCENT") or 1.0),
+                                lot_size=lot_sz,
+                                is_option=True,
+                                tier=c_tier,
+                                allow_zero=True,
+                                allow_single_lot_conviction=True,
+                                max_single_lot_risk_pct=max_single_risk
+                            )
+                            if pos_size > 0:
+                                logging.info(f"🛡️ [AUTO_SPREAD_RESCUE] High-risk setup {sym} auto-converted to Debit Spread: {contract} x{pos_size} lots (Net debit: ₹{net_debit:.2f} vs naked risk)")
+                except Exception as auto_sp_err:
+                    logging.debug(f"Auto spread conversion exception for {sym}: {auto_sp_err}")
+
             if pos_size <= 0:
                 logging.warning(f"[RISK_BUDGET_EXCEEDED] Trade rejected for {sym} ({contract}): Position size is 0 lots (Risk per lot exceeds capital risk budget).")
                 continue
@@ -1218,6 +1275,27 @@ def execute_highest_rr_trade(kite, staged):
                     if pos.get("trade_id"):
                         trade_db.update_trade(pos["trade_id"], {"order_id": str(oid), "order_status": "OPEN"})
                     save_state()
+
+                    # Immediate RMS Rejection Guard:
+                    # Give Kite RMS 1.0 second to process the order. If the broker immediately rejects
+                    # (e.g. margin shortfall, price circuit bounds), purge from ACTIVE_POSITIONS to prevent ghost position lock.
+                    try:
+                        time.sleep(1.0)
+                        if kite and hasattr(kite, "order_history"):
+                            hist = kite.order_history(str(oid))
+                            if hist and isinstance(hist, list):
+                                latest_st = hist[-1].get("status")
+                                if latest_st in ("REJECTED", "CANCELLED"):
+                                    rej_msg = hist[-1].get("status_message", "Order rejected by broker RMS")
+                                    logging.warning(f"[IMMEDIATE_RMS_REJECT_PURGE] Order {oid} for {contract} rejected by RMS: {rej_msg}. Evicting ghost position immediately.")
+                                    with position_lock:
+                                        ACTIVE_POSITIONS.pop(sym, None)
+                                    if pos.get("trade_id"):
+                                        trade_db.update_trade(pos["trade_id"], {"status": "FAILED", "exit_reason": f"RMS_REJECTED_{rej_msg}"})
+                                    save_state()
+                                    continue
+                    except Exception as rej_check_err:
+                        logging.debug(f"Immediate RMS rejection check exception: {rej_check_err}")
 
                     if spread_info:
                         # P2: Sequential Spread Fill Confirmation

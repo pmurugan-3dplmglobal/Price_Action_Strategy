@@ -54,6 +54,7 @@ meta:
     - Institutional Adaptive Index Entry Window (DTE-Aware 13:30 vs 15:00 IST Cutoff, Late-Day Conviction R:R >= 2.0 Guard & Post-14:00 Spread Preference) (ISSUE-106)
     - Leg 1 / Leg 2 Debit Spread Rollback & Freeze-Sliced Emergency Unwind across Manual 1-Click Buy & Auto Engines (ISSUE-107)
     - Live Macro Market Regime Direction Gate (NIFTY/BANKNIFTY Tick Delta), Institutional Relative Strength (RS) Alpha Bypass Exception, Configurable Modes (TREND_FOLLOWING/CONTRARIAN/OFF), Opening Gap Breakeven Floor, Pre-Market Freeze & Ghost Order Purge (ISSUE-111)
+    - Directional Alignment Hard VWAP Gate, Intraday EMA Decoupling, Structural Support/Resistance Hold, Opening Wick Protection (09:15-09:20), Stale Expiry Indentation Fix, In-Loop RMS Ghost Order Purge & Auto-Spread Conversion for High-Risk Lots (ISSUE-112)
 
 architecture:
   diagram: |
@@ -510,6 +511,9 @@ verification_and_quality_assurance:
   profit_lock_and_capital_gate_suite: "scratch/test_profit_lock_and_capital_gate.py — 6/6 Unit Tests Passing (100% Success Rate)"
   ast_syntax_integrity: "100% Python files parsed with zero syntax errors"
   recent_major_issues_resolved:
+    - id: "ISSUE-112"
+      title: "Directional Alignment Hard VWAP Gate, Intraday EMA Decoupling, Structural Support/Resistance Hold, Opening Wick Protection (09:15-09:20), Stale Expiry Indentation Fix, In-Loop RMS Ghost Order Purge & Auto-Spread Conversion"
+      status: "RESOLVED"
     - id: "ISSUE-111"
       title: "Macro Market Regime Gate, RS Alpha Bypass Exception (Option 3), Configurable Modes (Option 4), sl_distance Floor & 50% Spread Floor"
       status: "RESOLVED"

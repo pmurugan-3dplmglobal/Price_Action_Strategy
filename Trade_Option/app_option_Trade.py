@@ -2241,7 +2241,8 @@ def api_buy_scanned_trade():
                             quantity=l1_qty,
                             order_type=_kite_session.ORDER_TYPE_LIMIT,
                             price=price,
-                            product=prod
+                            product=prod,
+                            tag="options_bot"
                         )
                         placed_leg1_oids.append(str(oid))
                     order_id = placed_leg1_oids[0]
@@ -2264,7 +2265,8 @@ def api_buy_scanned_trade():
                             quantity=lot_size,
                             order_type=_kite_session.ORDER_TYPE_LIMIT,
                             price=price,
-                            product=prod
+                            product=prod,
+                            tag="options_bot"
                         )
                         placed_leg1_oids = [str(order_id)]
                         logging.info(f"[1-CLICK BUY] Placed After Market Order (AMO) for {contract} on {exch} (Order ID: {order_id})")
@@ -2322,7 +2324,8 @@ def api_buy_scanned_trade():
                                 quantity=l2_qty,
                                 order_type=leg2_otype,
                                 price=leg2_limit if leg2_limit > 0 else None,
-                                product=prod
+                                product=prod,
+                                tag="options_bot"
                             )
                             leg2_placed.append(str(oid2))
                         leg2_order_id = leg2_placed[0]
