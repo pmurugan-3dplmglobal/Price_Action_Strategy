@@ -29,13 +29,14 @@
   "macro_market_gate": {
     "enable": true,
     "mode": "TREND_FOLLOWING",
-    "nifty_drop_threshold": -0.25,
-    "nifty_surge_threshold": 0.25,
-    "banknifty_drop_threshold": -0.35,
-    "banknifty_surge_threshold": 0.35,
-    "allow_rs_alpha_exception": true,
+    "nifty_drop_threshold_pct": -0.5,
+    "nifty_surge_threshold_pct": 0.5,
+    "banknifty_drop_threshold_pct": -0.75,
+    "banknifty_surge_threshold_pct": 0.75,
+    "allow_rs_alpha_bypass": true,
+    "rs_min_tier": "GOLD",
     "rs_min_rvol": 2.0,
-    "rs_min_vwap_dist_pct": 1.0
+    "rs_vwap_distance_pct": 1.0
   },
   "order_management": {
     "enable_stale_order_cancellation": true,

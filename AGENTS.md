@@ -95,14 +95,21 @@ AGY must perform exhaustive, 8-dimensional forensic audits whenever investigatin
 | **Stock Scanners** | CLI / Daemon | `Trade_Stock/stock_reversal_scanner.py` | Single real impl driven by `PROFILE`. Wrappers: `stock_bullish_reversal_scanner.py`, `stock_bearish_reversal_scanner.py` |
 | **Auto Exporter** | Scheduled | `Trade_Option/automated_strategy_exporter.py` | Invoked via `run_automated_export.bat` / daemon |
 | **Shared Core** | Library | `common/` (`trading_core.py`, `paths.py`, `trade_db.py`, etc.) | Centralized re-export hub and domain logic |
+| **Production Tools** | CLI Utilities | `tools/` (`vm_ops.py`, `forensic_auditor.py`, `pattern_inspector.py`) | Reusable VM operations, multi-target diagnostics, and live pattern inspection |
 
 - **UI Templates**: Rendered via external template files (`templates/index.html`). Modify HTML/JS directly without editing Python app code.
-- **Canonical Paths**: Always import file targets from `common/paths.py` (`SCAN_DISPLAY_*`, `TRADES_DB`, `TOKEN_FILE`, etc.).
+- **Canonical Paths**: Always import file targets from `common/paths.py` (`SCAN_DISPLAY_*`, `TRADES_DB`, `TOKEN_FILE`, `TOOLS_DIR`, etc.).
 - **Process Isolation**: Dashboards launch scanners as separate processes. Never import both bull and bear scanner wrappers into the same Python process.
+
+## Operational & Diagnostic CLI Commands
+
+- **VM Management**: `python tools/vm_ops.py --status`, `python tools/vm_ops.py --deploy`, `python tools/vm_ops.py --restart all`, `python tools/vm_ops.py --sync-token`
+- **Trade & Order Forensics**: `python tools/forensic_auditor.py --symbol <SYM> --remote`, `python tools/forensic_auditor.py --today`, `python tools/forensic_auditor.py --margins`, `python tools/forensic_auditor.py --clean-ghosts`
+- **Pattern Inspection**: `python tools/pattern_inspector.py --symbol <SYM> --timeframe 15minute`, `python tools/pattern_inspector.py --contract <CNT>`
 
 ## Verification Commands
 
 - **AST Syntax Check**: `python -c "import ast; ast.parse(open('FILE', encoding='utf-8').read())"`
 - **Import Smoke Test**: `python -c "import Trade_Option.app_option_Trade, Trade_Stock.app_Stock_Trade, Trade_Option.index_options_trade_engine, Trade_Option.stock_options_trade_engine, common.trading_core"`
 - **Unit Verification Suites**: `python scratch/test_institutional_enhancements.py` (5/5), `python scratch/test_parity_alignment.py` (4/4), `python scratch/test_vcp_metrics.py` (4/4), `python scratch/test_spread_liquidity_reconciler.py` (7/7), `python scratch/test_cve_fixes.py` (5/5), `python scratch/test_vix_portfolio_volume.py` (47/47).
-- **Regression Suite**: `python scratch/run_full_regression_test.py` (Validates all 21 test suites: imports, Kite session, scanner configs, serializers, trade DB invariants, paths, and parity).
+- **Regression Suite**: `python scratch/run_full_regression_test.py` (Validates all 35 test suites: imports, Kite session, scanner configs, serializers, trade DB invariants, paths, and parity).

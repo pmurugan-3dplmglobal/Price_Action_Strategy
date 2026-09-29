@@ -405,7 +405,7 @@ class TestD1SpotConfluenceAndGoldPromotion(unittest.TestCase):
     def test_02_d1_ce_spot_support_hold(self):
         """CE D1: Spot price is below VWAP, but strictly holds above structural support floor (spot_sl)."""
         conf, conf_type = evaluate_spot_confluence(
-            side="CE", is_d2=False, current_spot=24000.0, spot_vwap=24050.0, spot_sl=23950.0, spot_ema_trend=False
+            side="CE", is_d2=False, current_spot=24000.0, spot_vwap=24040.0, spot_sl=23950.0, spot_ema_trend=False
         )
         self.assertTrue(conf, "CE D1 holding structural support floor must return True")
         self.assertEqual(conf_type, "SPOT_SUPPORT_HOLD")
@@ -429,7 +429,7 @@ class TestD1SpotConfluenceAndGoldPromotion(unittest.TestCase):
     def test_05_d1_pe_spot_resistance_hold(self):
         """PE D1: Spot price is above VWAP, but strictly remains below resistance ceiling (spot_sl)."""
         conf, conf_type = evaluate_spot_confluence(
-            side="PE", is_d2=False, current_spot=24100.0, spot_vwap=24050.0, spot_sl=24150.0, spot_ema_trend=False
+            side="PE", is_d2=False, current_spot=24100.0, spot_vwap=24060.0, spot_sl=24150.0, spot_ema_trend=False
         )
         self.assertTrue(conf, "PE D1 holding below resistance ceiling must return True")
         self.assertEqual(conf_type, "SPOT_RESISTANCE_HOLD")

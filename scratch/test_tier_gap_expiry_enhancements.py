@@ -79,7 +79,7 @@ check('Default tier = 1 (20 shares)', s_def == 20)
 lots_t1 = calculate_position_size(100.0, 99.8, capital=100000.0, risk_percent=1.0, lot_size=25, is_option=True, tier=1)
 check('Option T1 25% cap enforces 10 lots (Rs 25,000 max)', lots_t1 == 10)
 
-lots_t2 = calculate_position_size(100.0, 99.8, capital=100000.0, risk_percent=1.0, lot_size=25, is_option=True, tier=2)
+lots_t2 = calculate_position_size(100.0, 99.8, capital=100000.0, risk_percent=1.0, lot_size=25, is_option=True, tier=2, allow_single_lot_conviction=False)
 check('Option T2 25% cap on 70k capital enforces 7 lots (Rs 17,500 max)', lots_t2 == 7)
 
 lots_t3 = calculate_position_size(100.0, 99.8, capital=100000.0, risk_percent=1.0, lot_size=25, is_option=True, tier=3)
@@ -200,26 +200,26 @@ with patch.object(resolve, "get_ist_date", return_value=today_d), \
     res_1000 = resolve.resolve_option_strikes(mock_instruments.copy(), "NIFTY", 24500.0, 50, "CE", n_range=0)
     check('0DTE morning (10:00 IST) selects today expiry (NIFTY2691024500CE)', res_1000[0]["tradingsymbol"] == "NIFTY2691024500CE")
 
-# 3.2 0DTE afternoon before threshold (13:29:59 IST) -> Today's expiry
-t_1329 = datetime.combine(today_d, datetime_time(13, 29, 59))
+# 3.2 0DTE morning before threshold (11:29:59 IST) -> Today's expiry
+t_1129 = datetime.combine(today_d, datetime_time(11, 29, 59))
 with patch.object(resolve, "get_ist_date", return_value=today_d), \
-     patch.object(resolve, "get_ist_now", return_value=t_1329):
-    res_1329 = resolve.resolve_option_strikes(mock_instruments.copy(), "NIFTY", 24500.0, 50, "CE", n_range=0)
-    check('0DTE afternoon (13:29:59 IST) stays on today expiry', res_1329[0]["tradingsymbol"] == "NIFTY2691024500CE")
+     patch.object(resolve, "get_ist_now", return_value=t_1129):
+    res_1129 = resolve.resolve_option_strikes(mock_instruments.copy(), "NIFTY", 24500.0, 50, "CE", n_range=0)
+    check('0DTE morning before threshold (11:29:59 IST) stays on today expiry', res_1129[0]["tradingsymbol"] == "NIFTY2691024500CE")
 
-# 3.3 0DTE afternoon at threshold (13:30:00 IST) -> MUST ROLL OVER TO NEXT WEEK!
+# 3.3 0DTE at threshold (11:30:00 IST) -> MUST ROLL OVER TO NEXT WEEK!
+t_1130 = datetime.combine(today_d, datetime_time(11, 30, 0))
+with patch.object(resolve, "get_ist_date", return_value=today_d), \
+     patch.object(resolve, "get_ist_now", return_value=t_1130):
+    res_1130 = resolve.resolve_option_strikes(mock_instruments.copy(), "NIFTY", 24500.0, 50, "CE", n_range=0)
+    check('0DTE at threshold (11:30:00 IST) rolls over to next week (NIFTY2691724500CE)', res_1130[0]["tradingsymbol"] == "NIFTY2691724500CE")
+
+# 3.4 0DTE afternoon at 13:30:00 IST -> MUST ROLL OVER TO NEXT WEEK!
 t_1330 = datetime.combine(today_d, datetime_time(13, 30, 0))
 with patch.object(resolve, "get_ist_date", return_value=today_d), \
      patch.object(resolve, "get_ist_now", return_value=t_1330):
     res_1330 = resolve.resolve_option_strikes(mock_instruments.copy(), "NIFTY", 24500.0, 50, "CE", n_range=0)
     check('0DTE afternoon (13:30:00 IST) rolls over to next week (NIFTY2691724500CE)', res_1330[0]["tradingsymbol"] == "NIFTY2691724500CE")
-
-# 3.4 0DTE afternoon at 13:35:00 IST -> MUST ROLL OVER TO NEXT WEEK!
-t_1335 = datetime.combine(today_d, datetime_time(13, 35, 0))
-with patch.object(resolve, "get_ist_date", return_value=today_d), \
-     patch.object(resolve, "get_ist_now", return_value=t_1335):
-    res_1335 = resolve.resolve_option_strikes(mock_instruments.copy(), "NIFTY", 24500.0, 50, "CE", n_range=0)
-    check('0DTE afternoon (13:35:00 IST) rolls over to next week (NIFTY2691724500CE)', res_1335[0]["tradingsymbol"] == "NIFTY2691724500CE")
 
 # 3.5 Non-expiry day (1 day remaining) at 14:15 IST -> STAYS ON CURRENT EXPIRY
 d_wed = today_d - timedelta(days=1)

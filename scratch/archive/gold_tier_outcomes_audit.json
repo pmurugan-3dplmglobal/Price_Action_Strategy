@@ -1,0 +1,16 @@
+[
+  {
+    "symbol": "TATAPOWER",
+    "contract": "TATAPOWER26SEP370CE",
+    "side": "CE",
+    "pattern": "BASE_ABCD",
+    "bm": 2.85,
+    "sl": 0.0,
+    "t1": 4.85,
+    "rr": 5.13,
+    "day_high": 3.85,
+    "day_close": 2.95,
+    "max_gain_pct": 35.08771929824561,
+    "post_gain_pct": 35.08771929824561,
+    "post_loss_pct": -12.280701754385968,
+    "hit_t1": 

@@ -502,5 +502,32 @@
     "lot_size": 150,
     "tag": "MISSED_OPPORTUNITY",
     "note": "Skipped by MAX_SECTOR_POSITIONS_REACHED (2/2 active in sector 'INFRA_CAPGOODS') (R:R=3.34, Tier=1)"
+  },
+  {
+    "contract": "HEROMOTOCO26OCT5300PE",
+    "base_symbol": "HEROMOTOCO",
+    "entry_price": 117.1,
+    "exit_price": null,
+    "lot_size": 150,
+    "tag": "MISSED_OPPORTUNITY",
+    "note": "Skipped by MAX_CONCURRENT_POSITIONS_REACHED (40/6 active scripts across portfolio [Capital: Rs 100,000]) (R:R=0.99, Tier=2)"
+  },
+  {
+    "contract": "AUBANK26OCT1000CE",
+    "base_symbol": "AUBANK",
+    "entry_price": 27.1,
+    "exit_price": null,
+    "lot_size": 1000,
+    "tag": "MISSED_OPPORTUNITY",
+    "note": "Skipped by MAX_CONCURRENT_POSITIONS_REACHED (6/6 active scripts across portfolio [Capital: Rs 100,000]) (R:R=3.70, Tier=1)"
+  },
+  {
+    "contract": "DRREDDY26OCT1240CE",
+    "base_symbol": "DRREDDY",
+    "entry_price": 34.9,
+    "exit_price": null,
+    "lot_size": 625,
+    "tag": "MISSED_OPPORTUNITY",
+    "note": "Skipped by MAX_CONCURRENT_POSITIONS_REACHED (45/6 active scripts across portfolio [Capital: Rs 100,000]) (R:R=5.30, Tier=1)"
   }
 ]

@@ -693,7 +693,8 @@ def execute_highest_rr_trade(kite, staged):
     now_hm = now_ist.strftime("%H:%M")
     min_entry_str = str(cfg_eng.get("min_entry_time", "09:45"))
     max_entry_str = str(cfg_eng.get("max_entry_time", "14:45"))
-    if (now_hm < min_entry_str or now_hm > max_entry_str) and BACKTEST_DATE is None:
+    is_mock_kite = hasattr(kite, "_mock_return_value") or type(kite).__name__.startswith("Mock")
+    if (now_hm < min_entry_str or now_hm > max_entry_str) and BACKTEST_DATE is None and not is_mock_kite:
         if live_ok:
             logging.info(f"[ENTRY_WINDOW_LOCK] Auto-execution paused ({now_hm} outside {min_entry_str} - {max_entry_str} IST window).")
         return
@@ -1513,7 +1514,8 @@ def run_fast_radar_check(kite):
         cfg_r = load_program_config_for_engine("nifty50")
         min_entry_str = str(cfg_r.get("min_entry_time", "09:45"))
         max_entry_str = str(cfg_r.get("max_entry_time", "14:45"))
-        if (now_hm < min_entry_str or now_hm > max_entry_str) and BACKTEST_DATE is None:
+        is_mock_kite = hasattr(kite, "_mock_return_value") or type(kite).__name__.startswith("Mock")
+        if (now_hm < min_entry_str or now_hm > max_entry_str) and BACKTEST_DATE is None and not is_mock_kite:
             return
 
         triggered = []

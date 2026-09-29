@@ -1,4 +1,4 @@
-﻿import os, sys, pandas as pd
+import os, sys, pandas as pd
 COMMON_DIR = r"G:\Poovendan\AI\Trading\Share\ReadyToDeploy\Prod_code_01\Price_Action_Strategy\common"
 sys.path.insert(0, COMMON_DIR)
 import paths

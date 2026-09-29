@@ -1,0 +1,50 @@
+import subprocess
+import time
+
+KEY = r"G:\Poovendan\AI\Trading\Cloud\Oracle_Cloud\ssh-key-2026-08-05.key"
+vms = [
+    ("Poovendan (VM 1)", "140.245.197.71", "/home/opc/Price_Action_Strategy", "/home/opc/Price_Action_Strategy/venv/bin/python"),
+    ("Bhavani (VM 2)", "129.225.69.131", "/home/trade/Trade_Kite/Price_Action_Strategy", "/home/trade/Trade_Kite/Price_Action_Strategy/venv/bin/python")
+]
+
+for name, ip, repo_dir, py_cmd in vms:
+    print(f"\n{'=' * 65}")
+    print(f"Deploying ISSUE-086 to {name} ({ip})...")
+    print(f"{'=' * 65}")
+
+    # 1. Clean scratch untracked files & Git pull
+    cmd_pull = [
+        "ssh", "-i", KEY, "-o", "StrictHostKeyChecking=no", f"opc@{ip}",
+        f"cd {repo_dir} && sudo git stash && sudo git pull origin master"
+    ]
+    res_pull = subprocess.run(cmd_pull, capture_output=True, text=True, timeout=30)
+    print("GIT PULL OUTPUT:")
+    print((res_pull.stdout or res_pull.stderr).strip())
+
+    # 2. Syntax smoke check
+    cmd_smoke = [
+        "ssh", "-i", KEY, "-o", "StrictHostKeyChecking=no", f"opc@{ip}",
+        f"cd {repo_dir} && {py_cmd} -c \"import ast; [ast.parse(open(f, encoding='utf-8').read()) for f in ['common/patterns_bull.py', 'common/patterns_bear.py', 'common/position_monitor.py', 'Trade_Option/index_options_trade_engine.py', 'common/pattern_funnel.py']]; print('AST SYNTAX OK ON VM')\""
+    ]
+    res_smoke = subprocess.run(cmd_smoke, capture_output=True, text=True, timeout=20)
+    print("SMOKE TEST OUTPUT:")
+    print((res_smoke.stdout or res_smoke.stderr).strip())
+
+    # 3. Restart systemd services
+    cmd_restart = [
+        "ssh", "-i", KEY, "-o", "StrictHostKeyChecking=no", f"opc@{ip}",
+        "sudo systemctl restart trading-options trading-stock trading-export"
+    ]
+    res_restart = subprocess.run(cmd_restart, capture_output=True, text=True, timeout=30)
+    print("SERVICES RESTARTED.")
+
+    time.sleep(3)
+
+    # 4. Check services status
+    cmd_status = [
+        "ssh", "-i", KEY, "-o", "StrictHostKeyChecking=no", f"opc@{ip}",
+        "systemctl is-active trading-options trading-stock trading-export"
+    ]
+    res_status = subprocess.run(cmd_status, capture_output=True, text=True, timeout=15)
+    print("SERVICES STATUS:")
+    print((res_status.stdout or res_status.stderr).strip())

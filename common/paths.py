@@ -9,6 +9,7 @@ for p in [PROJECT_ROOT, COMMON_DIR]:
 
 # Directory for temporary scratch files (validation artifacts, etc.)
 SCRATCH_DIR = os.path.join(PROJECT_ROOT, "scratch")
+TOOLS_DIR = os.path.join(PROJECT_ROOT, "tools")
 
 
 # Canonical directory paths

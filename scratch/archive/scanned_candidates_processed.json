@@ -1,0 +1,29 @@
+[
+  {
+    "symbol": "TATAPOWER",
+    "pattern": "BASE_ABCD",
+    "timeframe": "30minute",
+    "side": "CE",
+    "direction": "BULL",
+    "tier": "\ud83e\udd47 T1",
+    "benchmark": 2.85,
+    "sl": 2.05,
+    "t1": 4.85,
+    "is_opt_bm": true,
+    "spot_high": 370.0,
+    "spot_low": 365.9,
+    "spot_close": 367.2,
+    "rr": 5.13,
+    "created_at": "2026-09-22 12:15"
+  },
+  {
+    "symbol": "PIIND",
+    "pattern": "HAMMER_ABCD",
+    "timeframe": "30minute",
+    "side": "PE",
+    "direction": "BULL",
+    "tier": "\ud83e\udd47 T1",
+    "benchmark": 36.8,
+    "sl": 29.5,
+    "t1": 69.75,
+    "is_opt_bm": 

@@ -402,7 +402,7 @@ class TestSpreadExitAndIndexCap(unittest.TestCase):
         }
         fresh_item = {
             "symbol": "INFY",
-            "contract": "INFY26SEP1800CE",
+            "contract": "INFY26OCT1800CE",
             "date": today_str,
             "entry_time": f"{today_str} 09:20:00",
             "benchmark": 1815.0,

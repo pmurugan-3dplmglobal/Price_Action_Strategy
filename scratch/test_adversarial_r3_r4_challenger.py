@@ -69,53 +69,53 @@ class TestR3Index0DTERolloverBoundary(unittest.TestCase):
         ])
 
     def test_nifty_rollover_exact_boundary_seconds(self):
-        """Test NIFTY 0DTE at 13:29:59 (stay) vs 13:30:00 (roll) vs 13:30:01 (roll)."""
+        """Test NIFTY 0DTE at 11:29:59 (stay) vs 11:30:00 (roll) vs 11:30:01 (roll)."""
         index_options_trade_engine.instrument_dump = self.mock_dump.copy()
 
-        # 1. Exactly 13:29:59 on expiry day -> MUST STAY ON CURRENT (today)
-        mock_now_132959 = dt.combine(self.today, datetime_time(13, 29, 59))
+        # 1. Exactly 11:29:59 on expiry day -> MUST STAY ON CURRENT (today)
+        mock_now_112959 = dt.combine(self.today, datetime_time(11, 29, 59))
         with patch.object(index_options_trade_engine, "get_ist_date", return_value=self.today), \
-             patch.object(index_options_trade_engine, "get_ist_now", return_value=mock_now_132959):
+             patch.object(index_options_trade_engine, "get_ist_now", return_value=mock_now_112959):
             res_before = index_options_trade_engine.resolve_option_contract("NIFTY", 25000.0, 50, "CE")
             self.assertIsNotNone(res_before)
             self.assertEqual(res_before["tradingsymbol"], "NIFTY2691025000CE")
             self.assertEqual(res_before["expiry"], str(self.today))
 
-        # 2. Exactly 13:30:00 on expiry day -> MUST ROLL TO NEXT WEEK
-        mock_now_133000 = dt.combine(self.today, datetime_time(13, 30, 0))
+        # 2. Exactly 11:30:00 on expiry day -> MUST ROLL TO NEXT WEEK
+        mock_now_113000 = dt.combine(self.today, datetime_time(11, 30, 0))
         with patch.object(index_options_trade_engine, "get_ist_date", return_value=self.today), \
-             patch.object(index_options_trade_engine, "get_ist_now", return_value=mock_now_133000):
+             patch.object(index_options_trade_engine, "get_ist_now", return_value=mock_now_113000):
             res_at = index_options_trade_engine.resolve_option_contract("NIFTY", 25000.0, 50, "CE")
             self.assertIsNotNone(res_at)
             self.assertEqual(res_at["tradingsymbol"], "NIFTY2691725000CE")
             self.assertEqual(res_at["expiry"], str(self.next_week))
 
-        # 3. Exactly 13:30:01 on expiry day -> MUST STAY ON NEXT WEEK
-        mock_now_133001 = dt.combine(self.today, datetime_time(13, 30, 1))
+        # 3. Exactly 11:30:01 on expiry day -> MUST STAY ON NEXT WEEK
+        mock_now_113001 = dt.combine(self.today, datetime_time(11, 30, 1))
         with patch.object(index_options_trade_engine, "get_ist_date", return_value=self.today), \
-             patch.object(index_options_trade_engine, "get_ist_now", return_value=mock_now_133001):
+             patch.object(index_options_trade_engine, "get_ist_now", return_value=mock_now_113001):
             res_after = index_options_trade_engine.resolve_option_contract("NIFTY", 25000.0, 50, "CE")
             self.assertIsNotNone(res_after)
             self.assertEqual(res_after["tradingsymbol"], "NIFTY2691725000CE")
             self.assertEqual(res_after["expiry"], str(self.next_week))
 
     def test_sensex_bfo_rollover_exact_boundary_seconds(self):
-        """Test SENSEX (BFO exchange) 0DTE rollover at 13:29:59 vs 13:30:00."""
+        """Test SENSEX (BFO exchange) 0DTE rollover at 11:29:59 vs 11:30:00."""
         index_options_trade_engine.instrument_dump = self.mock_dump.copy()
 
-        # At 13:29:59 -> Stay on today's expiry
-        mock_now_132959 = dt.combine(self.today, datetime_time(13, 29, 59))
+        # At 11:29:59 -> Stay on today's expiry
+        mock_now_112959 = dt.combine(self.today, datetime_time(11, 29, 59))
         with patch.object(index_options_trade_engine, "get_ist_date", return_value=self.today), \
-             patch.object(index_options_trade_engine, "get_ist_now", return_value=mock_now_132959):
+             patch.object(index_options_trade_engine, "get_ist_now", return_value=mock_now_112959):
             res_bfo_before = index_options_trade_engine.resolve_option_contract("SENSEX", 82000.0, 100, "CE")
             self.assertIsNotNone(res_bfo_before)
             self.assertEqual(res_bfo_before["tradingsymbol"], "SENSEX2691082000CE")
             self.assertEqual(res_bfo_before["expiry"], str(self.today))
 
-        # At 13:30:00 -> Roll to next week's expiry
-        mock_now_133000 = dt.combine(self.today, datetime_time(13, 30, 0))
+        # At 11:30:00 -> Roll to next week's expiry
+        mock_now_113000 = dt.combine(self.today, datetime_time(11, 30, 0))
         with patch.object(index_options_trade_engine, "get_ist_date", return_value=self.today), \
-             patch.object(index_options_trade_engine, "get_ist_now", return_value=mock_now_133000):
+             patch.object(index_options_trade_engine, "get_ist_now", return_value=mock_now_113000):
             res_bfo_at = index_options_trade_engine.resolve_option_contract("SENSEX", 82000.0, 100, "CE")
             self.assertIsNotNone(res_bfo_at)
             self.assertEqual(res_bfo_at["tradingsymbol"], "SENSEX2691782000CE")
@@ -317,7 +317,7 @@ class TestR4ConvictionWeightedTierSizingAndCeilings(unittest.TestCase):
 
         # Tier 2 (25% of 70k = 17,500 Rs -> 17,500 / 2500 = 7 lots)
         lots_t2 = calculate_position_size(opt_premium, opt_sl, capital=capital, risk_percent=1.0,
-                                          lot_size=lot_size, is_option=True, tier=2)
+                                          lot_size=lot_size, is_option=True, tier=2, allow_single_lot_conviction=False)
         self.assertEqual(lots_t2, 7)
         self.assertLessEqual(lots_t2 * lot_size * opt_premium, (capital * 0.70) * 0.25)
 
@@ -384,6 +384,7 @@ class TestR4SpotAnchoredSLGuardAdversarial(unittest.TestCase):
                 "spot_token": 256265,
                 "spot_sl": spot_support,
                 "option_token": 1001,
+                "df_spot": self._make_df([24940.0, 24950.0, 24950.0]),
             }
         }
 
