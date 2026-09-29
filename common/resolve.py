@@ -148,12 +148,7 @@ def check_spot_anchor_confirmation(df_spot, side: str, spot_vwap: float = 0.0) -
     max_lookback = min(10, len(df_spot) - 2)
 
     if side == "CE":
-        # Hard Regime Block: Spot is in runaway bear trend below VWAP
-        if spot_vwap > 0 and last_price < spot_vwap:
-            if (last_price < spot_vwap * 0.998 and last_price < ema13) or (ema13 < ema44):
-                return False, "BEAR_SPOT_REGIME_TRAP"
-
-        # Check 5 Bullish Anchors on Spot across recent window
+        # Check 5 Bullish Anchors on Spot across recent window FIRST
         try:
             try:
                 from patterns_bull import (
@@ -186,6 +181,12 @@ def check_spot_anchor_confirmation(df_spot, side: str, spot_vwap: float = 0.0) -
         except Exception:
             pass
 
+        # If no Bullish Anchor found, enforce Bear Regime Trap Gate
+        # Hard Regime Block: Spot is in runaway bear trend below VWAP
+        if spot_vwap > 0 and last_price < spot_vwap:
+            if (last_price < spot_vwap * 0.998 and last_price < ema13) or (ema13 < ema44):
+                return False, "BEAR_SPOT_REGIME_TRAP"
+
         # Check Trend Momentum Alignment: Spot >= EMA13 >= EMA44 with RVOL >= 1.2
         if len(df_spot) >= 44:
             if last_price >= ema13 >= ema44 and spot_rvol >= 1.2:
@@ -197,12 +198,7 @@ def check_spot_anchor_confirmation(df_spot, side: str, spot_vwap: float = 0.0) -
         return False, "NO_SPOT_BULL_ANCHOR"
 
     else:  # PE
-        # Hard Regime Block: Spot is in runaway bull trend above VWAP
-        if spot_vwap > 0 and last_price > spot_vwap:
-            if (last_price > spot_vwap * 1.002 and last_price > ema13) or (ema13 > ema44):
-                return False, "BULL_SPOT_REGIME_TRAP"
-
-        # Check 5 Bearish Anchors on Spot across recent window
+        # Check 5 Bearish Anchors on Spot across recent window FIRST
         try:
             try:
                 from patterns_bear import (
@@ -237,6 +233,12 @@ def check_spot_anchor_confirmation(df_spot, side: str, spot_vwap: float = 0.0) -
                     return True, "SPOT_TWO_LOWER_LOWS"
         except Exception:
             pass
+
+        # If no Bearish Anchor found, enforce Bull Regime Trap Gate
+        # Hard Regime Block: Spot is in runaway bull trend above VWAP
+        if spot_vwap > 0 and last_price > spot_vwap:
+            if (last_price > spot_vwap * 1.002 and last_price > ema13) or (ema13 > ema44):
+                return False, "BULL_SPOT_REGIME_TRAP"
 
         # Check Trend Momentum Alignment: Spot <= EMA13 <= EMA44 with RVOL >= 1.2
         if len(df_spot) >= 44:

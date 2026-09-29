@@ -1810,14 +1810,28 @@ def run_fast_radar_check(kite):
                                         s_ema44 = float(s_closes.ewm(span=44, adjust=False).mean().iloc[-1])
                                         s_last = float(s_closes.iloc[-1])
 
-                                        # Golden Cross: Spot > EMA13 > EMA44 -> STRICTLY BLOCK PE TRIGGERS!
+                                        pat_name = str(item.get("pattern", "")).upper()
+                                        is_d2_radar = bool(item.get("is_d2", False) or "D2" in pat_name or "CONTINUATION" in pat_name)
+                                        spot_anc_radar = str(item.get("spot_anchor_name") or item.get("spot_confluence_type") or "")
+                                        has_d1_anchor = any(anc in spot_anc_radar.upper() for anc in [
+                                            "ENGULFING", "SWEEP", "HAMMER", "HARAMI", "HIGHER_HIGHS", "LOWER_LOWS",
+                                            "SPOT_SUPPORT_HOLD", "SPOT_RESISTANCE_HOLD", "VWAP_RECLAIM", "VWAP_REJECT"
+                                        ])
+
+                                        # Golden Cross: Spot > EMA13 > EMA44 -> STRICTLY BLOCK PE TRIGGERS (unless confirmed D1 breakdown below VWAP)!
                                         if is_pe and (s_last > s_ema13 > s_ema44):
-                                            logging.info(f"🛡️ [SPOT GOLDEN CROSS REJECT] {sym}: Spot ({s_last:.2f}) > EMA13 ({s_ema13:.2f}) > EMA44 ({s_ema44:.2f}) is in strong Bullish Golden Cross. Blocking counter-trend PE trigger!")
-                                            continue
-                                        # Death Cross: Spot < EMA13 < EMA44 -> STRICTLY BLOCK CE TRIGGERS!
+                                            if not is_d2_radar and spot_ltp <= (spot_vwap * 1.002) and has_d1_anchor:
+                                                logging.info(f"⚡ [D1 BREAKDOWN EMA BYPASS] {sym}: Spot ({spot_ltp:.2f}) <= VWAP ({spot_vwap:.2f}) with confirmed D1 anchor {spot_anc_radar}. Decoupled from lagging 30m EMA Golden Cross.")
+                                            else:
+                                                logging.info(f"🛡️ [SPOT GOLDEN CROSS REJECT] {sym}: Spot ({s_last:.2f}) > EMA13 ({s_ema13:.2f}) > EMA44 ({s_ema44:.2f}) is in strong Bullish Golden Cross. Blocking counter-trend PE trigger!")
+                                                continue
+                                        # Death Cross: Spot < EMA13 < EMA44 -> STRICTLY BLOCK CE TRIGGERS (unless confirmed D1 reversal above VWAP)!
                                         elif (not is_pe) and (s_last < s_ema13 < s_ema44):
-                                            logging.info(f"🛡️ [SPOT DEATH CROSS REJECT] {sym}: Spot ({s_last:.2f}) < EMA13 ({s_ema13:.2f}) < EMA44 ({s_ema44:.2f}) is in strong Bearish Death Cross. Blocking counter-trend CE trigger!")
-                                            continue
+                                            if not is_d2_radar and spot_ltp >= (spot_vwap * 0.998) and has_d1_anchor:
+                                                logging.info(f"⚡ [D1 REVERSAL EMA BYPASS] {sym}: Spot ({spot_ltp:.2f}) >= VWAP ({spot_vwap:.2f}) with confirmed D1 anchor {spot_anc_radar}. Decoupled from lagging 30m EMA Death Cross.")
+                                            else:
+                                                logging.info(f"🛡️ [SPOT DEATH CROSS REJECT] {sym}: Spot ({s_last:.2f}) < EMA13 ({s_ema13:.2f}) < EMA44 ({s_ema44:.2f}) is in strong Bearish Death Cross. Blocking counter-trend CE trigger!")
+                                                continue
                                 except Exception as ma_err:
                                     logging.debug(f"Spot MA confluence error for {sym}: {ma_err}")
 

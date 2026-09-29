@@ -55,6 +55,7 @@ meta:
     - Leg 1 / Leg 2 Debit Spread Rollback & Freeze-Sliced Emergency Unwind across Manual 1-Click Buy & Auto Engines (ISSUE-107)
     - Live Macro Market Regime Direction Gate (NIFTY/BANKNIFTY Tick Delta), Institutional Relative Strength (RS) Alpha Bypass Exception, Configurable Modes (TREND_FOLLOWING/CONTRARIAN/OFF), Opening Gap Breakeven Floor, Pre-Market Freeze & Ghost Order Purge (ISSUE-111)
     - Directional Alignment Hard VWAP Gate, Intraday EMA Decoupling, Structural Support/Resistance Hold, Opening Wick Protection (09:15-09:20), Stale Expiry Indentation Fix, In-Loop RMS Ghost Order Purge & Auto-Spread Conversion for High-Risk Lots (ISSUE-112)
+    - D1 Reversal Decoupling from Lagging EMA 13/44 Death/Golden Cross on Spot VWAP Reclaim & Anchor Priority (ISSUE-113)
 
 architecture:
   diagram: |
@@ -511,6 +512,9 @@ verification_and_quality_assurance:
   profit_lock_and_capital_gate_suite: "scratch/test_profit_lock_and_capital_gate.py — 6/6 Unit Tests Passing (100% Success Rate)"
   ast_syntax_integrity: "100% Python files parsed with zero syntax errors"
   recent_major_issues_resolved:
+    - id: "ISSUE-113"
+      title: "D1 Reversal Decoupling from Lagging EMA 13/44 Death/Golden Cross on Spot VWAP Reclaim & Anchor Priority"
+      status: "RESOLVED"
     - id: "ISSUE-112"
       title: "Directional Alignment Hard VWAP Gate, Intraday EMA Decoupling, Structural Support/Resistance Hold, Opening Wick Protection (09:15-09:20), Stale Expiry Indentation Fix, In-Loop RMS Ghost Order Purge & Auto-Spread Conversion"
       status: "RESOLVED"

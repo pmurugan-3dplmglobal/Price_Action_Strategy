@@ -10,6 +10,28 @@ meta:
     recent_archived_batch: [FEATURE-031, FEATURE-030, FEATURE-029, ISSUE-084, ISSUE-083, ISSUE-082, ISSUE-081, ISSUE-080, FEATURE-036, FEATURE-035, FEATURE-034, FEATURE-033, ISSUE-054]
     key_archived_families: [ALGO_AUDIT_CVE, QUANT_ENHANCEMENTS, RADAR_LIFECYCLE, VCP_METRICS, SCANNER_DISCOVERY, SECURITY_CONFIG, ZERO_REGRESSION_AUDIT]
 issues:
+- id: ISSUE-113
+  title: D1 Reversal Decoupling from Lagging EMA 13/44 Death/Golden Cross on Spot VWAP Reclaim
+  severity: HIGH
+  category: Price Action Geometry, Market Structure, Trend Regime Governance
+  family: QUANT_ENHANCEMENTS
+  date_reported: '2026-09-29'
+  symptom: |
+    1. Reversal Trade Blindness: Legitimate bottom reversals (D1) forming on Spot (e.g. MANKIND at 2464 forming an accumulation base) were rejected because the preceding downtrend naturally caused 30m EMA13 < EMA44.
+    2. Short-Circuited Anchor Inspection: In check_spot_anchor_confirmation(), BEAR_SPOT_REGIME_TRAP was checked prior to inspecting the 5 Bullish Anchors. If Spot was below VWAP with EMA13 < EMA44, the function exited immediately without checking if a textbook Hammer Baby, LL Sweep, or Bullish Engulfing had formed.
+    3. Fast Radar Death Cross Rejection: In stock_options_trade_engine.py, Fast Radar unconditionally blocked any Call trigger if Spot was in a 30m Death Cross (Spot < EMA13 < EMA44), preventing D1 reversals that had already reclaimed Intraday VWAP from executing.
+  root_cause: |
+    Lagging moving average crossovers (13 and 44 bars lag price action by 6.5 to 22 trading hours) were enforced uniformly across both D1 Reversals and D2 Continuations. While D2 continuations require established trend momentum, D1 reversals by definition occur at the cyclical bottom of a downtrend where EMA13 < EMA44.
+  affected_files:
+  - common/resolve.py
+  - Trade_Option/stock_options_trade_engine.py
+  - ISSUE_MANAGEMENT.yaml
+  - MASTER_DOCUMENTATION.yaml
+  fix_applied: |
+    1. Anchor Inspection Priority: In check_spot_anchor_confirmation(), prioritized checking the 5 Bullish Anchors (Engulfing, LL Sweep, Hammer, Harami, Two Higher Highs) and 5 Bearish Anchors before evaluating regime traps. If a valid anchor exists, it is recognized immediately.
+    2. D1 Reversal Fast Radar Decoupling: In Fast Radar (stock_options_trade_engine.py), decoupled D1 Reversals with confirmed anchors and VWAP reclaim (Spot >= VWAP * 0.998) from the lagging 30m Death Cross, while strictly keeping EMA13/44 cross mandatory for D2 Continuations and setups without VWAP support.
+    3. D1 Breakdown Fast Radar Decoupling: For PE, allowed D1 Breakdowns with confirmed bearish anchors and VWAP rejection (Spot <= VWAP * 1.002) to bypass the lagging 30m Golden Cross.
+  status: RESOLVED
 - id: ISSUE-112
   title: Directional VWAP Alignment, Structural Support Hold, Opening Wick Protection, Stale Expiry Fix & In-Loop RMS Ghost Purge
   severity: CRITICAL
