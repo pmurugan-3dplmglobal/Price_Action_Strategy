@@ -527,9 +527,18 @@ except Exception as e:
 print("[TEST 20] Testing Pattern Funnel & Lifecycle Stage (A+, A, B) Invariants...", end="", flush=True)
 try:
     import pattern_funnel
+    from datetime import datetime as _dt_test20, timedelta as _td_test20
+
+    # Generate a future-month contract suffix so test fixtures never use expired contracts.
+    # Always target 2 months from now to guarantee the contract is unexpired.
+    _future_dt = _dt_test20.now() + _td_test20(days=60)
+    _future_yymth = _future_dt.strftime("%y") + _future_dt.strftime("%b").upper()  # e.g. "27JAN"
+
     t_eng = "reg_test_engine"
     pattern_funnel.clear_funnel(t_eng)
-    item = {"symbol": "TESTSYM", "contract": "TESTSYM26SEP100CE", "side": "CE", "pattern": "BE_ABCD", "strike": "100"}
+    _test_contract = f"TESTSYM{_future_yymth}100CE"
+    _run_contract = f"RUNSYM{_future_yymth}200CE"
+    item = {"symbol": "TESTSYM", "contract": _test_contract, "side": "CE", "pattern": "BE_ABCD", "strike": "100"}
     
     # 1. Register B
     pattern_funnel.register_partial_pattern(t_eng, item, pattern_funnel.STAGE_B)
@@ -565,7 +574,7 @@ try:
 
     # 5. Verify Automated Purge on 80% T1 Hit and TF Closing SL Policy
     item_run = {
-        "symbol": "RUNSYM", "contract": "RUNSYM26SEP200CE", "side": "CE",
+        "symbol": "RUNSYM", "contract": _run_contract, "side": "CE",
         "benchmark": 200.0, "current_sl": 180.0, "t1": 240.0
     }
     # 80% T1 = 200 + 0.80 * (240 - 200) = 232.0
@@ -573,16 +582,16 @@ try:
     assert len(pattern_funnel.get_funnel_summary(t_eng)["category_a"]) == 1, "Must register RUNSYM"
 
     # 5a. Post-breakout below 80% T1 (e.g. LTP = 215.0) must NOT be evicted (valid breakout / retest zone)
-    pattern_funnel.purge_invalidated_or_triggered(t_eng, ltp_dict={"RUNSYM26SEP200CE": 215.0})
+    pattern_funnel.purge_invalidated_or_triggered(t_eng, ltp_dict={_run_contract: 215.0})
     assert len(pattern_funnel.get_funnel_summary(t_eng)["category_a"]) == 1, "Must NOT purge setup when LTP < 80% T1 (215.0 < 232.0)"
 
     # 5b. Purge on 80% T1 Hit (LTP = 233.0 >= 232.0)
-    pattern_funnel.purge_invalidated_or_triggered(t_eng, ltp_dict={"RUNSYM26SEP200CE": 233.0})
+    pattern_funnel.purge_invalidated_or_triggered(t_eng, ltp_dict={_run_contract: 233.0})
     assert len(pattern_funnel.get_funnel_summary(t_eng)["category_a"]) == 0, "Must purge setup when LTP >= 80% T1 (233.0 >= 232.0)"
 
     # 5c. Tick-level SL dips do NOT purge in purge_invalidated_or_triggered (SL evaluated strictly on TF closing basis)
     pattern_funnel.promote_item(t_eng, item_run, pattern_funnel.STAGE_A)
-    pattern_funnel.purge_invalidated_or_triggered(t_eng, ltp_dict={"RUNSYM26SEP200CE": 175.0})
+    pattern_funnel.purge_invalidated_or_triggered(t_eng, ltp_dict={_run_contract: 175.0})
     assert len(pattern_funnel.get_funnel_summary(t_eng)["category_a"]) == 1, "Tick-level SL dip must NOT purge; SL is on TF closing basis"
 
     # Clean up test engine
@@ -987,6 +996,24 @@ try:
     print(" PASSED [OK]", flush=True)
 except Exception as e:
     errors.append(f"Profit Lock Ratchet, Cash Affordability Gate & Spot Candle-Close SL Invariants Failed: {e}")
+    print(f" FAILED [ERR] ({e})", flush=True)
+
+# -------------------------------------------------------------------------
+# TEST 35: Macro Market Regime Gate, sl_distance Floor & 50% Spread Floor (ISSUE-111)
+# -------------------------------------------------------------------------
+print("[TEST 35] Testing Macro Gate, sl_distance Floor & 50% Spread Floor (ISSUE-111)...", end="", flush=True)
+try:
+    import subprocess
+    import paths
+    cmd_p111 = [
+        sys.executable,
+        os.path.join(paths.SCRATCH_DIR, "test_issue111_macro_gate_and_safety_fixes.py")
+    ]
+    res_p111 = subprocess.run(cmd_p111, cwd=paths.PROJECT_ROOT, capture_output=True, text=True)
+    assert res_p111.returncode == 0, f"Issue 111 unit tests failed:\nSTDOUT:\n{res_p111.stdout}\nSTDERR:\n{res_p111.stderr}"
+    print(" PASSED [OK]", flush=True)
+except Exception as e:
+    errors.append(f"Issue 111 Macro Gate & Safety Fixes Failed: {e}")
     print(f" FAILED [ERR] ({e})", flush=True)
 
 print("\n" + "=" * 100)

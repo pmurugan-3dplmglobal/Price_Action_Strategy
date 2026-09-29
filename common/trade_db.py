@@ -700,6 +700,13 @@ def reconcile_broker_live_positions(kite, pos_data=None, orders_data=None):
     if kite is None and pos_data is None:
         return 0
 
+    # ISSUE-111: Pre-Market Freeze: Never reconcile live broker positions before 09:15:30 AM IST
+    # Prevents wiping active overnight carry positions when Kite positions endpoint returns empty pre-market
+    from datetime import datetime as dt_mod, time as dt_time
+    now_ist = dt_mod.now()
+    if now_ist.time() < dt_time(9, 15, 30):
+        return 0
+
     now_t = time.time()
 
     with _RECONCILE_LOCK:
@@ -725,6 +732,12 @@ def reconcile_broker_live_positions(kite, pos_data=None, orders_data=None):
 
         if not isinstance(pos_data, dict):
             pos_data = {}
+
+        # ISSUE-111: Empty / Uninitialized Dictionary Guard:
+        # If pos_data is empty or missing both 'net' and 'day' lists, abort reconciliation immediately
+        # to prevent treating all active trades as net_qty=0 and prematurely closing them.
+        if not pos_data or (not pos_data.get("net") and not pos_data.get("day")):
+            return 0
 
         if orders_data is None and kite is not None:
             try:

@@ -615,14 +615,27 @@ def get_live_available_cash(kite, default=100000.0, cache_ttl=15.0):
 
         m_res = safe_kite_call(kite.margins, "equity")
         if isinstance(m_res, dict):
-            avail = m_res.get("available", {})
-            avail_cash = avail.get("cash")
-            if avail_cash is not None:
-                live_bal = float(avail_cash)
+            avail = m_res.get("available", {}) if "available" in m_res else m_res.get("equity", {}).get("available", {})
+            collateral = float(avail.get("collateral") or 0.0)
+            live_balance = float(avail["live_balance"]) if avail.get("live_balance") is not None else None
+            cash = float(avail["cash"]) if avail.get("cash") is not None else None
+
+            # Calculate pure liquid cash (live balance excluding collateral and intraday debits)
+            if live_balance is not None and cash is not None:
+                liquid_remaining = max(0.0, live_balance - collateral)
+                live_bal = min(cash, liquid_remaining) if cash > 0 else 0.0
+            elif cash is not None:
+                live_bal = max(0.0, cash)
+            elif live_balance is not None:
+                live_bal = max(0.0, live_balance - collateral)
+            elif m_res.get("net") is not None:
+                live_bal = max(0.0, float(m_res["net"]) - collateral)
             else:
-                live_bal = float(avail.get("live_balance") or m_res.get("net", default) or default)
+                live_bal = float(default)
+
             if live_bal < 0:
                 live_bal = 0.0
+            live_bal = round(live_bal, 2)
             with _CASH_LOCK:
                 _LIVE_CASH_CACHE["timestamp"] = now_epoch
                 _LIVE_CASH_CACHE["cash"] = live_bal

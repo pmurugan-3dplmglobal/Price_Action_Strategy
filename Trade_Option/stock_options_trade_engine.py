@@ -686,12 +686,27 @@ def execute_highest_rr_trade(kite, staged):
             logging.info("Auto-execution skipped: No 🥇 Tier 1 (Gold) or 🥈 Tier 2 (Core) candidates found in current cycle.")
         return
     cfg_eng = load_program_config_for_engine("nifty50")
+
+    # ISSUE-111: Opening Volatility Stabilization Lock (Default 09:45 - 14:45 IST)
+    # Prevents entering during the first 30-min opening price discovery where spreads are wide
+    now_ist = get_ist_now()
+    now_hm = now_ist.strftime("%H:%M")
+    min_entry_str = str(cfg_eng.get("min_entry_time", "09:45"))
+    max_entry_str = str(cfg_eng.get("max_entry_time", "14:45"))
+    if (now_hm < min_entry_str or now_hm > max_entry_str) and BACKTEST_DATE is None:
+        if live_ok:
+            logging.info(f"[ENTRY_WINDOW_LOCK] Auto-execution paused ({now_hm} outside {min_entry_str} - {max_entry_str} IST window).")
+        return
+
     exec_mode = str(cfg_eng.get("execution_mode", "AUTO")).upper()
     use_spread = (exec_mode in ["DEBIT_SPREAD", "SPREAD_ONLY"]) or (exec_mode == "AUTO" and TIMEFRAME_ENTRY in ["15minute", "30minute", "60minute", "day"])
     cap_val_base = float(cfg_eng.get("capital") or 100000.0)
     live_cash_avail = get_live_available_cash(kite, default=cap_val_base) if (live_ok and kite) else cap_val_base
-    if use_spread and exec_mode != "SPREAD_ONLY" and live_cash_avail < 200000.0:
-        logging.info(f"[SPREAD_MARGIN_GUARD] Available broker cash ₹{live_cash_avail:,.2f} < ₹2,00,000 threshold. Defaulting to clean naked option to prevent sequential limit order hedge delay / RMS rejection on Leg 2.")
+    # ISSUE-111: Spread Margin Floor taken from 50% of UI capital setting (default 50k for 100k capital)
+    spread_floor_pct = float(cfg_eng.get("spread_margin_floor_pct", 0.50))
+    spread_min_margin = cap_val_base * spread_floor_pct
+    if use_spread and exec_mode != "SPREAD_ONLY" and live_cash_avail < spread_min_margin:
+        logging.info(f"[SPREAD_MARGIN_GUARD] Available broker cash ₹{live_cash_avail:,.2f} < ₹{spread_min_margin:,.2f} ({int(spread_floor_pct*100)}% of UI capital ₹{cap_val_base:,.2f}). Defaulting to clean naked option...")
         use_spread = False
 
     for best in sorted_pool:
@@ -712,6 +727,18 @@ def execute_highest_rr_trade(kite, staged):
                 if trade_db.is_symbol_active(sym, "nifty50"):
                     logging.info(f"[DUPLICATE_GUARD] {sym} already active in trade_db; evaluating next candidate in pool")
                     continue
+
+            # Gate 0B: Live Macro Market Regime Direction Gate (ISSUE-111)
+            # Rejects Calls when NIFTY 50 is down > 0.25%, Rejects Puts when NIFTY 50 is up > 0.25%
+            try:
+                from common.macro_gate import evaluate_macro_index_gate
+            except ImportError:
+                from macro_gate import evaluate_macro_index_gate
+
+            m_ok, m_reason = evaluate_macro_index_gate(kite, side, sym)
+            if not m_ok:
+                logging.info(f"[MACRO_NIFTY_GATE] Auto-execution blocked for {sym} ({best.get('contract') or sym}): {m_reason}")
+                continue
 
             # Gate 1: Mandatory Spot Confluence Gate (ISSUE-071)
             # Auto-execution requires verified spot directional backing (100% win/loss separation).
@@ -1479,6 +1506,14 @@ def run_fast_radar_check(kite):
                 except Exception as qe:
                     logging.debug(f"Radar bulk quote fetch error: {qe}")
 
+        # ISSUE-111: Fast Radar Entry Window Lock (09:45 - 14:45 IST)
+        now_hm = get_ist_now().strftime("%H:%M")
+        cfg_r = load_program_config_for_engine("nifty50")
+        min_entry_str = str(cfg_r.get("min_entry_time", "09:45"))
+        max_entry_str = str(cfg_r.get("max_entry_time", "14:45"))
+        if (now_hm < min_entry_str or now_hm > max_entry_str) and BACKTEST_DATE is None:
+            return
+
         triggered = []
         for item in radar_pool:
             sym = item.get("symbol")
@@ -1486,7 +1521,19 @@ def run_fast_radar_check(kite):
                 if sym in ACTIVE_POSITIONS:
                     continue
 
+            # ISSUE-111: Fast Radar Macro Market Regime Gate
+            side_val = str(item.get("side", "CE")).upper()
+            try:
+                from common.macro_gate import evaluate_macro_index_gate
+            except ImportError:
+                from macro_gate import evaluate_macro_index_gate
+            m_ok, m_reason = evaluate_macro_index_gate(kite, side_val, sym)
             c_name = item.get("contract")
+            c_gate_key = c_name or sym
+            if not m_ok:
+                logging.info(f"🛡️ [RADAR MACRO GATE] {sym} ({c_name}): {m_reason}. Holding candidate from radar breakout.")
+                _RADAR_CANDIDATE_GATE_COOLDOWN[c_gate_key] = time.time() + 60.0
+                continue
             # Gate Cooldown Check: Prevent rapid 15s retry loops on gate-rejected candidates
             c_gate_key = c_name or sym
             if c_gate_key in _RADAR_CANDIDATE_GATE_COOLDOWN:

@@ -2598,6 +2598,27 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                             c["tier_badge"] = "🥈 T2"
                             logging.info(f"[WHIPSAW_DEMOTION] {symbol} {c.get('contract')}: Demoted Tier 1 -> Tier 2 due to direction flip ({prev_side} -> {c_side}) within {time_diff:.1f}m (< {_WHIPSAW_WINDOW_MINUTES}m window).")
 
+        # ISSUE-111: Macro Index Gate Filter (Tick-level NIFTY/BANKNIFTY direction)
+        # Never trade CE into a confirmed NIFTY crash (delta < -0.25%) or PE into a confirmed rally (delta > +0.25%)
+        try:
+            from common.macro_gate import evaluate_macro_index_gate
+        except ImportError:
+            try:
+                from macro_gate import evaluate_macro_index_gate
+            except ImportError:
+                evaluate_macro_index_gate = None
+
+        if evaluate_macro_index_gate is not None:
+            macro_filtered = []
+            for c in trend_governed_candidates:
+                c_side = c.get("side", "CE")
+                m_ok, m_reason = evaluate_macro_index_gate(kite, c_side, symbol)
+                if not m_ok:
+                    logging.info(f"[MACRO_INDEX_GATE] Discarded {c_side} candidate {c.get('contract') or symbol}: {m_reason}")
+                else:
+                    macro_filtered.append(c)
+            trend_governed_candidates = macro_filtered
+
         # Priority Pool: 🥇 Tier 1 Gold candidates (including institutional VWAP reversals) get highest priority
         t1_candidates = [c for c in trend_governed_candidates if int(c.get("tier", 2)) == 1]
         preferred_candidates = [c for c in trend_governed_candidates if c.get("side") == macro_bias] if macro_bias else []

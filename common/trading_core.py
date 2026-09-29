@@ -282,8 +282,8 @@ def clamp_lpp_buy_price(limit_price, ltp, lpp_factor=1.08):
             return lpp_ceiling
     return lp
 
-
 from position_monitor import confirm_leg1_order_filled
+from macro_gate import evaluate_macro_index_gate, get_macro_index_deltas
 
 
 

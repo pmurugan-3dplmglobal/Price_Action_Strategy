@@ -1253,6 +1253,9 @@ def reconcile_and_cancel_stale_orders(kite, positions_dict=None, position_lock=N
     # Synchronize orders that filled on Kite: update order_status from 'OPEN' to 'FILLED'
     completed_orders_by_id = {str(o.get("order_id")): o for o in orders if o.get("status") == "COMPLETE"}
     completed_orders_by_sym = {o.get("tradingsymbol"): o for o in orders if o.get("status") == "COMPLETE"}
+    # ISSUE-111: Synchronize terminal/rejected/cancelled orders to purge ghost positions immediately
+    terminal_orders_by_id = {str(o.get("order_id")): o for o in orders if o.get("status") in ["REJECTED", "CANCELLED", "EXPIRED"]}
+    terminal_orders_by_sym = {o.get("tradingsymbol"): o for o in orders if o.get("status") in ["REJECTED", "CANCELLED", "EXPIRED"]}
 
     if positions_dict:
         items_to_check = []
@@ -1266,6 +1269,38 @@ def reconcile_and_cancel_stale_orders(kite, positions_dict=None, position_lock=N
             if pos.get("order_status") == "OPEN":
                 oid = str(pos.get("order_id", ""))
                 c = pos.get("contract") or sym
+                broker_pos = net_pos_dict.get(c) or net_pos_dict.get(sym)
+                is_broker_held = broker_pos and abs(int(broker_pos.get("quantity", 0))) > 0
+
+                # Check if order was rejected or cancelled by broker OMS/RMS
+                term_o = terminal_orders_by_id.get(oid) or terminal_orders_by_sym.get(c)
+                if term_o and not is_broker_held:
+                    term_status = term_o.get("status")
+                    term_msg = term_o.get("status_message") or ""
+                    logging.warning(f"[ORDER_MANAGER] Order #{oid} for {sym} ({c}) terminated on broker with status {term_status}: {term_msg}. Purging ghost position from state.")
+                    if position_lock:
+                        with position_lock:
+                            positions_dict.pop(sym, None)
+                    else:
+                        positions_dict.pop(sym, None)
+                    trade_id_val = pos.get("trade_id") or pos.get("id")
+                    if trade_id_val:
+                        try:
+                            import trade_db
+                            trade_db.update_trade(trade_id_val, {
+                                "status": "FAILED",
+                                "order_status": term_status,
+                                "exit_reason": f"BROKER_{term_status}",
+                                "details": term_msg
+                            })
+                        except Exception as e_tdb:
+                            logging.debug(f"[ORDER_MANAGER] update_trade FAILED failed for #{trade_id_val}: {e_tdb}")
+                    if save_state_fn:
+                        try:
+                            save_state_fn()
+                        except Exception:
+                            pass
+                    continue
                 matched_o = completed_orders_by_id.get(oid) or completed_orders_by_sym.get(c)
                 broker_pos = net_pos_dict.get(c) or net_pos_dict.get(sym)
                 is_broker_held = broker_pos and abs(int(broker_pos.get("quantity", 0))) > 0
@@ -1942,7 +1977,15 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                     gap_breach_critical = False
                     gap_magnitude = 0.0
                     if live_ltp > 0 and current_sl > 0:
-                        sl_distance = abs(entry_s - current_sl) if entry_s > 0 else (current_sl * 0.05)
+                        raw_dist = abs(entry_s - current_sl) if entry_s > 0 else (current_sl * 0.05)
+                        if not is_stock:
+                            # ISSUE-111: Option Contract Floor (min 1.50 pts or 5% of SL)
+                            # Prevents breakeven 0.0-distance bug and normal 30-paise opening spread shakeouts
+                            sl_distance = max(raw_dist, current_sl * 0.05, 1.50)
+                        else:
+                            # Cash Equity Floor: min Rs 2.00 or 1% of SL
+                            sl_distance = max(raw_dist, current_sl * 0.01, 2.00)
+
                         if is_short_stock and live_ltp > current_sl:
                             gap_magnitude = live_ltp - current_sl
                         elif not is_short_stock and live_ltp < current_sl:

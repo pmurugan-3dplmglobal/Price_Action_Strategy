@@ -238,6 +238,17 @@ def execute_index_entry(kite, pos):
         return True
     try:
         sym = pos.get("symbol")
+        side = pos.get("side", "CE")
+        # ISSUE-111: Index Engine Macro Market Regime Gate
+        try:
+            from common.macro_gate import evaluate_macro_index_gate
+        except ImportError:
+            from macro_gate import evaluate_macro_index_gate
+        m_ok, m_reason = evaluate_macro_index_gate(kite, side, sym)
+        if not m_ok:
+            logging.info(f"[INDEX MACRO GATE] Blocked index trade for {pos.get('contract')}: {m_reason}")
+            return False
+
         c_str = str(pos['contract']).upper()
         clear_executed_exit(pos['contract'])
         target_exch = "BFO" if ("SENSEX" in c_str or "BSE" in c_str) else "NFO"
