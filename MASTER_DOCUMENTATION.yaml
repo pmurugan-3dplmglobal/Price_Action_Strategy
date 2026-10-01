@@ -56,6 +56,7 @@ meta:
     - Live Macro Market Regime Direction Gate (NIFTY/BANKNIFTY Tick Delta), Institutional Relative Strength (RS) Alpha Bypass Exception, Configurable Modes (TREND_FOLLOWING/CONTRARIAN/OFF), Opening Gap Breakeven Floor, Pre-Market Freeze & Ghost Order Purge (ISSUE-111)
     - Directional Alignment Hard VWAP Gate, Intraday EMA Decoupling, Structural Support/Resistance Hold, Opening Wick Protection (09:15-09:20), Stale Expiry Indentation Fix, In-Loop RMS Ghost Order Purge & Auto-Spread Conversion for High-Risk Lots (ISSUE-112)
     - D1 Reversal Decoupling from Lagging EMA 13/44 Death/Golden Cross on Spot VWAP Reclaim & Anchor Priority (ISSUE-113)
+    - Institutional Edge Maturity — Anchor Invalidation Invariant, Runner VWAP Acceptance, Elimination of Adverse Selection & 09:20 Window Unlock (ISSUE-114)
 
 architecture:
   diagram: |

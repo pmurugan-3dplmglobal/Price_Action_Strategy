@@ -696,11 +696,11 @@ def execute_highest_rr_trade(kite, staged):
         return
     cfg_eng = load_program_config_for_engine("nifty50")
 
-    # ISSUE-111: Opening Volatility Stabilization Lock (Default 09:45 - 14:45 IST)
-    # Prevents entering during the first 30-min opening price discovery where spreads are wide
+    # Opening Volatility Stabilization Lock (Default 09:20 - 14:45 IST)
+    # Allows opening 5-min candle (09:15-09:20) to settle, then captures 09:20-09:45 morning breakout velocity
     now_ist = get_ist_now()
     now_hm = now_ist.strftime("%H:%M")
-    min_entry_str = str(cfg_eng.get("min_entry_time", "09:45"))
+    min_entry_str = str(cfg_eng.get("min_entry_time", "09:20"))
     max_entry_str = str(cfg_eng.get("max_entry_time", "14:45"))
     is_mock_kite = hasattr(kite, "_mock_return_value") or type(kite).__name__.startswith("Mock")
     if (now_hm < min_entry_str or now_hm > max_entry_str) and BACKTEST_DATE is None and not is_mock_kite:
@@ -1149,15 +1149,16 @@ def execute_highest_rr_trade(kite, staged):
                         logging.debug(f"[LIQUIDITY_GATE] Re-evaluating {sym} ({contract}): spread still wide ({spread_val * 100:.2f}%); holding in radar")
                     continue
 
-                # Stage 1: Smart Pegged Limit Order Routing (Passive Mid-Price Peg)
-                # If spread >= 0.8%, peg limit order at Mid price between Best Bid and Best Ask to capture spread savings
+                # Stage 1: Smart Marketable Limit Order Routing
+                # For breakout execution, route marketable limit pegged at Best Ask (capped at benchmark limit + 2% / LPP clamp).
+                # This prevents the fatal Adverse Selection of mid-price resting limits (which miss explosive runners and only fill on dumped failures).
                 best_bid = float(depth_details.get("best_bid", 0.0))
                 best_ask = float(depth_details.get("best_ask", 0.0))
-                if best_bid > 0 and best_ask > 0 and depth_details.get("spread_pct", 0.0) >= 0.8:
-                    mid_price = round_to_tick((best_bid + best_ask) / 2.0, 0.05)
-                    if mid_price > 0 and mid_price < limit_price:
-                        logging.info(f"[PEGGED_LIMIT_ROUTING] {contract}: Pegging limit at Mid-Price {mid_price:.2f} (Bid={best_bid:.2f}, Ask={best_ask:.2f}, Spread={depth_details.get('spread_pct'):.2f}%) instead of marketable {limit_price:.2f}")
-                        limit_price = mid_price
+                if best_ask > 0:
+                    marketable_limit = round_to_tick(best_ask, 0.05)
+                    max_allowed = round_to_tick(limit_price * 1.02, 0.05)
+                    limit_price = min(marketable_limit, max_allowed)
+                    logging.info(f"[MARKETABLE_LIMIT_ROUTING] {contract}: Routing limit at Best Ask {limit_price:.2f} (Bid={best_bid:.2f}, Ask={best_ask:.2f}, Spread={depth_details.get('spread_pct'):.2f}%) to guarantee immediate breakout runner fill")
 
                 # Kite Limit Price Protection (LPP) Safety Clamp:
                 from position_monitor import clamp_lpp_buy_price
@@ -1587,10 +1588,11 @@ def run_fast_radar_check(kite):
                 except Exception as qe:
                     logging.debug(f"Radar bulk quote fetch error: {qe}")
 
-        # ISSUE-111: Fast Radar Entry Window Lock (09:45 - 14:45 IST)
+        # Fast Radar Entry Window Lock (Default 09:20 - 14:45 IST)
+        # Allows opening 5-min candle (09:15-09:20) to settle, then captures 09:20-09:45 morning breakout velocity
         now_hm = get_ist_now().strftime("%H:%M")
         cfg_r = load_program_config_for_engine("nifty50")
-        min_entry_str = str(cfg_r.get("min_entry_time", "09:45"))
+        min_entry_str = str(cfg_r.get("min_entry_time", "09:20"))
         max_entry_str = str(cfg_r.get("max_entry_time", "14:45"))
         is_mock_kite = hasattr(kite, "_mock_return_value") or type(kite).__name__.startswith("Mock")
         if (now_hm < min_entry_str or now_hm > max_entry_str) and BACKTEST_DATE is None and not is_mock_kite:

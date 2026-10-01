@@ -1,6 +1,11 @@
 # Credentials & secrets
+**/program_config.json
+**/kite_access_token.txt
 input/program_config.json
 input/kite_access_token.txt
+scratch/live_*.json
+scratch/*_candles.json
+scratch/forensic_quotes.json
 
 # Python cache & logs
 __pycache__/

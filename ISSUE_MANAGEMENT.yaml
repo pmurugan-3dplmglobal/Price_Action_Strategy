@@ -1,15 +1,43 @@
 meta:
   system: Price Action Unified Strategy System
   version: v2.1.0-stable
-  last_updated: '2026-09-29'
+  last_updated: '2026-10-01'
   purpose: Active operational tracker for v2.1.0-stable failures, root causes, regressions, and enhancements.
   historical_archive: archive/ISSUE_HISTORY_ARCHIVE.yaml (Preserves 119 resolved legacy issues prior to 2026-09-05)
-  total_active_issues: 60
+  total_active_issues: 61
   archived_issues_summary:
     total_archived: 119
     recent_archived_batch: [FEATURE-031, FEATURE-030, FEATURE-029, ISSUE-084, ISSUE-083, ISSUE-082, ISSUE-081, ISSUE-080, FEATURE-036, FEATURE-035, FEATURE-034, FEATURE-033, ISSUE-054]
     key_archived_families: [ALGO_AUDIT_CVE, QUANT_ENHANCEMENTS, RADAR_LIFECYCLE, VCP_METRICS, SCANNER_DISCOVERY, SECURITY_CONFIG, ZERO_REGRESSION_AUDIT]
 issues:
+- id: ISSUE-114
+  title: Institutional Edge Maturity — Anchor Invalidation Invariant, Runner VWAP Acceptance, Elimination of Adverse Selection & 09:20 Window Unlock
+  severity: CRITICAL
+  category: Live Execution Governance, Price Action Geometry, Market Microstructure, Mathematical Expectancy
+  family: QUANT_ENHANCEMENTS
+  date_reported: '2026-10-01'
+  symptom: |
+    1. Reversal Trap Bleed: In check_spot_anchor_confirmation(), an anchor pattern (e.g. Bullish Harami) formed 8 candles ago returned True even if subsequent candles closed below the Anchor Low and current spot price was cascading below VWAP.
+    2. Missing Explosive Breakout Runners: In evaluate_spot_confluence(), strong trending stocks accepted above VWAP (MANKIND, POLICYBZR, VBL) returned False because they never approached/tested VWAP on the latest candle.
+    3. Adverse Selection via Pegged Mid-Limits: Buying breakout options with passive limits pegged at mid-price resulted in 0% fills on massive upward runners, while only filling on dumped failures.
+    4. 09:45 AM Late-Entry Freeze: Fast Radar and scan engines defaulted to min_entry_time="09:45", missing the 09:20-09:45 morning breakout velocity and entering at morning exhaustion.
+  root_cause: |
+    1. check_spot_anchor_confirmation() lacked an anchor structural invalidation loop checking whether subsequent candles breached AnchorLow/AnchorHigh.
+    2. evaluate_spot_confluence() only checked physical VWAP test/pullback wicks rather than acceptance above VWAP.
+    3. Passive mid-price pegging suffers classic market microstructure adverse selection on momentum breakouts.
+    4. min_entry_time was omitted from configuration, defaulting to 09:45 AM.
+  affected_files:
+  - common/resolve.py
+  - Trade_Option/stock_options_trade_engine.py
+  - Trade_Option/input/program_config.json
+  - ISSUE_MANAGEMENT.yaml
+  - MASTER_DOCUMENTATION.yaml
+  fix_applied: |
+    1. Structural Anchor Invalidation: Implemented _is_anchor_structurally_unbroken() in check_spot_anchor_confirmation() verifying that subsequent candles have not closed beyond the Anchor boundary and that current spot holds the level.
+    2. Runner VWAP Acceptance: Added SPOT_TREND_VWAP_ACCEPTANCE and SPOT_TREND_VWAP_REJECTION in evaluate_spot_confluence() to confirm trending breakouts above/below VWAP.
+    3. Marketable Limit Routing: Pegged breakout buy limit orders to Best Ask (capped at limit + 2% and LPP clamp) to ensure instant fills on explosive runners without adverse selection.
+    4. Golden Window Entry: Updated min_entry_time default from 09:45 to 09:20 across engine and program_config.json.
+  status: RESOLVED
 - id: ISSUE-113
   title: D1 Reversal Decoupling from Lagging EMA 13/44 Death/Golden Cross on Spot VWAP Reclaim
   severity: HIGH

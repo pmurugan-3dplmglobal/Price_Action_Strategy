@@ -147,6 +147,36 @@ def check_spot_anchor_confirmation(df_spot, side: str, spot_vwap: float = 0.0) -
 
     max_lookback = min(10, len(df_spot) - 2)
 
+    def _is_anchor_structurally_unbroken(offset, anchor_res, s_side):
+        if not anchor_res or not isinstance(anchor_res, dict):
+            return False
+        if s_side == "CE":
+            a_low = float(anchor_res.get("AnchorLow") or anchor_res.get("SL") or 0.0)
+            if a_low > 0 and last_price < a_low:
+                return False
+            if offset > 0 and a_low > 0:
+                subsequent = df_spot.iloc[len(df_spot) - offset:]
+                for _, row in subsequent.iterrows():
+                    if float(row.get("close", 0.0)) < a_low:
+                        return False
+            # If spot is deeply trapped below VWAP in a runaway bear regime, old anchor is negated
+            if spot_vwap > 0 and last_price < (spot_vwap * 0.995) and last_price < ema13 and ema13 < ema44:
+                return False
+            return True
+        else:
+            a_high = float(anchor_res.get("AnchorHigh") or anchor_res.get("SL") or 0.0)
+            if a_high > 0 and last_price > a_high:
+                return False
+            if offset > 0 and a_high > 0:
+                subsequent = df_spot.iloc[len(df_spot) - offset:]
+                for _, row in subsequent.iterrows():
+                    if float(row.get("close", 0.0)) > a_high:
+                        return False
+            # If spot is deeply trapped above VWAP in a runaway bull regime, old anchor is negated
+            if spot_vwap > 0 and last_price > (spot_vwap * 1.005) and last_price > ema13 and ema13 > ema44:
+                return False
+            return True
+
     if side == "CE":
         # Check 5 Bullish Anchors on Spot across recent window FIRST
         try:
@@ -168,15 +198,20 @@ def check_spot_anchor_confirmation(df_spot, side: str, spot_vwap: float = 0.0) -
                 )
             for offset in range(max_lookback + 1):
                 sub = df_spot.iloc[:len(df_spot) - offset] if offset > 0 else df_spot
-                if find_anchor_bullish_engulfing(sub):
+                anc = find_anchor_bullish_engulfing(sub)
+                if anc and _is_anchor_structurally_unbroken(offset, anc, "CE"):
                     return True, "SPOT_BULL_ENGULFING"
-                if find_anchor_ll_sweep(sub):
+                anc = find_anchor_ll_sweep(sub)
+                if anc and _is_anchor_structurally_unbroken(offset, anc, "CE"):
                     return True, "SPOT_LL_SWEEP"
-                if find_anchor_hammer_baby(sub):
+                anc = find_anchor_hammer_baby(sub)
+                if anc and _is_anchor_structurally_unbroken(offset, anc, "CE"):
                     return True, "SPOT_HAMMER_BABY"
-                if find_anchor_bullish_harami(sub):
+                anc = find_anchor_bullish_harami(sub)
+                if anc and _is_anchor_structurally_unbroken(offset, anc, "CE"):
                     return True, "SPOT_HARAMI"
-                if find_anchor_two_higher_highs(sub):
+                anc = find_anchor_two_higher_highs(sub)
+                if anc and _is_anchor_structurally_unbroken(offset, anc, "CE"):
                     return True, "SPOT_TWO_HIGHER_HIGHS"
         except Exception:
             pass
@@ -218,18 +253,22 @@ def check_spot_anchor_confirmation(df_spot, side: str, spot_vwap: float = 0.0) -
                 )
             for offset in range(max_lookback + 1):
                 sub = df_spot.iloc[:len(df_spot) - offset] if offset > 0 else df_spot
-                if find_anchor_bearish_engulfing(sub):
+                anc = find_anchor_bearish_engulfing(sub)
+                if anc and _is_anchor_structurally_unbroken(offset, anc, "PE"):
                     return True, "SPOT_BEAR_ENGULFING"
-                if find_anchor_hh_sweep(sub):
-                    # Guard: HH Sweep must not be in a runaway green candle uptrend
+                anc = find_anchor_hh_sweep(sub)
+                if anc and _is_anchor_structurally_unbroken(offset, anc, "PE"):
                     sub_last = sub.iloc[-1]
                     if float(sub_last.get('close', 0)) <= float(sub_last.get('open', 0)):
                         return True, "SPOT_HH_SWEEP"
-                if find_anchor_shooting_star_baby(sub):
+                anc = find_anchor_shooting_star_baby(sub)
+                if anc and _is_anchor_structurally_unbroken(offset, anc, "PE"):
                     return True, "SPOT_SHOOTING_STAR"
-                if find_anchor_bearish_harami(sub):
+                anc = find_anchor_bearish_harami(sub)
+                if anc and _is_anchor_structurally_unbroken(offset, anc, "PE"):
                     return True, "SPOT_BEAR_HARAMI"
-                if find_anchor_two_lower_lows(sub):
+                anc = find_anchor_two_lower_lows(sub)
+                if anc and _is_anchor_structurally_unbroken(offset, anc, "PE"):
                     return True, "SPOT_TWO_LOWER_LOWS"
         except Exception:
             pass
@@ -280,12 +319,16 @@ def evaluate_spot_confluence(side: str, is_d2: bool, current_spot: float, spot_v
                     body_sz = max(0.05, abs(c_close - c_open))
                     lower_wick = min(c_open, c_close) - c_low
 
-                    # Physical VWAP Reclaim:
-                    # 1. Test Phase: Candle physically tested/approached VWAP
+                    # 1. Strong Bullish Trend Acceptance above VWAP (Breakout Runner Confluence)
+                    if c_close >= spot_vwap and (spot_ema_trend or c_close >= c_open) and current_spot >= spot_vwap:
+                        return True, "SPOT_TREND_VWAP_ACCEPTANCE"
+
+                    # 2. Physical VWAP Reclaim:
+                    # Test Phase: Candle physically tested/approached VWAP
                     tested_vwap = (c_low <= spot_vwap * 1.003)
-                    # 2. Support Wick: Lower buying wick defending VWAP
+                    # Support Wick: Lower buying wick defending VWAP
                     has_support_action = (lower_wick >= 1.0 * body_sz) or (c_close >= c_open and lower_wick >= 0.3 * body_sz)
-                    # 3. Close: Closed above or at VWAP with green close
+                    # Close: Closed above or at VWAP with green close
                     closed_above_vwap = (c_close >= spot_vwap and c_close >= c_open)
                     if tested_vwap and has_support_action and closed_above_vwap:
                         return True, "SPOT_VWAP_RECLAIM"
@@ -324,12 +367,16 @@ def evaluate_spot_confluence(side: str, is_d2: bool, current_spot: float, spot_v
                     body_sz = max(0.05, abs(c_close - c_open))
                     upper_wick = c_high - max(c_open, c_close)
 
-                    # Physical VWAP Reject:
-                    # 1. Test Phase: Candle physically tested/approached VWAP
+                    # 1. Strong Bearish Breakdown Acceptance below VWAP (Breakdown Runner Confluence)
+                    if c_close <= spot_vwap and (spot_ema_trend or c_close <= c_open) and current_spot <= spot_vwap:
+                        return True, "SPOT_TREND_VWAP_REJECTION"
+
+                    # 2. Physical VWAP Reject:
+                    # Test Phase: Candle physically tested/approached VWAP
                     tested_vwap = (c_high >= spot_vwap * 0.997)
-                    # 2. Rejection Wick: Upper selling wick pushing price down from VWAP
+                    # Rejection Wick: Upper selling wick pushing price down from VWAP
                     has_rejection_action = (upper_wick >= 1.0 * body_sz) or (c_close <= c_open and upper_wick >= 0.3 * body_sz)
-                    # 3. Close: Closed below or at VWAP with red close
+                    # Close: Closed below or at VWAP with red close
                     closed_below_vwap = (c_close <= spot_vwap and c_close <= c_open)
                     if tested_vwap and has_rejection_action and closed_below_vwap:
                         return True, "SPOT_VWAP_REJECT"
