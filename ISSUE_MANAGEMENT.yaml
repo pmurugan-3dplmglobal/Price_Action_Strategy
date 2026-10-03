@@ -3710,3 +3710,28 @@ ISSUE-088:
     2. Master regression suite scratch/run_full_regression_test.py: PASSED (34/34 tests with 100% success, zero regressions).
   status: RESOLVED
   resolution_date: '2026-09-24'
+
+ISSUE-116:
+  title: "Position Monitor Dynamic Engine Config Hierarchy & UI Trailing Rules Parity"
+  date_logged: '2026-10-03'
+  family: "CONFIG_AND_EXECUTION_INTEGRATION"
+  component: "common/position_monitor.py, Trade_Option/app_option_Trade.py, Trade_Option/templates/index.html"
+  symptoms: |
+    1. Custom trailing rules (e.g. +15% trigger -> +8% SL lock, +25% trigger -> +15% SL lock) and max option loss caps configured under engine blocks (`cfg[\"index\"]`, `cfg[\"nifty50\"]`) in program_config.json were not picked up by position_monitor.py.
+    2. Web dashboard UI did not expose max_option_loss_pct or option_trail_* parameters in the program configuration drawer.
+    3. Saving configuration from the UI card could overwrite nested dictionary structures (e.g. trailing_rules) if not explicitly maintained.
+  root_cause: |
+    1. position_monitor.py called _load_program_config_file() which loaded the root JSON object, but failed to overlay engine-specific configuration (e.g. full_cfg.get(engine_name, {})). Consequently, cfg.get(\"trailing_rules\") returned None and fell back to hardcoded module defaults.
+    2. Trade_Option/app_option_Trade.py lacked config_fields definitions for max_option_loss_pct and trailing rules.
+    3. save_config() assigned cfg[prog_id] = cleaned rather than performing a non-destructive dictionary update.
+  fix_applied: |
+    1. common/position_monitor.py: Enhanced _load_program_config_file(engine_name=None) to dynamically overlay engine-specific configurations ({**full_cfg, **eng_sub}). Updated monitor_active_positions and reconcile_and_cancel_stale_orders to pass engine_name and overlay per-position engine configs.
+    2. Trade_Option/app_option_Trade.py: Added max_option_loss_pct and option_trail_1/2 triggers and SL locks to PROGRAMS[\"index\"][\"config_fields\"] and PROGRAMS[\"nifty50\"][\"config_fields\"].
+    3. Trade_Option/app_option_Trade.py: Upgraded save_config() to merge fields non-destructively, map option_trail_* fields into nested trailing_rules, and automatically synchronize updates across root, Trade_Option, and Trade_Stock config files.
+    4. Trade_Option/app_option_Trade.py & templates/index.html: Updated dashboard() to inject saved configuration defaults and added selected bindings to select dropdowns.
+  verification: |
+    1. Dedicated unit test suite scratch/test_position_monitor_config_hierarchy.py: PASSED (5/5 tests in 0.010s).
+    2. AST syntax check across all 402 files: PASSED (100% clean).
+    3. Anti-exploded state verification suite scratch/test_exploded_state_guard.py: PASSED (8/8 tests with 100% precision).
+  status: RESOLVED
+  resolution_date: '2026-10-03'

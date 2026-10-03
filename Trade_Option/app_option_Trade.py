@@ -123,7 +123,12 @@ PROGRAMS = {
             "timeframe_anchor": {"label": "Anchor Timeframe", "type": "select", "options": ["3minute","5minute","10minute","15minute","30minute","60minute","75min","4hr","day","week"], "default": "60minute"},
             "capital": {"label": "Capital", "type": "number", "default": 100000.0},
             "max_daily_loss_pct": {"label": "Daily Loss Limit (%)", "type": "number", "default": 3.0},
+            "max_option_loss_pct": {"label": "Max Option Loss (%)", "type": "number", "default": 28.0},
             "strike_range": {"label": "Strike Range (±)", "type": "number", "default": 1},
+            "option_trail_1_gain_pct": {"label": "Trail 1 Trigger (%)", "type": "number", "default": 15.0},
+            "option_trail_1_sl_pct": {"label": "Trail 1 SL Lock (%)", "type": "number", "default": 8.0},
+            "option_trail_2_gain_pct": {"label": "Trail 2 Trigger (%)", "type": "number", "default": 25.0},
+            "option_trail_2_sl_pct": {"label": "Trail 2 SL Lock (%)", "type": "number", "default": 15.0},
             "enable_swing_filter": {"label": "Swing Filter", "type": "select", "options": ["true", "false"], "default": "true"},
             "swing_min_waves": {"label": "Min Swings", "type": "number", "default": 2},
             "strict_macro_gate": {"label": "Strict Macro Gate (13 EMA)", "type": "select", "options": ["false", "true"], "default": "false"},
@@ -143,7 +148,12 @@ PROGRAMS = {
             "timeframe_anchor": {"label": "Anchor Timeframe", "type": "select", "options": ["3minute","5minute","10minute","15minute","30minute","60minute","75min","4hr","day","week"], "default": "30minute"},
             "capital": {"label": "Capital", "type": "number", "default": 100000.0},
             "max_daily_loss_pct": {"label": "Daily Loss Limit (%)", "type": "number", "default": 3.0},
+            "max_option_loss_pct": {"label": "Max Option Loss (%)", "type": "number", "default": 28.0},
             "strike_range": {"label": "Strike Range (±)", "type": "number", "default": 1},
+            "option_trail_1_gain_pct": {"label": "Trail 1 Trigger (%)", "type": "number", "default": 15.0},
+            "option_trail_1_sl_pct": {"label": "Trail 1 SL Lock (%)", "type": "number", "default": 8.0},
+            "option_trail_2_gain_pct": {"label": "Trail 2 Trigger (%)", "type": "number", "default": 25.0},
+            "option_trail_2_sl_pct": {"label": "Trail 2 SL Lock (%)", "type": "number", "default": 15.0},
             "enable_swing_filter": {"label": "Swing Filter", "type": "select", "options": ["true", "false"], "default": "true"},
             "swing_min_waves": {"label": "Min Swings", "type": "number", "default": 2},
             "strict_macro_gate": {"label": "Strict Macro Gate (13 EMA)", "type": "select", "options": ["false", "true"], "default": "false"},
@@ -279,7 +289,18 @@ def save_config(prog_id, data):
                     cleaned[k] = v
         else:
             cleaned[k] = v
-    cfg[prog_id] = cleaned
+    if prog_id not in cfg or not isinstance(cfg[prog_id], dict):
+        cfg[prog_id] = {}
+    cfg[prog_id].update(cleaned)
+
+    # Sync trailing rules into nested trailing_rules object
+    trail_keys = ["option_trail_1_gain_pct", "option_trail_1_sl_pct", "option_trail_2_gain_pct", "option_trail_2_sl_pct"]
+    for tk in trail_keys:
+        if tk in cleaned:
+            if "trailing_rules" not in cfg[prog_id] or not isinstance(cfg[prog_id]["trailing_rules"], dict):
+                cfg[prog_id]["trailing_rules"] = {}
+            cfg[prog_id]["trailing_rules"][tk] = float(cleaned[tk])
+
     if "max_daily_loss_pct" in cleaned:
         if "portfolio_risk" not in cfg or not isinstance(cfg["portfolio_risk"], dict):
             cfg["portfolio_risk"] = {}
@@ -293,8 +314,21 @@ def save_config(prog_id, data):
             cfg["macro_market_gate"] = {}
         cfg["macro_market_gate"].update(cleaned)
     os.makedirs(os.path.dirname(CONFIG_FILE), exist_ok=True)
-    with open(CONFIG_FILE, "w") as f:
+    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         json.dump(cfg, f, indent=2)
+
+    # Harmonize across all active config locations
+    for alt_cfg in [
+        os.path.join(BASE_DIR, "input", "program_config.json"),
+        os.path.join(BASE_DIR, "Trade_Option", "input", "program_config.json"),
+        os.path.join(BASE_DIR, "Trade_Stock", "input", "program_config.json")
+    ]:
+        if os.path.exists(os.path.dirname(alt_cfg)) and os.path.abspath(alt_cfg) != os.path.abspath(CONFIG_FILE):
+            try:
+                with open(alt_cfg, "w", encoding="utf-8") as af:
+                    json.dump(cfg, af, indent=2)
+            except Exception:
+                pass
     return True
 
 def get_backtest_mode():
@@ -1088,7 +1122,18 @@ def favicon():
 def dashboard():
     with open(TEMPLATE_PATH, encoding="utf-8") as _template_f:
         tpl = _template_f.read()
-    return render_template_string(tpl, refresh=REFRESH_SECONDS, programs=PROGRAMS, user=session.get("user", ""), role=session.get("role", ""))
+    cfg = load_config()
+    import copy
+    progs = copy.deepcopy(PROGRAMS)
+    for pid, pdata in progs.items():
+        p_cfg = cfg.get(pid, {})
+        if isinstance(p_cfg, dict) and "config_fields" in pdata:
+            for f_key, f_spec in pdata["config_fields"].items():
+                if f_key in p_cfg:
+                    f_spec["default"] = p_cfg[f_key]
+                elif "trailing_rules" in p_cfg and isinstance(p_cfg["trailing_rules"], dict) and f_key in p_cfg["trailing_rules"]:
+                    f_spec["default"] = p_cfg["trailing_rules"][f_key]
+    return render_template_string(tpl, refresh=REFRESH_SECONDS, programs=progs, user=session.get("user", ""), role=session.get("role", ""))
 
 def get_watchlist_data():
     try:

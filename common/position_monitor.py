@@ -1104,20 +1104,26 @@ def close_position(kite, pos, live_market=True, product=None, qty_override=None,
                 logging.error(f"All exit attempts failed for {contract}: primary={primary_err}, alt={m_err}, market={m_final_err}")
                 return {"success": False, "order_id": "REJECTED_ERROR", "error": str(m_final_err)}
 
-def _load_program_config_file():
+def _load_program_config_file(engine_name=None):
     possible_paths = [
         paths.PROGRAM_CONFIG_FILE,
         os.path.join(os.path.dirname(os.path.dirname(__file__)), "input", "program_config.json"),
         os.path.join(os.path.dirname(__file__), "input", "program_config.json")
     ]
     cfg_path = next((p for p in possible_paths if os.path.exists(p)), None)
+    full_cfg = {}
     if cfg_path:
         try:
             with open(cfg_path, encoding="utf-8") as f:
-                return json.load(f)
+                full_cfg = json.load(f)
         except Exception:
             pass
-    return {}
+    if engine_name and isinstance(full_cfg, dict):
+        eng_sub = full_cfg.get(engine_name, {})
+        if isinstance(eng_sub, dict):
+            # Engine-specific configuration overlays root config
+            return {**full_cfg, **eng_sub}
+    return full_cfg
 
 def is_candle_before_entry(c_date, entry_time_val):
     if not entry_time_val:
@@ -1223,7 +1229,7 @@ def reconcile_and_cancel_stale_orders(kite, positions_dict=None, position_lock=N
     if kite is None:
         return {"cancelled": 0, "evaluated": 0}
 
-    cfg = _load_program_config_file()
+    cfg = _load_program_config_file(engine_name=engine_name)
     cfg_om = cfg.get("order_management", {}) if isinstance(cfg, dict) else {}
     if not cfg_om.get("enable_stale_order_cancellation", True):
         return {"cancelled": 0, "evaluated": 0}
@@ -1574,7 +1580,8 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
             logging.debug(f"[ORDER_MANAGER] Stale order evaluation error: {o_mgr_err}")
 
     # Load sl_mode from program config if available ("hybrid", "candle_close", or "tick_ltp")
-    cfg = _load_program_config_file()
+    base_cfg = _load_program_config_file(engine_name=engine_name)
+    cfg = base_cfg
     sl_mode = cfg.get("sl_mode", "hybrid")
     emergency_buffer_pct = float(cfg.get("emergency_buffer_pct", 0.15))
     failsafe_start_str = cfg.get("failsafe_start_time", "09:50")
@@ -1612,6 +1619,8 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
 
     for sym, pos in items:
         try:
+            pos_eng = pos.get("engine") or engine_name
+            cfg = _load_program_config_file(engine_name=pos_eng) if (pos_eng and pos_eng != engine_name) else base_cfg
             # If position is still marked OPEN, verify if it has actually filled on Kite broker.
             # Only skip if genuinely unfilled with 0 held quantity.
             if pos.get("order_status") == "OPEN":

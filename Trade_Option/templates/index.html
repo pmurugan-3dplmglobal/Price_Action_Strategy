@@ -3008,7 +3008,7 @@
                         {% if field.type == "select" %}
                         <select class="config-input" data-prog="{{ pid }}" data-field="{{ field_key }}" onchange="event.stopPropagation();saveConfig('{{ pid }}')">
                             {% for opt in field.options %}
-                            <option value="{{ opt }}">{{ opt }}</option>
+                            <option value="{{ opt }}" {% if opt|string == field.default|string %}selected{% endif %}>{{ opt }}</option>
                             {% endfor %}
                         </select>
                         {% else %}
