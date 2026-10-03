@@ -263,19 +263,42 @@ def execute_index_entry(kite, pos):
         bid = float(depth_buy[0]["price"]) if (depth_buy and len(depth_buy) > 0 and depth_buy[0].get("price", 0) > 0) else 0.0
 
         bm = float(pos.get("benchmark") or 0)
+        t1_val = float(pos.get("t1") or 0.0)
+        sl_val = float(pos.get("current_sl") or 0.0)
+        ref_check_price = ask if ask > 0 else ltp
+
+        # Gate 00: Point-of-Execution Anti-Explosion & Chase Protection Guard
+        # Prevents buying an index contract that has already run into T1 or overextended due to scanner delay
+        if ref_check_price > 0 and bm > 0 and t1_val > bm:
+            from exploded_state_guard import check_exploded_state_guard
+            safe_idx_state, idx_reason, _ = check_exploded_state_guard(
+                live_price=ref_check_price,
+                benchmark_price=bm,
+                t1_target=t1_val,
+                stop_loss=sl_val,
+                symbol=sym,
+                contract=pos['contract'],
+                is_option=True,
+                max_target_consumed_pct=0.20,
+                max_chase_pct=0.08,
+                min_live_rr=1.00
+            )
+            if not safe_idx_state:
+                logging.warning(f"🛡️ [INDEX_ANTI_EXPLOSION_BLOCKED] Execution aborted for {pos['contract']}: {idx_reason}")
+                return False
+
+        # Stage 1: Marketable Limit Order Routing at Best Ask (Eliminates Adverse Selection)
+        # Routes limit at Best Ask (capped at benchmark + 2% / LPP clamp) to guarantee fill on explosive moves
         is_spread = pos.get("position_type") == "option_spread"
-        if bm > 0 and not is_spread:
+        if ask > 0 and not is_spread:
+            marketable_limit = round_to_tick(ask, 0.05)
+            max_allowed = round_to_tick((bm * 1.02 if bm > 0 else ask * 1.02), 0.05)
+            price = min(marketable_limit, max_allowed)
+            logging.info(f"[INDEX MARKETABLE_LIMIT_ROUTING] {pos['contract']}: Routing limit at Best Ask {price:.2f} (Bid={bid:.2f}, Ask={ask:.2f}) to guarantee immediate breakout fill")
+        elif bm > 0 and not is_spread:
             price = round_to_tick(bm * 1.005, 0.05)
         else:
             price = round_to_tick((ask if ask > 0 else ltp) * 1.005, 0.05)
-
-        # Smart Pegged Limit Order Routing (Passive Mid-Price Peg)
-        # If spread >= 0.8%, peg limit order at Mid price between Best Bid and Best Ask to capture spread savings
-        if bid > 0 and ask > 0 and (ask - bid) / ask >= 0.008:
-            mid_price = round_to_tick((bid + ask) / 2.0, 0.05)
-            if mid_price > 0 and mid_price < price:
-                logging.info(f"[INDEX PEGGED_LIMIT_ROUTING] {pos['contract']}: Pegging limit at Mid-Price {mid_price:.2f} (Bid={bid:.2f}, Ask={ask:.2f}) instead of {price:.2f}")
-                price = mid_price
 
         from position_monitor import clamp_lpp_buy_price
         price = round_to_tick(clamp_lpp_buy_price(price, ask if ask > 0 else (ltp or price)), 0.05)
@@ -637,15 +660,27 @@ def execute_highest_rr_trade(kite, staged):
                          f"Index BASE_ABCD requires >= 15m structural base to prevent theta chop. Evaluating next candidate.")
             continue
 
-        # Gate 0C: Index Anti-Chase Ceiling Gate
+        # Gate 0C: Index Anti-Exploded State & Chase Protection Gate
         orig_bm_idx = float(best.get("benchmark") or best.get("entry_spot") or 0.0)
         t1_idx = float(best.get("t1") or 0.0)
+        sl_idx = float(best.get("current_sl") or 0.0)
         live_idx_ltp = float(best.get("last_price") or best.get("ltp") or 0.0)
         if live_idx_ltp > 0 and orig_bm_idx > 0 and t1_idx > orig_bm_idx:
-            max_idx_chase = round(orig_bm_idx + 0.25 * (t1_idx - orig_bm_idx), 2)
-            if live_idx_ltp > max_idx_chase:
-                logging.info(f"🛡️ [INDEX_ANTI_CHASE_GUARD] {sym} ({contract_cand}): Live price ₹{live_idx_ltp:.2f} > Max Chase ₹{max_idx_chase:.2f} "
-                             f"(25% to T1 ₹{t1_idx:.2f}, BM ₹{orig_bm_idx:.2f}). Holding candidate for Benchmark Retest.")
+            from exploded_state_guard import check_exploded_state_guard
+            safe_cand, cand_reason, _ = check_exploded_state_guard(
+                live_price=live_idx_ltp,
+                benchmark_price=orig_bm_idx,
+                t1_target=t1_idx,
+                stop_loss=sl_idx,
+                symbol=sym,
+                contract=contract_cand or sym,
+                is_option=True,
+                max_target_consumed_pct=0.20,
+                max_chase_pct=0.08,
+                min_live_rr=1.00
+            )
+            if not safe_cand:
+                logging.info(f"🛡️ [INDEX_ANTI_EXPLOSION_GUARD] {sym} ({contract_cand}): {cand_reason}. Holding candidate for Benchmark Retest.")
                 continue
 
         # Gate 1: Mandatory Spot Confluence Gate (ISSUE-071, ISSUE-073)

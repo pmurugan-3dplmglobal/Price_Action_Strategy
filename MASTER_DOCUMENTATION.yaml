@@ -8,6 +8,8 @@ meta:
   architecture: Centralized Shared Core (common/) + Dual Workspaces (Trade_Option & Trade_Stock)
   strategy: Unified ABC Bullish & Bearish Reversal Pattern Engine + Multi-Tiered Market Structure (T1/T2/T3)
   coverage:
+    - Anti-Exploded State & Point-of-Execution Chase Protection Guard (check_exploded_state_guard) (ISSUE-115)
+    - Index Engine Marketable Limit Parity at Best Ask (* 1.005) with LPP Clamping (ISSUE-115)
     - Index Options (NIFTY, BANKNIFTY, SENSEX via BFO/NFO)
     - Stock Options (210+ NSE F&O Constituent Equities dynamically discovered)
     - Stock Spot Cash Equity Bullish (Long CNC/MIS) & Bearish (Short MIS)

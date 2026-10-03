@@ -43,8 +43,22 @@ SL_TARGET_OVERRIDES_FILE = monitor_file("sl_target_overrides.json")
 EXECUTED_EXITS_FILE = monitor_file("executed_exit_orders.json")
 JOURNAL_TRADES_DB = monitor_file("journal_trades_db.json")
 TRADE_JOURNAL_CSV = monitor_file("trade_journal.csv")
-PROGRAM_CONFIG_FILE = input_file("program_config.json")
 WATCHLIST_CONFIG_FILE = input_file("watchlist.json")
+
+def get_program_config_file():
+    primary = input_file("program_config.json")
+    if os.path.exists(primary):
+        return primary
+    opt_cfg = os.path.join(PROJECT_ROOT, "Trade_Option", "input", "program_config.json")
+    if os.path.exists(opt_cfg):
+        return opt_cfg
+    stock_cfg = os.path.join(PROJECT_ROOT, "Trade_Stock", "input", "program_config.json")
+    if os.path.exists(stock_cfg):
+        return stock_cfg
+    return primary
+
+
+PROGRAM_CONFIG_FILE = get_program_config_file()
 WATCHLIST_LIVE_FILE = monitor_file("watchlist_live.json")
 DASHBOARD_USERS_FILE = monitor_file("dashboard_users.json")
 DASHBOARD_SECRET_KEY_FILE = input_file("dashboard_secret_key.txt")

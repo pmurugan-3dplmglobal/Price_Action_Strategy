@@ -1817,6 +1817,30 @@ def api_buy_scanned_trade():
                 from common.trading_core import is_option_contract, round_to_tick
                 price = round_to_tick(price, 0.05)
                 force_order = bool(data.get("force", False))
+
+                # ── Anti-Exploded State Guard for 1-Click Buy / Short ──
+                t1_cand = float(data.get("t1") or 0.0)
+                sl_cand = float(data.get("current_sl") or 0.0)
+                ref_chk = (bid if bid > 0 else ltp) if is_sell else (ask if ask > 0 else ltp)
+                if not force_order and ref_chk > 0 and bm > 0 and t1_cand > 0:
+                    from common.exploded_state_guard import check_exploded_state_guard
+                    safe_click, click_reason, _ = check_exploded_state_guard(
+                        live_price=ref_chk,
+                        benchmark_price=bm,
+                        t1_target=t1_cand,
+                        stop_loss=sl_cand,
+                        symbol=symbol,
+                        contract=contract,
+                        is_option=False,
+                        max_target_consumed_pct=0.20,
+                        max_chase_pct=0.015,
+                        min_live_rr=1.00
+                    )
+                    if not safe_click:
+                        return jsonify({
+                            "ok": False,
+                            "error": f"Anti-Explosion Guard Alert: {click_reason}. Check 'Force Buy' if you explicitly wish to override."
+                        }), 400
                 liq_ok, spread_val, liq_msg, _ = check_bid_ask_spread_liquidity(
                     kite=_kite_session, exchange=exch, contract=contract, max_spread_pct=0.025
                 )

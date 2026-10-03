@@ -925,16 +925,36 @@ def execute_highest_rr_trade(kite, staged):
                 except Exception:
                     pass
 
-            # Gate 00: Anti-Chase Ceiling Gate on Scan Cycle Execution
-            # If live quote has already run > 25% of the distance to Target 1, hold candidate for Benchmark Retest
+            # Gate 00: Anti-Exploded State & Point-of-Execution Chase Protection Gate
+            # Protects against entering when options/spot have already exploded due to scanner latency
             orig_bm = float(best.get("benchmark") or cp or 0.0)
             t1_target = float(best.get("t1") or 0.0)
+            sl_target = float(best.get("current_sl") or 0.0)
             c_ltp_live = float(contract_quote_val or 0.0)
+            spot_ltp_live = float(best.get("spot_ltp") or 0.0)
+            spot_trig = float(best.get("spot_entry") or best.get("entry_spot") or 0.0)
+            spot_t1_val = float(best.get("spot_t1") or 0.0)
+
             if c_ltp_live > 0 and orig_bm > 0 and t1_target > orig_bm:
-                max_chase_limit = round(orig_bm + 0.25 * (t1_target - orig_bm), 2)
-                if c_ltp_live > max_chase_limit:
-                    logging.info(f"🛡️ [ANTI_CHASE_GATE] {sym} ({contract}): Live price ₹{c_ltp_live:.2f} > Max Chase Ceiling ₹{max_chase_limit:.2f} "
-                                 f"(25% to T1 ₹{t1_target:.2f}, BM ₹{orig_bm:.2f}). Holding candidate for Benchmark Retest.")
+                from exploded_state_guard import check_exploded_state_guard
+                safe_state, state_reason, _ = check_exploded_state_guard(
+                    live_price=c_ltp_live,
+                    benchmark_price=orig_bm,
+                    t1_target=t1_target,
+                    stop_loss=sl_target,
+                    symbol=sym,
+                    contract=contract,
+                    is_option=True,
+                    spot_ltp=spot_ltp_live if spot_ltp_live > 0 else None,
+                    spot_trigger=spot_trig if spot_trig > 0 else None,
+                    spot_t1=spot_t1_val if spot_t1_val > 0 else None,
+                    max_target_consumed_pct=0.20,
+                    max_chase_pct=0.08,
+                    min_live_rr=1.00
+                )
+                if not safe_state:
+                    logging.info(f"[ANTI_EXPLODED_STATE] Auto-execution skipped for {sym} ({contract}): {state_reason}")
+                    _RADAR_CANDIDATE_GATE_COOLDOWN[contract] = time.time() + 60.0
                     continue
 
             benchmark_val = float(contract_quote_val or best.get("benchmark") or cp)
@@ -1154,6 +1174,28 @@ def execute_highest_rr_trade(kite, staged):
                 # This prevents the fatal Adverse Selection of mid-price resting limits (which miss explosive runners and only fill on dumped failures).
                 best_bid = float(depth_details.get("best_bid", 0.0))
                 best_ask = float(depth_details.get("best_ask", 0.0))
+
+                # Point-of-Execution Anti-Explosion Re-Verification on Best Ask
+                # Blocks orders if option surged into an exploded state during the execution pipeline
+                if best_ask > 0 and orig_bm > 0 and t1_target > orig_bm:
+                    from exploded_state_guard import check_exploded_state_guard
+                    safe_ask_state, ask_reason, _ = check_exploded_state_guard(
+                        live_price=best_ask,
+                        benchmark_price=orig_bm,
+                        t1_target=t1_target,
+                        stop_loss=sl_target,
+                        symbol=sym,
+                        contract=contract,
+                        is_option=True,
+                        max_target_consumed_pct=0.20,
+                        max_chase_pct=0.08,
+                        min_live_rr=1.00
+                    )
+                    if not safe_ask_state:
+                        logging.warning(f"🛡️ [POINT_OF_EXECUTION_EXPLOSION_BLOCKED] {sym} ({contract}): Best Ask ₹{best_ask:.2f} exploded right at order dispatch! Reason: {ask_reason}")
+                        _RADAR_CANDIDATE_GATE_COOLDOWN[contract] = time.time() + 60.0
+                        continue
+
                 if best_ask > 0:
                     marketable_limit = round_to_tick(best_ask, 0.05)
                     max_allowed = round_to_tick(limit_price * 1.02, 0.05)

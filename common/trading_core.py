@@ -104,6 +104,9 @@ from targets import (
     round_to_tick
 )
 
+# ── exploded_state_guard ──
+from exploded_state_guard import check_exploded_state_guard
+
 # ── patterns_bull ──
 from patterns_bull import (
     find_anchor_bullish_engulfing,

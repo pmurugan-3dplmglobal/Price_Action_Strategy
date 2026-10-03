@@ -1,15 +1,54 @@
 meta:
   system: Price Action Unified Strategy System
   version: v2.1.0-stable
-  last_updated: '2026-10-01'
+  last_updated: '2026-10-02'
   purpose: Active operational tracker for v2.1.0-stable failures, root causes, regressions, and enhancements.
   historical_archive: archive/ISSUE_HISTORY_ARCHIVE.yaml (Preserves 119 resolved legacy issues prior to 2026-09-05)
-  total_active_issues: 61
+  total_active_issues: 62
   archived_issues_summary:
     total_archived: 119
     recent_archived_batch: [FEATURE-031, FEATURE-030, FEATURE-029, ISSUE-084, ISSUE-083, ISSUE-082, ISSUE-081, ISSUE-080, FEATURE-036, FEATURE-035, FEATURE-034, FEATURE-033, ISSUE-054]
     key_archived_families: [ALGO_AUDIT_CVE, QUANT_ENHANCEMENTS, RADAR_LIFECYCLE, VCP_METRICS, SCANNER_DISCOVERY, SECURITY_CONFIG, ZERO_REGRESSION_AUDIT]
 issues:
+- id: ISSUE-115
+  title: Anti-Exploded State & Point-of-Execution Chase Protection Guard with Index Marketable Limit Parity
+  severity: CRITICAL
+  category: Live Execution Governance, Latency Resilience, Market Microstructure, Risk Discipline
+  family: QUANT_ENHANCEMENTS
+  date_reported: '2026-10-02'
+  symptom: |
+    1. Exploded State Catching: When scanner loops or application pipelines experienced latency or execution queue delays, options that had already surged into or near Target 1 (T1) were blindly purchased by automated engines or 1-Click Buy.
+    2. Severely Inverted Risk:Reward: Buying an option that had already run 20%-35% into the target meant risking institutional capital for trivial remaining reward (R:R dropping below 1.0), leading to instant stop-outs on normal mean-reversion pullbacks.
+    3. Index Mid-Price Pegging Trap: index_options_trade_engine.py still utilized passive mid-price pegging ((bid+ask)/2) on wide spreads (>= 0.8%), suffering the adverse selection trap eliminated in stock options by ISSUE-114.
+    4. Unsynchronized Root Configuration: paths.PROGRAM_CONFIG_FILE pointed to input/program_config.json which was missing at root, causing submodules to fall back to default empty settings.
+  root_cause: |
+    1. Lack of a unified point-of-execution guard validating fresh live Ask against benchmark, T1 distance consumed, and live R:R right before kite.place_order().
+    2. index_options_trade_engine.py had not been updated with marketable limit routing at ask (* 1.005) or point-of-execution re-verification.
+    3. Root input/ directory lacked the synchronized program_config.json file.
+  affected_files:
+  - common/exploded_state_guard.py
+  - common/trading_core.py
+  - common/paths.py
+  - input/program_config.json
+  - Trade_Option/stock_options_trade_engine.py
+  - Trade_Option/index_options_trade_engine.py
+  - Trade_Option/app_option_Trade.py
+  - Trade_Stock/app_Stock_Trade.py
+  - scratch/test_exploded_state_guard.py
+  - ISSUE_MANAGEMENT.yaml
+  - MASTER_DOCUMENTATION.yaml
+  fix_applied: |
+    1. Anti-Exploded State Guard: Implemented check_exploded_state_guard() in common/exploded_state_guard.py enforcing:
+       a) Hard rejection if Target 1 is already touched or within 15% of T1.
+       b) Max 20% target distance consumed ceiling.
+       c) Max 8% benchmark chase ceiling for options (1.5% for cash equities).
+       d) Live R:R >= 1.00 minimum at point of execution.
+       e) Underlying Spot Climax protection (blocking if Spot hit Spot T1 or consumed > 35% target).
+    2. Dual-Layer Execution Guarding: Integrated guard in both candidate selection loops AND microsecond point-of-order dispatch across stock and index engines.
+    3. Index Engine Marketable Limit Parity: Upgraded index_options_trade_engine.py to route Marketable Limits at Best Ask (* 1.005) with Kite LPP clamp, removing passive mid-price adverse selection.
+    4. 1-Click UI Guard: Added anti-explosion protection to /api/buy-scanned-trade in both 5050 and 5051 Flask dashboards.
+    5. Canonical Config & Path Fallback: Synchronized input/program_config.json and implemented get_program_config_file() dynamic resolution in common/paths.py.
+  status: RESOLVED
 - id: ISSUE-114
   title: Institutional Edge Maturity — Anchor Invalidation Invariant, Runner VWAP Acceptance, Elimination of Adverse Selection & 09:20 Window Unlock
   severity: CRITICAL

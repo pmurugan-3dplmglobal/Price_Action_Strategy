@@ -2094,6 +2094,31 @@ def api_buy_scanned_trade():
 
                 force_order = bool(data.get("force", False))
 
+                # ── Anti-Exploded State Guard for 1-Click Buy ──
+                # Protects manual traders from clicking Buy after an option has already exploded into T1
+                ref_chk = ask if ask > 0 else ltp
+                t1_cand = float(data.get("t1") or 0.0)
+                sl_cand = float(data.get("current_sl") or 0.0)
+                if not force_order and ref_chk > 0 and bm > 0 and t1_cand > bm:
+                    from exploded_state_guard import check_exploded_state_guard
+                    safe_click, click_reason, _ = check_exploded_state_guard(
+                        live_price=ref_chk,
+                        benchmark_price=bm,
+                        t1_target=t1_cand,
+                        stop_loss=sl_cand,
+                        symbol=symbol,
+                        contract=contract,
+                        is_option=(exch != "NSE"),
+                        max_target_consumed_pct=0.20,
+                        max_chase_pct=0.08,
+                        min_live_rr=1.00
+                    )
+                    if not safe_click:
+                        return jsonify({
+                            "ok": False,
+                            "error": f"Anti-Explosion Guard Alert: {click_reason}. Check 'Force Buy' if you explicitly wish to override."
+                        }), 400
+
                 # ── Adaptive DTE-Aware Cutoff Guard for Index Options ──
                 from trading_core import is_market_open, is_option_contract
                 from common.position_monitor import is_new_entry_allowed, get_contract_days_to_expiry
