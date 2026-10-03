@@ -1,6 +1,18 @@
 {
   "api_key": "o8nnw6kxykvrsrhg",
   "api_secret": "9g7d5kktr38d7yvq11njsm4upz8kc6s1",
+  "macro_market_gate": {
+    "enable": true,
+    "mode": "TREND_FOLLOWING",
+    "nifty_drop_threshold_pct": -0.5,
+    "nifty_surge_threshold_pct": 0.5,
+    "banknifty_drop_threshold_pct": -0.75,
+    "banknifty_surge_threshold_pct": 0.75,
+    "allow_rs_alpha_bypass": true,
+    "rs_min_tier": "GOLD",
+    "rs_min_rvol": 2.0,
+    "rs_vwap_distance_pct": 1.0
+  },
   "nifty50": {
     "target_universe": "FNO_ALL",
     "timeframe_entry": "30minute",
@@ -13,9 +25,12 @@
     "enable_spot_sl_guard": true,
     "tranche_mode": true,
     "single_lot_target_mode": "EXIT_AT_T1",
+    "max_option_loss_pct": 28.0,
     "trailing_rules": {
-      "stock_trail_1_gain_pct": 8.0,
-      "stock_trail_1_sl_pct": 2.0
+      "option_trail_1_gain_pct": 15.0,
+      "option_trail_1_sl_pct": 8.0,
+      "option_trail_2_gain_pct": 25.0,
+      "option_trail_2_sl_pct": 15.0
     }
   },
   "ema_engine": {
@@ -24,8 +39,8 @@
     "scan_interval": 300
   },
   "index": {
-    "timeframe_entry": "3minute",
-    "timeframe_anchor": "15minute",
+    "timeframe_entry": "15minute",
+    "timeframe_anchor": "60minute",
     "capital": 100000,
     "strike_range": 1,
     "enable_swing_filter": true,
@@ -33,7 +48,14 @@
     "strict_macro_gate": true,
     "enable_spot_sl_guard": true,
     "tranche_mode": true,
-    "single_lot_target_mode": "EXIT_AT_T1"
+    "single_lot_target_mode": "EXIT_AT_T1",
+    "max_option_loss_pct": 28.0,
+    "trailing_rules": {
+      "option_trail_1_gain_pct": 15.0,
+      "option_trail_1_sl_pct": 8.0,
+      "option_trail_2_gain_pct": 25.0,
+      "option_trail_2_sl_pct": 15.0
+    }
   },
   "bear_trade": {
     "product_type": "MIS",

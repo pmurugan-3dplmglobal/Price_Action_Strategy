@@ -58,18 +58,22 @@
     }
   },
   "bear_trade": {
-    "product_type": "CNC",
-    "target_index": "NIFTY_MIDCAP_100",
+    "product_type": "MIS",
+    "target_universe": "FNO_ALL",
+    "target_index": "FNO_ALL",
     "timeframe": "day",
     "enable_swing_filter": true,
-    "swing_min_waves": 2
+    "swing_min_waves": 2,
+    "single_lot_target_mode": "EXIT_AT_T1"
   },
   "daily": {
     "product_type": "CNC",
-    "target_index": "NIFTY_MIDCAP_100",
+    "target_universe": "FNO_ALL",
+    "target_index": "FNO_ALL",
     "timeframe": "day",
     "enable_swing_filter": true,
-    "swing_min_waves": 2
+    "swing_min_waves": 2,
+    "single_lot_target_mode": "EXIT_AT_T1"
   },
   "swing_leg_config": {
     "default": 3,
