@@ -2296,6 +2296,26 @@ def api_buy_scanned_trade():
                         "ok": False,
                         "error": "Markets are closed (09:15 - 15:30 IST). After-Market Orders (AMO) are strictly disabled for options to protect against opening spread noise, illiquidity, and weekend/overnight theta decay traps."
                     }), 400
+
+                # ── Pre-Execution Capital Affordability Gate ──
+                if not force_order and _kite_session:
+                    try:
+                        from portfolio_risk import check_capital_affordability
+                        required_capital = float(lot_size * price)
+                        afford_ok, afford_msg, _ = check_capital_affordability(
+                            kite=_kite_session,
+                            required_capital=required_capital,
+                            max_utilization_pct=0.90
+                        )
+                        if not afford_ok:
+                            logging.warning(f"[1-CLICK BUY REJECTED] {symbol} ({contract}): {afford_msg}")
+                            return jsonify({
+                                "ok": False,
+                                "error": f"Capital Affordability: {afford_msg}. Set force=true to override."
+                            }), 400
+                    except Exception as afford_err:
+                        logging.warning(f"Capital affordability check error in 1-Click Buy: {afford_err}")
+
                 order_variety = _kite_session.VARIETY_REGULAR if market_open else _kite_session.VARIETY_AMO
 
                 try:

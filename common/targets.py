@@ -140,11 +140,11 @@ def find_profit_targets(df_hist, entry_close, stop_loss=None, symbol=None, dte=N
 
     if is_higher_tf:     # Daily/Weekly/Monthly Stock or Index (allows major 52-week peaks)
         max_target_cap = max(entry_close * 2.0, entry_close + 20 * atr)
-        min_target_start = max(entry_close * 1.03, entry_close + 1.5 * risk)
+        min_target_start = max(entry_close * 1.01, entry_close + 0.1 * risk)
         step_tol = 0.03
     else:                  # Intraday Spot Stock / Index
         max_target_cap = max(entry_close * 1.25, entry_close + 10 * atr)
-        min_target_start = max(entry_close * 1.02, entry_close + 1.5 * risk)
+        min_target_start = max(entry_close * 1.005, entry_close + 0.1 * risk)
         step_tol = 0.02
 
     # 6. Extract Non-Negated 5-bar structural swing high resistance pivots above min_target_start
@@ -497,11 +497,11 @@ def find_profit_targets_bearish(df_hist, entry_close, stop_loss=None, symbol=Non
 
     if is_higher_tf:
         max_target_cap = max(entry_close * 0.5, entry_close - 20 * atr)
-        min_target_start = min(entry_close * 0.97, entry_close - 1.5 * risk)
+        min_target_start = min(entry_close * 0.99, entry_close - 0.1 * risk)
         step_tol = 0.03
     else:
         max_target_cap = max(entry_close * 0.75, entry_close - 10 * atr)
-        min_target_start = min(entry_close * 0.98, entry_close - 1.5 * risk)
+        min_target_start = min(entry_close * 0.995, entry_close - 0.1 * risk)
         step_tol = 0.02
 
     non_negated_targets = []

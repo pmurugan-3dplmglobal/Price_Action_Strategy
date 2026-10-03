@@ -4,7 +4,7 @@ meta:
   last_updated: '2026-10-02'
   purpose: Active operational tracker for v2.1.0-stable failures, root causes, regressions, and enhancements.
   historical_archive: archive/ISSUE_HISTORY_ARCHIVE.yaml (Preserves 119 resolved legacy issues prior to 2026-09-05)
-  total_active_issues: 62
+  total_active_issues: 63
   archived_issues_summary:
     total_archived: 119
     recent_archived_batch: [FEATURE-031, FEATURE-030, FEATURE-029, ISSUE-084, ISSUE-083, ISSUE-082, ISSUE-081, ISSUE-080, FEATURE-036, FEATURE-035, FEATURE-034, FEATURE-033, ISSUE-054]
@@ -3735,3 +3735,39 @@ ISSUE-116:
     3. Anti-exploded state verification suite scratch/test_exploded_state_guard.py: PASSED (8/8 tests with 100% precision).
   status: RESOLVED
   resolution_date: '2026-10-03'
+
+ISSUE-117:
+  title: "Comprehensive Multi-Agent Architectural Audit & Edge Remediation (AUDIT-01 to AUDIT-08)"
+  date_logged: '2026-10-03'
+  family: "MULTI_AGENT_ALGO_AUDIT"
+  component: "common/position_monitor.py, Trade_Option/stock_options_trade_engine.py, common/trade_db.py, Trade_Option/app_option_Trade.py, common/targets.py, common/patterns_bull.py, common/patterns_bear.py"
+  symptoms: |
+    1. Multi-Strike Collision: In standalone position monitor, positions dictionary was keyed by underlying symbol, causing concurrent option strikes (CE and PE) on the same symbol to overwrite each other.
+    2. Execution Race Condition: Fast Surveillance Radar and Main Scan loop ran concurrently without mutual exclusion, creating duplicate execution risks.
+    3. LPP RMS Rejection on Wide Spreads: Clamping limit buy price against Best Ask rather than Last Traded Price (cp) triggered Zerodha Kite RMS 16404 rejections.
+    4. SQLite MAX(id)+1 Primary Key Contention: create_trade() queried MAX(id)+1 rather than relying on atomic ROWID/AUTOINCREMENT, risking primary key collisions under high concurrency.
+    5. Manual 1-Click Buy Cash Gate Bypassed: /api/buy-scanned-trade did not verify live cash balance affordability prior to order dispatch, risking RMS margin shortfall rejections.
+    6. R:R Optical Illusion in Targets: min_target_start enforced entry + 1.5 * risk, blinding scanners to real structural resistance pivots and inflating paper R:R.
+    7. Pattern Geometric Inaccuracies: Harami patterns anchored solely to inside bar boundaries rather than mother candle span; Engulfing ignored prior candle wicks; Sweep spacing allowed < 3 bars gap; Point C rejected shallow consolidations within 1.5% of benchmark.
+  root_cause: |
+    1. position_monitor.py keyed active position dictionaries by symbol rather than normalized contract string.
+    2. stock_options_trade_engine.py lacked a global _EXECUTION_LOCK wrapping candidate selection and order routing.
+    3. clamp_lpp_buy_price() in stock_options_trade_engine.py received best_ask as primary reference price instead of cp (LTP).
+    4. trade_db.py performed non-atomic manual ID incrementing.
+    5. app_option_Trade.py lacked check_capital_affordability() call in api_buy_scanned_trade.
+    6. targets.py clamped minimum target start above 1.5x risk.
+    7. patterns_bull.py and patterns_bear.py had rigid single-bar anchor limits, 2-bar sweep gaps, and required strict negative bar closes for Point C retests.
+  fix_applied: |
+    1. AUDIT-01: Keyed all position dictionaries in position_monitor.py strictly by normalized contract string; preserved fallback symbol lookups in token registry.
+    2. AUDIT-02: Wrapped execute_highest_rr_trade() in threading.Lock (_EXECUTION_LOCK), clamped LPP limit orders against LTP (cp), reduced RMS check sleep to 0.15s, and added Leg 2 fill verification poll.
+    3. AUDIT-03: Refactored trade_db.py create_trade() to use SQLite's native atomic ROWID/lastrowid primary key assignment.
+    4. AUDIT-04: Integrated check_capital_affordability() into /api/buy-scanned-trade in Trade_Option/app_option_Trade.py.
+    5. AUDIT-05: Adjusted min_target_start in targets.py to entry_close * 1.005 / entry_close + 0.1 * risk to accurately detect genuine structural resistance and prevent inflated R:R illusions.
+    6. AUDIT-06 & AUDIT-07 & AUDIT-08: Updated patterns_bull.py and patterns_bear.py: Harami and Engulfing anchor spans cover full mother + baby candle boundaries; Sweep spacing enforces >= 3 bars gap and decoupled bounce confirmation; Point C accepts shallow retests within 1.5% of benchmark and narrow-range / doji bars.
+  verification: |
+    1. Comprehensive unit test suite scratch/test_audit_fixes_comprehensive.py: PASSED (8/8 tests in 0.14s).
+    2. AST syntax check across all 403 Python files: PASSED (100% clean).
+    3. Hierarchy and anti-explosion test suites: PASSED (13/13 tests).
+  status: RESOLVED
+  resolution_date: '2026-10-03'
+

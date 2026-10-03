@@ -85,6 +85,7 @@ BACKTEST_DATE = None
 
 ACTIVE_POSITIONS = {}
 position_lock = threading.Lock()
+_EXECUTION_LOCK = threading.Lock()
 NFO_INSTRUMENTS = pd.DataFrame()
 instruments_lock = threading.Lock()
 ANCHOR_SCAN_REQUEST_FILE = paths.monitor_file("anchor_scan_request.txt")
@@ -665,7 +666,11 @@ def execute_highest_rr_trade(kite, staged):
     """After a scan cycle, filter ONLY Tier 1 (🥇 T1 Gold) candidates, pick best by avg RR and execute (if live) at Benchmark limit price."""
     if not staged:
         return
+    with _EXECUTION_LOCK:
+        return _execute_highest_rr_trade_locked(kite, staged)
 
+
+def _execute_highest_rr_trade_locked(kite, staged):
     live_ok = LIVE_MARKET_DEPLOYMENT and live_execution_enabled(LIVE_EXECUTION_FLAG) and is_new_entry_allowed(live_execution_active=True, is_option=True)
 
     # Prioritized Candidate Pools: Tier 1 Gold (Priority 1) and Tier 2 Core (Priority 2)
@@ -1179,6 +1184,14 @@ def execute_highest_rr_trade(kite, staged):
                 # Blocks orders if option surged into an exploded state during the execution pipeline
                 if best_ask > 0 and orig_bm > 0 and t1_target > orig_bm:
                     from exploded_state_guard import check_exploded_state_guard
+                    spot_ltp_val = real_spot if ('real_spot' in locals() and real_spot > 0) else None
+                    if not spot_ltp_val and kite:
+                        try:
+                            q_s = safe_kite_call(kite.quote, [f"NSE:{sym}"])
+                            spot_ltp_val = float(q_s.get(f"NSE:{sym}", {}).get("last_price", 0.0)) or None
+                        except Exception:
+                            spot_ltp_val = None
+
                     safe_ask_state, ask_reason, _ = check_exploded_state_guard(
                         live_price=best_ask,
                         benchmark_price=orig_bm,
@@ -1189,7 +1202,10 @@ def execute_highest_rr_trade(kite, staged):
                         is_option=True,
                         max_target_consumed_pct=0.20,
                         max_chase_pct=0.08,
-                        min_live_rr=1.00
+                        min_live_rr=1.00,
+                        spot_ltp=spot_ltp_val,
+                        spot_trigger=float(best.get("entry_spot") or 0.0) or None,
+                        spot_t1=float(best.get("spot_t1") or 0.0) or None,
                     )
                     if not safe_ask_state:
                         logging.warning(f"🛡️ [POINT_OF_EXECUTION_EXPLOSION_BLOCKED] {sym} ({contract}): Best Ask ₹{best_ask:.2f} exploded right at order dispatch! Reason: {ask_reason}")
@@ -1204,10 +1220,10 @@ def execute_highest_rr_trade(kite, staged):
 
                 # Kite Limit Price Protection (LPP) Safety Clamp:
                 from position_monitor import clamp_lpp_buy_price
-                clamped_limit = clamp_lpp_buy_price(limit_price, best_ask if best_ask > 0 else (best_bid if best_bid > 0 else cp))
+                clamped_limit = clamp_lpp_buy_price(limit_price, cp if (cp and cp > 0) else (best_ask if best_ask > 0 else best_bid))
                 limit_price = round_to_tick(clamped_limit, 0.05)
                 if clamped_limit < limit_price:
-                    logging.info(f"[LPP_CLAMP] Clamped limit buy price for {contract} from {limit_price:.2f} to {clamped_limit:.2f} (LTP/Ask={best_ask or cp:.2f})")
+                    logging.info(f"[LPP_CLAMP] Clamped limit buy price for {contract} from {limit_price:.2f} to {clamped_limit:.2f} (LTP={cp or best_ask:.2f})")
 
                 with position_lock:
                     if sym in ACTIVE_POSITIONS:
@@ -1320,10 +1336,10 @@ def execute_highest_rr_trade(kite, staged):
                     save_state()
 
                     # Immediate RMS Rejection Guard:
-                    # Give Kite RMS 1.0 second to process the order. If the broker immediately rejects
+                    # Give Kite RMS 150ms to process the order. If the broker immediately rejects
                     # (e.g. margin shortfall, price circuit bounds), purge from ACTIVE_POSITIONS to prevent ghost position lock.
                     try:
-                        time.sleep(1.0)
+                        time.sleep(0.15)
                         if kite and hasattr(kite, "order_history"):
                             hist = kite.order_history(str(oid))
                             if hist and isinstance(hist, list):
@@ -1401,6 +1417,13 @@ def execute_highest_rr_trade(kite, staged):
                             if pos.get("trade_id"):
                                 trade_db.update_trade(pos["trade_id"], {"leg2_order_id": leg2_placed[0], "leg2_order_ids": leg2_placed})
                             logging.info(f"[DEBIT SPREAD SHORT LEG] Placed {leg2_c} TotalQty={qty} @ Limit={leg2_limit} (Orders: {leg2_placed})")
+
+                            # P2: Sequential Short Leg Fill Confirmation
+                            leg2_ok, _, _, leg2_reason = confirm_leg1_order_filled(
+                                kite, leg2_placed, timeout_seconds=3.0, poll_interval=0.3
+                            )
+                            if not leg2_ok:
+                                logging.warning(f"[DEBIT SPREAD] Leg 2 {leg2_c} not immediately filled ({leg2_reason}); position monitor daemon will track.")
                         except Exception as leg2_err:
                             logging.error(f"[DEBIT SPREAD SHORT LEG FAILED] {spread_info['leg2']['contract']}: {leg2_err}")
                             # ROLLBACK GUARD 1: Cancel Leg 1 order slices to prevent unhedged naked exposure

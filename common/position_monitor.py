@@ -1104,7 +1104,19 @@ def close_position(kite, pos, live_market=True, product=None, qty_override=None,
                 logging.error(f"All exit attempts failed for {contract}: primary={primary_err}, alt={m_err}, market={m_final_err}")
                 return {"success": False, "order_id": "REJECTED_ERROR", "error": str(m_final_err)}
 
+def _deep_merge_dict(base, overlay):
+    out = dict(base)
+    for k, v in overlay.items():
+        if k in out and isinstance(out[k], dict) and isinstance(v, dict):
+            out[k] = _deep_merge_dict(out[k], v)
+        else:
+            out[k] = v
+    return out
+
+_CFG_CACHE = {"mtime": 0, "path": None, "data": {}}
+
 def _load_program_config_file(engine_name=None):
+    global _CFG_CACHE
     possible_paths = [
         paths.PROGRAM_CONFIG_FILE,
         os.path.join(os.path.dirname(os.path.dirname(__file__)), "input", "program_config.json"),
@@ -1114,15 +1126,20 @@ def _load_program_config_file(engine_name=None):
     full_cfg = {}
     if cfg_path:
         try:
-            with open(cfg_path, encoding="utf-8") as f:
-                full_cfg = json.load(f)
+            mtime = os.path.getmtime(cfg_path)
+            if _CFG_CACHE.get("path") == cfg_path and _CFG_CACHE.get("mtime") == mtime:
+                full_cfg = _CFG_CACHE.get("data", {})
+            else:
+                with open(cfg_path, encoding="utf-8") as f:
+                    full_cfg = json.load(f)
+                _CFG_CACHE = {"mtime": mtime, "path": cfg_path, "data": full_cfg}
         except Exception:
-            pass
+            full_cfg = _CFG_CACHE.get("data", {})
     if engine_name and isinstance(full_cfg, dict):
         eng_sub = full_cfg.get(engine_name, {})
         if isinstance(eng_sub, dict):
-            # Engine-specific configuration overlays root config
-            return {**full_cfg, **eng_sub}
+            # Engine-specific configuration deeply overlays root config
+            return _deep_merge_dict(full_cfg, eng_sub)
     return full_cfg
 
 def is_candle_before_entry(c_date, entry_time_val):
@@ -1666,7 +1683,7 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                     logging.debug(f"Option token lookup error for {contract}: {tok_err}")
 
             if not token and is_stock_spot:
-                token = registry.get(sym, {}).get("token")
+                token = registry.get(pos.get("symbol") or sym, {}).get("token") or registry.get(sym, {}).get("token")
 
             if not token:
                 logging.warning(f"[MONITOR SKIP] Could not resolve valid token for {contract}. Skipping spot token fallback to prevent target corruption.")
@@ -2893,17 +2910,22 @@ def monitor_all_active_positions(kite, live=True):
     stock_cash_positions = {}
 
     for t in active_trades:
-        sym = t.get("symbol") or t.get("contract")
-        if not sym:
+        # Key positions by unique contract (for derivatives) or symbol/contract (for equity) to prevent multi-strike overwrites
+        c_name = t.get("contract") or t.get("symbol")
+        if not c_name:
             continue
+        pos_key = str(c_name).strip().upper()
+        sym = t.get("symbol") or c_name
         eng = str(t.get("engine", "nifty50")).lower()
         pos_data = dict(t)
-        if eng == "index" or ("NIFTY" in str(sym).upper() and ("CE" in str(sym).upper() or "PE" in str(sym).upper())) or ("SENSEX" in str(sym).upper() and ("CE" in str(sym).upper() or "PE" in str(sym).upper())):
-            index_positions[sym] = pos_data
+        pos_data["contract"] = c_name
+        pos_data["symbol"] = sym
+        if eng == "index" or ("NIFTY" in pos_key and ("CE" in pos_key or "PE" in pos_key)) or ("SENSEX" in pos_key and ("CE" in pos_key or "PE" in pos_key)):
+            index_positions[pos_key] = pos_data
         elif pos_data.get("position_type") == "stock" or eng in ["daily", "bear_trade", "weekly", "weekly_bear"]:
-            stock_cash_positions[sym] = pos_data
+            stock_cash_positions[pos_key] = pos_data
         else:
-            stock_options_positions[sym] = pos_data
+            stock_options_positions[pos_key] = pos_data
 
     # 4. Check for unlinked live broker positions on Kite
     try:
@@ -2919,7 +2941,7 @@ def monitor_all_active_positions(kite, live=True):
                 logging.debug(f"[STANDALONE_MONITOR] Skipping broker recovery for {tsym}: contract already closed today.")
                 continue
             # If not in any active group, auto-stage into monitor dict
-            if tsym not in index_positions and tsym not in stock_options_positions and tsym not in stock_cash_positions:
+            if tsym_c not in index_positions and tsym_c not in stock_options_positions and tsym_c not in stock_cash_positions:
                 c_str = tsym.upper()
                 is_opt = is_option_contract(c_str)
                 is_index = is_opt and ("NIFTY" in c_str or "BANKNIFTY" in c_str or "SENSEX" in c_str or "FINNIFTY" in c_str or "MIDCPNIFTY" in c_str)
@@ -3025,11 +3047,11 @@ def monitor_all_active_positions(kite, live=True):
                     logging.warning(f"Could not persist broker position {tsym} into DB: {p_err}")
 
                 if is_index and is_opt:
-                    index_positions[tsym] = broker_pos_dict
+                    index_positions[tsym_c] = broker_pos_dict
                 elif is_opt:
-                    stock_options_positions[tsym] = broker_pos_dict
+                    stock_options_positions[tsym_c] = broker_pos_dict
                 else:
-                    stock_cash_positions[tsym] = broker_pos_dict
+                    stock_cash_positions[tsym_c] = broker_pos_dict
     except Exception as e:
         logging.debug(f"[STANDALONE_MONITOR] Broker position fetch error: {e}")
 

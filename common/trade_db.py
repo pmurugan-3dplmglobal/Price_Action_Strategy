@@ -235,11 +235,8 @@ def create_trade(engine, symbol, data, allow_duplicate=False):
                 if row:
                     return row["id"], False
 
-            # Get next ID
-            max_row = conn.execute("SELECT MAX(id) as m FROM trades").fetchone()
-            tid = (max_row["m"] or 0) + 1
             now = get_ist_now().strftime("%Y-%m-%d %H:%M:%S")
-            trade = {"id": tid, "engine": engine, "symbol": symbol, "status": "ACTIVE", "created_at": now}
+            trade = {"engine": engine, "symbol": symbol, "status": "ACTIVE", "created_at": now}
             trade.update(data)
             if not trade.get("entry_time"):
                 trade["entry_time"] = now
@@ -251,11 +248,17 @@ def create_trade(engine, symbol, data, allow_duplicate=False):
             if "execution_type" not in trade:
                 pat = str(trade.get("pattern", "")).upper()
                 trade["execution_type"] = "USER_OVERRIDE" if ("OVERRIDE" in pat or "MANUAL" in pat) else "ALGO_TRIGGER"
-            conn.execute(
-                "INSERT INTO trades (id, engine, symbol, contract, status, data_json, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (tid, engine, symbol, contract, trade.get("status", "ACTIVE"),
+            cur = conn.execute(
+                "INSERT INTO trades (engine, symbol, contract, status, data_json, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (engine, symbol, contract, trade.get("status", "ACTIVE"),
                  json.dumps(trade), now, now)
+            )
+            tid = cur.lastrowid
+            trade["id"] = tid
+            conn.execute(
+                "UPDATE trades SET data_json=? WHERE id=?",
+                (json.dumps(trade), tid)
             )
     _sync_tab_databases()
     return tid, True

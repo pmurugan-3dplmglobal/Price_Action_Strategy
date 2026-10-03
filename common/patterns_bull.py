@@ -57,8 +57,8 @@ def find_anchor_bullish_engulfing(df):
         return None
     if not (float(bull_anchor['open']) <= float(bearish_candle['close']) and float(bull_anchor['close']) > float(bearish_candle['high'])):
         return None
-    a_high = float(bull_anchor['high'])
-    a_low = float(bull_anchor['low'])
+    a_high = max(float(bull_anchor['high']), float(bearish_candle['high']))
+    a_low = min(float(bull_anchor['low']), float(bearish_candle['low']))
     anchor_close = float(bull_anchor['close'])
     sl_val = calculate_sl_buffer(a_low, side="BULL")
     return {
@@ -94,7 +94,7 @@ def find_anchor_ll_sweep(df):
 
     pos_low_1 = df.index.get_loc(low_1_idx)
     pos_sweep = df.index.get_loc(sweep_idx)
-    if (pos_sweep - pos_low_1 - 1) < 2:
+    if (pos_sweep - pos_low_1 - 1) < 3:
         return None
 
     inbetween_df = df.iloc[pos_low_1 + 1 : pos_sweep]
@@ -127,7 +127,9 @@ def find_anchor_ll_sweep(df):
 
     if not (v1 or v2 or v3):
         return None
-    if not (float(bounce_candle['close']) > float(sweep_candle['high'])):
+    # Bounce Confirmation: Bounce candle must close above Low 1 and reclaim sweep body top or 99.5% sweep high
+    sweep_body_top = max(float(sweep_candle['open']), float(sweep_candle['close']))
+    if not (float(bounce_candle['close']) > low_1 and (float(bounce_candle['close']) >= sweep_body_top or float(bounce_candle['close']) >= float(sweep_candle['high']) * 0.995)):
         return None
     # Floor Protection (Datta Image 22): Next candle after L2 does not break L2 low (<< LOW NOT BREAK)
     if float(bounce_candle['low']) < sweep_low:
@@ -218,16 +220,16 @@ def find_anchor_bullish_harami(df):
     inside_body = i_close - i_open
     if mother_body > 0 and (inside_body / mother_body) > 0.65:
         return None
-    inside_high = float(bullish_inside['high'])
-    inside_low = float(bullish_inside['low'])
+    a_high = max(float(bearish_mother['high']), float(bullish_inside['high']))
+    a_low = min(float(bearish_mother['low']), float(bullish_inside['low']))
     anchor_close = i_close
-    sl_val = calculate_sl_buffer(inside_low, side="BULL")
+    sl_val = calculate_sl_buffer(a_low, side="BULL")
     return {
         "Pattern": "BULL_A_Harami",
         "Close": anchor_close,
         "SL": sl_val,
-        "AnchorHigh": inside_high,
-        "AnchorLow": inside_low,
+        "AnchorHigh": a_high,
+        "AnchorLow": a_low,
         "Signal": "Harami_Formation",
         "CandleATime": str(bullish_inside.get('date', ''))
     }
@@ -416,13 +418,15 @@ def scan_anchor_bcd_breakout(df_entry, df_anchor, anchor_tf="", entry_tf="", ena
             if float(c_row['high']) > max_b_excursion:
                 break
             c_low = float(c_row['low'])
+            c_high = float(c_row['high'])
             c_close = float(c_row['close'])
             c_open = float(c_row['open'])
             is_red = c_close < c_open
+            is_doji_or_narrow = abs(c_close - c_open) <= (c_high - c_low) * 0.35 if (c_high > c_low) else True
             # Structural Invalidation: Retest candle cannot breach Anchor A Low floor
             if c_low < a_low or c_close < a_low:
                 break
-            if (c_low <= benchmark and c_low >= a_low and is_red):
+            if (c_low <= (benchmark * 1.015) and c_low >= a_low and (is_red or is_doji_or_narrow)):
                 c_idx = b_idx + 1 + j
                 break
         if c_idx is None:
