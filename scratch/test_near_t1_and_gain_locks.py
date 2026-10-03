@@ -5,9 +5,11 @@ from unittest.mock import MagicMock, patch
 import pandas as pd
 from datetime import datetime as dt, timedelta
 
-PROJECT_ROOT = r"g:\Poovendan\AI\Trading\Share\ReadyToDeploy\Prod_code_01\Price_Action_Strategy"
-if PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_ROOT)
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+COMMON_DIR = os.path.join(PROJECT_ROOT, "common")
+for p in [PROJECT_ROOT, COMMON_DIR]:
+    if p not in sys.path:
+        sys.path.insert(0, p)
 
 from common import position_monitor
 from common import trade_db

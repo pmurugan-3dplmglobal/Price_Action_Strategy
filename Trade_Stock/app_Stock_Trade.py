@@ -1736,6 +1736,11 @@ def api_buy_scanned_trade():
         else:
             exch = "NSE"
 
+        from common.trading_core import STOCK_REGISTRY
+        lot_size = STOCK_REGISTRY.get(symbol, {}).get("lot_size", 1) if exch != "NSE" else 1
+        direction_val = str(data.get("direction") or "").upper()
+        is_sell = str(side).upper() in ["SELL", "PE", "BEAR"] or direction_val == "BEAR"
+
         global _kite_session
         order_id = None
         ltp = 0
@@ -1785,11 +1790,8 @@ def api_buy_scanned_trade():
                     if price <= 0:
                         price = round(entry_spot * 1.005, 1)
 
-                from common.trading_core import STOCK_REGISTRY, is_market_open, check_bid_ask_spread_liquidity
-                lot_size = STOCK_REGISTRY.get(symbol, {}).get("lot_size", 1) if exch != "NSE" else 1
+                from common.trading_core import is_market_open, check_bid_ask_spread_liquidity
 
-                direction_val = str(data.get("direction") or "").upper()
-                is_sell = str(side).upper() in ["SELL", "PE", "BEAR"] or direction_val == "BEAR"
                 txn_type = _kite_session.TRANSACTION_TYPE_SELL if is_sell else _kite_session.TRANSACTION_TYPE_BUY
                 if is_sell:
                     prod = _kite_session.PRODUCT_MIS

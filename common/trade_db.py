@@ -398,13 +398,13 @@ def is_contract_closed_today(contract, engine=None):
         if engine:
             row = conn.execute(
                 "SELECT id FROM trades WHERE status='COMPLETED' AND engine=? AND contract=? "
-                "AND (created_at LIKE ? OR updated_at LIKE ? OR exit_time LIKE ?) LIMIT 1",
+                "AND (created_at LIKE ? OR updated_at LIKE ? OR json_extract(data_json, '$.exit_time') LIKE ?) LIMIT 1",
                 (engine, norm, f"{today_str}%", f"{today_str}%", f"{today_str}%")
             ).fetchone()
         else:
             row = conn.execute(
                 "SELECT id FROM trades WHERE status='COMPLETED' AND contract=? "
-                "AND (created_at LIKE ? OR updated_at LIKE ? OR exit_time LIKE ?) LIMIT 1",
+                "AND (created_at LIKE ? OR updated_at LIKE ? OR json_extract(data_json, '$.exit_time') LIKE ?) LIMIT 1",
                 (norm, f"{today_str}%", f"{today_str}%", f"{today_str}%")
             ).fetchone()
     return bool(row)
@@ -417,13 +417,13 @@ def get_contracts_closed_today(engine=None):
         if engine:
             rows = conn.execute(
                 "SELECT DISTINCT contract FROM trades WHERE status='COMPLETED' AND engine=? "
-                "AND (created_at LIKE ? OR updated_at LIKE ? OR exit_time LIKE ?)",
+                "AND (created_at LIKE ? OR updated_at LIKE ? OR json_extract(data_json, '$.exit_time') LIKE ?)",
                 (engine, f"{today_str}%", f"{today_str}%", f"{today_str}%")
             ).fetchall()
         else:
             rows = conn.execute(
                 "SELECT DISTINCT contract FROM trades WHERE status='COMPLETED' "
-                "AND (created_at LIKE ? OR updated_at LIKE ? OR exit_time LIKE ?)",
+                "AND (created_at LIKE ? OR updated_at LIKE ? OR json_extract(data_json, '$.exit_time') LIKE ?)",
                 (f"{today_str}%", f"{today_str}%", f"{today_str}%")
             ).fetchall()
     return {_normalize_contract(r["contract"]) for r in rows if r["contract"]}

@@ -185,8 +185,8 @@ class TestIndex7GatesAndInstantDispatch(unittest.TestCase):
             self.assertTrue(ok)
             mock_kite.place_order.assert_called_once()
             placed_kwargs = mock_kite.place_order.call_args[1]
-            # Since spread >= 0.8%, mid-price peg (98.0 + 100.2)/2 = 99.1 is used
-            self.assertAlmostEqual(placed_kwargs["price"], 99.1, places=1)
+            # Marketable Limit Order routing at Best Ask (100.20) to guarantee breakout execution
+            self.assertAlmostEqual(placed_kwargs["price"], 100.2, places=1)
 
     def test_06_fast_bulk_quote_screener_preserves_safeguards(self):
         """Bulk screener in stock engine skips dormant stocks but retains active and incubating stocks."""

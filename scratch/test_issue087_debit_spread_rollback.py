@@ -194,6 +194,7 @@ class TestDebitSpreadRollbackManual1Click(unittest.TestCase):
 
         client = self._authenticated_client()
         with patch("trading_core.is_market_open", return_value=True), \
+             patch("trading_core.contract_is_expired", return_value=False), \
              patch("trade_db.create_trade", return_value=(9999, True)) as mock_create_trade:
             resp = client.post("/api/buy-scanned-trade", json={
                 "symbol": "NIFTY",

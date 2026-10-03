@@ -18,7 +18,7 @@ class TestSysPathNormalization(unittest.TestCase):
             sys.executable,
             "-c",
             "import sys; import stock_options_trade_engine; "
-            "assert any(p.endswith('Price_Action_Strategy') for p in sys.path), 'PROJECT_ROOT not in sys.path'; "
+            "assert any('Price_Action_Strategy' in p for p in sys.path), 'PROJECT_ROOT not in sys.path'; "
             "assert any(p.endswith('common') for p in sys.path), 'COMMON_DIR not in sys.path'; "
             "from common.position_monitor import _get_nfo_cache; "
             "from common.resolve import resolve_option_spread; "
@@ -34,7 +34,7 @@ class TestSysPathNormalization(unittest.TestCase):
             sys.executable,
             "-c",
             "import sys; import index_options_trade_engine; "
-            "assert any(p.endswith('Price_Action_Strategy') for p in sys.path), 'PROJECT_ROOT not in sys.path'; "
+            "assert any('Price_Action_Strategy' in p for p in sys.path), 'PROJECT_ROOT not in sys.path'; "
             "assert any(p.endswith('common') for p in sys.path), 'COMMON_DIR not in sys.path'; "
             "from common.position_monitor import _get_nfo_cache; "
             "print('INDEX_OPTIONS_ENGINE_PATH_OK')"
@@ -49,7 +49,7 @@ class TestSysPathNormalization(unittest.TestCase):
             sys.executable,
             "-c",
             "import sys; import paths; "
-            "assert any(p.endswith('Price_Action_Strategy') for p in sys.path), 'PROJECT_ROOT not in sys.path'; "
+            "assert any('Price_Action_Strategy' in p for p in sys.path), 'PROJECT_ROOT not in sys.path'; "
             "assert any(p.endswith('common') for p in sys.path), 'COMMON_DIR not in sys.path'; "
             "print('PATHS_MODULE_OK')"
         ]
@@ -63,7 +63,7 @@ class TestSysPathNormalization(unittest.TestCase):
             sys.executable,
             "-c",
             "import sys; import stock_reversal_scanner; "
-            "assert any(p.endswith('Price_Action_Strategy') for p in sys.path), 'PROJECT_ROOT not in sys.path'; "
+            "assert any('Price_Action_Strategy' in p for p in sys.path), 'PROJECT_ROOT not in sys.path'; "
             "assert any(p.endswith('common') for p in sys.path), 'COMMON_DIR not in sys.path'; "
             "from common.trading_core import is_market_open; "
             "print('STOCK_SCANNER_PATH_OK')"

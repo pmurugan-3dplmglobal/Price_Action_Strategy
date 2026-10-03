@@ -12,10 +12,12 @@ import os
 import sys
 import pandas as pd
 
-WORKSPACE_DIR = r"g:\Poovendan\AI\Trading\Share\ReadyToDeploy\Prod_code_01\Price_Action_Strategy"
+WORKSPACE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 COMMON_DIR = os.path.join(WORKSPACE_DIR, "common")
 if COMMON_DIR not in sys.path:
     sys.path.insert(0, COMMON_DIR)
+if WORKSPACE_DIR not in sys.path:
+    sys.path.insert(0, WORKSPACE_DIR)
 
 import position_monitor
 from patterns_bear import find_anchor_shooting_star_baby

@@ -2204,7 +2204,8 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                 spot_tok = pos.get("spot_token") or pos.get("index_token") or pos.get("underlying_token")
                 if not spot_tok:
                     from registries import STOCK_REGISTRY, INDEX_REGISTRY
-                    reg_entry = STOCK_REGISTRY.get(sym) or INDEX_REGISTRY.get(sym)
+                    underlying_sym = pos.get("symbol") or sym
+                    reg_entry = STOCK_REGISTRY.get(underlying_sym) or INDEX_REGISTRY.get(underlying_sym) or STOCK_REGISTRY.get(sym) or INDEX_REGISTRY.get(sym)
                     if isinstance(reg_entry, dict):
                         spot_tok = reg_entry.get("token")
                     elif isinstance(reg_entry, int):
@@ -2550,7 +2551,8 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                                     from common.registries import STOCK_REGISTRY, INDEX_REGISTRY
                                 except ImportError:
                                     STOCK_REGISTRY, INDEX_REGISTRY = {}, {}
-                            reg_entry = STOCK_REGISTRY.get(sym) or INDEX_REGISTRY.get(sym)
+                            underlying_sym = pos.get("symbol") or sym
+                            reg_entry = STOCK_REGISTRY.get(underlying_sym) or INDEX_REGISTRY.get(underlying_sym) or STOCK_REGISTRY.get(sym) or INDEX_REGISTRY.get(sym)
                             if isinstance(reg_entry, dict):
                                 spot_tok = reg_entry.get("token")
                             elif isinstance(reg_entry, int):

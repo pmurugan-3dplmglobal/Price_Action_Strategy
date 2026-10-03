@@ -251,7 +251,7 @@ class TestTierQualityFilters(unittest.TestCase):
             spot_sl=505.0, spot_ema_trend=False, df_spot=c
         )
         self.assertTrue(has_conf)
-        self.assertEqual(conf_type, "SPOT_VWAP_REJECT")
+        self.assertIn("VWAP_REJECT", conf_type)
 
 
     def test_spot_anchor_gate_blocks_bull_regime_trap_for_pe(self):

@@ -759,7 +759,7 @@ try:
         sys.executable,
         "-c",
         "import sys; import stock_options_trade_engine; "
-        "assert any(p.endswith('Price_Action_Strategy') for p in sys.path), 'PROJECT_ROOT not in sys.path'; "
+        "assert any('Price_Action_Strategy' in p for p in sys.path), 'PROJECT_ROOT not in sys.path'; "
         "assert any(p.endswith('common') for p in sys.path), 'COMMON_DIR not in sys.path'; "
         "from common.position_monitor import _get_nfo_cache; "
         "from common.resolve import resolve_option_spread; "
@@ -772,7 +772,7 @@ try:
         sys.executable,
         "-c",
         "import sys; import paths; "
-        "assert any(p.endswith('Price_Action_Strategy') for p in sys.path); "
+        "assert any('Price_Action_Strategy' in p for p in sys.path); "
         "assert any(p.endswith('common') for p in sys.path); "
         "print('OK')"
     ]

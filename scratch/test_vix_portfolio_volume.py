@@ -181,11 +181,11 @@ df_test.loc[22, "low"] = 102.0
 df_test.loc[22, "volume"] = 28000  # High trigger volume
 
 # Historical targets above
-df_anchor = df_test.copy()
-df_anchor.loc[5, "high"] = 120.0
-df_anchor.loc[5, "close"] = 119.0
+df_anchor = df_test.iloc[:16].copy()
+df_anchor.loc[5, "high"] = 135.0
+df_anchor.loc[5, "close"] = 134.0
 
-res_bull = scan_anchor_bcd_breakout(df_test, df_anchor, anchor_tf="30minute", entry_tf="30minute", enable_swing_filter=False)
+res_bull = scan_anchor_bcd_breakout(df_test.iloc[:23].copy(), df_anchor, anchor_tf="30minute", entry_tf="30minute", enable_swing_filter=False)
 
 test("Bullish BCD scanner detected pattern", res_bull is not None)
 if res_bull:

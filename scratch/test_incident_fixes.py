@@ -72,7 +72,7 @@ class TestIncidentFixes(unittest.TestCase):
     def test_bullish_point_d_candle_color(self):
         """Incident 1: Point D must be a bullish green candle (close >= open). Red bars must be rejected."""
         candles_red_d = [
-            {"date": "2026-09-21 09:15:00", "open": 115.0, "high": 116.0, "low": 105.0, "close": 106.0, "volume": 1000},
+            {"date": "2026-09-21 09:15:00", "open": 130.0, "high": 135.0, "low": 105.0, "close": 134.0, "volume": 1000},
             # Anchor A (Low 100.0, High 105.0)
             {"date": "2026-09-21 09:30:00", "open": 104.75, "high": 105.0, "low": 100.0, "close": 104.85, "volume": 2000},
             # Point B: breakout above 105.0
@@ -90,7 +90,7 @@ class TestIncidentFixes(unittest.TestCase):
 
         # Now make Point D a GREEN candle (Open 105.0, Close 108.0)
         candles_green_d = list(candles_red_d)
-        candles_green_d[4] = {"date": "2026-09-21 09:39:00", "open": 105.0, "high": 109.5, "low": 104.8, "close": 108.0, "volume": 2800}
+        candles_green_d[4] = {"date": "2026-09-21 09:39:00", "open": 105.0, "high": 108.5, "low": 104.8, "close": 108.0, "volume": 2800}
         df_green = pd.DataFrame(candles_green_d)
         res_green = scan_anchor_bcd_breakout(df_green, df_green, entry_tf="3minute", anchor_tf="3minute", enable_swing_filter=False)
         self.assertIsNotNone(res_green, "Point D candle with close >= open (green bar) expanding above benchmark must be accepted")

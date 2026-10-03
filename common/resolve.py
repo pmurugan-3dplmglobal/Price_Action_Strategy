@@ -319,11 +319,7 @@ def evaluate_spot_confluence(side: str, is_d2: bool, current_spot: float, spot_v
                     body_sz = max(0.05, abs(c_close - c_open))
                     lower_wick = min(c_open, c_close) - c_low
 
-                    # 1. Strong Bullish Trend Acceptance above VWAP (Breakout Runner Confluence)
-                    if c_close >= spot_vwap and (spot_ema_trend or c_close >= c_open) and current_spot >= spot_vwap:
-                        return True, "SPOT_TREND_VWAP_ACCEPTANCE"
-
-                    # 2. Physical VWAP Reclaim:
+                    # 1. Physical VWAP Reclaim (Wick Defense / Rejection Geometry):
                     # Test Phase: Candle physically tested/approached VWAP
                     tested_vwap = (c_low <= spot_vwap * 1.003)
                     # Support Wick: Lower buying wick defending VWAP
@@ -332,6 +328,10 @@ def evaluate_spot_confluence(side: str, is_d2: bool, current_spot: float, spot_v
                     closed_above_vwap = (c_close >= spot_vwap and c_close >= c_open)
                     if tested_vwap and has_support_action and closed_above_vwap:
                         return True, "SPOT_VWAP_RECLAIM"
+
+                    # 2. Strong Bullish Trend Acceptance above VWAP (Breakout Runner Confluence)
+                    if c_close >= spot_vwap and (spot_ema_trend or c_close >= c_open) and current_spot >= spot_vwap:
+                        return True, "SPOT_TREND_VWAP_ACCEPTANCE"
                 elif current_spot >= spot_vwap:
                     return True, "SPOT_VWAP_RECLAIM"
 
@@ -367,11 +367,7 @@ def evaluate_spot_confluence(side: str, is_d2: bool, current_spot: float, spot_v
                     body_sz = max(0.05, abs(c_close - c_open))
                     upper_wick = c_high - max(c_open, c_close)
 
-                    # 1. Strong Bearish Breakdown Acceptance below VWAP (Breakdown Runner Confluence)
-                    if c_close <= spot_vwap and (spot_ema_trend or c_close <= c_open) and current_spot <= spot_vwap:
-                        return True, "SPOT_TREND_VWAP_REJECTION"
-
-                    # 2. Physical VWAP Reject:
+                    # 1. Physical VWAP Reject (Upper Selling Wick Pushdown from VWAP):
                     # Test Phase: Candle physically tested/approached VWAP
                     tested_vwap = (c_high >= spot_vwap * 0.997)
                     # Rejection Wick: Upper selling wick pushing price down from VWAP
@@ -380,6 +376,10 @@ def evaluate_spot_confluence(side: str, is_d2: bool, current_spot: float, spot_v
                     closed_below_vwap = (c_close <= spot_vwap and c_close <= c_open)
                     if tested_vwap and has_rejection_action and closed_below_vwap:
                         return True, "SPOT_VWAP_REJECT"
+
+                    # 2. Strong Bearish Breakdown Acceptance below VWAP (Breakdown Runner Confluence)
+                    if c_close <= spot_vwap and (spot_ema_trend or c_close <= c_open) and current_spot <= spot_vwap:
+                        return True, "SPOT_TREND_VWAP_REJECTION"
                 elif current_spot <= spot_vwap:
                     return True, "SPOT_VWAP_REJECT"
 

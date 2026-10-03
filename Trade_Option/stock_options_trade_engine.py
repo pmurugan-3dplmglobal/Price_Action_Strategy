@@ -936,9 +936,17 @@ def _execute_highest_rr_trade_locked(kite, staged):
             t1_target = float(best.get("t1") or 0.0)
             sl_target = float(best.get("current_sl") or 0.0)
             c_ltp_live = float(contract_quote_val or 0.0)
-            spot_ltp_live = float(best.get("spot_ltp") or 0.0)
-            spot_trig = float(best.get("spot_entry") or best.get("entry_spot") or 0.0)
-            spot_t1_val = float(best.get("spot_t1") or 0.0)
+            spot_ltp_live = float(best.get("spot_ltp") or (real_spot if ('real_spot' in locals() and real_spot > 0) else 0.0))
+            if spot_ltp_live <= 0 and kite and live_ok:
+                try:
+                    reg_entry = STOCK_REGISTRY.get(sym, {})
+                    spot_ts = reg_entry.get("tradingsymbol", sym)
+                    q_s = safe_kite_call(kite.quote, [f"NSE:{spot_ts}"])
+                    spot_ltp_live = float(q_s.get(f"NSE:{spot_ts}", {}).get("last_price", 0.0))
+                except Exception:
+                    pass
+            spot_trig = float(best.get("spot_entry") or 0.0) or None
+            spot_t1_val = float(best.get("spot_t1") or 0.0) or None
 
             if c_ltp_live > 0 and orig_bm > 0 and t1_target > orig_bm:
                 from exploded_state_guard import check_exploded_state_guard
@@ -951,8 +959,8 @@ def _execute_highest_rr_trade_locked(kite, staged):
                     contract=contract,
                     is_option=True,
                     spot_ltp=spot_ltp_live if spot_ltp_live > 0 else None,
-                    spot_trigger=spot_trig if spot_trig > 0 else None,
-                    spot_t1=spot_t1_val if spot_t1_val > 0 else None,
+                    spot_trigger=spot_trig,
+                    spot_t1=spot_t1_val,
                     max_target_consumed_pct=0.20,
                     max_chase_pct=0.08,
                     min_live_rr=1.00
@@ -1843,6 +1851,8 @@ def run_fast_radar_check(kite):
                                 q_data = spot_quote.get(f"NSE:{sym}", {}) if isinstance(spot_quote, dict) else {}
                                 spot_ltp = float(q_data.get("last_price") or 0.0)
                                 spot_vwap = float(q_data.get("average_price") or 0.0)
+                                if spot_ltp > 0:
+                                    item["spot_ltp"] = spot_ltp
 
                                 # ── ALL-DAY SPOT VWAP & TREND CONFLUENCE GATE ──
                                 side_val = str(item.get("side", "CE")).upper()
