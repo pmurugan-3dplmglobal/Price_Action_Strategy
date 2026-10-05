@@ -99,8 +99,8 @@ def is_contract_held_on_broker(kite, contract):
 
 _CONTRACT_EXPIRY_RE = None
 
-def contract_is_expired(contract):
-    """Return True if the option contract has already expired.
+def contract_is_expired(contract, ref_date=None):
+    """Return True if the option contract has already expired relative to ref_date (default: today).
 
     Uses the NFO instruments cache (authoritative expiry) when available;
     falls back to parsing the embedded expiry from the contract name.
@@ -110,6 +110,7 @@ def contract_is_expired(contract):
     if not contract:
         return False
     c = str(contract).strip().upper()
+    ref_d = ref_date if ref_date is not None else get_ist_date()
     try:
         df = _get_nfo_cache()
         if not df.empty:
@@ -117,7 +118,7 @@ def contract_is_expired(contract):
             if not row.empty:
                 exp_str = str(row.iloc[0]['expiry'])
                 exp_date = pd.to_datetime(exp_str).date()
-                return exp_date < get_ist_date()
+                return exp_date < ref_d
     except Exception as e:
         logging.warning(f"Expiry cache lookup failed for {c}: {e}")
     # Check standard monthly contract pattern (e.g. RELIANCE26AUG1340PE)
@@ -127,7 +128,7 @@ def contract_is_expired(contract):
         yy = int("20" + m_mon.group(1))
         mon_str = m_mon.group(2)
         month_num = _MONTH_MAP[mon_str]
-        today = get_ist_date()
+        today = ref_d
         if yy < today.year:
             return True
         if yy == today.year and month_num < today.month:
@@ -157,7 +158,7 @@ def contract_is_expired(contract):
                 if 1 <= mm <= 12 and 1 <= dd <= 31:
                     try:
                         exp_date = dt.strptime("20%02d-%02d-%02d" % (yy, mm, dd), "%Y-%m-%d").date()
-                        return exp_date < get_ist_date()
+                        return exp_date < ref_d
                     except Exception:
                         continue
     return False

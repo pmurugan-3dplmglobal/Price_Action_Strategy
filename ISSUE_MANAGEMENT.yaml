@@ -3866,5 +3866,49 @@ ISSUE-119:
   status: RESOLVED
   resolution_date: '2026-10-05'
 
+ISSUE-120:
+  title: "Morning Bell Breakout Execution & Overnight Incubation Retention Engine"
+  date_logged: '2026-10-05'
+  family: "EXECUTION_QUALITY_AND_RADAR"
+  component: "common/pattern_funnel.py, common/position_monitor.py, common/morning_reconciler.py, Trade_Option/app_option_Trade.py, Trade_Option/stock_options_trade_engine.py, input/program_config.json"
+  symptoms: |
+    1. Missed Opening Bell Breakouts: Pre-incubated Point C setups (such as KALYANKJIL 570 CE which formed Point C on Thursday Oct 1 @ 15:15 PM at ₹10.40 with Benchmark ₹10.55 and exploded on Monday Oct 5 @ 09:15 AM to ₹17.30 and ₹23.40) were completely missed at the opening bell.
+    2. False Radar Eviction: At 09:15 AM on Day T+1, Fast Radar evaluated `live_ltp >= bm * 0.99` against the prior-day setup and falsely concluded it was a `[RADAR EVICT: STALE PRIOR-DAY RUN]`, evicting the high-momentum breakout setup precisely as it triggered.
+    3. Premature 80% T1 Hard Eviction: Fast Radar evicted setups hitting 80% T1 via quote, permanently deleting them from the radar and eliminating the opportunity to enter on Post-D Retests.
+    4. Fast Radar Morning Lockout: Fast Radar hardcoded `min_entry_str = "09:20"` while program config defaulted to 09:20, causing a 5-minute temporal blindness (09:15-09:20 AM) during the highest-velocity opening minutes of the day.
+    5. Overnight Funnel Aging Flaws: `purge_stale_prior_day_setups` used a 3-day lookback limit which purged valid incubated setups across 4-day long holiday weekends (e.g. Thu close -> Fri Gandhi Jayanti -> weekend -> Mon).
+  root_cause: |
+    1. Inverted check in `purge_invalidated_or_triggered` and `run_fast_radar_check`: Compared live price on Day T+1 against BM to determine if setup was stale, confusing Day T+1 opening breakouts with setups that broke out on Day T.
+    2. Hardcoded temporal lockouts in `stock_options_trade_engine.py` (09:20 AM) preventing pre-incubated Point C setups from executing immediately at 09:15 AM.
+    3. `run_fast_radar_check` permanently calling `evict_item` when quote exceeded 80% T1 instead of skipping entry with anti-chase guard.
+    4. 3-day calendar window in `pattern_funnel.py` inadequate for Indian exchange long holiday weekends.
+  fix_applied: |
+    1. common/pattern_funnel.py:
+       - In `purge_invalidated_or_triggered`: Checked `c_prior_close >= bm * 0.99` instead of live price. If prior-day close was below BM, setup is an active incubated setup awaiting fresh breakout on Day T+1.
+       - In `purge_stale_prior_day_setups`: Extended max calendar lookback from 3 to 5 days to preserve incubated setups across 4-day long holiday weekends.
+       - Initialized `total_evicted = 0` cleanly in `purge_stale_prior_day_setups`.
+       - Updated `auto_purge_if_due` to call `reconcile_funnel_and_display_setups(purge_scan_display=True)` to retain valid setups while purging invalidated/exhausted ones.
+    2. common/position_monitor.py:
+       - Updated `contract_is_expired(contract, ref_date=None)` to accept optional `ref_date` for historical/replay safety and unit test flexibility.
+    3. common/morning_reconciler.py:
+       - Line 59 updated to invoke `pattern_funnel.reconcile_funnel_and_display_setups(today_str=today_str)` instead of blindly purging all prior setups.
+    4. Trade_Option/app_option_Trade.py:
+       - Route `/api/radar/purge-stale` updated to invoke `reconcile_funnel_and_display_setups` and return dual-status message.
+    5. Trade_Option/stock_options_trade_engine.py:
+       - Fast Radar unlocked at 09:15 AM (`min_entry_str = "09:15"`).
+       - In `_execute_highest_rr_trade_locked`: Allowed immediate 09:15 AM entry for pre-incubated or Fast Radar setups (`eff_min_entry = "09:15"`).
+       - In `run_fast_radar_check`: Replaced live price comparison with `c_prior_close` to prevent evicting fresh Day T+1 breakouts.
+       - Replaced hard `evict_item` at 80% T1 with anti-chase `continue`, preserving setups for post-breakout pullback retests.
+       - Added 09:15-09:25 AM morning fast-track bypass avoiding 30m candle maturation lag for pre-incubated setups.
+    6. input/program_config.json:
+       - Configured `"radar_min_entry_time": "09:15"` for instant opening bell execution.
+  verification: |
+    1. Dedicated unit test suite `scratch/test_morning_bell_incubation_radar_execution.py`: 4/4 PASSED (100%).
+    2. Funnel & Dispatch test suite `scratch/test_funnel_and_dispatch_fixes.py`: 17/17 PASSED (100%).
+    3. Spread Exit & Radar purge suite `scratch/test_spread_exit_and_index_cap.py`: 8/8 PASSED (100%).
+    4. Master regression test suite `scratch/run_full_regression_test.py`: ALL 35/35 TEST SUITES PASSED (100% SUCCESS, zero regressions).
+  status: RESOLVED
+  resolution_date: '2026-10-05'
+
 
 

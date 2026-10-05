@@ -54,9 +54,9 @@ def run_preflight_reconciliation(kite=None, engines=("nifty50", "index", "daily"
     logging.info(f"[09:16 PRE-FLIGHT] Starting Morning State Audit for {today_str}...")
     logging.info("=" * 70)
 
-    # 0. Purge stale prior-day pattern funnel incubation setups
+    # 0. Reconcile prior-day pattern funnel incubation setups (preserve valid unexpired setups)
     try:
-        pattern_funnel.purge_stale_prior_day_setups(today_str=today_str)
+        pattern_funnel.reconcile_funnel_and_display_setups(today_str=today_str)
     except Exception as funnel_err:
         logging.warning(f"[09:16 PRE-FLIGHT] Funnel morning purge failed: {funnel_err}")
 

@@ -701,16 +701,23 @@ def _execute_highest_rr_trade_locked(kite, staged):
         return
     cfg_eng = load_program_config_for_engine("nifty50")
 
-    # Opening Volatility Stabilization Lock (Default 09:20 - 14:45 IST)
-    # Allows opening 5-min candle (09:15-09:20) to settle, then captures 09:20-09:45 morning breakout velocity
+    # Opening Volatility Stabilization & Radar Fast-Track Lock (ISSUE-120):
+    # Regular universe scan observes 09:20 stabilization window; pre-incubated Fast Radar setups
+    # (Category A/A+ with prior Point C formation) are unlocked from 09:15:00 AM IST.
     now_ist = get_ist_now()
     now_hm = now_ist.strftime("%H:%M")
     min_entry_str = str(cfg_eng.get("min_entry_time", "09:20"))
     max_entry_str = str(cfg_eng.get("max_entry_time", "14:45"))
     is_mock_kite = hasattr(kite, "_mock_return_value") or type(kite).__name__.startswith("Mock")
-    if (now_hm < min_entry_str or now_hm > max_entry_str) and BACKTEST_DATE is None and not is_mock_kite:
+
+    has_radar_trigger = any(
+        bool(c.get("trigger_type") or str(c.get("stage", "")).upper() in ["A_PLUS", "A", "STAGE_A_PLUS_READY", "STAGE_A_READY"])
+        for c in (staged or []) if isinstance(c, dict)
+    )
+    eff_min_entry = "09:15" if has_radar_trigger else min_entry_str
+    if (now_hm < eff_min_entry or now_hm > max_entry_str) and BACKTEST_DATE is None and not is_mock_kite:
         if live_ok:
-            logging.info(f"[ENTRY_WINDOW_LOCK] Auto-execution paused ({now_hm} outside {min_entry_str} - {max_entry_str} IST window).")
+            logging.info(f"[ENTRY_WINDOW_LOCK] Auto-execution paused ({now_hm} outside {eff_min_entry} - {max_entry_str} IST window).")
         return
 
     exec_mode = str(cfg_eng.get("execution_mode", "AUTO")).upper()
@@ -1625,15 +1632,15 @@ def run_fast_radar_check(kite):
     today_str = now_ist.strftime("%Y-%m-%d")
     t_str = now_ist.strftime("%H:%M")
 
-    # Automated Morning Funnel Reset (Fix 4): Purge prior-day incubation setups once time >= "08:00" IST
+    # Automated Morning Funnel Reset (Fix 4): Reconcile prior-day incubation setups once time >= "08:00" IST
     # Runs before is_new_entry_allowed() gate so radar is clean prior to 09:16 market open
     if _LAST_FUNNEL_CLEANUP_DATE != today_str and t_str >= "08:00":
         try:
-            pattern_funnel.purge_stale_prior_day_setups("nifty50", today_str=today_str, purge_scan_display=True)
+            pattern_funnel.reconcile_funnel_and_display_setups("nifty50", today_str=today_str, purge_scan_display=True)
             _LAST_FUNNEL_CLEANUP_DATE = today_str
-            logging.info(f"[RADAR MORNING PURGE] Successfully purged prior-day incubation setups at {t_str} IST for {today_str}")
+            logging.info(f"[RADAR MORNING RECONCILE] Successfully reconciled prior-day incubation setups at {t_str} IST for {today_str}")
         except Exception as p_err:
-            logging.warning(f"Radar morning funnel purge error: {p_err}")
+            logging.warning(f"Radar morning funnel reconcile error: {p_err}")
 
     if not is_new_entry_allowed(live_execution_active=True, is_option=True):
         return []
@@ -1701,11 +1708,12 @@ def run_fast_radar_check(kite):
                 except Exception as qe:
                     logging.debug(f"Radar bulk quote fetch error: {qe}")
 
-        # Fast Radar Entry Window Lock (Default 09:20 - 14:45 IST)
-        # Allows opening 5-min candle (09:15-09:20) to settle, then captures 09:20-09:45 morning breakout velocity
+        # Fast Radar Entry Window Lock (Default 09:15 - 14:45 IST)
+        # Fast Radar tracks pre-incubated Category A/A+ setups formed on prior sessions;
+        # unlocked at 09:15:00 to capture opening bell breakout velocity.
         now_hm = get_ist_now().strftime("%H:%M")
         cfg_r = load_program_config_for_engine("nifty50")
-        min_entry_str = str(cfg_r.get("min_entry_time", "09:20"))
+        min_entry_str = str(cfg_r.get("radar_min_entry_time", cfg_r.get("min_entry_time", "09:15")))
         max_entry_str = str(cfg_r.get("max_entry_time", "14:45"))
         is_mock_kite = hasattr(kite, "_mock_return_value") or type(kite).__name__.startswith("Mock")
         if (now_hm < min_entry_str or now_hm > max_entry_str) and BACKTEST_DATE is None and not is_mock_kite:
@@ -1753,10 +1761,13 @@ def run_fast_radar_check(kite):
             # Prior-day stale setup check:
             # Under Datta Rulebook, prior-day incubation setups (Point A/B/C formed yesterday) are 100% VALID
             # to trigger at Point D today! They should ONLY be evicted if they ALREADY ran/broke out
-            # prior to today (live_ltp >= benchmark or >= 80% T1).
+            # prior to today (i.e. prior day candle close was already at/above benchmark).
+            # CRITICAL (ISSUE-120): Never check live_ltp on day T+1, as live_ltp >= bm on day T+1
+            # is the fresh opening breakout we MUST execute!
             item_date = pattern_funnel._get_item_date_str(item)
-            if item_date and item_date < today_str and live_ltp > 0 and bm > 0 and live_ltp >= (bm * 0.99):
-                logging.info(f"[RADAR EVICT: STALE PRIOR-DAY RUN] {sym} ({item.get('contract')}) prior-day setup ({item_date}) already at/above BM ({live_ltp:.2f} >= {bm:.2f}). Evicting cleanly.")
+            c_prior_close = float(item.get("c_close") or item.get("close") or item.get("entry_spot") or 0.0)
+            if item_date and item_date < today_str and c_prior_close > 0 and bm > 0 and c_prior_close >= (bm * 0.99):
+                logging.info(f"[RADAR EVICT: STALE PRIOR-DAY RUN] {sym} ({item.get('contract')}) prior-day setup ({item_date}) close was already at/above BM ({c_prior_close:.2f} >= {bm:.2f}). Evicting cleanly.")
                 pattern_funnel.evict_item("nifty50", item)
                 continue
 
@@ -1766,8 +1777,7 @@ def run_fast_radar_check(kite):
             if live_ltp > 0 and bm > 0:
                 t1_80pct = round(bm + 0.80 * (t1 - bm), 2) if (bm > 0 and t1 > bm) else round(t1 * 0.80, 2) if t1 > 0 else 0.0
                 if t1_80pct > 0 and live_ltp >= t1_80pct:
-                    logging.info(f"[RADAR EVICT: 80% T1 HIT VIA QUOTE] {sym} ({item.get('contract')}) live LTP {live_ltp:.2f} >= {t1_80pct:.2f}. Evicting setup.")
-                    pattern_funnel.evict_item("nifty50", item)
+                    logging.debug(f"[RADAR ANTI-CHASE SKIP] {sym} ({item.get('contract')}) live LTP {live_ltp:.2f} >= 80% T1 ({t1_80pct:.2f}). Skipping breakout chase; retaining for Post-D Retest.")
                     continue
 
                 if sl > 0 and live_ltp <= sl:
@@ -1823,7 +1833,16 @@ def run_fast_radar_check(kite):
                         if (t1 > 0 and c_now >= (t1 * 0.995)) or (bm > 0 and c_now >= bm) or (sl > 0 and c_now <= sl):
                             logging.info(f"[RADAR EVICT: STALE PRIOR-DAY SETUP] {sym} ({item.get('contract')}) from {c_dt.date()} already reached level (Close={c_now:.2f}, BM={bm:.2f}, T1={t1:.2f}, SL={sl:.2f}). Evicting setup.")
                             pattern_funnel.evict_item("nifty50", item)
-                        continue
+                            continue
+                        # If prior session setup was intact (< BM and > SL) and today's live quote broke out (LTP >= BM),
+                        # fast-track live quote price so it doesn't get blocked by yesterday's historical candle!
+                        if live_ltp > 0 and bm > 0 and live_ltp >= bm:
+                            c_now = live_ltp
+                            c_dt = now_ist
+                            is_closed_bar = False
+                            is_80pct_mature = True  # Prior-day Point C setup had full structural maturity
+                        else:
+                            continue
 
                     # Surveillance Guard 1: SL Breach Check
                     # IMPORTANT: Eviction must strictly be on Anchor Timeframe (15m) close with buffer (handled in audit_funnel_anchor_closures).
@@ -1832,11 +1851,10 @@ def run_fast_radar_check(kite):
                         logging.debug(f"[RADAR SL HELD: AWAITING ANCHOR TF CLOSE] {sym} ({item.get('contract')}) price at {c_now:.2f} <= SL {sl:.2f} on {item_tf}. Skipping entry; awaiting Anchor TF close for eviction.")
                         continue
 
-                    # Hard Eviction Rule 2: 80% T1 achieved pre-entry (Do Not Chase)
+                    # Anti-Chase Rule 2: 80% T1 achieved pre-entry (Do Not Chase)
                     t1_80pct = round(bm + 0.80 * (t1 - bm), 2) if (bm > 0 and t1 > bm) else round(t1 * 0.80, 2) if t1 > 0 else 0.0
                     if t1_80pct > 0 and c_now >= t1_80pct:
-                        logging.info(f"[RADAR EVICT: 80% T1 HIT] {sym} ({item.get('contract')}) reached 80% of T1 target ({c_now:.2f} >= {t1_80pct:.2f}, T1={t1:.2f}, BM={bm:.2f}) before entry. Evicting setup.")
-                        pattern_funnel.evict_item("nifty50", item)
+                        logging.debug(f"[RADAR ANTI-CHASE SKIP] {sym} ({item.get('contract')}) reached 80% of T1 target ({c_now:.2f} >= {t1_80pct:.2f}, T1={t1:.2f}, BM={bm:.2f}) before entry. Skipping breakout chase; retaining for Post-D Retest.")
                         continue
 
                     # Trigger 1: Breakout / 80% Early D Trigger
@@ -1858,7 +1876,11 @@ def run_fast_radar_check(kite):
 
                         # For initial breakouts, require 80% bar maturity or bar close to avoid premature wicks
                         if is_breakout and not is_retest:
-                            if not (is_80pct_mature or is_closed_bar):
+                            # Pre-incubated Category A/A+ setups formed on prior sessions already established structural candle maturity;
+                            # allow instant tick/quote execution during opening bell window (09:15-09:25 IST) without waiting for 80% of forming bar
+                            is_opening_bell = ("09:15" <= time_now_str <= "09:25")
+                            is_pre_incubated = (item.get("stage") in ["A_PLUS", "A", "STAGE_A_PLUS_READY", "STAGE_A_READY"] or (item_date and item_date < today_str))
+                            if not (is_80pct_mature or is_closed_bar or (is_opening_bell and is_pre_incubated)):
                                 logging.debug(f"[RADAR COILING] {sym} ({item.get('contract')}) at {c_now} >= Benchmark {bm}, awaiting 80% candle maturity (Minute >= {int(tf_mins*0.8)}).")
                                 continue
 
@@ -2175,14 +2197,14 @@ def main_scan_loop(kite):
             t_str = now_ist.strftime("%H:%M")
             is_pre_market = t_now < datetime_time(9, 15)
 
-            # Morning pre-flight cleanup of stale runaway setups (runs once per day after 08:00 IST)
+            # Morning pre-flight reconciliation of prior-day setups (runs once per day after 08:00 IST)
             if _LAST_FUNNEL_CLEANUP_DATE != today_str and t_str >= "08:00":
                 try:
-                    pattern_funnel.purge_stale_prior_day_setups("nifty50", today_str=today_str, purge_scan_display=True)
+                    pattern_funnel.reconcile_funnel_and_display_setups("nifty50", today_str=today_str, purge_scan_display=True)
                     _LAST_FUNNEL_CLEANUP_DATE = today_str
-                    logging.info(f"[MORNING PRE-FLIGHT PURGE] Cleaned stale runaway setups before morning scanning at {t_str} IST.")
+                    logging.info(f"[MORNING PRE-FLIGHT RECONCILE] Reconciled prior-day setups before morning scanning at {t_str} IST.")
                 except Exception as p_err:
-                    logging.warning(f"Morning pre-flight purge error: {p_err}")
+                    logging.warning(f"Morning pre-flight reconcile error: {p_err}")
 
             # Fast sync active trades from SQLite trade_db to catch manual/1-Click entries immediately
             try:

@@ -1462,10 +1462,10 @@ def api_radar_purge_stale():
     try:
         now_ist = get_ist_now(naive=True)
         today_str = now_ist.strftime("%Y-%m-%d")
-        res = pattern_funnel.purge_stale_prior_day_setups(engine_name=engine, today_str=today_str, purge_scan_display=True)
+        res = pattern_funnel.reconcile_funnel_and_display_setups(engine_name=engine, today_str=today_str, purge_scan_display=True)
         return jsonify({
             "ok": True,
-            "message": f"Successfully purged prior-day stale setups from radar & scan display ({today_str})",
+            "message": f"Successfully purged prior-day stale setups and reconciled radar & scan display ({today_str})",
             "date": today_str
         })
     except Exception as e:

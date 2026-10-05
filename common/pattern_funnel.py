@@ -403,7 +403,8 @@ def purge_invalidated_or_triggered(engine_name, ltp_dict=None, max_runaway_pct=N
                         )
                         return False
 
-            # 4. Prior-day stale setup check: If Candle A / Entry Time is from prior session and setup already broke out
+            # 4. Prior-day stale setup check: Evict ONLY if setup already broke out on a prior day (prior day closing price was at/above BM).
+            # CRITICAL (ISSUE-120): Never check live_price >= bm on day T+1, as live_price >= bm on day T+1 is a FRESH OPENING BREAKOUT!
             candle_time_str = item.get("candle_c_time") or item.get("candle_b_time") or item.get("candle_a_time")
             if candle_time_str:
                 try:
@@ -411,14 +412,9 @@ def purge_invalidated_or_triggered(engine_name, ltp_dict=None, max_runaway_pct=N
                     if len(c_dt) >= 10:
                         c_date = dt.strptime(c_dt[:10], "%Y-%m-%d").date()
                         if c_date < today_date:
-                            # Prior session setup: If live price is known and at/above BM, it already ran
-                            if live_price is not None and bm > 0 and live_price >= bm:
-                                logger.info(f"[FUNNEL PURGE: STALE RUN] {cntr or sym} prior-day {c_date} setup already above BM ({live_price:.2f} >= {bm:.2f}). Evicting.")
-                                return False
-                            # For options, if setup is from a prior day and price has reached near/above BM
-                            is_opt = ("CE" in cntr or "PE" in cntr) and any(ch.isdigit() for ch in cntr)
-                            if is_opt and (today_date - c_date).days >= 1 and live_price is not None and bm > 0 and live_price >= (bm * 0.98):
-                                logger.info(f"[FUNNEL PURGE: STALE OPTION RUN] {cntr} prior-day {c_date} option setup already ran (LTP={live_price:.2f} >= BM={bm:.2f}). Evicting.")
+                            c_prior_close = float(item.get("c_close") or item.get("close") or item.get("entry_spot") or 0.0)
+                            if c_prior_close > 0 and bm > 0 and c_prior_close >= (bm * 0.99):
+                                logger.info(f"[FUNNEL PURGE: STALE PRIOR-DAY RUN] {cntr or sym} prior-day {c_date} close was already at/above BM ({c_prior_close:.2f} >= {bm:.2f}). Evicting.")
                                 return False
                 except Exception:
                     pass
@@ -462,13 +458,19 @@ def purge_stale_prior_day_setups(engine_name=None, today_str=None, purge_scan_di
 
         engines_to_clean = [engine_name] if engine_name else list(full_state.keys())
         total_evicted = 0
+        t_ref_date = None
+        if today_str:
+            try:
+                t_ref_date = dt.strptime(today_str[:10], "%Y-%m-%d").date()
+            except Exception:
+                pass
 
         def _is_current(x):
             if not isinstance(x, dict):
                 return False
             # 1. Contract expiry check
             contract = x.get("contract") or x.get("symbol")
-            if contract and contract_is_expired(contract):
+            if contract and contract_is_expired(contract, ref_date=t_ref_date):
                 return False
 
             d_str = _get_item_date_str(x)
@@ -483,12 +485,12 @@ def purge_stale_prior_day_setups(engine_name=None, today_str=None, purge_scan_di
                 except Exception:
                     pass
 
-            # 2. Lookback age check (max 3 calendar days for smart reconciliation)
+            # 2. Lookback age check (max 5 calendar days to accommodate 4-day long holiday weekends, e.g. Thu close to Mon morning)
             if d_str:
                 try:
                     d_obj = dt.strptime(d_str[:10], "%Y-%m-%d").date()
                     t_obj = dt.strptime(today_str[:10], "%Y-%m-%d").date()
-                    if (t_obj - d_obj).days > 3:
+                    if (t_obj - d_obj).days > 5:
                         return False
                 except Exception:
                     pass
@@ -597,7 +599,7 @@ def auto_purge_if_due(engine_name=None):
     today_str = now_ist.strftime("%Y-%m-%d")
     t_str = now_ist.strftime("%H:%M")
     if _LAST_AUTO_PURGE_DATE != today_str and t_str >= "08:00":
-        res = purge_stale_prior_day_setups(engine_name=engine_name, today_str=today_str, purge_scan_display=True)
+        res = reconcile_funnel_and_display_setups(engine_name=engine_name, today_str=today_str, purge_scan_display=True)
         _LAST_AUTO_PURGE_DATE = today_str
         return res
     return None
