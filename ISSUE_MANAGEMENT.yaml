@@ -10,6 +10,36 @@ meta:
     recent_archived_batch: [FEATURE-031, FEATURE-030, FEATURE-029, ISSUE-084, ISSUE-083, ISSUE-082, ISSUE-081, ISSUE-080, FEATURE-036, FEATURE-035, FEATURE-034, FEATURE-033, ISSUE-054]
     key_archived_families: [ALGO_AUDIT_CVE, QUANT_ENHANCEMENTS, RADAR_LIFECYCLE, VCP_METRICS, SCANNER_DISCOVERY, SECURITY_CONFIG, ZERO_REGRESSION_AUDIT]
 issues:
+- id: ISSUE-116
+  title: 1-Click Buy Route UnboundLocalError 'ltp' and Order Variable Scope Initialization
+  severity: HIGH
+  category: Route Resilience, Error Handling, Scope Isolation, 1-Click Execution
+  family: ZERO_REGRESSION_AUDIT
+  date_reported: '2026-10-04'
+  symptom: |
+    Clicking '1-Click Buy' in the Options Dashboard (app_option_Trade.py) raised:
+    'UnboundLocalError: cannot access local variable 'ltp' where it is not associated with a value'
+    when the Kite session was offline, unauthenticated, or recovering, failing the API call with HTTP 500.
+  root_cause: |
+    In Trade_Option/app_option_Trade.py:api_buy_scanned_trade(), variables `ltp`, `lot_size`, `price`,
+    `ask`, `spread_info`, `leg2_order_id`, and `is_opt` were only initialized inside `if _kite_session:`
+    (and inside a nested try-block). If `_kite_session` was None or raised an error during broker init,
+    execution skipped to downstream trade DB recording where `ltp` and `lot_size` were accessed,
+    crashing with UnboundLocalError.
+  affected_files:
+  - Trade_Option/app_option_Trade.py
+  - scratch/test_order_execution_microstructure_integrity.py
+  - scratch/run_full_regression_test.py
+  - ISSUE_MANAGEMENT.yaml
+  fix_applied: |
+    1. Pre-initialized all default scope variables (`is_index`, `registry`, `is_opt`, `lot_size`, `ltp`,
+       `ask`, `price`, `spread_info`, `leg2_order_id`) at the top of `api_buy_scanned_trade()` before any
+       Kite authentication check.
+    2. Added `ensure_kite_session(_kite_session, TOKEN_FILE)` to keep in-memory KiteConnect tokens fresh.
+    3. Added automated unit regression test `test_1click_buy_offline_no_unbound_local_error` in
+       `scratch/test_order_execution_microstructure_integrity.py`.
+    4. Updated Test 5 in `scratch/run_full_regression_test.py` to use dynamic unexpired month codes.
+  status: RESOLVED
 - id: ISSUE-115
   title: Anti-Exploded State & Point-of-Execution Chase Protection Guard with Index Marketable Limit Parity
   severity: CRITICAL

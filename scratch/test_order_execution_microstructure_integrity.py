@@ -180,6 +180,29 @@ class TestOrderExecutionMicrostructureIntegrity(unittest.TestCase):
             self.assertFalse(data["ok"])
             self.assertIn("Capital Affordability", data["error"])
 
+    def test_1click_buy_offline_no_unbound_local_error(self):
+        """Verify 1-Click Buy route does not raise UnboundLocalError for ltp when Kite session is None."""
+        import trade_db
+        client = aot.app.test_client()
+        with client.session_transaction() as sess:
+            sess["user"] = "admin"
+            sess["role"] = "admin"
+
+        with patch.object(aot, "_kite_session", None), \
+             patch("session.load_kite_session", side_effect=Exception("No token available")), \
+             patch("trade_db.create_trade", return_value=(999, True)), \
+             patch("trade_db.is_contract_active", return_value=False):
+            resp = client.post("/api/buy-scanned-trade", json={
+                "symbol": "TESTSTK",
+                "contract": "TESTSTK26OCT100CE",
+                "engine": "nifty50",
+                "force": True
+            })
+            self.assertEqual(resp.status_code, 200)
+            data = resp.get_json()
+            self.assertTrue(data.get("ok"))
+            self.assertIn("Successfully placed 1-Click BUY", data.get("message", ""))
+
 
 if __name__ == "__main__":
     unittest.main()

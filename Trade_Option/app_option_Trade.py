@@ -2028,18 +2028,35 @@ def api_buy_scanned_trade():
         else:
             exch = "NSE"
 
+        from trading_core import INDEX_REGISTRY, STOCK_REGISTRY, get_option_lot_size, is_option_contract
+        is_index = (engine == "index") or (symbol in INDEX_REGISTRY) or any(idx_name in str(contract).upper() for idx_name in INDEX_REGISTRY.keys())
+        registry = INDEX_REGISTRY if is_index else STOCK_REGISTRY
+        is_opt = is_option_contract(contract) or exch != "NSE"
+        lot_size = int(data.get("lot_size") or data.get("quantity") or get_option_lot_size(contract) or registry.get(symbol, {}).get("lot_size", 1) or 1)
+        ltp = 0.0
+        ask = 0.0
+        price = float(data.get("price") or data.get("benchmark") or entry_spot or 0.0)
+        spread_info = None
+        leg2_order_id = None
+
         global _kite_session
         order_id = None
         if not _kite_session:
             try:
-                from trading_core import load_kite_session
-                api_k, acc_t = load_kite_session()
+                from session import load_kite_session
+                api_k, acc_t = load_kite_session(TOKEN_FILE)
                 if api_k and acc_t:
-                    from kiteconnect import KiteConnect
-                    _kite_session = KiteConnect(api_key=api_k)
-                    _kite_session.set_access_token(acc_t)
+                    ks = KiteConnect(api_key=api_k)
+                    ks.set_access_token(acc_t)
+                    _kite_session = ks
             except Exception as init_err:
                 logging.warning(f"1-Click Buy auto-init kite session failed: {init_err}")
+        else:
+            try:
+                from session import ensure_kite_session
+                ensure_kite_session(_kite_session, TOKEN_FILE)
+            except Exception:
+                pass
 
         if _kite_session:
             force_order = bool(data.get("force", False))

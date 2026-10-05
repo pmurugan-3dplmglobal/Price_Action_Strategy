@@ -92,7 +92,8 @@ try:
         with client.session_transaction() as sess:
             sess["user"] = "test_admin"
             sess["role"] = "admin"
-        res1 = client.get('/api/get-chart-data?symbol=KAYNES26SEP3900PE&type=option&timeframe=30minute')
+        cur_mo = dt.now().strftime("%b").upper()
+        res1 = client.get(f'/api/get-chart-data?symbol=KAYNES26{cur_mo}3900PE&type=option&timeframe=30minute')
         res2 = client.get('/api/get-chart-data?symbol=RELIANCE&type=spot&timeframe=30minute')
         assert res1.status_code == 200, f"Option chart status: {res1.status_code}"
         assert res2.status_code == 200, f"Spot chart status: {res2.status_code}"
