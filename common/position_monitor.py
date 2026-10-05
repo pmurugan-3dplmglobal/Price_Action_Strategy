@@ -3125,7 +3125,7 @@ def clamp_lpp_buy_price(limit_price, ltp, lpp_factor=1.08):
     return lp
 
 
-def confirm_leg1_order_filled(kite, placed_oids, timeout_seconds=5.0, poll_interval=0.3):
+def confirm_leg1_order_filled(kite, placed_oids, timeout_seconds=5.0, poll_interval=0.3, contract=None, rms_settle_delay=1.0):
     """
     Sequentially verify that Leg 1 (Long BUY) order(s) are filled ('COMPLETE') on Kite
     before placing Leg 2 (Short SELL).
@@ -3135,12 +3135,16 @@ def confirm_leg1_order_filled(kite, placed_oids, timeout_seconds=5.0, poll_inter
        ~₹20,000 for hedged debit spreads IF the long leg is already COMPLETE on the broker.
     2. Atomic Execution: If Leg 1 fails or remains uncompleted, placing Leg 2 is blocked, preventing
        catastrophic unhedged short exposure.
+    3. Option B RMS Settlement: Provides a breathing window and verifies broker net position so Kite RMS
+       propagates the hedge credit before the short leg is submitted.
 
     Args:
         kite: KiteConnect session or None.
         placed_oids: List of order IDs or single order ID string/int for Leg 1 slices.
         timeout_seconds: Maximum seconds to poll for fill confirmation (default: 5.0).
         poll_interval: Seconds between status polls (default: 0.3).
+        contract: Optional tradingsymbol of Leg 1 for broker net holding confirmation.
+        rms_settle_delay: Seconds to pause after fill for RMS SPAN margin ledger update (default: 1.0).
 
     Returns:
         tuple (bool success, list filled_oids, list pending_oids, str reason)
@@ -3221,7 +3225,24 @@ def confirm_leg1_order_filled(kite, placed_oids, timeout_seconds=5.0, poll_inter
 
         if not uncompleted_set:
             elapsed = time.time() - start_t
-            logging.info(f"[SEQUENTIAL SPREAD CONFIRM] Leg 1 order(s) {oids} confirmed COMPLETE in {elapsed:.2f}s. Proceeding to Leg 2 placement.")
+            # OPTION B: RMS Settlement & Ledger Propagation Guard
+            if not is_mock and rms_settle_delay > 0:
+                settle_start = time.time()
+                if contract:
+                    try:
+                        held, held_qty = is_contract_held_on_broker(kite, contract)
+                        while not held and (time.time() - settle_start < 2.0):
+                            time.sleep(0.2)
+                            held, held_qty = is_contract_held_on_broker(kite, contract)
+                        if held:
+                            logging.info(f"[SEQUENTIAL SPREAD CONFIRM] Verified {contract} held on broker (Qty: {held_qty}) before Leg 2.")
+                    except Exception as h_err:
+                        logging.debug(f"[SEQUENTIAL SPREAD CONFIRM] Broker holding check notice: {h_err}")
+                time_so_far = time.time() - settle_start
+                if time_so_far < rms_settle_delay:
+                    time.sleep(rms_settle_delay - time_so_far)
+
+            logging.info(f"[SEQUENTIAL SPREAD CONFIRM] Leg 1 order(s) {oids} confirmed COMPLETE in {elapsed:.2f}s (RMS settle applied). Proceeding to Leg 2 placement.")
             return True, list(filled_set), [], "ALL_COMPLETE"
 
         time.sleep(poll_interval)

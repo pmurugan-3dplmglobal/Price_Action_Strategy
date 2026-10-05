@@ -156,7 +156,7 @@ class TestOrderExecutionMicrostructureIntegrity(unittest.TestCase):
             }
         }
         mock_kite.quote.return_value = {
-            "NFO:NIFTY26SEP24000CE": {"last_price": 100.0, "depth": {"buy": [{"price": 99.0}], "sell": [{"price": 100.0}]}}
+            "NFO:NIFTY26SEP24000CE": {"last_price": 100.0, "depth": {"buy": [{"price": 99.0, "quantity": 1000, "orders": 5}], "sell": [{"price": 100.0, "quantity": 1000, "orders": 5}]}}
         }
 
         with patch.object(aot, "_kite_session", mock_kite), \
@@ -202,6 +202,31 @@ class TestOrderExecutionMicrostructureIntegrity(unittest.TestCase):
             data = resp.get_json()
             self.assertTrue(data.get("ok"))
             self.assertIn("Successfully placed 1-Click BUY", data.get("message", ""))
+
+    def test_debit_spread_resolves_same_expiry_and_no_expired_contract(self):
+        """Verify resolve_option_spread never selects expired contracts and enforces matching expiries."""
+        import pandas as pd
+        from common.resolve import resolve_option_spread
+
+        mock_nfo = pd.DataFrame([
+            # Expired September contracts (should be discarded)
+            {"name": "NIFTY", "instrument_type": "CE", "strike": 22400.0, "expiry": "2026-09-24", "tradingsymbol": "NIFTY26SEP22400CE", "instrument_token": 1001, "lot_size": 25},
+            {"name": "NIFTY", "instrument_type": "CE", "strike": 22600.0, "expiry": "2026-09-24", "tradingsymbol": "NIFTY26SEP22600CE", "instrument_token": 1002, "lot_size": 25},
+            # Active October contracts
+            {"name": "NIFTY", "instrument_type": "CE", "strike": 22400.0, "expiry": "2026-10-06", "tradingsymbol": "NIFTY26O0622400CE", "instrument_token": 2001, "lot_size": 25},
+            {"name": "NIFTY", "instrument_type": "CE", "strike": 22600.0, "expiry": "2026-10-06", "tradingsymbol": "NIFTY26O0622600CE", "instrument_token": 2002, "lot_size": 25},
+            # November contracts
+            {"name": "NIFTY", "instrument_type": "CE", "strike": 22400.0, "expiry": "2026-11-26", "tradingsymbol": "NIFTY26NOV22400CE", "instrument_token": 3001, "lot_size": 25},
+            {"name": "NIFTY", "instrument_type": "CE", "strike": 22600.0, "expiry": "2026-11-26", "tradingsymbol": "NIFTY26NOV22600CE", "instrument_token": 3002, "lot_size": 25},
+        ])
+
+        spread = resolve_option_spread(mock_nfo, "NIFTY", spot_price=22400.0, step_size=50, direction="BULL", target_price=22600.0, side="CE")
+        self.assertIsNotNone(spread)
+        # Leg 1 and Leg 2 must be the active October contracts, NOT expired September
+        self.assertEqual(spread["leg1"]["contract"], "NIFTY26O0622400CE")
+        self.assertEqual(spread["leg2"]["contract"], "NIFTY26O0622600CE")
+        self.assertNotIn("SEP", spread["leg1"]["contract"])
+        self.assertNotIn("SEP", spread["leg2"]["contract"])
 
 
 if __name__ == "__main__":

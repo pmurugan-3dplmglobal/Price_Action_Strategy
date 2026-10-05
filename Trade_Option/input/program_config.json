@@ -13,6 +13,7 @@
     "rs_min_rvol": 2.0,
     "rs_vwap_distance_pct": 1.0
   },
+  "allow_naked_on_spread_margin_fail": true,
   "nifty50": {
     "target_universe": "FNO_ALL",
     "timeframe_entry": "30minute",
@@ -23,15 +24,23 @@
     "swing_min_waves": 3,
     "strict_macro_gate": true,
     "enable_spot_sl_guard": true,
+    "allow_naked_on_spread_margin_fail": true,
     "tranche_mode": true,
     "single_lot_target_mode": "EXIT_AT_T1",
-    "max_option_loss_pct": 28.0,
+    "max_option_loss_pct": 28,
     "trailing_rules": {
       "option_trail_1_gain_pct": 15.0,
       "option_trail_1_sl_pct": 8.0,
       "option_trail_2_gain_pct": 25.0,
       "option_trail_2_sl_pct": 15.0
-    }
+    },
+    "execution_mode": "AUTO",
+    "max_daily_loss_pct": 3,
+    "option_trail_1_gain_pct": 15.0,
+    "option_trail_1_sl_pct": 8.0,
+    "option_trail_2_gain_pct": 25.0,
+    "option_trail_2_sl_pct": 15.0,
+    "macro_gate_mode": "TREND_FOLLOWING"
   },
   "ema_engine": {
     "timeframe": "1d",
@@ -39,23 +48,31 @@
     "scan_interval": 300
   },
   "index": {
-    "timeframe_entry": "15minute",
-    "timeframe_anchor": "60minute",
+    "timeframe_entry": "5minute",
+    "timeframe_anchor": "15minute",
     "capital": 100000,
     "strike_range": 1,
     "enable_swing_filter": true,
     "swing_min_waves": 3,
-    "strict_macro_gate": true,
+    "strict_macro_gate": false,
     "enable_spot_sl_guard": true,
+    "allow_naked_on_spread_margin_fail": true,
     "tranche_mode": true,
     "single_lot_target_mode": "EXIT_AT_T1",
-    "max_option_loss_pct": 28.0,
+    "max_option_loss_pct": 28,
     "trailing_rules": {
       "option_trail_1_gain_pct": 15.0,
       "option_trail_1_sl_pct": 8.0,
       "option_trail_2_gain_pct": 25.0,
       "option_trail_2_sl_pct": 15.0
-    }
+    },
+    "execution_mode": "AUTO",
+    "max_daily_loss_pct": 3,
+    "option_trail_1_gain_pct": 15,
+    "option_trail_1_sl_pct": 8,
+    "option_trail_2_gain_pct": 25,
+    "option_trail_2_sl_pct": 15,
+    "macro_gate_mode": "TREND_FOLLOWING"
   },
   "bear_trade": {
     "product_type": "MIS",
@@ -84,5 +101,8 @@
       "NIFTY": 2,
       "BANKNIFTY": 2
     }
+  },
+  "portfolio_risk": {
+    "max_daily_loss_pct": 3.0
   }
 }

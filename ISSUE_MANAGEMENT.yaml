@@ -3801,3 +3801,32 @@ ISSUE-117:
   status: RESOLVED
   resolution_date: '2026-10-03'
 
+ISSUE-118:
+  title: "Debit Spread Same-Expiry Contract Enforcement, Stale Expiry Fallback Elimination & After-Hours AMO Margin Rejection Guard"
+  date_logged: '2026-10-04'
+  family: "EXECUTION_QUALITY_AND_RISK"
+  component: "common/resolve.py, Trade_Option/app_option_Trade.py, Trade_Option/stock_options_trade_engine.py, Trade_Option/index_options_trade_engine.py"
+  symptoms: |
+    1. Leg 2 RMS Margin Rejection: During 1-Click Buy debit spread execution, broker rejected Leg 2 short order with `RMS: Margin Insufficient for Leg 2 Short`.
+    2. Expired Strike Selection: The engine attempted to place Leg 2 using an expired September contract (`NIFTY26SEP24200CE`) in October.
+    3. After-Hours Option AMO Margin Trap: When placing debit spread orders outside live market hours (after 15:30 IST), Zerodha Kite converts orders to VARIETY_AMO. Kite does NOT grant SPAN hedge margin benefits on unexecuted AMOs, demanding full naked margin (₹1.28L+) which causes RMS rejection when available cash is ~₹52,900.
+    4. Leg 1 Fill Polling Without Contract: confirm_leg1_order_filled did not receive the specific contract parameter, bypassing broker holdings verification and RMS settlement timing prior to Leg 2 dispatch.
+  root_cause: |
+    1. common/resolve.py: In resolve_option_strikes, an unsafe fallback `elif not df.empty: c = df.iloc[0]` returned the first contract in the DataFrame whenever `future = df[df['expiry_dt'] >= today]` was empty, reviving expired contracts from previous months.
+    2. common/resolve.py: In resolve_option_spread, candidate strikes pool was searched for Leg 2 without strictly filtering `strike['expiry'] == leg1['expiry']`. Mismatched expiry series break exchange SPAN margin discounts.
+    3. Trade_Option/app_option_Trade.py: Allowed after-hours option AMOs and debit spreads to be dispatched to Kite without checking market_open status.
+    4. Trade_Option/app_option_Trade.py & stock_options_trade_engine.py: confirm_leg1_order_filled was called without `contract=contract`, preventing broker position holding verification before placing Leg 2.
+  fix_applied: |
+    1. common/resolve.py: Removed `elif not df.empty: c = df.iloc[0]` fallback in resolve_option_strikes; unexpired contracts are strictly required (`future = df[df['expiry_dt'] >= today]`). If no unexpired contracts exist, returns None.
+    2. common/resolve.py: In resolve_option_spread, filtered `same_exp_pool = [s for s in strikes_pool if s.get("expiry") == leg1_exp]` to mathematically guarantee Leg 1 and Leg 2 share the identical active expiry date series.
+    3. Trade_Option/app_option_Trade.py: Added market_open guard blocking after-hours option orders and debit spreads (`if not market_open and is_opt and not force_order: return jsonify({"ok": False, "error": "Markets are closed... Option AMOs/spreads blocked."}), 400`).
+    4. Trade_Option/app_option_Trade.py & stock_options_trade_engine.py: Passed `contract=contract` into `confirm_leg1_order_filled` to verify broker holding and ensure RMS ledger settlement delay is met before Leg 2 dispatch.
+    5. Trade_Option/app_option_Trade.py: Added `if not force_order and contract_is_expired(contract):` pre-flight guard.
+  verification: |
+    1. Dedicated unit test suite scratch/test_order_execution_microstructure_integrity.py: PASSED (7/7 tests).
+    2. Debit spread rollback suite scratch/test_issue087_debit_spread_rollback.py: PASSED (10/10 tests).
+    3. Master regression suite scratch/run_full_regression_test.py: PASSED (35/35 test suites with 100% success).
+  status: RESOLVED
+  resolution_date: '2026-10-04'
+
+

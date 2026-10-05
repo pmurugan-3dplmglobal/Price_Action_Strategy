@@ -369,12 +369,12 @@ def execute_index_entry(kite, pos):
         if pos.get("position_type") == "option_spread" and pos.get("leg2_contract"):
             leg2_c = pos["leg2_contract"]
 
-            # P2: Sequential Spread Fill Confirmation
+            # P2: Sequential Spread Fill Confirmation (with Option B RMS Settlement Guard)
             # Verify Leg 1 BUY is filled ('COMPLETE') on Kite before firing Leg 2 SELL
             # This unlocks Zerodha RMS hedge margin benefits (~₹20k required instead of ~₹1.8L for naked short)
             from common.position_monitor import confirm_leg1_order_filled
             leg1_ok, filled_oids, pending_oids, leg1_reason = confirm_leg1_order_filled(
-                kite, placed_oids, timeout_seconds=5.0, poll_interval=0.3
+                kite, placed_oids, timeout_seconds=5.0, poll_interval=0.3, contract=pos["contract"]
             )
             if not leg1_ok:
                 logging.error(f"[INDEX DEBIT SPREAD] Leg 1 {pos['contract']} not confirmed filled ({leg1_reason}). Cancelling resting orders to prevent unhedged exposure.")
@@ -471,11 +471,51 @@ def execute_index_entry(kite, pos):
                 except Exception as l2_chk_err:
                     logging.debug(f"Leg 2 broker holding check skipped: {l2_chk_err}")
 
-                # ISSUE-086 / ISSUE-107: Emergency Unwind for Stranded Leg 1
-                # If Leg 1 was already COMPLETE, cancel does nothing. Check broker and unwind.
+                # ISSUE-086 / ISSUE-107: Emergency Unwind or Margin Fallback for Leg 1
                 try:
                     from common.position_monitor import is_contract_held_on_broker
                     held, held_qty = is_contract_held_on_broker(kite, pos["contract"])
+
+                    # LOW CAPITAL MARGIN FALLBACK:
+                    # If Leg 2 failed specifically due to RMS margin shortage (e.g. low account capital),
+                    # allow retaining Leg 1 as an active Naked Long Option position instead of liquidating at loss.
+                    err_str = str(leg2_err).lower()
+                    is_margin_err = any(kw in err_str for kw in [
+                        "margin insufficient", "insufficient margin", "margin required",
+                        "rms: margin", "rms margin", "margin shortage", "insufficient balance"
+                    ])
+                    cfg_idx = load_program_config_for_engine("index")
+                    allow_naked = bool(cfg_idx.get("allow_naked_on_spread_margin_fail", True))
+
+                    if is_margin_err and allow_naked and held and held_qty > 0:
+                        logging.warning(
+                            f"[INDEX DEBIT SPREAD MARGIN FALLBACK] Leg 2 failed due to insufficient margin: {leg2_err}. "
+                            f"Retaining Leg 1 ({pos['contract']}, Qty={held_qty}) as active Naked Long Option position."
+                        )
+                        pos["position_type"] = "option"
+                        pos.pop("spread_type", None)
+                        pos.pop("leg2_contract", None)
+                        pos.pop("leg2_order_id", None)
+                        pos.pop("leg2_order_ids", None)
+                        if sym and sym in ACTIVE_POSITIONS:
+                            with position_lock:
+                                ACTIVE_POSITIONS[sym]["position_type"] = "option"
+                                ACTIVE_POSITIONS[sym].pop("spread_type", None)
+                                ACTIVE_POSITIONS[sym].pop("leg2_contract", None)
+                                ACTIVE_POSITIONS[sym].pop("leg2_order_id", None)
+                                ACTIVE_POSITIONS[sym].pop("leg2_order_ids", None)
+                        if pos.get("trade_id"):
+                            trade_db.update_trade(pos["trade_id"], {
+                                "position_type": "option",
+                                "is_debit_spread": False,
+                                "spread_type": None,
+                                "leg2_contract": None,
+                                "leg2_order_id": None,
+                                "leg2_order_ids": [],
+                                "details": f"Index debit spread Leg 2 failed ({leg2_err}); retained as Naked Long Option"
+                            })
+                        return True
+
                     if held and held_qty > 0:
                         logging.warning(f"[DEBIT SPREAD EMERGENCY UNWIND] Leg 1 {pos['contract']} is held ({held_qty} qty) after Leg 2 failure. Executing emergency sell...")
                         exchange_for_exit = "BFO" if any(idx in pos["contract"].upper() for idx in ["SENSEX", "BANKEX"]) else "NFO"

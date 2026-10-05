@@ -1370,7 +1370,7 @@ def _execute_highest_rr_trade_locked(kite, staged):
                         # This unlocks Zerodha RMS hedge margin benefits (~₹20k required instead of ~₹1.8L for naked short)
                         from common.position_monitor import confirm_leg1_order_filled
                         leg1_ok, filled_oids, pending_oids, leg1_reason = confirm_leg1_order_filled(
-                            kite, placed_oids, timeout_seconds=5.0, poll_interval=0.3
+                            kite, placed_oids, timeout_seconds=5.0, poll_interval=0.3, contract=contract
                         )
                         if not leg1_ok:
                             logging.error(f"[DEBIT SPREAD REJECTED] Leg 1 {contract} not confirmed filled ({leg1_reason}). Cancelling resting orders to prevent unhedged exposure.")
@@ -1476,6 +1476,46 @@ def _execute_highest_rr_trade_locked(kite, staged):
                             # Check if Leg 1 was already filled/held on broker
                             from position_monitor import is_contract_held_on_broker
                             is_held, held_qty = is_contract_held_on_broker(kite, contract)
+
+                            # LOW CAPITAL MARGIN FALLBACK:
+                            err_str = str(leg2_err).lower()
+                            is_margin_err = any(kw in err_str for kw in [
+                                "margin insufficient", "insufficient margin", "margin required",
+                                "rms: margin", "rms margin", "margin shortage", "insufficient balance"
+                            ])
+                            cfg_stk = load_program_config_for_engine("nifty50")
+                            allow_naked = bool(cfg_stk.get("allow_naked_on_spread_margin_fail", True))
+
+                            if is_margin_err and allow_naked and is_held and held_qty > 0:
+                                logging.warning(
+                                    f"[STOCK DEBIT SPREAD MARGIN FALLBACK] Leg 2 failed due to insufficient margin: {leg2_err}. "
+                                    f"Retaining Leg 1 ({contract}, Qty={held_qty}) as active Naked Long Option position."
+                                )
+                                pos["position_type"] = "option"
+                                pos.pop("spread_type", None)
+                                pos.pop("leg2_contract", None)
+                                pos.pop("leg2_order_id", None)
+                                pos.pop("leg2_order_ids", None)
+                                with position_lock:
+                                    if sym in ACTIVE_POSITIONS:
+                                        ACTIVE_POSITIONS[sym]["position_type"] = "option"
+                                        ACTIVE_POSITIONS[sym].pop("spread_type", None)
+                                        ACTIVE_POSITIONS[sym].pop("leg2_contract", None)
+                                        ACTIVE_POSITIONS[sym].pop("leg2_order_id", None)
+                                        ACTIVE_POSITIONS[sym].pop("leg2_order_ids", None)
+                                if pos.get("trade_id"):
+                                    trade_db.update_trade(pos["trade_id"], {
+                                        "position_type": "option",
+                                        "is_debit_spread": False,
+                                        "spread_type": None,
+                                        "leg2_contract": None,
+                                        "leg2_order_id": None,
+                                        "leg2_order_ids": [],
+                                        "details": f"Stock debit spread Leg 2 failed ({leg2_err}); retained as Naked Long Option"
+                                    })
+                                save_state()
+                                continue
+
                             if is_held and held_qty > 0:
                                 logging.warning(f"[DEBIT SPREAD EMERGENCY UNWIND] Leg 1 {contract} is held ({held_qty} qty) after Leg 2 failure. Executing emergency sell...")
                                 u_limit = max(0.05, limit_price)

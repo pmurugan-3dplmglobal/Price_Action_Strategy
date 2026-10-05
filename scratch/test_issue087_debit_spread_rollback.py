@@ -139,7 +139,8 @@ class TestDebitSpreadRollbackManual1Click(unittest.TestCase):
                 "direction": "BULL",
                 "force": True,
                 "is_debit_spread": True,
-                "spread_info": mock_resolve.return_value
+                "spread_info": mock_resolve.return_value,
+                "allow_naked_on_margin_fail": False
             })
 
         self.assertEqual(resp.status_code, 400)
@@ -153,6 +154,74 @@ class TestDebitSpreadRollbackManual1Click(unittest.TestCase):
         self.assertEqual(sell_calls[0][1]["tradingsymbol"], "NIFTY26SEP24000CE")
         self.assertEqual(sell_calls[0][1]["quantity"], 25)
         self.assertEqual(sell_calls[0][1]["tag"], "spread_unwind")
+
+    @patch("Trade_Option.app_option_Trade._kite_session")
+    @patch("common.position_monitor.is_contract_held_on_broker")
+    @patch("common.position_monitor.confirm_leg1_order_filled")
+    @patch("common.resolve.resolve_option_spread")
+    @patch("liquidity_guard.check_bid_ask_spread_liquidity", return_value=(True, 0.01, "OK", 0))
+    @patch("vix_guard.evaluate_vix_regime", return_value=(True, "OK", {}))
+    @patch("portfolio_risk.check_portfolio_risk_caps", return_value=(True, "OK", {}))
+    def test_1click_leg2_margin_insufficient_allows_naked_position(self, mock_risk, mock_vix, mock_liq, mock_resolve, mock_confirm, mock_held, mock_kite):
+        """When Leg 2 fails specifically due to margin shortage and allow_naked is True, retain Leg 1 as Naked Long Option."""
+        mock_kite.VARIETY_REGULAR = "regular"
+        mock_kite.TRANSACTION_TYPE_BUY = "BUY"
+        mock_kite.TRANSACTION_TYPE_SELL = "SELL"
+        mock_kite.ORDER_TYPE_LIMIT = "LIMIT"
+        mock_kite.PRODUCT_NRML = "NRML"
+
+        def mock_place_order(**kwargs):
+            if kwargs.get("tradingsymbol") == "NIFTY26SEP24000CE" and kwargs.get("transaction_type") == "BUY":
+                return "ORD_LEG1_123"
+            elif kwargs.get("tradingsymbol") == "NIFTY26SEP24200CE":
+                raise RuntimeError("RMS: Margin Insufficient for Leg 2 Short")
+            return "ORD_OTHER"
+
+        mock_kite.place_order.side_effect = mock_place_order
+        mock_kite.quote.return_value = {
+            "NFO:NIFTY26SEP24000CE": {"last_price": 95.0, "depth": {"buy": [{"price": 94.5}]}},
+            "NFO:NIFTY26SEP24200CE": {"last_price": 50.0, "depth": {"buy": [{"price": 49.5}]}}
+        }
+
+        mock_resolve.return_value = {
+            "spread_type": "BULL_CALL_DEBIT_SPREAD",
+            "leg1": {"contract": "NIFTY26SEP24000CE", "token": 111, "strike": 24000, "lot_size": 25},
+            "leg2": {"contract": "NIFTY26SEP24200CE", "token": 222, "strike": 24200, "lot_size": 25, "entry_price": 50.0}
+        }
+        mock_confirm.return_value = (True, ["ORD_LEG1_123"], [], "ALL_COMPLETE")
+        mock_held.return_value = (True, 25)
+
+        client = self._authenticated_client()
+        with patch("trading_core.is_market_open", return_value=True), \
+             patch("trade_db.create_trade", return_value=(8888, True)) as mock_create_trade:
+            resp = client.post("/api/buy-scanned-trade", json={
+                "symbol": "NIFTY",
+                "contract": "NIFTY26SEP24000CE",
+                "lot_size": 25,
+                "price": 100.0,
+                "engine": "index",
+                "side": "CE",
+                "direction": "BULL",
+                "force": True,
+                "is_debit_spread": True,
+                "spread_info": mock_resolve.return_value,
+                "allow_naked_on_margin_fail": True
+            })
+
+        self.assertEqual(resp.status_code, 200)
+        data = resp.get_json()
+        self.assertTrue(data["ok"])
+        self.assertTrue(data.get("spread_degraded_to_naked"))
+        self.assertIn("Naked Long Option", data["message"])
+
+        # Verify emergency unwind was NOT executed
+        unwind_calls = [c for c in mock_kite.place_order.call_args_list if c[1].get("tag") == "spread_unwind"]
+        self.assertEqual(len(unwind_calls), 0)
+
+        # Verify trade was created as a standard naked option
+        mock_create_trade.assert_called_once()
+        saved_data = mock_create_trade.call_args[0][2]
+        self.assertEqual(saved_data["position_type"], "option")
 
     @patch("Trade_Option.app_option_Trade._kite_session")
     @patch("common.position_monitor.is_contract_held_on_broker")

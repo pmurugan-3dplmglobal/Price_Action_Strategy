@@ -644,3 +644,7 @@ verification_and_quality_assurance:
     - id: "ISSUE-056"
       title: "Institutional Zero-Trade-Starvation Architecture (Option VWAP Guard, Point C TWAP Base Stability, Spot Confluence Mapping & Continuous 15% Loss Shield)"
       status: "RESOLVED"
+    - id: "ISSUE-118"
+      title: "Debit Spread Same-Expiry Contract Enforcement, Stale Expiry Fallback Elimination & After-Hours AMO Margin Rejection Guard"
+      status: "RESOLVED"
+

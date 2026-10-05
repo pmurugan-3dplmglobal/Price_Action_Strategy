@@ -431,9 +431,10 @@ try:
     from liquidity_guard import check_bid_ask_spread_liquidity
     from morning_reconciler import run_preflight_reconciliation
 
+    future_exp_str = (dt.now() + timedelta(days=7)).strftime("%Y-%m-%d")
     df_mock_nfo = pd.DataFrame([
-        {"name": "NIFTY", "tradingsymbol": "NIFTY24500CE", "instrument_token": 1, "instrument_type": "CE", "strike": 24500.0, "expiry": "2026-09-30", "lot_size": 25},
-        {"name": "NIFTY", "tradingsymbol": "NIFTY24700CE", "instrument_token": 2, "instrument_type": "CE", "strike": 24700.0, "expiry": "2026-09-30", "lot_size": 25}
+        {"name": "NIFTY", "tradingsymbol": "NIFTY24500CE", "instrument_token": 1, "instrument_type": "CE", "strike": 24500.0, "expiry": future_exp_str, "lot_size": 25},
+        {"name": "NIFTY", "tradingsymbol": "NIFTY24700CE", "instrument_token": 2, "instrument_type": "CE", "strike": 24700.0, "expiry": future_exp_str, "lot_size": 25}
     ])
     sp = resolve_option_spread(df_mock_nfo, "NIFTY", 24500.0, 50, "BULL", target_price=24700.0)
     assert sp is not None and sp["spread_type"] == "BULL_CALL_SPREAD"

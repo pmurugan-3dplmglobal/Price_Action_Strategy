@@ -3053,17 +3053,18 @@ def resolve_option_strikes(nfo_instruments, base_symbol, spot_price, step_size, 
                         c = sub.iloc[0] if not sub.empty else future.iloc[0]
                     else:
                         c = future.iloc[0]
-            elif not df.empty:
-                c = df.iloc[0]
             else:
+                logging.warning(f"[EXPIRED_CONTRACT_GUARD] No future unexpired contract found for {base_symbol} {strike} {option_type}")
                 continue
+
             c_lot = int(c['lot_size']) if 'lot_size' in c and pd.notna(c['lot_size']) else None
             out.append({
                 "strike": strike,
                 "token": int(c['instrument_token']),
                 "tradingsymbol": c['tradingsymbol'],
                 "lot_size": c_lot,
-                "strike_offset": offset
+                "strike_offset": offset,
+                "expiry": str(c.get('expiry_dt') or c.get('expiry'))
             })
         except Exception as e:
             logging.error(f"Strike resolution error for {base_symbol} {option_type} @ {strike}: {e}")
@@ -3126,18 +3127,22 @@ def resolve_option_spread(nfo_instruments, base_symbol, spot_price, step_size, d
         closest_strike = min(strike_map.keys(), key=lambda k: abs(k - float(atm_strike)))
         leg1 = strike_map[closest_strike]
 
-    leg2 = strike_map.get(round(float(target_strike), 4))
+    leg1_exp = leg1.get("expiry")
+    same_exp_pool = [s for s in strikes_pool if s.get("expiry") == leg1_exp] if leg1_exp else strikes_pool
+    same_exp_map = {round(float(s["strike"]), 4): s for s in same_exp_pool}
+
+    leg2 = same_exp_map.get(round(float(target_strike), 4))
     if not leg2:
         if is_bull:
-            otm_candidates = [k for k in strike_map.keys() if k > float(leg1["strike"])]
+            otm_candidates = [k for k in same_exp_map.keys() if k > float(leg1["strike"])]
             if otm_candidates:
                 best_otm = min(otm_candidates, key=lambda k: abs(k - float(target_strike)))
-                leg2 = strike_map[best_otm]
+                leg2 = same_exp_map[best_otm]
         else:
-            otm_candidates = [k for k in strike_map.keys() if k < float(leg1["strike"])]
+            otm_candidates = [k for k in same_exp_map.keys() if k < float(leg1["strike"])]
             if otm_candidates:
                 best_otm = min(otm_candidates, key=lambda k: abs(k - float(target_strike)))
-                leg2 = strike_map[best_otm]
+                leg2 = same_exp_map[best_otm]
 
     if not leg1 or not leg2 or leg1["strike"] == leg2["strike"]:
         return None

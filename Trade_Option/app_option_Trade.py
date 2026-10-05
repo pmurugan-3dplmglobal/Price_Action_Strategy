@@ -2333,6 +2333,13 @@ def api_buy_scanned_trade():
                     except Exception as afford_err:
                         logging.warning(f"Capital affordability check error in 1-Click Buy: {afford_err}")
 
+                if not market_open and is_opt and not force_order:
+                    logging.warning(f"[1-CLICK BUY REJECTED] {symbol} ({contract}): Markets closed. Option AMOs/spreads blocked.")
+                    return jsonify({
+                        "ok": False,
+                        "error": "Markets are closed (trading hours: 09:15 - 15:30 IST). Option orders and multi-leg debit spreads cannot be executed after hours (broker RMS requires live market execution to grant spread margin hedge benefits and avoid naked short margin requirements). Set force=true if you explicitly wish to override for paper testing."
+                    }), 400
+
                 order_variety = _kite_session.VARIETY_REGULAR if market_open else _kite_session.VARIETY_AMO
 
                 try:
@@ -2382,10 +2389,10 @@ def api_buy_scanned_trade():
 
                 # Leg 2 Execution for Debit Spread (Sell OTM Short Leg)
                 if spread_info and _kite_session:
-                    # P2: Sequential Spread Fill Confirmation
+                    # P2: Sequential Spread Fill Confirmation (with Option B RMS Settlement Guard)
                     from common.position_monitor import confirm_leg1_order_filled, is_contract_held_on_broker, slice_quantity_for_freeze
                     leg1_ok, filled_oids, pending_oids, leg1_reason = confirm_leg1_order_filled(
-                        _kite_session, placed_leg1_oids, timeout_seconds=5.0, poll_interval=0.3
+                        _kite_session, placed_leg1_oids, timeout_seconds=5.0, poll_interval=0.3, contract=contract
                     )
                     if not leg1_ok:
                         logging.warning(f"[1-CLICK BUY DEBIT SPREAD] Leg 1 {contract} not confirmed filled ({leg1_reason}). Cancelling resting orders to avoid naked short.")
@@ -2479,7 +2486,31 @@ def api_buy_scanned_trade():
 
                         # Check if Leg 1 is held on broker
                         is_held, held_qty = is_contract_held_on_broker(_kite_session, contract)
-                        if is_held and held_qty > 0:
+
+                        # LOW CAPITAL MARGIN FALLBACK:
+                        err_str = str(leg2_err).lower()
+                        is_margin_err = any(kw in err_str for kw in [
+                            "margin insufficient", "insufficient margin", "margin required",
+                            "rms: margin", "rms margin", "margin shortage", "insufficient balance"
+                        ])
+                        allow_naked = data.get("allow_naked_on_margin_fail")
+                        if allow_naked is None:
+                            try:
+                                from common.position_monitor import _load_program_config_file
+                                cfg_f = _load_program_config_file(engine_name=engine)
+                                allow_naked = bool(cfg_f.get("allow_naked_on_spread_margin_fail", False))
+                            except Exception:
+                                allow_naked = False
+
+                        if is_margin_err and allow_naked and is_held and held_qty > 0:
+                            logging.warning(
+                                f"[1-CLICK BUY DEBIT SPREAD MARGIN FALLBACK] Leg 2 failed due to insufficient margin: {leg2_err}. "
+                                f"Retaining Leg 1 ({contract}, Qty={held_qty}) as active Naked Long Option position."
+                            )
+                            spread_info = None  # Demote to naked option for position monitor supervision
+                            leg2_margin_fallback_msg = str(leg2_err)
+                            lot_size = held_qty
+                        elif is_held and held_qty > 0:
                             logging.warning(f"[1-CLICK BUY DEBIT SPREAD EMERGENCY UNWIND] Leg 1 {contract} is held ({held_qty} qty) after Leg 2 failure. Executing emergency sell...")
                             try:
                                 leg1_exch = "BFO" if ("SENSEX" in contract.upper() or "BSE" in contract.upper() or "BANKEX" in contract.upper()) else "NFO"
@@ -2625,7 +2656,7 @@ def api_buy_scanned_trade():
             trade_data["direction"] = direction
         try:
             from trading_core import contract_is_expired
-            if contract_is_expired(contract):
+            if not force_order and contract_is_expired(contract):
                 return jsonify({"ok": False, "error": f"Contract {contract} is expired. Cannot place 1-Click Buy."}), 400
         except Exception as exp_check_err:
             logging.warning(f"1-Click Buy expiry check skipped: {exp_check_err}")
@@ -2640,6 +2671,15 @@ def api_buy_scanned_trade():
                 "error": f"CRITICAL: Leg 2 failed ({leg2_err_msg}) AND Leg 1 emergency unwind failed ({unwind_failed_err})! Position retained in trade DB as naked option for position monitor supervision. IMMEDIATE MANUAL ACTION RECOMMENDED!",
                 "order_id": order_id
             }), 500
+
+        if 'leg2_margin_fallback_msg' in locals() and leg2_margin_fallback_msg:
+            return jsonify({
+                "ok": True,
+                "message": f"Successfully placed 1-Click BUY for {contract}" + (f" (Order ID: {order_id})" if order_id else "") + f". Note: Spread Leg 2 failed due to insufficient margin ({leg2_margin_fallback_msg}); position retained as Naked Long Option.",
+                "trade_id": tid,
+                "spread_degraded_to_naked": True,
+                "status": "ACTIVE"
+            }), 200
 
         return jsonify({
             "ok": True,
