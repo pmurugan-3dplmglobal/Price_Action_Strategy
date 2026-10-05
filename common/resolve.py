@@ -2088,7 +2088,7 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                         cand_rr_ce = float(result_ce.get("RR") or 0.0)
                         is_opt_vcp_ce = (atr_r_cand_ce <= 0.85 and (atr_r_cand_ce <= 0.65 or is_squeeze_cand_ce))
                         is_spot_vcp_ce = (spot_atr_ratio <= 0.85) if (df_spot is not None and len(df_spot) >= 14) else True
-                        if tier_ce >= 2 and spot_conf_ce and has_spot_anchor_ce and is_spot_vcp_ce and is_opt_vcp_ce and cand_rr_ce >= 1.80:
+                        if not is_d2_ce and tier_ce >= 2 and spot_conf_ce and has_spot_anchor_ce and is_spot_vcp_ce and is_opt_vcp_ce and cand_rr_ce >= 1.80:
                             tier_ce = 1
                             tier_label_ce = "TIER_1_GOLD"
                             tier_badge_ce = "🥇 T1"
@@ -2340,7 +2340,7 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                         cand_rr_pe = float(result_pe.get("RR") or 0.0)
                         is_opt_vcp_pe = (atr_r_cand_pe <= 0.85 and (atr_r_cand_pe <= 0.65 or is_squeeze_cand_pe))
                         is_spot_vcp_pe = (spot_atr_ratio <= 0.85) if (df_spot is not None and len(df_spot) >= 14) else True
-                        if tier_pe >= 2 and spot_conf_pe and has_spot_anchor_pe and is_spot_vcp_pe and is_opt_vcp_pe and cand_rr_pe >= 1.80:
+                        if not is_d2_pe and tier_pe >= 2 and spot_conf_pe and has_spot_anchor_pe and is_spot_vcp_pe and is_opt_vcp_pe and cand_rr_pe >= 1.80:
                             tier_pe = 1
                             tier_label_pe = "TIER_1_GOLD"
                             tier_badge_pe = "🥇 T1"

@@ -982,12 +982,23 @@ def scan_trend_continuation_reentry(df_entry, df_anchor):
     """
     Setup Page 16 (Bullish Trend Continuation + Re-Entry):
     1. Context: Established Uptrend (Higher Highs & Higher Lows in preceding window).
-    2. Retest: Price pulls back to prior swing support level.
-    3. Trigger: Bullish Engulfing or Reclaim candle forms at support.
-    4. Execution: Immediate Re-entry on the next candle close (No BCD delay).
+    2. EMA Alignment: Price strictly above or holding EMA 13; EMA slope not declining.
+    3. Drawdown Cap: Reject sharp pullbacks/crashes > 12% from recent lookback peak.
+    4. Volume Liquidity: Filter out completely dead/illiquid strikes.
+    5. Retest: Price pulls back to prior swing support level.
+    6. Trigger: Bullish Engulfing or Reclaim candle forms at support.
+    7. Structural Output: Provides explicit Benchmark & AnchorFloor mapping for UI/forensics.
     """
     if len(df_entry) < 20:
         return None
+
+    # Liquidity check: Filter out zero-volume / illiquid option contracts
+    if "volume" in df_entry.columns:
+        vol_slice = df_entry["volume"].iloc[-20:]
+        if float(vol_slice.max()) > 0:
+            non_zero_bars = int((vol_slice > 0).sum())
+            if non_zero_bars < 6 or float(vol_slice.mean()) < 20.0:
+                return None
 
     lookback = df_entry.iloc[-25:-2]
     if lookback.empty or len(lookback) < 10:
@@ -1002,19 +1013,33 @@ def scan_trend_continuation_reentry(df_entry, df_anchor):
 
     trigger_candle = df_entry.iloc[-2]
     current_candle = df_entry.iloc[-1]
+    entry_price = float(current_candle['close'])
+    trigger_low = float(trigger_candle['low'])
+    trigger_close = float(trigger_candle['close'])
+
+    # Peak Drawdown Cap: Disqualify freefalls/crashes > 12% from peak
+    recent_peak = float(lookback['high'].max())
+    if recent_peak > 0:
+        if trigger_low < (recent_peak * 0.88) or entry_price < (recent_peak * 0.88):
+            return None
+
+    # EMA 13 Trend & Slope Filter
+    ema13 = df_entry['close'].ewm(span=13, adjust=False).mean()
+    if len(ema13) >= 5:
+        if trigger_close < float(ema13.iloc[-2]) * 0.99 or entry_price < float(ema13.iloc[-1]) * 0.99:
+            return None
+        if float(ema13.iloc[-1]) < float(ema13.iloc[-4]) * 0.995:
+            return None
 
     is_green_trigger = float(trigger_candle['close']) > float(trigger_candle['open'])
     if not is_green_trigger:
         return None
 
     support_level = float(part2['low'].min())
-    trigger_low = float(trigger_candle['low'])
-    trigger_close = float(trigger_candle['close'])
 
     if not (trigger_low <= (support_level * 1.015) and trigger_close >= support_level):
         return None
 
-    entry_price = float(current_candle['close'])
     sl_val = round(trigger_low - max(0.50, trigger_low * 0.02), 2)
 
     if entry_price <= sl_val:
@@ -1037,21 +1062,35 @@ def scan_trend_continuation_reentry(df_entry, df_anchor):
     rr = (t1 - entry_price) / risk
     return {
         "Pattern": "TREND_CONT_BULL",
+        "pattern": "TREND_CONT_BULL",
+        "anchor_name": "TREND_CONT_PULLBACK",
+        "Benchmark": round(support_level, 2),
+        "benchmark": round(support_level, 2),
+        "AnchorFloor": sl_val,
+        "anchor_floor": sl_val,
+        "PointC_Time": str(trigger_candle.get("date", "")),
+        "PointD_Time": str(current_candle.get("date", "")),
+        "point_c_time": str(trigger_candle.get("date", "")),
+        "point_d_time": str(current_candle.get("date", "")),
+        "stage": "STAGE_D_TRIGGER",
         "SL": sl_val,
-        "T1": t1,
-        "T2": t2,
-        "T3": t3,
+        "sl": sl_val,
+        "T1": t1, "t1": t1,
+        "T2": t2, "t2": t2,
+        "T3": t3, "t3": t3,
         "Entry": entry_price,
         "Close": entry_price,
+        "close": entry_price,
         "RR": round(rr, 2),
+        "rr": round(rr, 2),
         "Signal": "Immediate_ReEntry",
         "CandleTime": str(current_candle.get("date", "")),
         "CandleATime": str(trigger_candle.get("date", "")),
         "D_time": str(current_candle.get("date", "")),
         "A_time": str(trigger_candle.get("date", "")),
-        "tier": 3,
-        "tier_label": "TIER_3_MOMENTUM",
-        "tier_badge": "🥉 T3",
+        "tier": 2,
+        "tier_label": "TIER_2_CORE",
+        "tier_badge": "🥈 T2",
         "swing_waves": 1,
         "terminal_base": False,
         "direction": "BULL",

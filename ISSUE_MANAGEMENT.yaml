@@ -3829,4 +3829,42 @@ ISSUE-118:
   status: RESOLVED
   resolution_date: '2026-10-04'
 
+ISSUE-119:
+  title: "D2 Trend Continuation Re-entry Hardening — 13 EMA Alignment, Crash Drawdown Cap, Volume Liquidity Gate & Structural Mapping"
+  date_logged: '2026-10-05'
+  family: "PATTERN_DETECTION_AND_FILTERING"
+  component: "common/patterns_bull.py, common/patterns_bear.py, common/resolve.py, scratch/test_d2_trend_cont_hardening.py"
+  symptoms: |
+    1. False D2 Trend Continuation Signal on Collapsing Asset: `SHREECEM26OCT21750PE` was surfaced on the Option Scan Tab as a D2 setup even though its underlying premium crashed -36% (from ₹739.60 down to ₹474.80) in a steep freefall below a falling 13 EMA.
+    2. Missing C & D Structural Markers: The UI showed `---` or `null` for Point C / Point D times and Benchmark because `scan_trend_continuation_reentry` returned `Benchmark: None` and lacked PointC_Time / PointD_Time mapping.
+    3. Improper Tier 1 Gold Elevation: Dual-Asset VCP coiling in `common/resolve.py` elevated the continuation trade from Tier 3 to Tier 1 Gold because lines 2091 and 2343 lacked the `not is_d2_ce` / `not is_d2_pe` exclusion gate.
+  root_cause: |
+    1. `scan_trend_continuation_reentry` and `scan_trend_continuation_reentry_bearish` only evaluated `part2['high'].max() > part1['high'].max()` across a 23-bar window, completely oblivious to current EMA trend alignment, moving-average slope, or catastrophic peak drawdown.
+    2. Zero volume/liquidity checking allowed illiquid 1-lot contracts with stale prints to trigger execution signals.
+    3. Structural output lacked explicit `Benchmark`, `AnchorFloor`, `PointC_Time`, and `PointD_Time` keys.
+    4. `common/resolve.py` lines 2091 and 2343 lacked `not is_d2_ce` / `not is_d2_pe` checks in the Dual VCP promotion rule.
+  fix_applied: |
+    1. common/patterns_bull.py:
+       - In `scan_trend_continuation_reentry`:
+         - Enforced 13 EMA Trend & Slope: Trigger close and entry close must hold at/above 13 EMA (`>= ema13 * 0.99`), and 13 EMA slope must not be in steep decline (`ema13[-1] >= ema13[-4] * 0.995`).
+         - Added Peak Drawdown Cap: Reject sharp pullbacks/crashes > 12% from recent lookback peak (`trigger_low >= recent_peak * 0.88` and `entry_price >= recent_peak * 0.88`).
+         - Added Volume Liquidity Filter: Require at least 6 non-zero volume bars in the last 20 candles and mean volume >= 20.
+         - Populated Structural Mapping: Added `Benchmark`, `benchmark`, `AnchorFloor`, `anchor_floor`, `PointC_Time`, `PointD_Time`, `stage="STAGE_D_TRIGGER"`, `tier=2`, `tier_label="TIER_2_CORE"`, `tier_badge="🥈 T2"`.
+    2. common/patterns_bear.py:
+       - In `scan_trend_continuation_reentry_bearish`:
+         - Enforced symmetric downward 13 EMA alignment (`<= ema13 * 1.01`) and non-rising slope.
+         - Added Trough Bounce Cap: Reject counter-trend squeezes > 12% from recent lookback trough (`trigger_high <= recent_trough * 1.12`).
+         - Added Volume Liquidity Filter and structural mapping (`Benchmark`, `AnchorFloor`, etc.).
+    3. common/resolve.py:
+       - Added `not is_d2_ce` to CE Dual VCP promotion gate (line 2088) and `not is_d2_pe` to PE Dual VCP promotion gate (line 2340). Trend continuation trades are strictly barred from being promoted to Tier 1 Gold and remain Tier 2 Core.
+    4. scratch/test_d2_trend_cont_hardening.py:
+       - Added unit test suite verifying `SHREECEM26OCT21750PE` crash rejection and valid continuation acceptance.
+  verification: |
+    1. Dedicated unit test suite `scratch/test_d2_trend_cont_hardening.py`: 3/3 tests PASSED (100%).
+    2. Verification suites `test_vcp_metrics.py`, `test_parity_alignment.py`, `test_spread_liquidity_reconciler.py`, `test_institutional_enhancements.py`, `test_vix_portfolio_volume.py`: 66/66 tests PASSED.
+    3. AST syntax check across `common/patterns_bull.py`, `common/patterns_bear.py`, and `common/resolve.py`: 100% OK.
+  status: RESOLVED
+  resolution_date: '2026-10-05'
+
+
 
