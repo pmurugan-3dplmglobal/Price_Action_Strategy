@@ -35,7 +35,8 @@ def check_bid_ask_spread_liquidity(
     max_spread_pct: float = 0.02,
     min_depth_qty: int = None,
     bypass_when_closed: bool = True,
-    lot_size: int = None
+    lot_size: int = None,
+    quote_dict: dict = None
 ):
     """
     Evaluates bid-ask spread liquidity for an option or equity contract before order routing.
@@ -48,6 +49,7 @@ def check_bid_ask_spread_liquidity(
         min_depth_qty: Minimum cumulative shares/units on top 5 bid/ask depth (defaults to max(lot_size, 50)).
         bypass_when_closed: When market is closed and off-hours testing or AMO, permit bypass.
         lot_size: Optional contract lot size. If not provided, dynamically resolved.
+        quote_dict: Optional pre-fetched batch quote dict to avoid extra network latency.
 
     Returns:
         tuple: (is_liquid: bool, spread_pct: float, reason: str, details: dict)
@@ -60,7 +62,9 @@ def check_bid_ask_spread_liquidity(
 
     q_key = f"{exchange.strip().upper()}:{contract.strip().upper()}"
     try:
-        if safe_kite_call is not None:
+        if quote_dict and isinstance(quote_dict, dict) and q_key in quote_dict:
+            quote_data = quote_dict
+        elif safe_kite_call is not None:
             quote_data = safe_kite_call(kite.quote, [q_key], retries=2, delay=0.5)
         else:
             quote_data = kite.quote([q_key])

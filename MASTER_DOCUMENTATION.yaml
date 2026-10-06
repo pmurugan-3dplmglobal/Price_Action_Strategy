@@ -648,4 +648,14 @@ verification_and_quality_assurance:
     - id: "ISSUE-118"
       title: "Debit Spread Same-Expiry Contract Enforcement, Stale Expiry Fallback Elimination & After-Hours AMO Margin Rejection Guard"
       status: "RESOLVED"
+    - id: "ISSUE-119"
+      title: "D2 Trend Continuation Re-Entry Hardening (Peak Drawdown Cap, 13 EMA Alignment, Liquidity Filter & Tier 2 Ceilings)"
+      status: "RESOLVED"
+    - id: "ISSUE-120"
+      title: "Morning Bell Breakout Execution & Overnight Incubation Retention Engine"
+      status: "RESOLVED"
+    - id: "ISSUE-121"
+      title: "Tier 2 Strategic Architectural Upgrades — WebSocket Event-Driven Triggers, Point D Climax Throttle & Consolidated Pre-Flight Batch Quote Query"
+      status: "RESOLVED"
+
 

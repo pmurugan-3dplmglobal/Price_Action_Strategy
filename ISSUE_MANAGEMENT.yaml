@@ -3910,5 +3910,41 @@ ISSUE-120:
   status: RESOLVED
   resolution_date: '2026-10-05'
 
+ISSUE-121:
+  title: "Tier 2 Strategic Architectural Upgrades — WebSocket Event-Driven Triggers, Point D Climax Throttle & Consolidated Pre-Flight Batch Quote Query"
+  date_logged: '2026-10-05'
+  family: "HIGH_VELOCITY_EXECUTION_AND_GEOMETRIC_DISCIPLINE"
+  component: "common/websocket_monitor.py, common/patterns_bull.py, common/patterns_bear.py, common/liquidity_guard.py, Trade_Option/stock_options_trade_engine.py"
+  symptoms: |
+    1. Surveillance Radar Latency for Category A+ Coiled Setups: Fast Surveillance Radar polled quotes on a 15-second loop, causing up to 15 seconds of execution delay for Category A+ candidates during rapid opening bell breakouts.
+    2. Overextended Point D Climax Chasing: When Candle D formed an elongated climax bar that closed >50% of the distance toward Target 1, the engine chased the breakout at market, suffering deteriorated R:R, high slippage, and elevated shakeout risk.
+    3. Sequential Network Query Latency: The pre-flight execution pipeline executed sequential REST queries to Kite (one for option quote & depth in liquidity_guard, and another for underlying spot LTP), accumulating ~1,100ms of pre-execution latency.
+  root_cause: |
+    1. websocket_monitor.py was solely dedicated to active open positions, lacking integration with pre-breakout radar candidate tracking and sub-second tick dispatch.
+    2. scan_anchor_bcd_breakout and scan_anchor_bcd_breakout_bearish lacked a climax excursion throttle to block market orders when Candle D closed >50% toward Target 1.
+    3. liquidity_guard.py did not accept pre-fetched quote dictionaries, requiring redundant network calls before order dispatch.
+  fix_applied: |
+    1. common/websocket_monitor.py:
+       - Upgraded ActivePositionWebSocketMonitor with radar candidate tracking (update_radar_candidates, register_radar_callback, clear_triggered_radar_token).
+       - Promoted on_ticks and on_connect to instance methods for testability and clean architecture.
+       - Dispatched sub-second breakout events to background callback threads upon tick breach (ltp >= benchmark) with anti-exploded guard (< 20% into T1) and token debouncing.
+       - Preserved isolation between active position tokens and radar candidate tokens during subscription updates.
+    2. common/patterns_bull.py & common/patterns_bear.py:
+       - Implemented Point D Climax Excursion Throttle.
+       - Evaluated planned_t1_span from base risk when T1 is fallback, or structural target span when structural pivots exist.
+       - Throttled market entry (FRESH_ENTRY / EARLY_D_ENTRY) when Candle D closed > 50% toward Target 1, requiring setups to pull back to the Benchmark corridor as POST_D_RETEST.
+    3. common/liquidity_guard.py:
+       - Updated check_bid_ask_spread_liquidity to accept optional quote_dict parameter. If supplied and containing the target instrument key, consumes cached depth directly without issuing redundant HTTP requests.
+    4. Trade_Option/stock_options_trade_engine.py:
+       - In _execute_highest_rr_trade_locked: Consolidated pre-flight quote query into a single atomic batch call ([f"NFO:{contract}", f"NSE:{sym}"]), extracting spot LTP directly and passing the cached quote to check_bid_ask_spread_liquidity (< 250ms total latency).
+       - In run_fast_radar_check: Registered _on_ws_radar_tick_breakout callback with global WebSocket monitor and fed Category A+ candidates into the monitor for sub-second event-driven triggers under _EXECUTION_LOCK.
+  verification: |
+    1. Dedicated unit test suite scratch/test_tier2_architectural_upgrades.py: 4/4 tests PASSED (100%).
+    2. Master regression test suite scratch/run_full_regression_test.py: 32/35 test suites PASSED (3 auth-only failed due to offline local token).
+    3. AST syntax check across all 5 modified files: 100% OK.
+  status: RESOLVED
+  resolution_date: '2026-10-05'
+
+
 
 

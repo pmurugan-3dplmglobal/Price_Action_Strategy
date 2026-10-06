@@ -21,6 +21,10 @@ class ActivePositionWebSocketMonitor:
         self.failsafe_start_str = failsafe_start_time
         self.kws = None
         self.subscribed_tokens = set()
+        self.radar_candidates = {}          # int_token -> candidate_dict (Category A+)
+        self.radar_tokens = set()           # set of int tokens for Category A+ radar
+        self.radar_callbacks = []           # list of callable(cand, live_price, tick_data)
+        self.radar_triggered_tokens = set() # tokens already triggered to prevent duplicate execution
         self.live_ltp_map = {}  # token -> {"ltp": float, "timestamp": float}
         self.is_running = False
         self._thread = None
@@ -68,6 +72,56 @@ class ActivePositionWebSocketMonitor:
         except Exception:
             return False
 
+    def on_ticks(self, ws, ticks):
+        """KiteTicker tick handler: updates live LTP map and evaluates radar breakout triggers."""
+        now_ts = time.time()
+        triggered_cands = []
+        with self._map_lock:
+            for t in ticks:
+                token = t.get("instrument_token")
+                last_price = t.get("last_price")
+                if token and last_price:
+                    int_tok = int(token)
+                    self.live_ltp_map[int_tok] = {
+                        "ltp": float(last_price),
+                        "timestamp": now_ts
+                    }
+                    # Check Category A+ Event-Driven Radar Triggers
+                    if int_tok in self.radar_candidates and int_tok not in self.radar_triggered_tokens:
+                        cand = self.radar_candidates[int_tok]
+                        bm = float(cand.get("benchmark") or 0.0)
+                        t1 = float(cand.get("t1") or 0.0)
+                        if bm > 0 and float(last_price) >= bm:
+                            # Anti-Exploded check: If tick already surged > 20% into T1, skip
+                            t1_span = (t1 - bm) if (t1 > bm) else (bm * 0.15)
+                            if (float(last_price) - bm) <= (0.20 * t1_span):
+                                self.radar_triggered_tokens.add(int_tok)
+                                triggered_cands.append((cand, float(last_price), t))
+
+        for cand, ltp_val, tick_data in triggered_cands:
+            logging.info(
+                f"⚡ [WEBSOCKET RADAR TRIGGER] Sub-second breakout triggered for "
+                f"{cand.get('contract') or cand.get('symbol')} at ₹{ltp_val:.2f} >= BM ₹{cand.get('benchmark')}! Dispatching callbacks..."
+            )
+            for cb in self.radar_callbacks:
+                try:
+                    threading.Thread(target=cb, args=(cand, ltp_val, tick_data), daemon=True).start()
+                except Exception as cb_err:
+                    logging.error(f"[WEBSOCKET RADAR] Callback execution failed: {cb_err}")
+
+    def on_connect(self, ws, response):
+        """KiteTicker connect handler: subscribes to active positions and radar candidates."""
+        logging.info("[WEBSOCKET] KiteTicker connected successfully.")
+        with self._map_lock:
+            tokens_to_sub = list(self.subscribed_tokens | self.radar_tokens)
+        if tokens_to_sub:
+            try:
+                ws.subscribe(tokens_to_sub)
+                ws.set_mode(ws.MODE_FULL, tokens_to_sub)
+                logging.info(f"[WEBSOCKET] Connected & subscribed to {len(tokens_to_sub)} active position + radar token(s): {tokens_to_sub}")
+            except Exception as sub_err:
+                logging.warning(f"[WEBSOCKET] Subscription in on_connect failed: {sub_err}")
+
     def start(self):
         """Initialize and start KiteTicker WebSocket connection in background thread."""
         if self.is_running and self.kws:
@@ -75,30 +129,6 @@ class ActivePositionWebSocketMonitor:
         try:
             from kiteconnect import KiteTicker
             self.kws = KiteTicker(self.api_key, self.access_token)
-            
-            def on_ticks(ws, ticks):
-                now_ts = time.time()
-                with self._map_lock:
-                    for t in ticks:
-                        token = t.get("instrument_token")
-                        last_price = t.get("last_price")
-                        if token and last_price:
-                            self.live_ltp_map[int(token)] = {
-                                "ltp": float(last_price),
-                                "timestamp": now_ts
-                            }
-
-            def on_connect(ws, response):
-                logging.info("[WEBSOCKET] KiteTicker connected successfully.")
-                with self._map_lock:
-                    tokens_to_sub = list(self.subscribed_tokens)
-                if tokens_to_sub:
-                    try:
-                        ws.subscribe(tokens_to_sub)
-                        ws.set_mode(ws.MODE_FULL, tokens_to_sub)
-                        logging.info(f"[WEBSOCKET] Connected & subscribed to {len(tokens_to_sub)} active position token(s): {tokens_to_sub}")
-                    except Exception as sub_err:
-                        logging.warning(f"[WEBSOCKET] Subscription in on_connect failed: {sub_err}")
 
             def on_close(ws, code, reason):
                 logging.warning(f"[WEBSOCKET] KiteTicker closed: {code} - {reason}")
@@ -112,8 +142,8 @@ class ActivePositionWebSocketMonitor:
             def on_noreconnect(ws):
                 logging.warning("[WEBSOCKET] KiteTicker reconnection failed permanently.")
 
-            self.kws.on_ticks = on_ticks
-            self.kws.on_connect = on_connect
+            self.kws.on_ticks = self.on_ticks
+            self.kws.on_connect = self.on_connect
             self.kws.on_close = on_close
             self.kws.on_error = on_error
             self.kws.on_reconnect = on_reconnect
@@ -139,10 +169,10 @@ class ActivePositionWebSocketMonitor:
                 except Exception:
                     pass
 
-        new_tokens = current_tokens - self.subscribed_tokens
-        stale_tokens = self.subscribed_tokens - current_tokens
-
         with self._map_lock:
+            all_needed_before = self.subscribed_tokens | self.radar_tokens
+            new_tokens = current_tokens - all_needed_before
+            stale_tokens = (self.subscribed_tokens - current_tokens) - self.radar_tokens
             self.subscribed_tokens = current_tokens
 
         # If socket is not yet open (e.g. before initial handshake or during reconnection),
@@ -170,6 +200,75 @@ class ActivePositionWebSocketMonitor:
                 pass
             except Exception as e:
                 logging.warning(f"[WEBSOCKET] Unsubscription failed: {e}")
+
+    def update_radar_candidates(self, candidates):
+        """
+        Dynamically register Category A+ radar candidates with KiteTicker for sub-second tick execution.
+        Subscribes tokens without disturbing active position subscriptions.
+        """
+        if not candidates:
+            with self._map_lock:
+                stale_tokens = self.radar_tokens - self.subscribed_tokens
+                self.radar_tokens = set()
+                self.radar_candidates = {}
+            if self.is_connected() and stale_tokens:
+                try:
+                    self.kws.unsubscribe(list(stale_tokens))
+                except Exception:
+                    pass
+            return
+
+        new_radar_map = {}
+        cand_list = candidates.values() if isinstance(candidates, dict) else candidates
+        for item in cand_list:
+            if not isinstance(item, dict):
+                continue
+            tok = item.get("option_token") or item.get("token") or item.get("spot_token")
+            if tok:
+                try:
+                    new_radar_map[int(tok)] = item
+                except Exception:
+                    pass
+
+        with self._map_lock:
+            current_radar_tokens = set(new_radar_map.keys())
+            all_needed_before = self.subscribed_tokens | self.radar_tokens
+            new_tokens = current_radar_tokens - all_needed_before
+            stale_tokens = (self.radar_tokens - current_radar_tokens) - self.subscribed_tokens
+            self.radar_tokens = current_radar_tokens
+            self.radar_candidates = new_radar_map
+
+        if not self.is_connected():
+            return
+
+        if new_tokens:
+            try:
+                self.kws.subscribe(list(new_tokens))
+                self.kws.set_mode(self.kws.MODE_FULL, list(new_tokens))
+                logging.info(f"[WEBSOCKET] Subscribed to {len(new_tokens)} Category A+ radar token(s): {list(new_tokens)}")
+            except AttributeError:
+                pass
+            except Exception as e:
+                logging.warning(f"[WEBSOCKET] Radar candidate subscription failed: {e}")
+
+        if stale_tokens:
+            try:
+                self.kws.unsubscribe(list(stale_tokens))
+                logging.info(f"[WEBSOCKET] Unsubscribed from {len(stale_tokens)} evicted radar token(s).")
+            except AttributeError:
+                pass
+            except Exception as e:
+                logging.warning(f"[WEBSOCKET] Radar candidate unsubscription failed: {e}")
+
+    def register_radar_callback(self, callback):
+        """Register a callback func(cand, live_tick_price, tick_data) invoked when a Category A+ candidate triggers."""
+        if callback and callback not in self.radar_callbacks:
+            self.radar_callbacks.append(callback)
+
+    def clear_triggered_radar_token(self, token):
+        """Allow re-triggering for a token if execution was rejected or trade reset."""
+        with self._map_lock:
+            self.radar_triggered_tokens.discard(int(token))
 
     def can_execute_exit(self, symbol):
         """

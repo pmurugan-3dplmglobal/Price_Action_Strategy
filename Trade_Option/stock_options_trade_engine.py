@@ -1169,11 +1169,19 @@ def _execute_highest_rr_trade_locked(kite, staged):
                 else:
                     max_spread = base_max_spread
 
+                # Consolidated Pre-Flight Batch Quote Query (< 250ms)
+                # Combines contract quote & book depth with underlying spot validation into a single atomic call
+                batch_quote_keys = [f"NFO:{contract}"]
+                if sym:
+                    batch_quote_keys.append(f"NSE:{sym}")
+                preflight_quotes = safe_kite_call(kite.quote, batch_quote_keys) if (live_ok and kite) else {}
+
                 liq_ok, spread_val, liq_msg, depth_details = check_bid_ask_spread_liquidity(
                     kite=kite,
                     exchange=kite.EXCHANGE_NFO,
                     contract=contract,
-                    max_spread_pct=max_spread
+                    max_spread_pct=max_spread,
+                    quote_dict=preflight_quotes
                 )
                 if not liq_ok:
                     _RADAR_CANDIDATE_GATE_COOLDOWN[contract] = time.time() + 90.0
@@ -1200,6 +1208,8 @@ def _execute_highest_rr_trade_locked(kite, staged):
                 if best_ask > 0 and orig_bm > 0 and t1_target > orig_bm:
                     from exploded_state_guard import check_exploded_state_guard
                     spot_ltp_val = real_spot if ('real_spot' in locals() and real_spot > 0) else None
+                    if not spot_ltp_val and preflight_quotes:
+                        spot_ltp_val = float(preflight_quotes.get(f"NSE:{sym}", {}).get("last_price", 0.0)) or None
                     if not spot_ltp_val and kite:
                         try:
                             q_s = safe_kite_call(kite.quote, [f"NSE:{sym}"])
@@ -1681,6 +1691,38 @@ def run_fast_radar_check(kite):
             return (-tier_val, rr_val)
 
         radar_pool.sort(key=_radar_priority, reverse=True)
+
+        # ── Item 8B: Event-Driven WebSocket Triggers for Category A+ Setups ──
+        # Feed Category A+ candidates into KiteTicker so sub-second tick crossings trigger execution instantly
+        try:
+            from websocket_monitor import get_global_ws_monitor
+            ws_mon = get_global_ws_monitor(
+                getattr(kite, "api_key", None),
+                getattr(kite, "access_token", None)
+            )
+            if ws_mon and ws_mon.is_running:
+                if not getattr(ws_mon, "_radar_callback_registered", False):
+                    def _on_ws_radar_tick_breakout(cand, live_p, tick_t):
+                        sym = cand.get("symbol")
+                        cnt = cand.get("contract")
+                        logging.info(f"⚡ [EVENT_DRIVEN_WEBSOCKET_EXECUTION] Sub-second tick breakout for {sym} ({cnt}) at ₹{live_p:.2f} >= BM! Dispatching to execution...")
+                        cand_exec = dict(cand)
+                        cand_exec["live_price"] = live_p
+                        cand_exec["entry_spot"] = live_p
+                        with _EXECUTION_LOCK:
+                            _execute_highest_rr_trade_locked(kite, [cand_exec])
+
+                    ws_mon.register_radar_callback(_on_ws_radar_tick_breakout)
+                    ws_mon._radar_callback_registered = True
+
+                a_plus_items = [
+                    itm for itm in radar_pool
+                    if str(itm.get("stage", "")).upper() in ["A_PLUS", "STAGE_A_PLUS_READY", "A", "STAGE_A_READY"]
+                    and (itm.get("option_token") or itm.get("token") or itm.get("spot_token"))
+                ]
+                ws_mon.update_radar_candidates(a_plus_items)
+        except Exception as ws_radar_err:
+            logging.debug(f"[WEBSOCKET RADAR] Error updating radar candidates: {ws_radar_err}")
 
         # ── Item 8: Radar Quote-First Polling ──
         # Query bulk kite.quote() for candidate LTPs first; only fetch historical candle

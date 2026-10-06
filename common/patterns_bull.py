@@ -540,6 +540,22 @@ def scan_anchor_bcd_breakout(df_entry, df_anchor, anchor_tf="", entry_tf="", ena
         if risk <= 0 or risk < close_price * 0.002 or round((t1 - close_price) / risk, 2) < 1.5:
             continue
 
+        # Point D Climax Excursion Throttle:
+        # Block market entries if Candle D closed > 50% toward Target 1; queue them for POST_D_RETEST instead.
+        base_risk = max(benchmark * 0.002, benchmark - sl_val)
+        is_fallback_t1 = (t1 is None) or abs(float(t1) - (close_price + 1.5 * risk)) < 0.05
+        if is_fallback_t1:
+            planned_t1_span = 1.5 * base_risk
+        else:
+            planned_t1_span = max(float(t1) - benchmark, 1.5 * base_risk)
+
+        if benchmark > 0 and planned_t1_span > 0:
+            d_raw_close = float(d['close'])
+            if (d_raw_close - benchmark) > (0.50 * planned_t1_span):
+                if stage_status != "POST_D_RETEST":
+                    # Climax breakout bar consumed >50% of T1 distance; block market chase, require retest
+                    continue
+
         rr = (t1 - close_price) / risk if risk > 0 else 0
         short_names = {
             "BULL_A_ABCD_Engulf": "BE_ABCD",

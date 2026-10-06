@@ -527,6 +527,22 @@ def scan_anchor_bcd_breakout_bearish(df_entry, df_anchor, anchor_tf="", entry_tf
         if round(rr, 2) < 1.5:
             continue
 
+        # Point D Climax Excursion Throttle (Bearish):
+        # Block market entries if Candle D closed > 50% down toward Target 1; queue them for POST_D_RETEST instead.
+        base_risk = max(benchmark * 0.002, sl_val - benchmark)
+        is_fallback_t1 = (t1 is None) or abs(float(t1) - (entry_close - 1.5 * risk)) < 0.05
+        if is_fallback_t1:
+            planned_t1_span = 1.5 * base_risk
+        else:
+            planned_t1_span = max(benchmark - float(t1), 1.5 * base_risk)
+
+        if benchmark > 0 and planned_t1_span > 0:
+            d_raw_close = float(entry_candle['close'])
+            if (benchmark - d_raw_close) > (0.50 * planned_t1_span):
+                if stage_status != "POST_D_RETEST":
+                    # Climax bearish breakout bar consumed >50% of T1 distance; block market chase, require retest
+                    continue
+
         # ── Volume Profile Analysis on B-C-D (Option Chart Intraday RVOL) ──
         vol_b_ratio = 1.0
         vol_c_ratio = 1.0
