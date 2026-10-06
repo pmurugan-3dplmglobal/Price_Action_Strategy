@@ -130,17 +130,26 @@ class ActivePositionWebSocketMonitor:
             from kiteconnect import KiteTicker
             self.kws = KiteTicker(self.api_key, self.access_token)
 
+            # Mute internal verbose kiteconnect.ticker ERROR logs for normal network blips/reconnects
+            logging.getLogger("kiteconnect.ticker").setLevel(logging.CRITICAL)
+
             def on_close(ws, code, reason):
                 logging.warning(f"[WEBSOCKET] KiteTicker closed: {code} - {reason}")
 
             def on_error(ws, code, reason):
-                logging.error(f"[WEBSOCKET] KiteTicker error: {code} - {reason}")
+                reason_str = str(reason)
+                if "403" in reason_str or "Forbidden" in reason_str:
+                    logging.warning(f"[WEBSOCKET] KiteTicker auth expired (403 Forbidden). Falling back to REST polling.")
+                elif "timeout" in reason_str.lower() or code == 1006:
+                    logging.warning(f"[WEBSOCKET] KiteTicker connection blip ({code}): {reason_str}. Retrying...")
+                else:
+                    logging.error(f"[WEBSOCKET] KiteTicker error: {code} - {reason}")
 
             def on_reconnect(ws, attempts_count):
                 logging.info(f"[WEBSOCKET] Reconnecting KiteTicker (attempt {attempts_count})...")
 
             def on_noreconnect(ws):
-                logging.warning("[WEBSOCKET] KiteTicker reconnection failed permanently.")
+                logging.warning("[WEBSOCKET] KiteTicker reconnection failed permanently. Operating in REST mode.")
 
             self.kws.on_ticks = self.on_ticks
             self.kws.on_connect = self.on_connect
