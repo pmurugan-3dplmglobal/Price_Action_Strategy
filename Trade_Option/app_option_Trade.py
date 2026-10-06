@@ -344,14 +344,30 @@ def set_backtest_mode(enabled):
 #  KITE TOKEN MANAGEMENT
 # ──────────────────────────────────────────────
 
-def check_token_valid():
+_last_token_check_time = 0
+_last_token_check_result = None
+
+def check_token_valid(force_check=False):
+    global _last_token_check_time, _last_token_check_result
+    now = time.time()
+    if not force_check and _last_token_check_result and (now - _last_token_check_time < 30):
+        return _last_token_check_result
+
     if not os.path.exists(TOKEN_FILE):
-        return {"valid": False, "reason": "Token file not found"}
+        res = {"valid": False, "reason": "Token file not found"}
+        _last_token_check_result = res
+        _last_token_check_time = now
+        return res
     try:
         with open(TOKEN_FILE) as f:
             data = json.load(f)
-        if not data.get("api_key") or not data.get("access_token"):
-            return {"valid": False, "reason": "Invalid token file"}
+        api_k = data.get("api_key")
+        acc_t = data.get("access_token")
+        if not api_k or not acc_t:
+            res = {"valid": False, "reason": "Invalid token file"}
+            _last_token_check_result = res
+            _last_token_check_time = now
+            return res
         date_str = data.get("generated_at", "")
         if date_str:
             try:
@@ -361,20 +377,48 @@ def check_token_valid():
                 gen_date = gen_dt.date()
                 today = now_dt.date()
                 if gen_date < today:
-                    return {"valid": False, "reason": f"Token expired (generated {date_str})"}
+                    res = {"valid": False, "reason": f"Token expired (generated {date_str})"}
+                    _last_token_check_result = res
+                    _last_token_check_time = now
+                    return res
                 reset_cutoff = gen_dt.replace(hour=6, minute=0, second=0, microsecond=0)
                 if gen_dt < reset_cutoff and now_dt >= reset_cutoff:
-                    return {"valid": False, "reason": f"Token expired (generated {date_str} before 06:00 AM Zerodha reset)"}
+                    res = {"valid": False, "reason": f"Token expired (generated {date_str} before 06:00 AM Zerodha reset)"}
+                    _last_token_check_result = res
+                    _last_token_check_time = now
+                    return res
             except Exception:
                 try:
                     gen_date = dt.strptime(date_str.split()[0], "%Y-%m-%d").date()
                     if gen_date < dt.now().date():
-                        return {"valid": False, "reason": f"Token expired (generated {date_str})"}
+                        res = {"valid": False, "reason": f"Token expired (generated {date_str})"}
+                        _last_token_check_result = res
+                        _last_token_check_time = now
+                        return res
                 except Exception:
                     pass
-        return {"valid": True, "reason": "Token valid"}
+
+        # Live broker verification: probe KiteConnect profile
+        try:
+            ks = KiteConnect(api_key=api_k)
+            ks.set_access_token(acc_t)
+            ks.profile()
+            res = {"valid": True, "reason": "Token valid"}
+        except Exception as kite_err:
+            err_msg = str(kite_err).lower()
+            if "incorrect `api_key` or `access_token`" in err_msg or "tokenexception" in type(kite_err).__name__.lower() or "403" in err_msg:
+                res = {"valid": False, "reason": "Token expired or rejected by Zerodha"}
+            else:
+                res = {"valid": True, "reason": f"Token active (broker ping: {kite_err})"}
+
+        _last_token_check_result = res
+        _last_token_check_time = now
+        return res
     except Exception as e:
-        return {"valid": False, "reason": f"Token read error: {e}"}
+        res = {"valid": False, "reason": f"Token read error: {e}"}
+        _last_token_check_result = res
+        _last_token_check_time = now
+        return res
 
 def get_login_url():
     api_key, _ = get_kite_credentials()

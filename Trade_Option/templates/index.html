@@ -2366,19 +2366,38 @@
                 const text = document.getElementById('token-banner-text');
                 const btn = document.getElementById('token-gen-btn');
                 const panel = document.getElementById('token-panel');
+                if (banner) banner.classList.remove('token-hidden');
                 if (tk.valid) {
-                    banner.className = 'token-banner token-valid';
-                    text.innerHTML = '<strong>Token:</strong> Valid';
-                    btn.style.display = 'none';
-                    if (panel) panel.style.display = 'none';
-                } else if (tk.reason && tk.reason.includes('expired')) {
-                    banner.className = 'token-banner token-expired';
-                    text.innerHTML = '<strong>Token:</strong> Expired <span style="font-weight:normal;font-size:11px;color:#8b949e;">(' + tk.reason + ')</span>';
-                    btn.style.display = 'inline-block';
+                    if (banner) banner.className = 'token-banner token-valid';
+                    if (text) text.innerHTML = '<strong>Token:</strong> Valid';
+                    if (btn) {
+                        btn.innerHTML = '🔄 Re-generate';
+                        btn.style.display = 'inline-block';
+                        btn.style.background = '#21262d';
+                        btn.style.color = '#c9d1d9';
+                        btn.style.border = '1px solid #30363d';
+                    }
+                    if (panel && panel.style.display !== 'block') panel.style.display = 'none';
+                } else if (tk.reason && tk.reason.toLowerCase().includes('expired')) {
+                    if (banner) banner.className = 'token-banner token-expired';
+                    if (text) text.innerHTML = '<strong>Token:</strong> Expired <span style="font-weight:normal;font-size:11px;color:#8b949e;">(' + tk.reason + ')</span>';
+                    if (btn) {
+                        btn.innerHTML = '🔑 Generate Token';
+                        btn.style.display = 'inline-block';
+                        btn.style.background = '#238636';
+                        btn.style.color = '#fff';
+                        btn.style.border = 'none';
+                    }
                 } else {
-                    banner.className = 'token-banner token-missing';
-                    text.innerHTML = '<strong>Token:</strong> ' + (tk.reason || 'Missing');
-                    btn.style.display = 'inline-block';
+                    if (banner) banner.className = 'token-banner token-missing';
+                    if (text) text.innerHTML = '<strong>Token:</strong> ' + (tk.reason || 'Missing');
+                    if (btn) {
+                        btn.innerHTML = '🔑 Generate Token';
+                        btn.style.display = 'inline-block';
+                        btn.style.background = '#238636';
+                        btn.style.color = '#fff';
+                        btn.style.border = 'none';
+                    }
                 }
             } catch(e) { console.log('Token check error:', e); }
         }
@@ -2885,6 +2904,7 @@
     <div class="header-bar" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
         <h1 style="margin:0;">Trading Control Center <small>Steering & Dashboard</small></h1>
         <div class="user-badge" style="display:flex;align-items:center;gap:12px;font-size:12px;background:#161b22;padding:6px 14px;border-radius:6px;border:1px solid #30363d;">
+            <button onclick="showTokenPanel()" style="background:#238636;color:#fff;border:none;border-radius:4px;padding:4px 10px;font-size:11px;font-weight:600;cursor:pointer;" title="Generate or Refresh Zerodha Kite Token">🔑 Kite Token</button>
             <span style="color:#8b949e;">👤 <strong style="color:#c9d1d9;">{{ user }}</strong></span>
             {% if role == 'admin' %}
             <span style="background:#1f6feb33;color:#58a6ff;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:600;">ADMIN</span>
@@ -2895,10 +2915,10 @@
         </div>
     </div>
 
-    <div id="token-banner" class="token-banner token-hidden">
+    <div id="token-banner" class="token-banner">
         <div class="token-banner-row">
-            <span id="token-banner-text"></span>
-            <button id="token-gen-btn" class="token-gen-btn" onclick="showTokenPanel()" style="display:none">Generate Token</button>
+            <span id="token-banner-text"><strong>Token:</strong> Checking status...</span>
+            <button id="token-gen-btn" class="token-gen-btn" onclick="showTokenPanel()">🔑 Generate Token</button>
         </div>
         <div id="token-panel" class="token-panel" style="display:none">
             <div id="token-creds-box" style="display:none;margin-bottom:12px;background:#161b22;padding:12px;border-radius:6px;border:1px solid #d29922;">
