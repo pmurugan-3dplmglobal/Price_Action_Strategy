@@ -10,6 +10,30 @@ meta:
     recent_archived_batch: [FEATURE-031, FEATURE-030, FEATURE-029, ISSUE-084, ISSUE-083, ISSUE-082, ISSUE-081, ISSUE-080, FEATURE-036, FEATURE-035, FEATURE-034, FEATURE-033, ISSUE-054]
     key_archived_families: [ALGO_AUDIT_CVE, QUANT_ENHANCEMENTS, RADAR_LIFECYCLE, VCP_METRICS, SCANNER_DISCOVERY, SECURITY_CONFIG, ZERO_REGRESSION_AUDIT]
 issues:
+- id: ISSUE-119
+  title: Dynamic NSE Token Disk Caching & Daily Loss Limit Cap Harmonization to 5.0%
+  severity: MEDIUM
+  category: Token Resolution, Microstructure Robustness, Portfolio Risk Governance
+  family: QUANT_ENHANCEMENTS
+  date_reported: '2026-10-06'
+  symptom: |
+    1. During scan cycles, F&O equity spot tokens occasionally lacked resolution if instruments cache was partially fetched or delayed, causing potential skips on valid setups.
+    2. Daily Drawdown Cap of 3.0% was restrictive for volatile sessions with high-probability incubated setups.
+  root_cause: |
+    1. `STOCK_REGISTRY` relied solely on in-memory population without a persistent `nse_instruments_cache.csv` disk cache fallback.
+    2. `max_daily_loss_pct` was set to 3.0% across engine configs.
+  affected_files:
+  - common/paths.py
+  - common/registries.py
+  - Trade_Option/stock_options_trade_engine.py
+  - Trade_Option/input/program_config.json
+  - Trade_Stock/input/program_config.json
+  - input/program_config.json
+  fix_applied: |
+    1. Added `NSE_CACHE_FILE` to `common/paths.py` and implemented persistent CSV caching and fallback resolution in `common/registries.py`.
+    2. Added dynamic token resolution from live spot quotes in `Trade_Option/stock_options_trade_engine.py` to prevent skips.
+    3. Updated `max_daily_loss_pct` to 5.0% across `input/program_config.json`, `Trade_Option/input/program_config.json`, and `Trade_Stock/input/program_config.json`.
+  status: RESOLVED
 - id: ISSUE-118
   title: Fatal Python Encodings Runtime Failure (Broken Program Files Python) & KiteTicker 403 Dampening
   severity: HIGH

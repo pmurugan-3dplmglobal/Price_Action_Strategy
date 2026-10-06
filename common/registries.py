@@ -161,6 +161,20 @@ def _populate_stock_registry_from_cache():
     except Exception as e:
         logging.debug(f"Failed to populate STOCK_REGISTRY from NFO cache: {e}")
 
+    try:
+        import os
+        if os.path.exists(paths.NSE_CACHE_FILE):
+            df_nse_cached = pd.read_csv(paths.NSE_CACHE_FILE)
+            if not df_nse_cached.empty and 'tradingsymbol' in df_nse_cached.columns:
+                nse_map = dict(zip(df_nse_cached['tradingsymbol'].astype(str).str.strip(), df_nse_cached['instrument_token']))
+                for sym, cfg in STOCK_REGISTRY.items():
+                    if not cfg.get("token"):
+                        tok = nse_map.get(sym) or nse_map.get(sym.replace("_", "-")) or nse_map.get(sym.replace("-", ""))
+                        if tok:
+                            cfg["token"] = int(tok)
+    except Exception as e:
+        logging.debug(f"Failed to populate tokens from NSE cache: {e}")
+
 _populate_stock_registry_from_cache()
 
 def sync_stock_tokens(kite, df_nse=None):
@@ -174,6 +188,12 @@ def sync_stock_tokens(kite, df_nse=None):
             df['tradingsymbol'] = df['tradingsymbol'].str.strip()
             df['segment'] = df['segment'].str.strip()
             nse_df = df[df['segment'] == 'NSE']
+            try:
+                os.makedirs(os.path.dirname(paths.NSE_CACHE_FILE), exist_ok=True)
+                cols_to_save = [c for c in ['tradingsymbol', 'instrument_token', 'segment'] if c in nse_df.columns]
+                nse_df[cols_to_save].to_csv(paths.NSE_CACHE_FILE, index=False)
+            except Exception:
+                pass
             nse_map = dict(zip(nse_df['tradingsymbol'], nse_df['instrument_token']))
             synced = 0
             for sym in list(STOCK_REGISTRY.keys()):

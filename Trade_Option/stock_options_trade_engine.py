@@ -149,9 +149,9 @@ def sync_instruments(kite):
                             NFO_INSTRUMENTS = df_cached
                             NFO_INSTRUMENTS['name'] = NFO_INSTRUMENTS['name'].str.strip().str.upper()
                             NFO_INSTRUMENTS['instrument_type'] = NFO_INSTRUMENTS['instrument_type'].str.strip().str.upper()
-                        sync_stock_tokens(kite)
-                        from registries import _populate_stock_registry_from_cache
+                        from registries import _populate_stock_registry_from_cache, sync_stock_tokens
                         _populate_stock_registry_from_cache()
+                        sync_stock_tokens(kite)
                         logging.info(f"Loaded {len(NFO_INSTRUMENTS)} NFO/BFO contracts from today's cache ({len(STOCK_REGISTRY)} F&O equities in registry)")
                         return
             except Exception as c_err:
@@ -366,6 +366,14 @@ def run_scan_cycle(kite, universe_mode="AUTO"):
                 except Exception as ltp_err:
                     logging.debug(f"Chunk LTP fallback error: {ltp_err}")
 
+    # Dynamic token resolution from spot quotes if any registry entry is missing token
+    for s in base_symbols:
+        cfg = STOCK_REGISTRY.get(s)
+        if cfg and not cfg.get("token"):
+            q_tok = spot_quotes.get(f"NSE:{s}", {}).get("instrument_token")
+            if q_tok:
+                cfg["token"] = int(q_tok)
+
     # Identify Incubating Symbols from Pattern Funnel (Category A+, A, B)
     incubating_syms = set()
     try:
@@ -477,8 +485,13 @@ def run_scan_cycle(kite, universe_mode="AUTO"):
         futures = {}
         for symbol in scan_order:
             config = STOCK_REGISTRY.get(symbol)
-            if not config or not config.get("token"):
+            if not config:
                 continue
+            tok = config.get("token") or spot_quotes.get(f"NSE:{symbol}", {}).get("instrument_token")
+            if not tok:
+                continue
+            if not config.get("token"):
+                config["token"] = int(tok)
             s_ltp = spot_quotes.get(f"NSE:{symbol}", {}).get("last_price")
             if s_ltp is None or s_ltp <= 0:
                 continue

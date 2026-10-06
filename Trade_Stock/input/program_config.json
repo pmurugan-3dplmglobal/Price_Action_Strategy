@@ -35,7 +35,7 @@
       "option_trail_2_sl_pct": 15.0
     },
     "execution_mode": "AUTO",
-    "max_daily_loss_pct": 3,
+    "max_daily_loss_pct": 5.0,
     "option_trail_1_gain_pct": 15.0,
     "option_trail_1_sl_pct": 8.0,
     "option_trail_2_gain_pct": 25.0,
@@ -69,7 +69,7 @@
       "option_trail_2_sl_pct": 15.0
     },
     "execution_mode": "AUTO",
-    "max_daily_loss_pct": 3,
+    "max_daily_loss_pct": 5.0,
     "option_trail_1_gain_pct": 15,
     "option_trail_1_sl_pct": 8,
     "option_trail_2_gain_pct": 25,
@@ -107,6 +107,6 @@
     }
   },
   "portfolio_risk": {
-    "max_daily_loss_pct": 3.0
+    "max_daily_loss_pct": 5.0
   }
 }

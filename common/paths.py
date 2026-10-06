@@ -39,6 +39,7 @@ def export_file(name):
 TOKEN_FILE = input_file("kite_access_token.txt")
 GLOBAL_HALT_FILE = input_file("HALT")
 NFO_CACHE_FILE = monitor_file("nfo_instruments_cache.csv")
+NSE_CACHE_FILE = monitor_file("nse_instruments_cache.csv")
 SL_TARGET_OVERRIDES_FILE = monitor_file("sl_target_overrides.json")
 EXECUTED_EXITS_FILE = monitor_file("executed_exit_orders.json")
 JOURNAL_TRADES_DB = monitor_file("journal_trades_db.json")
