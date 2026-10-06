@@ -125,10 +125,6 @@ PROGRAMS = {
             "max_daily_loss_pct": {"label": "Daily Loss Limit (%)", "type": "number", "default": 3.0},
             "max_option_loss_pct": {"label": "Max Option Loss (%)", "type": "number", "default": 28.0},
             "strike_range": {"label": "Strike Range (±)", "type": "number", "default": 1},
-            "option_trail_1_gain_pct": {"label": "Trail 1 Trigger (%)", "type": "number", "default": 15.0},
-            "option_trail_1_sl_pct": {"label": "Trail 1 SL Lock (%)", "type": "number", "default": 8.0},
-            "option_trail_2_gain_pct": {"label": "Trail 2 Trigger (%)", "type": "number", "default": 25.0},
-            "option_trail_2_sl_pct": {"label": "Trail 2 SL Lock (%)", "type": "number", "default": 15.0},
             "enable_swing_filter": {"label": "Swing Filter", "type": "select", "options": ["true", "false"], "default": "true"},
             "swing_min_waves": {"label": "Min Swings", "type": "number", "default": 2},
             "strict_macro_gate": {"label": "Strict Macro Gate (13 EMA)", "type": "select", "options": ["false", "true"], "default": "false"},
@@ -150,10 +146,6 @@ PROGRAMS = {
             "max_daily_loss_pct": {"label": "Daily Loss Limit (%)", "type": "number", "default": 3.0},
             "max_option_loss_pct": {"label": "Max Option Loss (%)", "type": "number", "default": 28.0},
             "strike_range": {"label": "Strike Range (±)", "type": "number", "default": 1},
-            "option_trail_1_gain_pct": {"label": "Trail 1 Trigger (%)", "type": "number", "default": 15.0},
-            "option_trail_1_sl_pct": {"label": "Trail 1 SL Lock (%)", "type": "number", "default": 8.0},
-            "option_trail_2_gain_pct": {"label": "Trail 2 Trigger (%)", "type": "number", "default": 25.0},
-            "option_trail_2_sl_pct": {"label": "Trail 2 SL Lock (%)", "type": "number", "default": 15.0},
             "enable_swing_filter": {"label": "Swing Filter", "type": "select", "options": ["true", "false"], "default": "true"},
             "swing_min_waves": {"label": "Min Swings", "type": "number", "default": 2},
             "strict_macro_gate": {"label": "Strict Macro Gate (13 EMA)", "type": "select", "options": ["false", "true"], "default": "false"},
@@ -2037,7 +2029,16 @@ def api_buy_scanned_trade():
         ask = 0.0
         price = float(data.get("price") or data.get("benchmark") or entry_spot or 0.0)
         spread_info = None
-        leg2_order_id = None
+        force_order = bool(data.get("force", False))
+
+        # Pre-flight check: Reject expired contracts immediately before broker order placement
+        if not force_order and is_opt:
+            try:
+                from trading_core import contract_is_expired
+                if contract_is_expired(contract):
+                    return jsonify({"ok": False, "error": f"Contract {contract} is expired. Cannot place 1-Click Buy."}), 400
+            except Exception as exp_check_err:
+                logging.warning(f"1-Click Buy pre-flight expiry check error: {exp_check_err}")
 
         global _kite_session
         order_id = None
@@ -2059,8 +2060,6 @@ def api_buy_scanned_trade():
                 pass
 
         if _kite_session:
-            force_order = bool(data.get("force", False))
-
             # ── VIX Macro Regime Gate Check ──
             if not force_order:
                 try:
@@ -2190,7 +2189,7 @@ def api_buy_scanned_trade():
 
                 if is_index and market_open and not force_order:
                     if not is_new_entry_allowed(live_execution_active=True, is_option=is_opt, is_index=True, dte=dte_contract):
-                        cutoff_msg = "after 13:30 IST for 0DTE/expiry contracts" if (dte_contract is None or dte_contract <= 1) else "after 15:00 IST"
+                        cutoff_msg = "after 11:30 IST for 0DTE/expiry contracts" if (dte_contract is None or dte_contract <= 1) else "after 15:00 IST"
                         return jsonify({
                             "ok": False,
                             "error": f"Index Option Entry Cutoff: All new index option entries are blocked {cutoff_msg} to prevent late-day decay and EOD square-off traps. Set force=true if you explicitly wish to override."
@@ -2654,12 +2653,6 @@ def api_buy_scanned_trade():
             trade_data["anchor_floor"] = anchor_floor
         if direction:
             trade_data["direction"] = direction
-        try:
-            from trading_core import contract_is_expired
-            if not force_order and contract_is_expired(contract):
-                return jsonify({"ok": False, "error": f"Contract {contract} is expired. Cannot place 1-Click Buy."}), 400
-        except Exception as exp_check_err:
-            logging.warning(f"1-Click Buy expiry check skipped: {exp_check_err}")
         symbol = resolve_underlying(symbol or contract, engine)
         tid, _created = trade_db.create_trade(engine, symbol, trade_data)
         clear_executed_exit(contract)
@@ -2891,6 +2884,23 @@ def api_journal_analytics():
     try:
         from daily_trade_journal import get_trade_journal_analytics
         return jsonify({"ok": True, "data": get_trade_journal_analytics()})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+@app.route("/api/journal/learning-report", methods=["GET", "POST"])
+def api_journal_learning_report():
+    try:
+        from daily_trade_journal import generate_daily_session_learning_report, get_latest_daily_learning_report
+        req = request.json if request.is_json else (request.args or {})
+        dt_str = req.get("date")
+        force_generate = req.get("generate", False)
+        if dt_str or force_generate:
+            report_data = generate_daily_session_learning_report(target_date=dt_str, kite=_kite_session)
+        else:
+            report_data = get_latest_daily_learning_report()
+            if not report_data or not report_data.get("ok"):
+                report_data = generate_daily_session_learning_report(target_date=None, kite=_kite_session)
+        return jsonify(report_data)
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 

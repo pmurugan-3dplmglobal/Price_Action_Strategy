@@ -2180,6 +2180,23 @@ def api_journal_analytics():
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
+@app.route("/api/journal/learning-report", methods=["GET", "POST"])
+def api_journal_learning_report():
+    try:
+        from daily_trade_journal import generate_daily_session_learning_report, get_latest_daily_learning_report
+        req = request.json if request.is_json else (request.args or {})
+        dt_str = req.get("date")
+        force_generate = req.get("generate", False)
+        if dt_str or force_generate:
+            report_data = generate_daily_session_learning_report(target_date=dt_str, kite=_kite_session)
+        else:
+            report_data = get_latest_daily_learning_report()
+            if not report_data or not report_data.get("ok"):
+                report_data = generate_daily_session_learning_report(target_date=None, kite=_kite_session)
+        return jsonify(report_data)
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
 
 @app.route("/api/journal/sync", methods=["POST"])
 def api_journal_sync():

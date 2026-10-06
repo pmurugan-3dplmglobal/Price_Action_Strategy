@@ -676,9 +676,9 @@ def execute_highest_rr_trade(kite, staged):
             cand_dte = None
 
         if LIVE_MARKET_DEPLOYMENT and live_execution_enabled(LIVE_EXECUTION_FLAG) and BACKTEST_DATE is None:
-            # 0DTE / Expiry Day cutoff: strictly blocked after 13:30 IST to prevent lethal gamma/theta decay
-            if (cand_dte is None or cand_dte <= 1) and now_ist > dt_time(13, 30):
-                logging.info(f"[INDEX_0DTE_CUTOFF_GUARD] Candidate {contract_cand} is 0DTE/Expiry (DTE={cand_dte}). Automated entries blocked after 13:30 IST to prevent lethal theta/gamma burn. Evaluating next candidate.")
+            # 0DTE / Expiry Day cutoff: strictly blocked after 11:30 IST to prevent lethal gamma/theta decay (ISSUE-065 harmonization)
+            if (cand_dte is None or cand_dte <= 1) and now_ist > dt_time(11, 30):
+                logging.info(f"[INDEX_0DTE_CUTOFF_GUARD] Candidate {contract_cand} is 0DTE/Expiry (DTE={cand_dte}). Automated entries blocked after 11:30 IST to prevent lethal theta/gamma burn. Evaluating next candidate.")
                 continue
             # Non-expiry contracts (DTE >= 2) in the 13:30 - 15:00 window require high-conviction R:R >= 2.0
             if now_ist > dt_time(13, 30):

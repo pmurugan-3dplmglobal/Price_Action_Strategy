@@ -562,7 +562,7 @@ def is_new_entry_allowed(live_execution_active=True, is_option=False, is_index=F
     - Cash equities / normal: 09:15:00 IST start.
     - Index Options (is_index=True):
         * Non-Expiry / Monthly / Next-Week (dte >= 2): Adaptive window extended up to 15:00:00 IST to capture late-day institutional closing breakouts.
-        * 0DTE / Expiry Day / Unspecified (dte <= 1 or None): Strict 13:30:00 IST cutoff to eliminate lethal afternoon gamma/theta decay traps.
+        * 0DTE / Expiry Day / Unspecified (dte <= 1 or None): Strict 11:30:00 IST cutoff to eliminate lethal afternoon gamma/theta decay traps (harmonized with ISSUE-065).
     - Other instruments (cash / stock options): 15:20:00 IST cutoff.
     """
     if is_global_halt():
@@ -576,7 +576,7 @@ def is_new_entry_allowed(live_execution_active=True, is_option=False, is_index=F
     t_now = now.time()
     start_time = datetime_time(9, 16) if is_option else datetime_time(9, 15)
     if is_index:
-        end_time = datetime_time(15, 0) if (dte is not None and dte >= 2) else datetime_time(13, 30)
+        end_time = datetime_time(15, 0) if (dte is not None and dte >= 2) else datetime_time(11, 30)
     else:
         end_time = datetime_time(15, 20)
     return start_time <= t_now <= end_time

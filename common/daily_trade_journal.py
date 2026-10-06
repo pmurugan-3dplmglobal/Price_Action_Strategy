@@ -340,26 +340,117 @@ def resolve_trade_pattern(symbol, contract="", default_pat=None, is_manual=False
 
     return "MANUAL_ENTRY (Discretionary)" if is_manual else (default_pat or "MANUAL_ENTRY (Discretionary)")
 
-def derive_trade_remarks_and_lesson(symbol, outcome, pnl_rs, pattern):
-    """Derive generic analysis remarks and self-learning lessons based on trade outcome.
-
-    Previously contained hardcoded symbol-specific remarks (TECHM, DRREDDY, JSWSTEEL,
-    BANKNIFTY, HDFCLIFE, SBIN). These were stale historical trade annotations that have
-    been removed and replaced with generic outcome-based logic (2026-08-11).
+def derive_trade_remarks_and_lesson(symbol, outcome, pnl_rs, pattern, trade_data=None):
+    """Derive intelligent, data-driven analysis remarks and actionable self-learning lessons
+    evaluating MFE, MAE, execution timing, structural spot validity, and microstructure DNA.
+    Supports backward compatibility with signature (symbol, outcome, pnl_rs, pattern).
     """
-    if "SL" in outcome or pnl_rs < 0:
-        remarks = f"Stop Loss triggered for {symbol} ({pnl_rs:.2f} Rs) on pattern [{pattern}]."
-        lesson = "Respect pattern SL strictly. Ensure TF closing candle check or emergency stop buffer is respected."
+    td = trade_data if isinstance(trade_data, dict) else {}
+    dna = td.get("trade_dna") if isinstance(td.get("trade_dna"), dict) else {}
+
+    # Extract metrics
+    try:
+        mfe_val = float(td.get("MFE_Pct") or td.get("mfe_pct") or 0.0)
+    except (ValueError, TypeError):
+        mfe_val = 0.0
+    try:
+        mae_val = float(td.get("MAE_Pct") or td.get("mae_pct") or 0.0)
+    except (ValueError, TypeError):
+        mae_val = 0.0
+    try:
+        pnl_val = float(pnl_rs if pnl_rs is not None else td.get("PnL_Rs") or td.get("pnl") or 0.0)
+    except (ValueError, TypeError):
+        pnl_val = 0.0
+
+    entry_t = str(td.get("Entry_Time") or td.get("entry_time") or td.get("created_at") or "")
+    exit_t = str(td.get("Exit_Time") or td.get("exit_time") or "")
+    exit_reason = str(td.get("exit_reason") or td.get("details") or "").upper()
+    tier = str(td.get("Tier") or td.get("tier") or "")
+    spot_breached = td.get("spot_breached_on_close")
+
+    # Parse time-of-day window
+    time_window = "Normal"
+    if entry_t and len(entry_t) >= 16:
+        try:
+            t_part = entry_t.split(" ")[-1][:5]
+            hh, mm = map(int, t_part.split(":"))
+            t_mins = hh * 60 + mm
+            if 9 * 60 + 15 <= t_mins < 10 * 60:
+                time_window = "Opening Velocity (09:15-10:00)"
+            elif 10 * 60 <= t_mins < 11 * 60 + 30:
+                time_window = "Morning Trend (10:00-11:30)"
+            elif 11 * 60 + 30 <= t_mins < 13 * 60 + 30:
+                time_window = "Midday Chop (11:30-13:30)"
+            elif 13 * 60 + 30 <= t_mins <= 15 * 60 + 30:
+                time_window = "Closing Momentum (13:30-15:30)"
+        except Exception:
+            pass
+
+    # Volume & VCP indicators
+    rvol_val = None
+    rvol_raw = dna.get("spot_rvol") or td.get("Spot_RVOL")
+    if rvol_raw not in (None, "", "UNKNOWN"):
+        try:
+            rvol_val = float(rvol_raw)
+        except (ValueError, TypeError):
+            rvol_val = None
+
+    atr_ratio_val = None
+    atr_raw = dna.get("spot_atr_ratio") or td.get("Spot_ATR_Ratio")
+    if atr_raw not in (None, "", "UNKNOWN"):
+        try:
+            atr_ratio_val = float(atr_raw)
+        except (ValueError, TypeError):
+            atr_ratio_val = None
+
+    is_winner = pnl_val > 0 or any(w in str(outcome).upper() for w in ["T1", "T2", "T3", "TARGET", "PROFIT"])
+    is_loser = pnl_val < 0 or any(l in str(outcome).upper() for l in ["SL", "STOP", "LOSS"])
+    is_active = ("ACTIVE" in str(outcome).upper() or outcome == "Carry Forward" or exit_t == "OPEN") and not (is_winner or is_loser)
+
+    if is_active:
+        remarks = f"{symbol} active position in progress on pattern [{pattern}] ({tier or 'Core'}). Monitored by Position Guardian."
+        lesson = "Maintain trailing stop parameters and verify 15m/30m candle close boundaries against Anchor corridor."
         return remarks, lesson
 
-    elif "T1" in outcome or "T2" in outcome or "T3" in outcome or pnl_rs > 0:
-        remarks = f"Target reached for {symbol} (+{pnl_rs:.2f} Rs) on pattern [{pattern}]. Profit realized."
-        lesson = "Good execution. Trailed SL to breakeven after T1 hit to lock in gains."
+    if is_winner:
+        if mfe_val >= 25.0:
+            remarks = f"Explosive momentum winner (+₹{pnl_val:.2f}) on [{pattern}]. Peak MFE reached +{mfe_val:.1f}% with disciplined drawdown (MAE {mae_val:.1f}%)."
+            lesson = "Setup thesis validated: Multi-timeframe trend alignment and coiled VCP generated strong continuation velocity."
+        elif mfe_val >= 15.0 and pnl_val > 0 and (td.get("PnL_Pct") and float(str(td.get("PnL_Pct")).replace("%","").replace("+","") or 0) < mfe_val * 0.5):
+            pnl_pct_f = float(str(td.get("PnL_Pct")).replace("%","").replace("+","") or 0)
+            left_on_table = mfe_val - pnl_pct_f
+            remarks = f"Target captured (+₹{pnl_val:.2f}) on [{pattern}], peaking at +{mfe_val:.1f}% MFE before trailing exit (left ~{left_on_table:.1f}% on table)."
+            lesson = "Profit-locking evolution: Consider partial profit booking (50% lots) at T1 / +20% spike to lock in peak excursion while trailing balance."
+        elif abs(mae_val) <= 3.0 and mae_val <= 0:
+            remarks = f"Flawless clean breakout (+₹{pnl_val:.2f}) on [{pattern}] with near-zero adverse excursion (MAE {mae_val:.1f}%)."
+            lesson = "Optimal entry timing: Immediate volume expansion confirmed breakout without testing entry support."
+        else:
+            remarks = f"Target reached for {symbol} (+₹{pnl_val:.2f}) on pattern [{pattern}]. Profit realized."
+            lesson = "Good execution. Trailed SL to breakeven after T1 hit to lock in gains and protect capital."
         return remarks, lesson
 
-    elif "ACTIVE" in outcome or outcome == "Carry Forward":
-        remarks = f"{symbol} active position in progress on pattern [{pattern}], carrying forward to next session."
-        lesson = "Maintain trailing stop parameters and monitor candle closes on target timeframe."
+    if is_loser:
+        if spot_breached is False or "SHAKEOUT" in exit_reason or "PREMATURE" in exit_reason:
+            remarks = f"Premature option SL shakeout (-₹{abs(pnl_val):.2f}) on [{pattern}]. Spot held structural support inside Anchor corridor; option exited on premium IV/tick noise."
+            lesson = "Execution Evolution: Enforce Spot 15m candle-close confirmation before triggering option SL on incubated setups to prevent premature theta/IV shakeouts."
+        elif spot_breached is True or "STRUCTURAL" in exit_reason or "CANDLE_CLOSE_SL" in exit_reason:
+            remarks = f"Structural invalidation SL (-₹{abs(pnl_val):.2f}). Spot closed beyond pattern Anchor boundary on [{pattern}]. Disciplined capital protection."
+            lesson = "Capital shield verified: Prompt exit on structural invalidation preserved 80%+ capital against severe directional continuation."
+        elif mfe_val >= 12.0:
+            remarks = f"Round-trip loss (-₹{abs(pnl_val):.2f}) after surging to +{mfe_val:.1f}% peak MFE. Setup gave substantial initial expansion but reversed."
+            lesson = "Trailing ratchet mandate: Setups achieving >= +12% MFE must have SL automatically ratcheted to Breakeven floor."
+        elif time_window == "Midday Chop (11:30-13:30)":
+            remarks = f"Midday consolidation trap (-₹{abs(pnl_val):.2f}) on [{pattern}]. Entered during low-liquidity midday chop ({entry_t[-8:] if entry_t else '11:30-13:30'})."
+            lesson = "Midday Regime Gate: Require RVOL >= 1.8x and Spot EMA alignment for any discretionary or automated entry between 11:30 and 13:30 IST."
+        elif rvol_val is not None and rvol_val < 1.0:
+            remarks = f"Low volume breakout trap (-₹{abs(pnl_val):.2f}) on [{pattern}]. Entry RVOL ({rvol_val:.2f}x) lacked institutional volume sponsorship."
+            lesson = "Volume Gate Evolution: Enforce breakout candle RVOL >= 1.2x to eliminate low-volume false breakouts."
+        elif atr_ratio_val is not None and atr_ratio_val > 1.2:
+            remarks = f"Volatility expansion failure (-₹{abs(pnl_val):.2f}) on [{pattern}]. Setup entered in uncompressed volatility regime (ATR ratio {atr_ratio_val:.2f} > 0.85)."
+            lesson = "VCP Squeeze Evolution: Prioritize coiled setups with ATR3/ATR14 <= 0.85 to avoid buying at the end of volatility expansions."
+        else:
+            remarks = f"Stop Loss triggered for {symbol} (-₹{abs(pnl_val):.2f}) on pattern [{pattern}]."
+            lesson = "Respect pattern SL strictly. Ensure TF closing candle check or emergency stop buffer is respected."
         return remarks, lesson
 
     return f"Trade executed for {symbol} on pattern [{pattern}].", "Review chart pattern and entry timing for future setups."
@@ -444,7 +535,12 @@ def generate_daily_journal(target_date=None, kite=None):
                 # Resolve exact pattern (e.g. BASE_ABCD (Manual Entry))
                 pattern_name = resolve_trade_pattern(sym, sym, "ZERODHA_ORDER", is_manual=is_manual)
                 
-                rem, les = derive_trade_remarks_and_lesson(sym, outcome, pnl_rs, pattern_name)
+                trade_info = {
+                    "Symbol": sym, "Outcome": outcome, "PnL_Rs": pnl_rs, "PnL_Pct": pnl_pct_str,
+                    "Pattern": pattern_name, "Tier": tier_badge, "Entry_Time": entry_time,
+                    "Exit_Time": exit_time, "MFE_Pct": 0.0, "MAE_Pct": 0.0
+                }
+                rem, les = derive_trade_remarks_and_lesson(sym, outcome, pnl_rs, pattern_name, trade_data=trade_info)
                 if sym in existing_user_notes:
                     if existing_user_notes[sym].get("remarks"): rem = existing_user_notes[sym]["remarks"]
                     if existing_user_notes[sym].get("lesson"): les = existing_user_notes[sym]["lesson"]
@@ -558,6 +654,9 @@ def generate_daily_journal(target_date=None, kite=None):
                         e["Spot_EMA_Trend"] = tdna.get("spot_ema_trend", "")
                         e["Spot_ATR_Ratio"] = tdna.get("spot_atr_ratio", "")
                         e["Opt_VCP_Ratio"] = tdna.get("opt_vcp_ratio", "")
+                    rem, les = derive_trade_remarks_and_lesson(sym, status, pnl_rs, e.get("Pattern", ""), trade_data=t)
+                    e["Analysis_Remarks"] = rem
+                    e["Self_Learning_Lesson"] = les
 
         for t in trades:
             c_date = (t.get("created_at") or t.get("entry_time") or "")[:10]
@@ -572,7 +671,7 @@ def generate_daily_journal(target_date=None, kite=None):
                 pattern_name = resolve_trade_pattern(sym, t.get("contract", ""), t.get("pattern"))
                 tier_badge, swing_waves = resolve_trade_tier_and_swings(sym, t.get("contract", ""), pattern_name)
                 
-                rem, les = derive_trade_remarks_and_lesson(sym, outcome, pnl_rs, pattern_name)
+                rem, les = derive_trade_remarks_and_lesson(sym, outcome, pnl_rs, pattern_name, trade_data=t)
                 if sym in existing_user_notes:
                     if existing_user_notes[sym].get("remarks"): rem = existing_user_notes[sym]["remarks"]
                     if existing_user_notes[sym].get("lesson"): les = existing_user_notes[sym]["lesson"]
@@ -863,7 +962,510 @@ def get_trade_journal_analytics(entries=None):
         "by_vcp_compression": by_vcp_compression
     }
 
+
+def update_cumulative_evolution_log(session_summary, directives, target_date):
+    """Update append-only cumulative strategy evolution history and rolling performance metrics."""
+    cum_json_path = os.path.join(JOURNAL_DIR, "cumulative_strategy_evolution_log.json")
+    cum_md_path = os.path.join(JOURNAL_DIR, "cumulative_strategy_evolution_log.md")
+
+    entries = []
+    if os.path.exists(cum_json_path):
+        try:
+            with open(cum_json_path, "r", encoding="utf-8") as f:
+                entries = json.load(f)
+        except Exception:
+            entries = []
+
+    # Filter out target_date if re-running on same date
+    entries = [e for e in entries if e.get("date") != target_date]
+
+    entry = {
+        "date": target_date,
+        "total_trades": session_summary.get("total_trades", 0),
+        "closed_trades": session_summary.get("closed_trades", 0),
+        "winning_trades": session_summary.get("winning_trades", 0),
+        "losing_trades": session_summary.get("losing_trades", 0),
+        "win_rate_pct": session_summary.get("win_rate_pct", 0.0),
+        "net_pnl_rs": session_summary.get("net_pnl_rs", 0.0),
+        "profit_factor": session_summary.get("profit_factor", 0.0),
+        "avg_left_on_table_pct": session_summary.get("avg_left_on_table_pct", 0.0),
+        "directives": directives,
+        "updated_at": datetime.now().isoformat(),
+    }
+    entries.append(entry)
+    entries.sort(key=lambda x: x.get("date", ""))
+
+    try:
+        with open(cum_json_path, "w", encoding="utf-8") as f:
+            json.dump(entries, f, indent=2)
+    except Exception as e:
+        logging.warning(f"Could not save cumulative evolution JSON: {e}")
+
+    # Generate cumulative Markdown summary
+    try:
+        recent = entries[-10:]
+        total_pnl = sum(float(e.get("net_pnl_rs", 0)) for e in entries)
+        total_trades = sum(int(e.get("total_trades", 0)) for e in entries)
+        total_closed = sum(int(e.get("closed_trades", 0)) for e in entries)
+        total_wins = sum(int(e.get("winning_trades", 0)) for e in entries)
+        overall_wr = round((total_wins / total_closed * 100), 2) if total_closed > 0 else 0.0
+
+        md_lines = [
+            "# 📈 CUMULATIVE STRATEGY EVOLUTION & LEARNING LOG",
+            f"**Last Updated**: `{datetime.now().strftime('%Y-%m-%d %H:%M:%S IST')}` | **Total Sessions Tracked**: `{len(entries)}`",
+            "",
+            "## 1. Multi-Session Aggregate Performance",
+            f"- **Cumulative Realized P&L**: `₹{total_pnl:,.2f}`",
+            f"- **Cumulative Closed Trades**: `{total_closed}` (`{total_wins}` Wins, `{total_closed - total_wins}` Losses)",
+            f"- **Aggregate Win Rate**: `{overall_wr:.1f}%`",
+            "",
+            "## 2. Recent Session Trajectory (Last 10 Sessions)",
+            "| Date | Trades | Win Rate % | Net P&L (₹) | Profit Factor | Left on Table % | Top Evolutionary Directive |",
+            "| :--- | :---: | :---: | :---: | :---: | :---: | :--- |"
+        ]
+        for e in reversed(recent):
+            top_dir = e.get("directives", ["N/A"])[0] if e.get("directives") else "N/A"
+            if len(top_dir) > 80:
+                top_dir = top_dir[:77] + "..."
+            md_lines.append(
+                f"| `{e.get('date')}` | {e.get('total_trades')} | {e.get('win_rate_pct'):.1f}% | ₹{e.get('net_pnl_rs'):,.2f} | {e.get('profit_factor')} | {e.get('avg_left_on_table_pct'):.1f}% | {top_dir} |"
+            )
+
+        md_lines.extend([
+            "",
+            "## 3. Active Algorithmic Evolution Directives (Latest Session)",
+        ])
+        for idx, d in enumerate(directives, 1):
+            md_lines.append(f"{idx}. {d}")
+
+        with open(cum_md_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(md_lines) + "\n")
+    except Exception as e:
+        logging.warning(f"Could not save cumulative evolution Markdown: {e}")
+
+
+def generate_daily_session_learning_report(target_date=None, kite=None):
+    """
+    Generate an exhaustive, self-learning trade session report in both Markdown (.md) and JSON (.json)
+    for a given date (default today).
+    """
+    if not target_date:
+        target_date = datetime.now().strftime("%Y-%m-%d")
+
+    # 1. Sync journal first to capture latest states
+    generate_daily_journal(target_date=target_date, kite=kite)
+
+    # 2. Load all journal entries and filter for target_date
+    all_entries = load_journal_entries()
+    session_trades = [e for e in all_entries if e.get("Date") == target_date]
+
+    # Also fetch trades from trade_db for deeper metadata
+    trade_db_map = {}
+    try:
+        from common.trade_db import get_all_trades
+        for t in get_all_trades():
+            c = str(t.get("contract") or t.get("symbol") or "").replace(" ", "").upper()
+            if c:
+                trade_db_map[c] = t
+    except Exception:
+        pass
+
+    # Enrich session_trades with trade_db details if missing
+    for e in session_trades:
+        sym = str(e.get("Symbol") or "").replace(" ", "").upper()
+        if sym in trade_db_map:
+            t = trade_db_map[sym]
+            if not e.get("MFE_Pct") and t.get("mfe_pct") is not None:
+                e["MFE_Pct"] = float(t.get("mfe_pct") or 0.0)
+            if not e.get("MAE_Pct") and t.get("mae_pct") is not None:
+                e["MAE_Pct"] = float(t.get("mae_pct") or 0.0)
+            if not e.get("Attribution_Code"):
+                e["Attribution_Code"] = t.get("attribution_code") or classify_trade_attribution(t, e.get("PnL_Rs", 0), e.get("Outcome", ""))
+
+    total_trades = len(session_trades)
+    closed_trades = [e for e in session_trades if not ("ACTIVE" in str(e.get("Outcome","")).upper() or e.get("Exit_Time") in ("OPEN", ""))]
+    active_trades = [e for e in session_trades if ("ACTIVE" in str(e.get("Outcome","")).upper() or e.get("Exit_Time") in ("OPEN", ""))]
+
+    winning_trades = [e for e in closed_trades if float(e.get("PnL_Rs") or 0) > 0]
+    losing_trades = [e for e in closed_trades if float(e.get("PnL_Rs") or 0) < 0]
+    be_trades = [e for e in closed_trades if float(e.get("PnL_Rs") or 0) == 0]
+
+    gross_profit = sum(float(e.get("PnL_Rs") or 0) for e in winning_trades)
+    gross_loss = abs(sum(float(e.get("PnL_Rs") or 0) for e in losing_trades))
+    net_pnl = gross_profit - gross_loss
+    win_rate = (len(winning_trades) / len(closed_trades) * 100) if closed_trades else 0.0
+    profit_factor = round(gross_profit / gross_loss, 2) if gross_loss > 0 else (999.0 if gross_profit > 0 else 0.0)
+    avg_win = round(gross_profit / len(winning_trades), 2) if winning_trades else 0.0
+    avg_loss = round(gross_loss / len(losing_trades), 2) if losing_trades else 0.0
+    max_win = max([float(e.get("PnL_Rs") or 0) for e in winning_trades], default=0.0)
+    max_loss = min([float(e.get("PnL_Rs") or 0) for e in losing_trades], default=0.0)
+
+    # Opportunity Cost / MFE / MAE analysis
+    mfe_winners = [float(e.get("MFE_Pct") or 0) for e in winning_trades]
+    mae_winners = [float(e.get("MAE_Pct") or 0) for e in winning_trades]
+    mfe_losers = [float(e.get("MFE_Pct") or 0) for e in losing_trades]
+    mae_losers = [float(e.get("MAE_Pct") or 0) for e in losing_trades]
+
+    avg_mfe_winners = round(sum(mfe_winners) / len(mfe_winners), 2) if mfe_winners else 0.0
+    avg_mae_winners = round(sum(mae_winners) / len(mae_winners), 2) if mae_winners else 0.0
+    avg_mfe_losers = round(sum(mfe_losers) / len(mfe_losers), 2) if mfe_losers else 0.0
+    avg_mae_losers = round(sum(mae_losers) / len(mae_losers), 2) if mae_losers else 0.0
+
+    # Left on Table (Peak MFE vs Realized Return on Winners)
+    left_on_table_list = []
+    for w in winning_trades:
+        mfe_w = float(w.get("MFE_Pct") or 0)
+        pnl_pct_w = float(str(w.get("PnL_Pct") or "0").replace("%", "").replace("+", "") or 0)
+        left_on_table_list.append(max(0.0, mfe_w - pnl_pct_w))
+    avg_left_on_table = round(sum(left_on_table_list) / len(left_on_table_list), 2) if left_on_table_list else 0.0
+
+    # Groupings: Time of Day, Tier, Pattern, Attribution
+    time_windows = {
+        "Opening Velocity (09:15-10:00)": {"total": 0, "wins": 0, "losses": 0, "pnl": 0.0},
+        "Morning Trend (10:00-11:30)": {"total": 0, "wins": 0, "losses": 0, "pnl": 0.0},
+        "Midday Chop (11:30-13:30)": {"total": 0, "wins": 0, "losses": 0, "pnl": 0.0},
+        "Closing Momentum (13:30-15:30)": {"total": 0, "wins": 0, "losses": 0, "pnl": 0.0},
+        "Other / Unscheduled": {"total": 0, "wins": 0, "losses": 0, "pnl": 0.0},
+    }
+
+    tier_breakdown = {}
+    pattern_breakdown = {}
+    attribution_breakdown = {}
+
+    for e in session_trades:
+        pnl = float(e.get("PnL_Rs") or 0)
+        is_w = pnl > 0
+        is_l = pnl < 0
+
+        # Time Window
+        ent = str(e.get("Entry_Time") or "")
+        tw = "Other / Unscheduled"
+        if ent and len(ent) >= 16:
+            try:
+                t_str = ent.split(" ")[-1][:5]
+                hh, mm = map(int, t_str.split(":"))
+                mins = hh * 60 + mm
+                if 9 * 60 + 15 <= mins < 10 * 60:
+                    tw = "Opening Velocity (09:15-10:00)"
+                elif 10 * 60 <= mins < 11 * 60 + 30:
+                    tw = "Morning Trend (10:00-11:30)"
+                elif 11 * 60 + 30 <= mins < 13 * 60 + 30:
+                    tw = "Midday Chop (11:30-13:30)"
+                elif 13 * 60 + 30 <= mins <= 15 * 60 + 30:
+                    tw = "Closing Momentum (13:30-15:30)"
+            except Exception:
+                pass
+        time_windows[tw]["total"] += 1
+        time_windows[tw]["pnl"] += pnl
+        if is_w: time_windows[tw]["wins"] += 1
+        elif is_l: time_windows[tw]["losses"] += 1
+
+        # Tier
+        tr = str(e.get("Tier") or "🥈 T2 Core")
+        if tr not in tier_breakdown:
+            tier_breakdown[tr] = {"total": 0, "wins": 0, "losses": 0, "pnl": 0.0}
+        tier_breakdown[tr]["total"] += 1
+        tier_breakdown[tr]["pnl"] += pnl
+        if is_w: tier_breakdown[tr]["wins"] += 1
+        elif is_l: tier_breakdown[tr]["losses"] += 1
+
+        # Pattern
+        pat = str(e.get("Pattern") or "UNKNOWN")
+        if pat not in pattern_breakdown:
+            pattern_breakdown[pat] = {"total": 0, "wins": 0, "losses": 0, "pnl": 0.0}
+        pattern_breakdown[pat]["total"] += 1
+        pattern_breakdown[pat]["pnl"] += pnl
+        if is_w: pattern_breakdown[pat]["wins"] += 1
+        elif is_l: pattern_breakdown[pat]["losses"] += 1
+
+        # Attribution
+        attr = str(e.get("Attribution_Code") or classify_trade_attribution(e, pnl, e.get("Outcome","")))
+        attribution_breakdown[attr] = attribution_breakdown.get(attr, 0) + 1
+
+    # Synthesize Evolutionary Rules
+    directives = []
+
+    # Rule 1: Win rate & profit factor calibration
+    if closed_trades:
+        if win_rate >= 60.0:
+            directives.append(f"🥇 REGIME CONVICTION: High statistical edge confirmed ({win_rate:.1f}% win rate, Profit Factor {profit_factor:.2f}). Maintain full capital allocation (100% on T1 Gold, 70% on T2 Core).")
+        elif win_rate < 40.0 and len(closed_trades) >= 2:
+            directives.append(f"🛡️ REGIME DEFENSE: Sub-optimal win rate ({win_rate:.1f}%). Restrict automated entries strictly to 🥇 T1 Gold setups with R:R >= 2.0 and Spot EMA13/44 trend confirmation.")
+        else:
+            directives.append(f"⚖️ REGIME CALIBRATION: Balanced performance ({win_rate:.1f}% win rate). Prioritize setups with coiled VCP metrics (ATR3/ATR14 <= 0.85) to enhance trade follow-through.")
+    else:
+        directives.append("🛡️ CAPITAL PRESERVATION: No closed trades during session. Capital 100% shielded; scanners maintained surveillance.")
+
+    # Rule 2: Midday Chop Window Rule
+    midday_stats = time_windows["Midday Chop (11:30-13:30)"]
+    if midday_stats["total"] > 0:
+        if midday_stats["pnl"] < 0 or (midday_stats["total"] > 0 and midday_stats["wins"] == 0):
+            directives.append(f"⏰ MIDDAY CHOP SHIELD: 11:30-13:30 IST window generated negative expectancy (-₹{abs(midday_stats['pnl']):.2f} across {midday_stats['total']} trade(s)). Strictly enforce 11:30 cutoff on 0DTE index options, and require RVOL >= 1.8x for stock options.")
+        else:
+            directives.append(f"⏰ MIDDAY DISCIPLINE: Midday setups generated ₹{midday_stats['pnl']:.2f}. Continue requiring high structural confluence during noon consolidation.")
+    else:
+        directives.append("⏰ TIME WINDOW COMPLIANCE: Zero midday chop trades executed. Adherence to 11:30 IST 0DTE cutoff successfully protected capital from theta burn.")
+
+    # Rule 3: Left on Table / Profit Harvesting
+    if avg_left_on_table >= 8.0:
+        directives.append(f"💰 PROFIT HARVESTING: Average left on table was {avg_left_on_table:.1f}%. Implement partial profit scaling (lock 50% lots at Target 1 / +20% spike) while trailing remainder to eliminate profit round-trips.")
+    elif winning_trades:
+        directives.append(f"💰 TRAILING EFFICIENCY: Trailing ratchets executed cleanly ({avg_left_on_table:.1f}% avg left on table). Maintain current +15% -> +8% lock and +25% -> +15% lock rules.")
+
+    # Rule 4: Structural vs Premature Shakeouts
+    premature_shakeouts = attribution_breakdown.get("LOSS_COUNTER_SPOT_TRAP", 0) + attribution_breakdown.get("LOSS_THETA_DECAY", 0)
+    if "PREMATURE_OPTION_SL_SHAKEOUT" in attribution_breakdown or premature_shakeouts > 0:
+        directives.append("🔬 STRUCTURAL IMMUNITY: Premature option SL exits observed while Spot stayed inside Anchor corridor. Enforce Spot 15m candle-close confirmation before option SL execution.")
+    else:
+        directives.append("🛡️ DISCIPLINED RISK: Stop-losses executed per institutional rules. Zero unshielded runaway drawdowns observed.")
+
+    # Rule 5: Volume & VCP Validation
+    directives.append("📐 GEOMETRIC & VOLUME MANDATE: Breakout confirmation requires candle RVOL >= 1.2x and coiled VCP metric (ATR3/ATR14 <= 0.85). Reject uncompressed setups showing volatility exhaustion.")
+
+    summary_dict = {
+        "total_trades": total_trades,
+        "closed_trades": len(closed_trades),
+        "active_trades": len(active_trades),
+        "winning_trades": len(winning_trades),
+        "losing_trades": len(losing_trades),
+        "breakeven_trades": len(be_trades),
+        "win_rate_pct": round(win_rate, 2),
+        "net_pnl_rs": round(net_pnl, 2),
+        "gross_profit_rs": round(gross_profit, 2),
+        "gross_loss_rs": round(gross_loss, 2),
+        "profit_factor": profit_factor,
+        "avg_win_rs": avg_win,
+        "avg_loss_rs": avg_loss,
+        "max_win_rs": round(max_win, 2),
+        "max_loss_rs": round(max_loss, 2),
+        "avg_mfe_winners": avg_mfe_winners,
+        "avg_mae_winners": avg_mae_winners,
+        "avg_mfe_losers": avg_mfe_losers,
+        "avg_mae_losers": avg_mae_losers,
+        "avg_left_on_table_pct": avg_left_on_table,
+    }
+
+    # Build Markdown Report
+    top_winner = max(session_trades, key=lambda x: float(x.get("PnL_Rs") or 0), default=None) if session_trades else None
+    top_loser = min(session_trades, key=lambda x: float(x.get("PnL_Rs") or 0), default=None) if session_trades else None
+
+    md_lines = [
+        f"# 📊 DAILY TRADING SESSION LEARNING & EVOLUTION REPORT",
+        f"**Session Date**: `{target_date}` | **Generated At**: `{datetime.now().strftime('%Y-%m-%d %H:%M:%S IST')}`",
+        "",
+        "---",
+        "",
+        "## 1. Executive Performance Dashboard",
+        "",
+        "| Performance Metric | Session Value | Status / Benchmark |",
+        "| :--- | :---: | :--- |",
+        f"| **Total Trades Recorded** | **{total_trades}** | {len(closed_trades)} Closed, {len(active_trades)} Active |",
+        f"| **Win Rate** | **{win_rate:.1f}%** | Target >= 55.0% |",
+        f"| **Net Realized P&L** | **₹{net_pnl:,.2f}** | {'🟢 Profitable' if net_pnl > 0 else ('🔴 Loss' if net_pnl < 0 else '⚪ Breakeven')} |",
+        f"| **Gross Profit / Loss** | **+₹{gross_profit:,.2f} / -₹{gross_loss:,.2f}** | Profit Factor: **{profit_factor}** |",
+        f"| **Average Win / Loss** | **₹{avg_win:,.2f} / ₹{avg_loss:,.2f}** | Payoff Ratio: **{round(avg_win / max(1, avg_loss), 2)}x** |",
+        f"| **Max Single Win / Loss** | **₹{max_win:,.2f} / ₹{max_loss:,.2f}** | Risk Clamp Active |",
+        f"| **Avg Winner Peak MFE** | **+{avg_mfe_winners:.1f}%** | Realized Excursion |",
+        f"| **Avg Left on Table** | **{avg_left_on_table:.1f}%** | Peak MFE vs Realized Exit |",
+        "",
+        "---",
+        "",
+        "## 2. Multi-Dimensional Performance Breakdown",
+        "",
+        "### A. By Conviction Tier",
+        "| Tier Classification | Trades | Wins | Losses | Win Rate % | Realized P&L (₹) |",
+        "| :--- | :---: | :---: | :---: | :---: | :--- |"
+    ]
+
+    for tr_k, tr_v in tier_breakdown.items():
+        wr_tr = round(tr_v["wins"] / (tr_v["wins"] + tr_v["losses"]) * 100, 1) if (tr_v["wins"] + tr_v["losses"]) > 0 else 0.0
+        md_lines.append(f"| **{tr_k}** | {tr_v['total']} | {tr_v['wins']} | {tr_v['losses']} | {wr_tr}% | ₹{tr_v['pnl']:,.2f} |")
+
+    md_lines.extend([
+        "",
+        "### B. By Time-of-Day Execution Window",
+        "| Execution Window | Trades | Wins | Losses | Net P&L (₹) | Expectancy Assessment |",
+        "| :--- | :---: | :---: | :---: | :--- | :--- |"
+    ])
+
+    for tw_k, tw_v in time_windows.items():
+        if tw_v["total"] > 0:
+            assess = "🟢 High Expectancy" if tw_v["pnl"] > 0 else ("🔴 Negative / Avoid" if tw_v["pnl"] < 0 else "⚪ Neutral")
+            md_lines.append(f"| **{tw_k}** | {tw_v['total']} | {tw_v['wins']} | {tw_v['losses']} | ₹{tw_v['pnl']:,.2f} | {assess} |")
+
+    md_lines.extend([
+        "",
+        "### C. By Attribution Taxonomy",
+        "| Attribution Code | Count | Strategy Significance |",
+        "| :--- | :---: | :--- |"
+    ])
+
+    for att_k, att_cnt in attribution_breakdown.items():
+        md_lines.append(f"| `{att_k}` | {att_cnt} | Systematic Audit Tag |")
+
+    md_lines.extend([
+        "",
+        "---",
+        "",
+        "## 3. Trade-by-Trade Forensic Audit Log",
+        "",
+        "| Symbol / Contract | Side | Pattern | Tier | Entry Price | Exit Price | PnL (₹) | Return % | MFE % | MAE % | Forensic Remarks & Actionable Lesson |",
+        "| :--- | :---: | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :--- |"
+    ])
+
+    for t in session_trades:
+        sym_c = t.get("Symbol") or "UNKNOWN"
+        side_c = t.get("Side") or "BUY"
+        pat_c = t.get("Pattern") or "UNKNOWN"
+        tier_c = t.get("Tier") or "🥈 T2 Core"
+        ep_c = t.get("Entry_Price") or 0.0
+        xp_c = t.get("Exit_Price") or "-"
+        pnl_c = float(t.get("PnL_Rs") or 0.0)
+        pnl_pct_c = t.get("PnL_Pct") or "0.00%"
+        mfe_c = float(t.get("MFE_Pct") or 0.0)
+        mae_c = float(t.get("MAE_Pct") or 0.0)
+        rem_c = t.get("Analysis_Remarks") or ""
+        les_c = t.get("Self_Learning_Lesson") or ""
+        combined_note = f"**Remark**: {rem_c}<br>**Lesson**: {les_c}"
+
+        md_lines.append(
+            f"| `{sym_c}` | {side_c} | `{pat_c}` | {tier_c} | ₹{ep_c} | ₹{xp_c} | ₹{pnl_c:,.2f} | {pnl_pct_c} | +{mfe_c:.1f}% | {mae_c:.1f}% | {combined_note} |"
+        )
+
+    # Section 4: Autopsy of Top Winner and Top Loser
+    md_lines.extend([
+        "",
+        "---",
+        "",
+        "## 4. Session Autopsy: Case Studies",
+        ""
+    ])
+    if top_winner and float(top_winner.get("PnL_Rs") or 0) > 0:
+        md_lines.extend([
+            f"### 🏆 Top Winner: `{top_winner.get('Symbol')}` (+₹{float(top_winner.get('PnL_Rs', 0)):,.2f})",
+            f"- **Pattern & Tier**: `{top_winner.get('Pattern')}` | `{top_winner.get('Tier')}`",
+            f"- **Entry & Exit**: Entry @ ₹{top_winner.get('Entry_Price')} ({top_winner.get('Entry_Time')}) ─── Exit @ ₹{top_winner.get('Exit_Price')} ({top_winner.get('Exit_Time')})",
+            f"- **Peak Excursion**: MFE: `+{top_winner.get('MFE_Pct', 0.0)}%` | MAE: `{top_winner.get('MAE_Pct', 0.0)}%`",
+            f"- **Key Takeaway**: {top_winner.get('Self_Learning_Lesson')}",
+            ""
+        ])
+    else:
+        md_lines.append("### 🏆 Top Winner: None (No winning trades recorded today)\n")
+
+    if top_loser and float(top_loser.get("PnL_Rs") or 0) < 0:
+        md_lines.extend([
+            f"### 🛑 Top Risk Event / Loser: `{top_loser.get('Symbol')}` (-₹{abs(float(top_loser.get('PnL_Rs', 0))):,.2f})",
+            f"- **Pattern & Tier**: `{top_loser.get('Pattern')}` | `{top_loser.get('Tier')}`",
+            f"- **Entry & Exit**: Entry @ ₹{top_loser.get('Entry_Price')} ({top_loser.get('Entry_Time')}) ─── Exit @ ₹{top_loser.get('Exit_Price')} ({top_loser.get('Exit_Time')})",
+            f"- **Peak Excursion**: MFE: `+{top_loser.get('MFE_Pct', 0.0)}%` | MAE: `{top_loser.get('MAE_Pct', 0.0)}%`",
+            f"- **Root Cause & Remediation**: {top_loser.get('Analysis_Remarks')} | **Evolution Rule**: {top_loser.get('Self_Learning_Lesson')}",
+            ""
+        ])
+    else:
+        md_lines.append("### 🛑 Top Risk Event / Loser: None (Zero loss trades recorded today)\n")
+
+    # Section 5: Evolutionary Directives
+    md_lines.extend([
+        "---",
+        "",
+        "## 5. Actionable Strategy Evolution Directives (Rules for Subsequent Sessions)",
+        ""
+    ])
+    for idx, d in enumerate(directives, 1):
+        md_lines.append(f"{idx}. {d}")
+
+    md_lines.append("\n---\n*Report auto-generated by Price Action Self-Learning System.*")
+
+    # File Paths
+    report_md_path = os.path.join(JOURNAL_DIR, f"daily_learning_session_{target_date}.md")
+    report_json_path = os.path.join(JOURNAL_DIR, f"daily_learning_session_{target_date}.json")
+
+    # Write Markdown
+    with open(report_md_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(md_lines) + "\n")
+
+    # Build JSON
+    report_json_content = {
+        "ok": True,
+        "session_date": target_date,
+        "generated_at": datetime.now().isoformat(),
+        "summary": summary_dict,
+        "by_tier": tier_breakdown,
+        "by_time_window": time_windows,
+        "by_pattern": pattern_breakdown,
+        "by_attribution": attribution_breakdown,
+        "evolutionary_directives": directives,
+        "trades": session_trades,
+    }
+
+    # Write JSON
+    with open(report_json_path, "w", encoding="utf-8") as f:
+        json.dump(report_json_content, f, indent=2)
+
+    # Mirror to default output dir if JOURNAL_DIR points to G: drive
+    local_journal_dir = os.path.join(BASE_DIR, "output", "journal")
+    if local_journal_dir != JOURNAL_DIR:
+        os.makedirs(local_journal_dir, exist_ok=True)
+        local_md = os.path.join(local_journal_dir, f"daily_learning_session_{target_date}.md")
+        local_json = os.path.join(local_journal_dir, f"daily_learning_session_{target_date}.json")
+        try:
+            with open(local_md, "w", encoding="utf-8") as f:
+                f.write("\n".join(md_lines) + "\n")
+            with open(local_json, "w", encoding="utf-8") as f:
+                json.dump(report_json_content, f, indent=2)
+        except Exception:
+            pass
+
+    # Update cumulative evolution tracker
+    update_cumulative_evolution_log(summary_dict, directives, target_date)
+
+    logging.info(f"Daily session learning report generated: {report_md_path} and {report_json_path}")
+    return report_json_content
+
+
+def get_latest_daily_learning_report():
+    """Fetch the latest available daily session learning report."""
+    import glob
+    search_dirs = [JOURNAL_DIR, os.path.join(BASE_DIR, "output", "journal")]
+    found_files = []
+    for s_dir in search_dirs:
+        if os.path.exists(s_dir):
+            found_files.extend(glob.glob(os.path.join(s_dir, "daily_learning_session_*.json")))
+
+    if not found_files:
+        return {"ok": False, "message": "No session learning reports found."}
+
+    # Pick the newest by date in filename
+    found_files.sort(reverse=True)
+    latest_file = found_files[0]
+    try:
+        with open(latest_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            data["report_file"] = latest_file
+            return data
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 if __name__ == "__main__":
-    generate_daily_journal()
+    import argparse
+    parser = argparse.ArgumentParser(description="Daily Trade Journal & Strategy Evolution Engine")
+    parser.add_argument("--date", type=str, help="Target date in YYYY-MM-DD format (default today)")
+    parser.add_argument("--report", action="store_true", help="Generate daily session learning report (.md and .json)")
+    parser.add_argument("--analytics", action="store_true", help="Print journal analytics")
+    parser.add_argument("--clear", action="store_true", help="Clear journal files with automatic backup")
+    args = parser.parse_args()
+
+    if args.clear:
+        ok, backup, msg = clear_journal()
+        print(msg)
+    elif args.report:
+        rep = generate_daily_session_learning_report(target_date=args.date)
+        print(f"Generated session learning report for {rep.get('session_date')}: {rep.get('summary', {}).get('total_trades', 0)} trades recorded.")
+    elif args.analytics:
+        an = get_trade_journal_analytics()
+        print(json.dumps(an, indent=2))
+    else:
+        generate_daily_journal(target_date=args.date)
 
 

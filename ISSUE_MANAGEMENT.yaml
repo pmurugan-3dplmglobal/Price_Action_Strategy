@@ -1,15 +1,48 @@
 meta:
   system: Price Action Unified Strategy System
   version: v2.1.0-stable
-  last_updated: '2026-10-02'
+  last_updated: '2026-10-05'
   purpose: Active operational tracker for v2.1.0-stable failures, root causes, regressions, and enhancements.
   historical_archive: archive/ISSUE_HISTORY_ARCHIVE.yaml (Preserves 119 resolved legacy issues prior to 2026-09-05)
-  total_active_issues: 63
+  total_active_issues: 64
   archived_issues_summary:
     total_archived: 119
     recent_archived_batch: [FEATURE-031, FEATURE-030, FEATURE-029, ISSUE-084, ISSUE-083, ISSUE-082, ISSUE-081, ISSUE-080, FEATURE-036, FEATURE-035, FEATURE-034, FEATURE-033, ISSUE-054]
     key_archived_families: [ALGO_AUDIT_CVE, QUANT_ENHANCEMENTS, RADAR_LIFECYCLE, VCP_METRICS, SCANNER_DISCOVERY, SECURITY_CONFIG, ZERO_REGRESSION_AUDIT]
 issues:
+- id: ISSUE-117
+  title: Heuristic Pricing Replacement, 0DTE Index 11:30 Cutoff Harmonization & Session Learning/Evolution System
+  severity: HIGH
+  category: Pricing Integrity, Risk Timing Harmonization, Self-Learning Architecture, Forensic Journaling
+  family: QUANT_ENHANCEMENTS
+  date_reported: '2026-10-05'
+  symptom: |
+    1. Heuristic Pricing in EMA Screener: In `common/ema_engine.py:434`, option entry pricing fell back to hardcoded heuristic estimate `round(spot * 0.03, 2)` without attempting live broker quotes, and SL was artificially fixed rather than delta-clamped and DTE-adaptive.
+    2. Stray 0DTE Cutoffs (13:30 vs 11:30 IST): While ISSUE-065 established the 11:30 IST cutoff for 0DTE index options in `common/resolve.py`, stray 13:30 references remained in `common/position_monitor.py:579` and `Trade_Option/index_options_trade_engine.py:680`, creating potential execution desynchronization during midday hours.
+    3. Session Learning & Evolution Gap: Daily journal lacked an automated, multi-dimensional session learning and strategy evolution system capable of generating granular trade remarks (evaluating MFE, MAE, time-of-day, structural invalidation vs shakeout), daily Markdown/JSON session reports, and rolling cumulative strategy directives.
+  root_cause: |
+    1. EMA options mode was using a legacy placeholder formula `round(spot * 0.03, 2)` instead of authentic Kite quotes and standard `calculate_option_profit_targets(opt_entry, opt_sl, dte=days_rem)`.
+    2. Index options engine Gate 0 and position monitor entry allowed checks were not updated when ISSUE-065 advanced 0DTE rollovers to 11:30 IST.
+    3. Trade remarks in `common/daily_trade_journal.py` were static outcome strings that did not inspect microstructure DNA, time windows, or MFE/MAE excursions.
+  affected_files:
+  - common/ema_engine.py
+  - common/position_monitor.py
+  - common/daily_trade_journal.py
+  - Trade_Option/index_options_trade_engine.py
+  - Trade_Option/app_option_Trade.py
+  - Trade_Option/automated_strategy_exporter.py
+  - Trade_Stock/app_Stock_Trade.py
+  - scratch/test_adaptive_index_entry_window.py
+  - scratch/test_heuristic_pricing_and_0dte_harmonization.py
+  fix_applied: |
+    1. In `common/ema_engine.py`, replaced heuristic pricing with authentic broker quote queries via `safe_kite_call(kite.quote, f"NFO:{contract}")`, clamped delta-based SL (65% to 90% of entry premium), and DTE-adaptive profit targets via `calculate_option_profit_targets(opt_entry, opt_sl, dte=days_rem)`.
+    2. Harmonized 0DTE index cutoff to 11:30 IST in `common/position_monitor.py:is_new_entry_allowed()` and `Trade_Option/index_options_trade_engine.py` Gate 0.
+    3. In `common/daily_trade_journal.py`, enhanced `derive_trade_remarks_and_lesson()` to evaluate MFE %, MAE %, time-of-day windows, and structural Spot validity vs premature shakeout.
+    4. Implemented `generate_daily_session_learning_report()` producing rich `daily_learning_session_YYYY-MM-DD.md` and `.json` reports, synthesizing 5 concrete strategy evolution rules.
+    5. Implemented `update_cumulative_evolution_log()` generating `cumulative_strategy_evolution_log.json` and `.md` with rolling performance trajectory.
+    6. Connected `automated_strategy_exporter.py` and exposed `/api/journal/learning-report` in Options & Stock Dashboards.
+    7. Added 100% passing unit verification test `scratch/test_heuristic_pricing_and_0dte_harmonization.py`.
+  status: RESOLVED
 - id: ISSUE-116
   title: 1-Click Buy Route UnboundLocalError 'ltp' and Order Variable Scope Initialization
   severity: HIGH

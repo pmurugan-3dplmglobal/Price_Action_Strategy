@@ -40,7 +40,9 @@
     "option_trail_1_sl_pct": 8.0,
     "option_trail_2_gain_pct": 25.0,
     "option_trail_2_sl_pct": 15.0,
-    "macro_gate_mode": "TREND_FOLLOWING"
+    "macro_gate_mode": "TREND_FOLLOWING",
+    "min_entry_time": "09:20",
+    "radar_min_entry_time": "09:15"
   },
   "ema_engine": {
     "timeframe": "1d",
@@ -72,7 +74,9 @@
     "option_trail_1_sl_pct": 8,
     "option_trail_2_gain_pct": 25,
     "option_trail_2_sl_pct": 15,
-    "macro_gate_mode": "TREND_FOLLOWING"
+    "macro_gate_mode": "TREND_FOLLOWING",
+    "min_entry_time": "09:15",
+    "radar_min_entry_time": "09:15"
   },
   "bear_trade": {
     "product_type": "MIS",

@@ -266,6 +266,14 @@ def execute_scheduled_export(slot_name=None):
         trades = run_scan_for_registry(kite, STOCK_REGISTRY, "nifty50", tf, strike_range=0, max_workers=5)
         export_trades_to_csv(trades, csv_path, slot_name)
 
+    # 3. Generate or update Daily Session Learning & Evolution Report
+    try:
+        from daily_trade_journal import generate_daily_session_learning_report
+        rep = generate_daily_session_learning_report(target_date=now_ist.strftime("%Y-%m-%d"), kite=kite)
+        logging.info(f"Daily Session Learning Report generated: {rep.get('session_date')} ({rep.get('summary', {}).get('total_trades', 0)} trades tracked)")
+    except Exception as je:
+        logging.warning(f"Could not generate daily session learning report during export: {je}")
+
     logging.info(f"SUCCESS: Automated export completed for slot [{slot_name}]. Output: {slot_dir}")
     print(f"\n[SUCCESS] Export complete for slot [{slot_name}]! Files saved at:\n{slot_dir}\n")
 

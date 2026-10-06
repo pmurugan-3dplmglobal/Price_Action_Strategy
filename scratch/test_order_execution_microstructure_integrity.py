@@ -161,6 +161,7 @@ class TestOrderExecutionMicrostructureIntegrity(unittest.TestCase):
 
         with patch.object(aot, "_kite_session", mock_kite), \
              patch("trading_core.is_market_open", return_value=True), \
+             patch("trading_core.contract_is_expired", return_value=False), \
              patch("common.position_monitor.is_new_entry_allowed", return_value=True), \
              patch("common.position_monitor.get_contract_days_to_expiry", return_value=5), \
              patch("vix_guard.evaluate_vix_regime", return_value=(True, "OK", {})), \

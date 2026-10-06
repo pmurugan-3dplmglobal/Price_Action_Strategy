@@ -11,8 +11,9 @@ import paths
 
 from trading_core import (
     STOCK_REGISTRY, INDEX_REGISTRY, load_kite_session, fetch_and_resample_candles, sync_stock_tokens,
-    STOCK_EXPIRY_ROLLOVER_DAYS
+    STOCK_EXPIRY_ROLLOVER_DAYS, safe_kite_call
 )
+from targets import calculate_option_profit_targets
 from equity_universe import get_universe_symbols_and_tokens
 
 BASE_DIR = paths.PROJECT_ROOT
@@ -117,6 +118,20 @@ def _get_monthly_expiry_month_str(now=None):
         return next_dt.strftime("%y"), next_dt.strftime("%b").upper()
     else:
         return now.strftime("%y"), now.strftime("%b").upper()
+
+def get_days_to_monthly_expiry(now=None):
+    """Calculate days remaining to the last Thursday of the current month (monthly expiry)."""
+    if now is None:
+        now = datetime.datetime.now()
+    import calendar
+    year = now.year
+    month = now.month
+    last_day = calendar.monthrange(year, month)[1]
+    last_date = datetime.date(year, month, last_day)
+    offset = (last_date.weekday() - 3) % 7
+    last_thursday = last_date - datetime.timedelta(days=offset)
+    today = now.date() if isinstance(now, datetime.datetime) else now
+    return max(0, (last_thursday - today).days)
 
 def get_option_contract_symbol(symbol, strike, side="CE"):
     now = datetime.datetime.now()
@@ -399,17 +414,39 @@ def execute_ema_scan_cycle(timeframe="1d", is_options_mode=True, target_universe
             if is_options_mode:
                 strike_step = info.get("strike_step", 10)
                 lot_size = info.get("lot_size", 100)
-                spot = setup["spot_price"]
+                spot = float(setup["spot_price"])
                 strike = get_atm_strike(spot, strike_step)
                 contract = get_option_contract_symbol(symbol, strike, "CE")
 
-                # Derive option contract setup levels (simulated ratio based on spot movement)
-                opt_entry = round(spot * 0.03, 2)
-                opt_sl = round(max(0.5, opt_entry - (setup["spot_price"] - setup["sl"]) * 0.5), 2)
-                opt_risk = opt_entry - opt_sl
-                opt_t1 = round(opt_entry + (1.5 * opt_risk), 2)
-                opt_t2 = round(opt_entry + (2.5 * opt_risk), 2)
-                opt_t3 = round(opt_entry + (3.5 * opt_risk), 2)
+                # Authentic Option Pricing: Query real live market quote first
+                opt_entry = 0.0
+                q_key = f"NFO:{contract}"
+                if kite:
+                    try:
+                        q_data = safe_kite_call(kite.quote, q_key)
+                        if q_data and q_key in q_data:
+                            opt_entry = float(q_data[q_key].get("last_price") or 0.0)
+                    except Exception as q_err:
+                        logger.debug(f"[EMA_OPTION_QUOTE_ERROR] {contract}: {q_err}")
+
+                # Fallback only if broker quote unavailable (e.g. offline testing / simulated data)
+                if opt_entry <= 0:
+                    opt_entry = round(spot * 0.03, 2)
+                    logger.debug(f"[EMA_HEURISTIC_PRICING_FALLBACK] {contract}: Using baseline estimate {opt_entry:.2f}")
+
+                # Authentic Delta-based Option SL and DTE-adaptive profit targets (common/targets.py)
+                spot_risk = abs(spot - float(setup["sl"]))
+                delta = 0.50  # Standard ATM delta
+                calculated_sl = round(opt_entry - (spot_risk * delta), 2)
+                # Clamp SL between 65% (max 35% loss) and 90% (min 10% loss) of entry premium
+                opt_sl = max(round(opt_entry * 0.65, 2), min(round(opt_entry * 0.90, 2), calculated_sl))
+                if opt_sl <= 0:
+                    opt_sl = round(opt_entry * 0.85, 2)
+
+                days_rem = get_days_to_monthly_expiry()
+                opt_t1, opt_t2, opt_t3 = calculate_option_profit_targets(opt_entry, opt_sl, dte=days_rem)
+                opt_risk = max(0.05, round(opt_entry - opt_sl, 2))
+                opt_rr = round((opt_t1 - opt_entry) / opt_risk, 2) if opt_risk > 0 else 1.5
 
                 results.append({
                     "symbol": symbol,
@@ -421,9 +458,9 @@ def execute_ema_scan_cycle(timeframe="1d", is_options_mode=True, target_universe
                     "t1": opt_t1,
                     "t2": opt_t2,
                     "t3": opt_t3,
-                    "rr": 1.5,
-                    "candle_a_time": setup["candle_a_time"],
-                    "entry_time": setup["entry_time"],
+                    "rr": opt_rr,
+                    "candle_a_time": setup.get("candle_a_time", ""),
+                    "entry_time": setup.get("entry_time", ""),
                     "pattern": setup.get("pattern", "BULL_EMA_CROSS"),
                     "day_close": setup.get("day_close"),
                     "day_ema13": setup.get("day_ema13"),
@@ -446,9 +483,9 @@ def execute_ema_scan_cycle(timeframe="1d", is_options_mode=True, target_universe
                     "t1": setup["t1"],
                     "t2": setup["t2"],
                     "t3": setup["t3"],
-                    "rr": setup["rr"],
-                    "candle_a_time": setup["candle_a_time"],
-                    "entry_time": setup["entry_time"],
+                    "rr": setup.get("rr", 1.5),
+                    "candle_a_time": setup.get("candle_a_time", ""),
+                    "entry_time": setup.get("entry_time", ""),
                     "pattern": setup.get("pattern", "BULL_EMA_CROSS"),
                     "day_close": setup.get("day_close"),
                     "day_ema13": setup.get("day_ema13"),

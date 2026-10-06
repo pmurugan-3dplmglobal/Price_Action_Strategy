@@ -16,9 +16,9 @@ import Trade_Option.index_options_trade_engine as iote
 class TestAdaptiveIndexEntryWindow(unittest.TestCase):
 
     def test_0dte_vs_monthly_cutoff(self):
-        """Verify 0DTE/expiry day is strictly blocked after 13:30, but DTE >= 2 is allowed until 15:00."""
-        # 13:31 PM
-        with patch("common.position_monitor.get_ist_now", return_value=dt(2026, 9, 23, 13, 31, 0)):
+        """Verify 0DTE/expiry day is strictly blocked after 11:30, but DTE >= 2 is allowed until 15:00."""
+        # 11:31 AM (Past 11:30 0DTE cutoff)
+        with patch("common.position_monitor.get_ist_now", return_value=dt(2026, 9, 23, 11, 31, 0)):
             # 0DTE / None / dte=1 -> Blocked
             self.assertFalse(is_new_entry_allowed(live_execution_active=True, is_option=True, is_index=True, dte=None))
             self.assertFalse(is_new_entry_allowed(live_execution_active=True, is_option=True, is_index=True, dte=0))
