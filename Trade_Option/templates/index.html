@@ -3003,6 +3003,7 @@
                 </div>
                 <div class="config-body">
                     {% for field_key, field in prog.config_fields.items() %}
+                    {% if not field.hidden %}
                     <div class="config-row">
                         <span class="config-label">{{ field.label }}</span>
                         {% if field.type == "select" %}
@@ -3015,6 +3016,7 @@
                         <input type="number" class="config-input" data-prog="{{ pid }}" data-field="{{ field_key }}" value="{{ field.default }}" step="any" onchange="event.stopPropagation();saveConfig('{{ pid }}')">
                         {% endif %}
                     </div>
+                    {% endif %}
                     {% endfor %}
                     <span class="config-feedback" id="cfg-fb-{{ pid }}"></span>
                 </div>

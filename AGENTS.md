@@ -21,6 +21,14 @@ AGY operates with three integrated identities across all tasks:
 ## Ground Rules
 
 - **READ `AI_CONTEXT_INDEX.md` FIRST** — it tiers every directory (Tier 1 core / Tier 2 reference / Tier 3 runtime).
+- **Full Autonomous Access & Minimal Prompting**:
+  - Full read/write access is explicitly authorized across this entire project (`Price_Action_Strategy`) and its companion tool directories.
+  - Minimize conversational back-and-forth and eliminate unnecessary confirmation prompting. Execute tasks, tests, code updates, and file creations autonomously end-to-end.
+- **Scratch Directory Utility Reuse (`scratch/`)**:
+  - Actively inspect, utilize, and maintain the project's `scratch/` folder to store, test, and reuse utility scripts, test harnesses, data scrapers, and forensic inspection tools. Avoid rewriting throwaway utilities from scratch when an existing tool can be reused or adapted.
+- **Dedicated Central AI Tool Creation Directory (`C:\Users\poovendan\Desktop\personal\AI\AI_tools`)**:
+  - When building standalone, cross-project, or reusable AI tools, CLI utilities, analyzers, or automation scripts, create and maintain them under `C:\Users\poovendan\Desktop\personal\AI\AI_tools`.
+  - Full read/write permissions are granted to `C:\Users\poovendan\Desktop\personal\AI\AI_tools` with zero confirmation prompts.
 - **Two-Phase Operational Model (Consult First -> Full Autonomous Go)**:
   - **Phase 1 (Alignment)**: Propose plans, discuss architecture/trade-offs, or ask clarifying questions when requirements are ambiguous or critical decisions are needed.
   - **Phase 2 (Once Given the Go)**: Once the user says "go", "proceed", "implement", "continue", or approves the direction: execute the entire workflow 100% autonomously end-to-end. Read files, write code, run AST/regression tests, commit/push to git, and deploy to Cloud VMs without pausing to ask permission for individual actions.
