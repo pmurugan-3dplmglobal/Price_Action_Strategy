@@ -1441,11 +1441,28 @@
                 }
             });
 
+            const funnelSummary = d.pattern_funnel || {};
+            const aPlusCount = funnelSummary.count_a_plus || 0;
+            const aCount = funnelSummary.count_a || 0;
+            const bCount = funnelSummary.count_b || 0;
+            const totalRadar = aPlusCount + aCount + bCount;
+            let radarBannerHtml = '';
+            if (totalRadar > 0) {
+                radarBannerHtml = '<div style="background:#161b22;border:1px solid #30363d;border-radius:6px;padding:8px 14px;margin-bottom:12px;font-size:12px;color:#c9d1d9;display:flex;justify-content:space-between;align-items:center">' +
+                    '<div><strong style="color:#58a6ff">⚡ Actionable Execution Queue</strong> — Displays setups whose Point D breakout / retest triggered today.</div>' +
+                    '<div style="font-size:11.5px;color:#8b949e">' +
+                    '<span style="color:#f0883e;font-weight:600">' + aPlusCount + ' A+</span>, ' +
+                    '<span style="color:#58a6ff;font-weight:600">' + aCount + ' A</span>, ' +
+                    '<span style="color:#bc8cff;font-weight:600">' + bCount + ' B</span> incubating in ' +
+                    '<a href="javascript:void(0)" onclick="switchTab(\'radar-funnel-tab\')" style="color:#58a6ff;text-decoration:underline;margin-left:4px;font-weight:600">Pattern Radar (' + totalRadar + ') →</a>' +
+                    '</div></div>';
+            }
+
             if (!scanHtml) {
-                scanHtml = '<p class="empty-state">No scan trades yet. Run a scan cycle or wait for next cycle.</p>';
+                scanHtml = radarBannerHtml + '<p class="empty-state">No breakout triggers yet today. Fast Radar & WebSocket are actively monitoring ' + (aPlusCount + aCount) + ' Category A/A+ candidates for Point D breakout triggers.</p>';
             } else {
                 const ts = Object.values(sd).map(v => v.timestamp).filter(Boolean).sort().pop() || '-';
-                scanHtml += '<div style="padding:6px 14px;font-size:11px;color:#8b949e">Last updated: ' + ts + '</div>';
+                scanHtml = radarBannerHtml + scanHtml + '<div style="padding:6px 14px;font-size:11px;color:#8b949e">Last updated: ' + ts + '</div>';
             }
             document.getElementById('scan-body').innerHTML = scanHtml;
             reapplySorts();

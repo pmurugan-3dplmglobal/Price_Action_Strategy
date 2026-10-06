@@ -277,9 +277,6 @@ def reconcile_positions(kite):
 # ──────────────────────────────────────────────
 
 def _process_stock(kite, symbol, config, from_entry, to_entry, from_anchor, to_anchor, entry_scanners, anchor_scanners, spot_ltp=None):
-    # Priority Coordination: If Fast Radar is actively evaluating Category A/A+ candidates, pause briefly to yield Kite rate limits
-    if _RADAR_ACTIVE.is_set():
-        time.sleep(0.35)
     return scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anchor,
                        entry_scanners, anchor_scanners,
                        lambda sym, sp, step, opt, r: shared_resolve_strikes(NFO_INSTRUMENTS, sym, sp, step, opt, r),
@@ -533,56 +530,101 @@ def run_scan_cycle(kite, universe_mode="AUTO"):
             shared_write_display(temp_stored_trades, dict(ACTIVE_POSITIONS), SCAN_DISPLAY_FILE, "nifty50")
 
     # Audit incubating setups in Category B and Category A for Anchor TF T1 / SL closure / Runaway
+    # Optimized: Use bulk kite.quote() first; only fetch heavy historical candles if price reached SL or 80% T1
     try:
         current_funnel = pattern_funnel.load_funnel_state("nifty50")
+        items_to_check = []
+        quote_instruments = []
         for pool_key in ["category_a_plus", "category_a", "category_b"]:
             for item in list(current_funnel.get(pool_key, [])):
-                sym = item.get("symbol")
+                tok = item.get("option_token") or item.get("spot_token")
                 sl = float(item.get("current_sl") or 0.0)
                 t1 = float(item.get("t1") or 0.0)
                 bm = float(item.get("benchmark") or 0.0)
-                tok = item.get("option_token") or item.get("spot_token")
                 if tok and (sl > 0 or t1 > 0 or bm > 0):
-                    from timeframe_utils import fetch_and_resample_candles
-                    df_a_check = safe_kite_call(
-                        fetch_and_resample_candles,
-                        kite, tok,
-                        (dt.now() - timedelta(days=5)).strftime('%Y-%m-%d'),
-                        dt.now().strftime('%Y-%m-%d'),
-                        TIMEFRAME_ANCHOR
-                    )
-                    if df_a_check is not None and not df_a_check.empty:
-                        last_candle = df_a_check.iloc[-1]
-                        c_dt = get_ist_now(naive=True)
-                        try:
-                            parsed_dt = pd.to_datetime(str(last_candle.get('date', '')))
-                            if hasattr(parsed_dt, 'tz') and parsed_dt.tz is not None:
-                                parsed_dt = parsed_dt.tz_convert('Asia/Kolkata').tz_localize(None)
-                            c_dt = parsed_dt
-                        except Exception:
-                            pass
-                        from timeframe_utils import get_tf_minutes
-                        anchor_mins = get_tf_minutes(TIMEFRAME_ANCHOR)
-                        now_ist = get_ist_now(naive=True)
-                        is_closed_anchor = (now_ist - c_dt).total_seconds() >= (anchor_mins * 60.0)
+                    items_to_check.append((pool_key, item))
+                    cntr = item.get("contract")
+                    sym = item.get("symbol")
+                    if cntr:
+                        exch = "BFO" if ("SENSEX" in str(cntr) or "BSE" in str(cntr)) else "NFO"
+                        quote_instruments.append(f"{exch}:{cntr}")
+                    elif sym:
+                        quote_instruments.append(f"NSE:{sym}")
 
-                        last_a_close = float(last_candle['close'])
-                        t1_80pct = round(bm + 0.80 * (t1 - bm), 2) if (bm > 0 and t1 > bm) else round(t1 * 0.80, 2) if t1 > 0 else 0.0
+        audit_quotes = {}
+        if quote_instruments and kite:
+            for ch_start in range(0, len(quote_instruments), 100):
+                ch = quote_instruments[ch_start : ch_start + 100]
+                try:
+                    q_res = safe_kite_call(kite.quote, ch)
+                    if q_res and isinstance(q_res, dict):
+                        audit_quotes.update(q_res)
+                except Exception as qe:
+                    logging.debug(f"Funnel audit bulk quote error: {qe}")
 
-                        from targets import calculate_sl_buffer
-                        buffered_sl = calculate_sl_buffer(sl, side="BULL") if sl > 0 else 0.0
+        for pool_key, item in items_to_check:
+            sym = item.get("symbol")
+            sl = float(item.get("current_sl") or 0.0)
+            t1 = float(item.get("t1") or 0.0)
+            bm = float(item.get("benchmark") or 0.0)
+            tok = item.get("option_token") or item.get("spot_token")
+            cntr = item.get("contract")
 
-                        if buffered_sl > 0 and last_a_close <= buffered_sl:
-                            if is_closed_anchor:
-                                logging.info(f"[ANCHOR TF EVICT: SL BREACH] {sym} ({item.get('contract')}) closed at/below buffered SL on {TIMEFRAME_ANCHOR} ({last_a_close:.2f} <= {buffered_sl:.2f}, raw SL={sl:.2f}). Evicting from {pool_key}.")
-                                pattern_funnel.evict_item("nifty50", item)
-                            else:
-                                logging.debug(f"[ANCHOR TF SL WICK HELD] {sym} ({item.get('contract')}) tick at/below buffered SL ({last_a_close:.2f} <= {buffered_sl:.2f}) on forming {TIMEFRAME_ANCHOR} bar. Not evicting.")
-                        elif sl > 0 and buffered_sl < last_a_close <= sl:
-                            logging.debug(f"[ANCHOR TF SL BUFFER HELD] {sym} ({item.get('contract')}) closed at {last_a_close:.2f} within SL buffer zone ({buffered_sl:.2f} to {sl:.2f}). Preserving setup.")
-                        elif t1_80pct > 0 and last_a_close >= t1_80pct:
-                            logging.info(f"[ANCHOR TF EVICT: 80% T1 HIT] {sym} ({item.get('contract')}) reached 80% T1 on {TIMEFRAME_ANCHOR} ({last_a_close:.2f} >= {t1_80pct:.2f}, T1={t1:.2f}, BM={bm:.2f}). Evicting from {pool_key}.")
-                            pattern_funnel.evict_item("nifty50", item)
+            # Extract live price from bulk quote
+            q_val = 0.0
+            if cntr:
+                exch = "BFO" if ("SENSEX" in str(cntr) or "BSE" in str(cntr)) else "NFO"
+                q_val = float(audit_quotes.get(f"{exch}:{cntr}", {}).get("last_price") or 0.0)
+            if q_val <= 0 and sym:
+                q_val = float(audit_quotes.get(f"NSE:{sym}", {}).get("last_price") or 0.0)
+
+            t1_80pct = round(bm + 0.80 * (t1 - bm), 2) if (bm > 0 and t1 > bm) else round(t1 * 0.80, 2) if t1 > 0 else 0.0
+            from targets import calculate_sl_buffer
+            buffered_sl = calculate_sl_buffer(sl, side="BULL") if sl > 0 else 0.0
+
+            # Quote-First Fast Gate: If live LTP is comfortably within corridor, skip heavy candle fetch!
+            if q_val > 0:
+                is_near_sl = buffered_sl > 0 and q_val <= (buffered_sl * 1.015)
+                is_near_t1 = t1_80pct > 0 and q_val >= (t1_80pct * 0.985)
+                if not is_near_sl and not is_near_t1:
+                    continue  # Perfectly safe; no candle download needed!
+
+            from timeframe_utils import fetch_and_resample_candles
+            df_a_check = safe_kite_call(
+                fetch_and_resample_candles,
+                kite, tok,
+                (dt.now() - timedelta(days=5)).strftime('%Y-%m-%d'),
+                dt.now().strftime('%Y-%m-%d'),
+                TIMEFRAME_ANCHOR
+            )
+            if df_a_check is not None and not df_a_check.empty:
+                last_candle = df_a_check.iloc[-1]
+                c_dt = get_ist_now(naive=True)
+                try:
+                    parsed_dt = pd.to_datetime(str(last_candle.get('date', '')))
+                    if hasattr(parsed_dt, 'tz') and parsed_dt.tz is not None:
+                        parsed_dt = parsed_dt.tz_convert('Asia/Kolkata').tz_localize(None)
+                    c_dt = parsed_dt
+                except Exception:
+                    pass
+                from timeframe_utils import get_tf_minutes
+                anchor_mins = get_tf_minutes(TIMEFRAME_ANCHOR)
+                now_ist = get_ist_now(naive=True)
+                is_closed_anchor = (now_ist - c_dt).total_seconds() >= (anchor_mins * 60.0)
+
+                last_a_close = float(last_candle['close'])
+
+                if buffered_sl > 0 and last_a_close <= buffered_sl:
+                    if is_closed_anchor:
+                        logging.info(f"[ANCHOR TF EVICT: SL BREACH] {sym} ({item.get('contract')}) closed at/below buffered SL on {TIMEFRAME_ANCHOR} ({last_a_close:.2f} <= {buffered_sl:.2f}, raw SL={sl:.2f}). Evicting from {pool_key}.")
+                        pattern_funnel.evict_item("nifty50", item)
+                    else:
+                        logging.debug(f"[ANCHOR TF SL WICK HELD] {sym} ({item.get('contract')}) tick at/below buffered SL ({last_a_close:.2f} <= {buffered_sl:.2f}) on forming {TIMEFRAME_ANCHOR} bar. Not evicting.")
+                elif sl > 0 and buffered_sl < last_a_close <= sl:
+                    logging.debug(f"[ANCHOR TF SL BUFFER HELD] {sym} ({item.get('contract')}) closed at {last_a_close:.2f} within SL buffer zone ({buffered_sl:.2f} to {sl:.2f}). Preserving setup.")
+                elif t1_80pct > 0 and last_a_close >= t1_80pct:
+                    logging.info(f"[ANCHOR TF EVICT: 80% T1 HIT] {sym} ({item.get('contract')}) reached 80% T1 on {TIMEFRAME_ANCHOR} ({last_a_close:.2f} >= {t1_80pct:.2f}, T1={t1:.2f}, BM={bm:.2f}). Evicting from {pool_key}.")
+                    pattern_funnel.evict_item("nifty50", item)
     except Exception as audit_err:
         logging.debug(f"Anchor TF funnel audit error: {audit_err}")
 

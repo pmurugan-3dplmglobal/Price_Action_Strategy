@@ -1918,16 +1918,23 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                 logging.info(f"[0DTE_CUTOFF] {symbol}: 0DTE index option entry cutoff reached (11:30 IST). Skipping strike {strike}.")
                 continue
         same_tf = timeframe_entry == timeframe_anchor and from_entry == from_anchor and to_entry == to_anchor
+        can_resample_anchor = (
+            not same_tf
+            and from_entry == from_anchor
+            and to_entry == to_anchor
+            and str(timeframe_entry).lower() in ["15minute", "15min", "15m"]
+            and str(timeframe_anchor).lower() in ["30minute", "30min", "30m", "60minute", "60min", "1hr", "1h"]
+        )
         dfs = {}
         try:
             with ThreadPoolExecutor(max_workers=2) as pool:
                 tasks = {
-                    pool.submit(fetch_and_resample_candles, kite, ce["token"], from_entry, to_entry, timeframe_entry): ("ce", "entry"),
-                    pool.submit(fetch_and_resample_candles, kite, pe["token"], from_entry, to_entry, timeframe_entry): ("pe", "entry"),
+                    pool.submit(safe_kite_call, fetch_and_resample_candles, kite, ce["token"], from_entry, to_entry, timeframe_entry): ("ce", "entry"),
+                    pool.submit(safe_kite_call, fetch_and_resample_candles, kite, pe["token"], from_entry, to_entry, timeframe_entry): ("pe", "entry"),
                 }
-                if not same_tf:
-                    tasks[pool.submit(fetch_and_resample_candles, kite, ce["token"], from_anchor, to_anchor, timeframe_anchor)] = ("ce", "anchor")
-                    tasks[pool.submit(fetch_and_resample_candles, kite, pe["token"], from_anchor, to_anchor, timeframe_anchor)] = ("pe", "anchor")
+                if not same_tf and not can_resample_anchor:
+                    tasks[pool.submit(safe_kite_call, fetch_and_resample_candles, kite, ce["token"], from_anchor, to_anchor, timeframe_anchor)] = ("ce", "anchor")
+                    tasks[pool.submit(safe_kite_call, fetch_and_resample_candles, kite, pe["token"], from_anchor, to_anchor, timeframe_anchor)] = ("pe", "anchor")
                 for f in as_completed(tasks):
                     tag, kind = tasks[f]
                     try:
@@ -1938,25 +1945,39 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
         except Exception as e:
             logging.warning(f"Contract data failed for {symbol} {strike}: {e}")
             continue
-        if same_tf:
+
+        if can_resample_anchor:
+            ce_entry_df = dfs.get(("ce", "entry"), pd.DataFrame())
+            pe_entry_df = dfs.get(("pe", "entry"), pd.DataFrame())
+            dfs[("ce", "anchor")] = resample_timeframe(ce_entry_df.copy(), timeframe_anchor, source_tf=timeframe_entry) if not ce_entry_df.empty else pd.DataFrame()
+            dfs[("pe", "anchor")] = resample_timeframe(pe_entry_df.copy(), timeframe_anchor, source_tf=timeframe_entry) if not pe_entry_df.empty else pd.DataFrame()
+        elif same_tf:
             dfs[("ce", "anchor")] = dfs.get(("ce", "entry"), pd.DataFrame())
             dfs[("pe", "anchor")] = dfs.get(("pe", "entry"), pd.DataFrame())
+
         for tag_key, kind_key, from_d, to_d in [
             ("ce", "entry", from_entry, to_entry),
             ("pe", "entry", from_entry, to_entry),
             ("ce", "anchor", from_anchor, to_anchor),
             ("pe", "anchor", from_anchor, to_anchor),
         ]:
-            if same_tf and kind_key == "anchor":
+            if (same_tf or can_resample_anchor) and kind_key == "anchor":
                 continue
             df = dfs.get((tag_key, kind_key), pd.DataFrame())
             if len(df) < 5:
                 tok = ce["token"] if tag_key == "ce" else pe["token"]
                 tf = timeframe_entry if kind_key == "entry" else timeframe_anchor
                 dfs[(tag_key, kind_key)] = fetch_option_data(kite, tok, from_d, to_d, tf, timeframe_fallback)
-        if same_tf:
+
+        if can_resample_anchor:
+            ce_entry_df = dfs.get(("ce", "entry"), pd.DataFrame())
+            pe_entry_df = dfs.get(("pe", "entry"), pd.DataFrame())
+            dfs[("ce", "anchor")] = resample_timeframe(ce_entry_df.copy(), timeframe_anchor, source_tf=timeframe_entry) if not ce_entry_df.empty else pd.DataFrame()
+            dfs[("pe", "anchor")] = resample_timeframe(pe_entry_df.copy(), timeframe_anchor, source_tf=timeframe_entry) if not pe_entry_df.empty else pd.DataFrame()
+        elif same_tf:
             dfs[("ce", "anchor")] = dfs.get(("ce", "entry"), pd.DataFrame())
             dfs[("pe", "anchor")] = dfs.get(("pe", "entry"), pd.DataFrame())
+
         df_ce_e = dfs.get(("ce", "entry"), pd.DataFrame())
         df_pe_e = dfs.get(("pe", "entry"), pd.DataFrame())
         df_ce_a = dfs.get(("ce", "anchor"), pd.DataFrame())

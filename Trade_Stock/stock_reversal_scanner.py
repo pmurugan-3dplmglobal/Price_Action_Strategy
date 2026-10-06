@@ -19,6 +19,7 @@ from kiteconnect import KiteConnect
 from trading_core import (
     load_kite_session,
     optimize_kite_session,
+    safe_kite_call,
     log_to_journal,
     scan_anchor_bcd_breakout_generic,
     get_adaptive_lookback,
@@ -220,9 +221,8 @@ def run_scan(kite):
                     results.append({"Symbol": symbol, "Pattern": "NO_TOKEN"})
                 continue
             futures[pool.submit(
-                fetch_and_resample_candles, kite, tok, from_date, to_date, TIMEFRAME_ENTRY
+                safe_kite_call, fetch_and_resample_candles, kite, tok, from_date, to_date, TIMEFRAME_ENTRY
             )] = symbol
-            time.sleep(0.15)
         for f in as_completed(futures):
             symbol = futures[f]
             try:

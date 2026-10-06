@@ -4,12 +4,41 @@ meta:
   last_updated: '2026-10-05'
   purpose: Active operational tracker for v2.1.0-stable failures, root causes, regressions, and enhancements.
   historical_archive: archive/ISSUE_HISTORY_ARCHIVE.yaml (Preserves 119 resolved legacy issues prior to 2026-09-05)
-  total_active_issues: 65
+  total_active_issues: 66
   archived_issues_summary:
     total_archived: 119
     recent_archived_batch: [FEATURE-031, FEATURE-030, FEATURE-029, ISSUE-084, ISSUE-083, ISSUE-082, ISSUE-081, ISSUE-080, FEATURE-036, FEATURE-035, FEATURE-034, FEATURE-033, ISSUE-054]
     key_archived_families: [ALGO_AUDIT_CVE, QUANT_ENHANCEMENTS, RADAR_LIFECYCLE, VCP_METRICS, SCANNER_DISCOVERY, SECURITY_CONFIG, ZERO_REGRESSION_AUDIT]
 issues:
+- id: ISSUE-122
+  title: 3-Speed Scan Engine Orchestration, In-Memory 30m Resampling & Funnel Bulk Quote Audit Acceleration
+  severity: HIGH
+  category: Scan Engine Latency, Microstructure Architecture, Rate-Limiter Protection, Funnel Staging
+  family: QUANT_ENHANCEMENTS
+  date_reported: '2026-10-06'
+  symptom: |
+    1. Scan cycles across 210 F&O stocks took 6 to 9+ minutes on low-resource Oracle Cloud VMs and localhost, repeatedly querying redundant 30m candles over the wire and triggering Zerodha HTTP 429 rate limit backoff sleeps.
+    2. At the end of every scan cycle, the funnel SL/T1 audit iterated through all 89 items in Category A+, A, and B, issuing 89 individual candle API requests and adding ~32s of blocking latency.
+    3. Artificial thread sleeps (time.sleep(0.35) during radar activity and time.sleep(0.15) in cash scanner submission) caused up to 73s of idle waiting per cycle.
+    4. Confusion between 'Today's scan' tab (Actionable Execution Staging with 1-2 items) and 'Pattern Radar' tab (Incubation Pipeline with 89 items) lacked UI visual linkage.
+  root_cause: |
+    1. common/resolve.py fetched 30m option candles directly from Kite rather than aggregating in-memory from downloaded 15m entry candles, wasting 420 network API calls per full scan.
+    2. Inner option candle fetches in common/resolve.py bypassed safe_kite_call, bursting 6 concurrent threads and triggering Kite HTTP 429 errors.
+    3. Funnel audit in stock_options_trade_engine.py lacked a quote-first check before requesting historical candles.
+    4. The UI scan tab lacked an incubation breadcrumb banner connecting triggered setups to the radar pipeline.
+  affected_files:
+  - common/timeframe_utils.py
+  - common/resolve.py
+  - Trade_Option/stock_options_trade_engine.py
+  - Trade_Stock/stock_reversal_scanner.py
+  - Trade_Option/templates/index.html
+  fix_applied: |
+    1. In common/timeframe_utils.py, enhanced resample_timeframe(df, target_tf, source_tf=None) to support native in-memory 15m -> 30m / 60m OHLCV aggregation grouped by trade date.
+    2. In common/resolve.py, eliminated 420 redundant network calls by resampling CE/PE 30m anchor candles in-memory from 15m entry candles, and wrapped option candle calls in safe_kite_call to prevent 429 retries.
+    3. In Trade_Option/stock_options_trade_engine.py, replaced the 89-candle funnel audit with a 1-shot bulk kite.quote() check, fetching candles only when price is near SL or 80% T1. Removed artificial time.sleep(0.35) worker delays.
+    4. In Trade_Stock/stock_reversal_scanner.py, removed serial time.sleep(0.15) from thread submission and routed fetches via safe_kite_call.
+    5. In Trade_Option/templates/index.html, added an informative radar incubation banner to 'Today's scan' tab linking to 'Pattern Radar'.
+  status: RESOLVED
 - id: ISSUE-119
   title: Dynamic NSE Token Disk Caching & Daily Loss Limit Cap Harmonization to 5.0%
   severity: MEDIUM

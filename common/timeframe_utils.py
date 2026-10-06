@@ -135,15 +135,23 @@ def get_adaptive_lookback(timeframe_str, asset_class="STOCK_SPOT", user_lookback
     else:
         return 60
 
-def resample_timeframe(df, timeframe_str):
+def resample_timeframe(df, timeframe_str, source_tf=None):
     """
-    Resample dataframe candles for custom non-native timeframes (e.g. 75min, 3h, 4h, week).
-    Native Kite TFs (3m, 5m, 10m, 15m, 30m, 60m, day) are returned as is.
+    Resample dataframe candles for custom non-native timeframes (e.g. 75min, 3h, 4h, week)
+    or in-memory aggregation of smaller native timeframes (e.g. 15min -> 30min, 15min -> 60min).
+    Native Kite TFs without source_tf are returned as is.
     """
     if df is None or df.empty:
         return df
 
     tf_s = str(timeframe_str).lower()
+    src_s = str(source_tf).lower() if source_tf else ""
+
+    is_intraday_up_resample = (
+        src_s in ["15min", "15minute", "15m", "5min", "5minute", "5m", "3min", "3minute", "minute", "1min"]
+        and tf_s in ["30min", "30minute", "30m", "30minutes", "60min", "60minute", "60m", "1hr", "1h", "1hour"]
+    )
+
     if tf_s in ["75min", "75mins", "75m", "75minute", "75minutes"]:
         rule = '75min'
     elif tf_s in ["3hr", "3h", "180min", "180minute"]:
@@ -152,6 +160,8 @@ def resample_timeframe(df, timeframe_str):
         rule = '240min'
     elif tf_s in ["week", "weekly", "w", "1w"]:
         rule = 'W-FRI'
+    elif is_intraday_up_resample:
+        rule = '30min' if tf_s in ["30min", "30minute", "30m", "30minutes"] else '60min'
     else:
         return df
 
@@ -166,11 +176,11 @@ def resample_timeframe(df, timeframe_str):
             return df
 
         hist[time_col] = pd.to_datetime(hist[time_col])
-        if tf_s in ["75min", "75mins", "75m", "75minute", "75minutes"]:
+        if tf_s in ["75min", "75mins", "75m", "75minute", "75minutes"] or is_intraday_up_resample:
             hist['trade_date'] = hist[time_col].dt.date
             groups = []
             for d, g in hist.groupby('trade_date'):
-                g_res = g.set_index(time_col).resample('75min', origin='start').agg({
+                g_res = g.set_index(time_col).resample(rule, origin='start').agg({
                     'open': 'first',
                     'high': 'max',
                     'low': 'min',
