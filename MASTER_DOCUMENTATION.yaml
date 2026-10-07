@@ -61,6 +61,7 @@ meta:
     - D1 Reversal Decoupling from Lagging EMA 13/44 Death/Golden Cross on Spot VWAP Reclaim & Anchor Priority (ISSUE-113)
     - Institutional Edge Maturity — Anchor Invalidation Invariant, Runner VWAP Acceptance, Elimination of Adverse Selection & 09:20 Window Unlock (ISSUE-114)
     - Morning Bell Breakout Execution & Overnight Incubation Retention Engine (09:15 Radar unlock, 5-day holiday incubation lookback, anti-chase retest retention) (ISSUE-120)
+    - Decoupled Category B Incubation from Hard VWAP Gate & Sub-Second Fast Radar Reclaim Execution Engine (ISSUE-122)
 
 architecture:
   diagram: |

@@ -2206,8 +2206,17 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                                 has_spot_anchor_ce_f = has_spot_anchor_ce_sym
                                 spot_anchor_name_ce_f = spot_anchor_name_ce_sym
 
-                                if spot_anchor_name_ce_f == "BEAR_SPOT_REGIME_TRAP" or (spot_vwap > 0 and float(current_spot) < float(spot_vwap) * 0.998):
+                                if spot_anchor_name_ce_f == "BEAR_SPOT_REGIME_TRAP":
                                     continue
+
+                                is_sub_vwap_ce_f = bool(spot_vwap > 0 and float(current_spot) < float(spot_vwap) * 0.998)
+                                if is_sub_vwap_ce_f:
+                                    # Decouple Category B Incubation from the Hard VWAP Gate (ISSUE-122):
+                                    # Allow Category B incubation (STAGE_B_ANCHOR) when a verified Spot Anchor is confirmed
+                                    if f_stage == pattern_funnel.STAGE_B and has_spot_anchor_ce_f:
+                                        pass
+                                    else:
+                                        continue
 
                                 f_tier_ce = int(stage_ce.get("tier", 2))
                                 f_label_ce = stage_ce.get("tier_label", "TIER_2_CORE")
@@ -2262,12 +2271,17 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                                     "vcp_badge": stage_ce.get("vcp_badge", ""),
                                     "vwap": vwap_ce,
                                     "vwap_stretch": vwap_stretch_ce,
-                                    "vwap_status": vwap_status_ce,
+                                    "vwap_status": "SUB_VWAP_INCUBATING" if is_sub_vwap_ce_f else vwap_status_ce,
+                                    "sub_vwap_incubating": is_sub_vwap_ce_f,
                                     "vwap_zscore": vwap_z_ce,
                                     "vwap_upper_2sigma": vwap_u2s_ce,
                                     "spot_vwap": spot_vwap,
-                                    "spot_confluence": spot_conf_ce_f,
-                                    "spot_confluence_type": spot_conf_type_ce_f,
+                                    "spot_confluence": False if is_sub_vwap_ce_f else spot_conf_ce_f,
+                                    "spot_confluence_type": "SUB_VWAP_INCUBATING" if is_sub_vwap_ce_f else spot_conf_type_ce_f,
+                                    "spot_anchor_name": spot_anchor_name_ce_f,
+                                    "has_spot_anchor": has_spot_anchor_ce_f,
+                                    "vwap_dist_pct": round(((float(current_spot) - float(spot_vwap)) / float(spot_vwap)) * 100.0, 2) if (current_spot and spot_vwap and float(spot_vwap) > 0) else None,
+                                    "spot_vwap_dist_pct": round(((float(current_spot) - float(spot_vwap)) / float(spot_vwap)) * 100.0, 2) if (current_spot and spot_vwap and float(spot_vwap) > 0) else None,
                                     "twap_c_stable": stage_ce.get("twap_c_stable", False),
                                     "twap_c_score": stage_ce.get("twap_c_score", 0.0),
                                     "twap_c_std": stage_ce.get("twap_c_std", 0.0),
@@ -2458,8 +2472,17 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                                 has_spot_anchor_pe_f = has_spot_anchor_pe_sym
                                 spot_anchor_name_pe_f = spot_anchor_name_pe_sym
 
-                                if spot_anchor_name_pe_f == "BULL_SPOT_REGIME_TRAP" or (spot_vwap > 0 and float(current_spot) > float(spot_vwap) * 1.002):
+                                if spot_anchor_name_pe_f == "BULL_SPOT_REGIME_TRAP":
                                     continue
+
+                                is_above_vwap_pe_f = bool(spot_vwap > 0 and float(current_spot) > float(spot_vwap) * 1.002)
+                                if is_above_vwap_pe_f:
+                                    # Decouple Category B Incubation from the Hard VWAP Gate (ISSUE-122):
+                                    # Allow Category B incubation (STAGE_B_ANCHOR) when a verified Spot Anchor is confirmed
+                                    if f_stage == pattern_funnel.STAGE_B and has_spot_anchor_pe_f:
+                                        pass
+                                    else:
+                                        continue
 
                                 f_tier_pe = int(stage_pe.get("tier", 2))
                                 f_label_pe = stage_pe.get("tier_label", "TIER_2_CORE")
@@ -2514,12 +2537,17 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                                     "vcp_badge": stage_pe.get("vcp_badge", ""),
                                     "vwap": vwap_pe,
                                     "vwap_stretch": vwap_stretch_pe,
-                                    "vwap_status": vwap_status_pe,
+                                    "vwap_status": "ABOVE_VWAP_INCUBATING" if is_above_vwap_pe_f else vwap_status_pe,
+                                    "sub_vwap_incubating": is_above_vwap_pe_f,
                                     "vwap_zscore": vwap_z_pe,
                                     "vwap_upper_2sigma": vwap_u2s_pe,
                                     "spot_vwap": spot_vwap,
-                                    "spot_confluence": spot_conf_pe_f,
-                                    "spot_confluence_type": spot_conf_type_pe_f,
+                                    "spot_confluence": False if is_above_vwap_pe_f else spot_conf_pe_f,
+                                    "spot_confluence_type": "ABOVE_VWAP_INCUBATING" if is_above_vwap_pe_f else spot_conf_type_pe_f,
+                                    "spot_anchor_name": spot_anchor_name_pe_f,
+                                    "has_spot_anchor": has_spot_anchor_pe_f,
+                                    "vwap_dist_pct": round(((float(current_spot) - float(spot_vwap)) / float(spot_vwap)) * 100.0, 2) if (current_spot and spot_vwap and float(spot_vwap) > 0) else None,
+                                    "spot_vwap_dist_pct": round(((float(current_spot) - float(spot_vwap)) / float(spot_vwap)) * 100.0, 2) if (current_spot and spot_vwap and float(spot_vwap) > 0) else None,
                                     "twap_c_stable": stage_pe.get("twap_c_stable", False),
                                     "twap_c_score": stage_pe.get("twap_c_score", 0.0),
                                     "twap_c_std": stage_pe.get("twap_c_std", 0.0),
@@ -2567,7 +2595,9 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                     except Exception:
                         pass
 
-                if not is_valid_ce:
+                if spot_anchor_name_ce_sym == "BEAR_SPOT_REGIME_TRAP":
+                    logging.info(f"[REGIME_TRAP_DROP] {symbol} {ce['tradingsymbol']}: BEAR_SPOT_REGIME_TRAP. Skipping Category B promotion.")
+                elif not is_valid_ce:
                     logging.info(f"[ANCHOR EXHAUSTED] {ce['tradingsymbol']} | {res_ce['Pattern']} already completed or invalidated. Skipping Category B promotion.")
                 elif is_runaway_ce:
                     logging.info(f"[ANCHOR RUNAWAY: 80% T1 HIT] {ce['tradingsymbol']} reached 80% of T1 post-anchor. Skipping Category B promotion.")
@@ -2577,6 +2607,7 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                     risk_ce = round(res_ce["Close"] - res_ce["SL"], 2) if (res_ce["Close"] > res_ce["SL"]) else 0.0
                     rr_ce = round((t1_ce - res_ce["Close"]) / risk_ce, 2) if (t1_ce and risk_ce > 0) else 0.0
                     logging.info(f"ANCHOR FORMED: {ce['tradingsymbol']} | {res_ce['Pattern']} | Close: {res_ce['Close']:.2f} | SL: {res_ce['SL']:.2f} | T1: {t1_ce}")
+                    is_sub_vwap_ce_b = bool(spot_vwap > 0 and float(current_spot) < float(spot_vwap) * 0.998)
                     b_item = {
                         "symbol": symbol, "contract": ce['tradingsymbol'], "option_token": ce['token'],
                         "spot_token": config["token"], "spot_entry": current_spot, "strike": strike,
@@ -2587,6 +2618,9 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                         "timeframe": timeframe_anchor, "candle_a_time": ca_time_ce,
                         "lot_size": int(ce.get("lot_size") or config.get("lot_size", 1)),
                         "tier": 3, "tier_label": "TIER_3_MOMENTUM", "tier_badge": "🌱 B",
+                        "vwap_status": "SUB_VWAP_INCUBATING" if is_sub_vwap_ce_b else "FAIR",
+                        "sub_vwap_incubating": is_sub_vwap_ce_b,
+                        "spot_vwap": spot_vwap,
                         "stage": pattern_funnel.STAGE_B
                     }
                     pattern_funnel.promote_item(engine_name, b_item, pattern_funnel.STAGE_B)
@@ -2629,7 +2663,9 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                     except Exception:
                         pass
 
-                if not is_valid_pe:
+                if spot_anchor_name_pe_sym == "BULL_SPOT_REGIME_TRAP":
+                    logging.info(f"[REGIME_TRAP_DROP] {symbol} {pe['tradingsymbol']}: BULL_SPOT_REGIME_TRAP. Skipping Category B promotion.")
+                elif not is_valid_pe:
                     logging.info(f"[ANCHOR EXHAUSTED] {pe['tradingsymbol']} | {res_pe['Pattern']} already completed or invalidated. Skipping Category B promotion.")
                 elif is_runaway_pe:
                     logging.info(f"[ANCHOR RUNAWAY: 80% T1 HIT] {pe['tradingsymbol']} reached 80% of T1 post-anchor. Skipping Category B promotion.")
@@ -2639,6 +2675,7 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                     risk_pe = round(res_pe["Close"] - res_pe["SL"], 2) if (res_pe["Close"] > res_pe["SL"]) else 0.0
                     rr_pe = round((t1_pe - res_pe["Close"]) / risk_pe, 2) if (t1_pe and risk_pe > 0) else 0.0
                     logging.info(f"ANCHOR FORMED: {pe['tradingsymbol']} | {res_pe['Pattern']} | Close: {res_pe['Close']:.2f} | SL: {res_pe['SL']:.2f} | T1: {t1_pe}")
+                    is_above_vwap_pe_b = bool(spot_vwap > 0 and float(current_spot) > float(spot_vwap) * 1.002)
                     b_item = {
                         "symbol": symbol, "contract": pe['tradingsymbol'], "option_token": pe['token'],
                         "spot_token": config["token"], "spot_entry": current_spot, "strike": strike,
@@ -2649,6 +2686,9 @@ def scan_symbol(kite, symbol, config, from_entry, to_entry, from_anchor, to_anch
                         "timeframe": timeframe_anchor, "candle_a_time": ca_time_pe,
                         "lot_size": int(pe.get("lot_size") or config.get("lot_size", 1)),
                         "tier": 3, "tier_label": "TIER_3_MOMENTUM", "tier_badge": "🌱 B",
+                        "vwap_status": "ABOVE_VWAP_INCUBATING" if is_above_vwap_pe_b else "FAIR",
+                        "sub_vwap_incubating": is_above_vwap_pe_b,
+                        "spot_vwap": spot_vwap,
                         "stage": pattern_funnel.STAGE_B
                     }
                     pattern_funnel.promote_item(engine_name, b_item, pattern_funnel.STAGE_B)

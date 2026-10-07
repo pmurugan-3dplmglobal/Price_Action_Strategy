@@ -1033,6 +1033,24 @@ except Exception as e:
     errors.append(f"Issue 111 Macro Gate & Safety Fixes Failed: {e}")
     print(f" FAILED [ERR] ({e})", flush=True)
 
+# -------------------------------------------------------------------------
+# TEST 36: Decouple Incubation from Execution Invariants (ISSUE-122)
+# -------------------------------------------------------------------------
+print("[TEST 36] Testing Decoupled Incubation vs Execution Invariants (ISSUE-122)...", end="", flush=True)
+try:
+    import subprocess
+    import paths
+    cmd_p122 = [
+        sys.executable,
+        os.path.join(paths.SCRATCH_DIR, "test_decouple_incubation_execution.py")
+    ]
+    res_p122 = subprocess.run(cmd_p122, cwd=paths.PROJECT_ROOT, capture_output=True, text=True)
+    assert res_p122.returncode == 0, f"Issue 122 unit tests failed:\nSTDOUT:\n{res_p122.stdout}\nSTDERR:\n{res_p122.stderr}"
+    print(" PASSED [OK]", flush=True)
+except Exception as e:
+    errors.append(f"Issue 122 Decoupled Incubation vs Execution Invariants Failed: {e}")
+    print(f" FAILED [ERR] ({e})", flush=True)
+
 print("\n" + "=" * 100)
 if not errors:
     print("      ALL REGRESSION TESTS PASSED WITH 100% SUCCESS -- ZERO REGRESSIONS FOUND!")

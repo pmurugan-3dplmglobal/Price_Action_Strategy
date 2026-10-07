@@ -11,6 +11,37 @@ meta:
     key_archived_families: [ALGO_AUDIT_CVE, QUANT_ENHANCEMENTS, RADAR_LIFECYCLE, VCP_METRICS, SCANNER_DISCOVERY, SECURITY_CONFIG, ZERO_REGRESSION_AUDIT]
 issues:
 - id: ISSUE-122
+  title: Decoupled Category B Incubation from Hard VWAP Gate & Sub-Second Fast Radar Reclaim Execution Engine
+  severity: HIGH
+  category: Funnel Incubation Architecture, Point D Execution Invariants, Fast Radar Surveillance
+  family: QUANT_ENHANCEMENTS
+  date_reported: '2026-10-07'
+  symptom: |
+    1. Category B Funnel incubation in common/resolve.py dropped setups forming valid accumulation bases (Hammer Baby, LL Sweep, Bullish Engulfing, Harami, Two Higher Highs) whenever price was submerged below Intraday VWAP (current_spot < spot_vwap * 0.998 for CE or current_spot > spot_vwap * 1.002 for PE).
+    2. The system was completely blind to high-probability base-building setups during early formation, missing institutional bottom sweeps before they surged across VWAP.
+    3. Fast Radar pool in Trade_Option/stock_options_trade_engine.py only ingested Category A+ and A setups, ignoring Category B incubation bases.
+    4. Configuration files across input/, Trade_Option/input/, and Trade_Stock/input/ had minor discrepancies in min_entry_time (09:45 vs 09:20), missing radar_min_entry_time (09:15), and bear_trade product_type set to CNC instead of MIS.
+  root_cause: |
+    1. common/resolve.py coupled early incubation gating with the terminal execution gate, dropping STAGE_B_ANCHOR setups prematurely if Spot was on the adverse side of VWAP during base formation.
+    2. Fast Radar surveillance pool was hardcoded to category_a_plus and category_a only, missing incubating Category B setups as they broke out across VWAP.
+    3. _execute_highest_rr_trade_locked lacked an explicit live spot VWAP execution gate to guard against stale candidate execution.
+  affected_files:
+  - common/resolve.py
+  - Trade_Option/stock_options_trade_engine.py
+  - input/program_config.json
+  - Trade_Option/input/program_config.json
+  - Trade_Stock/input/program_config.json
+  - scratch/test_decouple_incubation_execution.py
+  - scratch/run_full_regression_test.py
+  fix_applied: |
+    1. In common/resolve.py scan_symbol(), decoupled Category B incubation from the Hard VWAP Gate: allowed Category B incubation (STAGE_B_ANCHOR) when a verified Spot Anchor (has_spot_anchor_ce_f / has_spot_anchor_pe_f is True and not a regime trap) is confirmed, even if Spot is currently below VWAP (for CE) or above VWAP (for PE). Tagged funnel items with sub_vwap_incubating=True, vwap_status='SUB_VWAP_INCUBATING' (or 'ABOVE_VWAP_INCUBATING' for PE), and spot_confluence=False.
+    2. Added strict regime trap enforcement in raw anchor scanners: BEAR_SPOT_REGIME_TRAP strictly blocks CE incubation, and BULL_SPOT_REGIME_TRAP strictly blocks PE incubation.
+    3. Preserved 100% strict Hard Execution Gate: auto-execution orders are NEVER placed while Spot is below VWAP for CE (spot_ltp < spot_vwap * 0.998) or above VWAP for PE (spot_ltp > spot_vwap * 1.002). Added Gate 0C in _execute_highest_rr_trade_locked to enforce live spot VWAP protection and block candidates with sub_vwap_incubating=True.
+    4. In Trade_Option/stock_options_trade_engine.py run_fast_radar_check(), expanded radar_pool to monitor Category B setups alongside Category A+ and A. Implemented the Sub-VWAP Incubation Reclaim Gate: when an incubating setup surges across VWAP, Fast Radar verifies Point D breakout with green/red candle close and RVOL >= 1.2x before confirming reclaim and dispatching sub-second execution.
+    5. Harmonized input/program_config.json, Trade_Option/input/program_config.json, and Trade_Stock/input/program_config.json with min_entry_time: '09:20', radar_min_entry_time: '09:15', and bear_trade / weekly_bear product_type: 'MIS'.
+    6. Created comprehensive unit test suite scratch/test_decouple_incubation_execution.py (7/7 passed) and added TEST 36 to scratch/run_full_regression_test.py (36/36 passed 100%).
+  status: RESOLVED
+- id: ISSUE-121
   title: 3-Speed Scan Engine Orchestration, In-Memory 30m Resampling & Funnel Bulk Quote Audit Acceleration
   severity: HIGH
   category: Scan Engine Latency, Microstructure Architecture, Rate-Limiter Protection, Funnel Staging

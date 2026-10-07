@@ -556,5 +556,14 @@
     "lot_size": 950,
     "tag": "MISSED_OPPORTUNITY",
     "note": "Skipped by MAX_SECTOR_POSITIONS_REACHED (2/2 active in sector 'INFRA_CAPGOODS') (R:R=4.33, Tier=1)"
+  },
+  {
+    "contract": "BANKNIFTY26OCT55100PE",
+    "base_symbol": "BANKNIFTY",
+    "entry_price": 675.5,
+    "exit_price": null,
+    "lot_size": 30,
+    "tag": "MISSED_OPPORTUNITY",
+    "note": "Skipped by MAX_INDEX_POSITIONS_REACHED (1/1 active index trade(s) across portfolio: ['FINNIFTY']) (R:R=2.81, Tier=1)"
   }
 ]

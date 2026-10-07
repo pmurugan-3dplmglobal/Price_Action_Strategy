@@ -819,6 +819,41 @@ def _execute_highest_rr_trade_locked(kite, staged):
             elif "RS_ALPHA_BYPASS" in m_reason:
                 logging.info(f"[MACRO_NIFTY_GATE] RS Alpha Outperformer approved for {sym} ({best.get('contract') or sym}): {m_reason}")
 
+            # Gate 0C: Hard Spot Intraday VWAP Directional Gate (Decoupled Incubation vs Execution Invariant - ISSUE-122)
+            # Auto-execution orders are NEVER placed while Spot is below VWAP for CE (spot_ltp < spot_vwap * 0.998)
+            # or above VWAP for PE (spot_ltp > spot_vwap * 1.002).
+            # Execution strictly requires Point D breakout with Spot reclaiming VWAP.
+            c_spot_vwap = float(best.get("spot_vwap") or 0.0)
+            c_spot_ltp = float(best.get("spot_ltp") or best.get("spot_entry") or 0.0)
+            if live_ok and kite:
+                try:
+                    reg_entry = STOCK_REGISTRY.get(sym, {})
+                    spot_ts = reg_entry.get("tradingsymbol", sym)
+                    q_s = safe_kite_call(kite.quote, [f"NSE:{spot_ts}"])
+                    if q_s and f"NSE:{spot_ts}" in q_s:
+                        c_spot_ltp = float(q_s[f"NSE:{spot_ts}"].get("last_price") or c_spot_ltp)
+                        c_spot_vwap = float(q_s[f"NSE:{spot_ts}"].get("average_price") or c_spot_vwap)
+                except Exception as q_spot_err:
+                    logging.debug(f"Spot live quote fetch error in execution gate for {sym}: {q_spot_err}")
+
+            if c_spot_vwap > 0 and c_spot_ltp > 0:
+                if side == "CE" and c_spot_ltp < (c_spot_vwap * 0.998):
+                    logging.info(f"🛡️ [HARD_VWAP_EXECUTION_GATE] Auto-execution blocked for {sym} ({best.get('contract') or sym}): "
+                                 f"Spot {c_spot_ltp:.2f} < VWAP {c_spot_vwap:.2f} (-{abs(c_spot_ltp - c_spot_vwap)/c_spot_vwap * 100:.2f}%). "
+                                 f"Strictly holding candidate in incubation.")
+                    continue
+                elif side == "PE" and c_spot_ltp > (c_spot_vwap * 1.002):
+                    logging.info(f"🛡️ [HARD_VWAP_EXECUTION_GATE] Auto-execution blocked for {sym} ({best.get('contract') or sym}): "
+                                 f"Spot {c_spot_ltp:.2f} > VWAP {c_spot_vwap:.2f} (+{abs(c_spot_ltp - c_spot_vwap)/c_spot_vwap * 100:.2f}%). "
+                                 f"Strictly holding candidate in incubation.")
+                    continue
+
+            # Sub-VWAP Incubating Guard: Candidate must have completed VWAP reclaim before execution
+            if best.get("sub_vwap_incubating"):
+                logging.info(f"🛡️ [SUB_VWAP_INCUBATION_GUARD] Auto-execution blocked for {sym} ({best.get('contract') or sym}): "
+                             f"Candidate marked as sub_vwap_incubating=True without confirmed VWAP reclaim. Holding in radar.")
+                continue
+
             # Gate 1: Mandatory Spot Confluence Gate (ISSUE-071)
             # Auto-execution requires verified spot directional backing (100% win/loss separation).
             # If not confirmed, skip auto-entry while leaving setup visible on Scans Tab for manual review.
@@ -1713,7 +1748,11 @@ def run_fast_radar_check(kite):
     _RADAR_ACTIVE.set()
     try:
         funnel_summary = pattern_funnel.get_funnel_summary("nifty50")
-        radar_pool = list(funnel_summary.get("category_a_plus", []) + funnel_summary.get("category_a", []))
+        radar_pool = list(
+            funnel_summary.get("category_a_plus", [])
+            + funnel_summary.get("category_a", [])
+            + funnel_summary.get("category_b", [])
+        )
 
         # Ingest unexecuted high-conviction candidates directly from the Scan Tab (SCAN_DISPLAY_FILE)
         if os.path.exists(SCAN_DISPLAY_FILE):
@@ -2020,11 +2059,11 @@ def run_fast_radar_check(kite):
                                 is_pe = (side_val == "PE" or dir_val == "BEAR" or c_str.endswith("PE"))
 
                                 if spot_vwap > 0 and spot_ltp > 0:
-                                    if not is_pe and spot_ltp < (spot_vwap * 0.997):
+                                    if not is_pe and spot_ltp < (spot_vwap * 0.998):
                                         logging.info(f"🛡️ [SPOT VWAP REJECT] {sym}: Spot {spot_ltp:.2f} < VWAP {spot_vwap:.2f} (CE) "
                                                      f"at {time_now_str}. Lacks institutional buying support. Holding candidate.")
                                         continue
-                                    elif is_pe and spot_ltp > (spot_vwap * 1.003):
+                                    elif is_pe and spot_ltp > (spot_vwap * 1.002):
                                         logging.info(f"🛡️ [SPOT VWAP REJECT] {sym}: Spot {spot_ltp:.2f} > VWAP {spot_vwap:.2f} (PE) "
                                                      f"at {time_now_str}. Lacks institutional selling pressure. Holding candidate.")
                                         continue
@@ -2050,8 +2089,8 @@ def run_fast_radar_check(kite):
                                         is_d2_radar = bool(item.get("is_d2", False) or "D2" in pat_name or "CONTINUATION" in pat_name)
                                         spot_anc_radar = str(item.get("spot_anchor_name") or item.get("spot_confluence_type") or "")
                                         has_d1_anchor = any(anc in spot_anc_radar.upper() for anc in [
-                                            "ENGULFING", "SWEEP", "HAMMER", "HARAMI", "HIGHER_HIGHS", "LOWER_LOWS",
-                                            "SPOT_SUPPORT_HOLD", "SPOT_RESISTANCE_HOLD", "VWAP_RECLAIM", "VWAP_REJECT"
+                                             "ENGULFING", "SWEEP", "HAMMER", "HARAMI", "HIGHER_HIGHS", "LOWER_LOWS",
+                                             "SPOT_SUPPORT_HOLD", "SPOT_RESISTANCE_HOLD", "VWAP_RECLAIM", "VWAP_REJECT"
                                         ])
 
                                         # Golden Cross: Spot > EMA13 > EMA44 -> STRICTLY BLOCK PE TRIGGERS (unless confirmed D1 breakdown below VWAP)!
@@ -2085,6 +2124,35 @@ def run_fast_radar_check(kite):
                                     proj_rvol = float(rvol_spot.get("rvol_projected", 1.0) or 1.0)
                                     item["spot_rvol_badge"] = rvol_spot.get("badge")
                                     item["spot_rvol_projected"] = proj_rvol
+
+                                    # Sub-VWAP Incubation Reclaim Gate (ISSUE-122):
+                                    # When an incubating setup surges across VWAP, verify Point D breakout confirmation:
+                                    # Spot reclaiming VWAP (SPOT_VWAP_RECLAIM / SPOT_TREND_VWAP_ACCEPTANCE) with candle close & RVOL >= 1.2x
+                                    is_sub_vwap_cand = bool(item.get("sub_vwap_incubating") or item.get("vwap_status") in ["SUB_VWAP_INCUBATING", "ABOVE_VWAP_INCUBATING"] or not item.get("spot_confluence"))
+                                    if is_sub_vwap_cand:
+                                        if proj_rvol < 1.2:
+                                            logging.info(f"🛡️ [RADAR RECLAIM RVOL GATE] {sym} ({item.get('contract')}): Spot RVOL {proj_rvol:.2f}x < 1.2x minimum threshold. Holding candidate in incubation radar.")
+                                            continue
+
+                                        # Verify candle close direction on latest available spot candle
+                                        s_dir_ok = True
+                                        if 's_closes' in locals() and len(s_closes) >= 1 and 'df_spot_30m' in locals() and df_spot_30m is not None:
+                                            s_last_c = df_spot_30m.iloc[-1]
+                                            s_o = float(s_last_c.get('open') or s_last)
+                                            s_c = float(s_last_c.get('close') or s_last)
+                                            s_dir_ok = (s_c >= s_o) if not is_pe else (s_c <= s_o)
+
+                                        if not s_dir_ok:
+                                            exp_col = "green" if not is_pe else "red"
+                                            logging.info(f"🛡️ [RADAR RECLAIM CANDLE GATE] {sym} ({item.get('contract')}): Awaiting confirmed {exp_col} spot candle close across VWAP. Holding in incubation radar.")
+                                            continue
+
+                                        conf_tag = "SPOT_VWAP_RECLAIM" if not is_pe else "SPOT_VWAP_REJECT"
+                                        item["spot_confluence"] = True
+                                        item["spot_confluence_type"] = conf_tag
+                                        item["sub_vwap_incubating"] = False
+                                        item["vwap_status"] = conf_tag
+                                        logging.info(f"⚡ [RADAR VWAP RECLAIM CONFIRMED] {sym} ({item.get('contract')}): Spot {spot_ltp:.2f} confirmed {conf_tag} with RVOL {proj_rvol:.2f}x >= 1.2x!")
 
                                     # Institutional Volume Surge (RVOL >= 2.0x with Spot VWAP alignment) -> Promote to T1 Gold!
                                     vwap_aligned = (spot_vwap == 0 or (spot_ltp <= spot_vwap if is_pe else spot_ltp >= spot_vwap))
