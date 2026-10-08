@@ -8,6 +8,7 @@ meta:
   architecture: Centralized Shared Core (common/) + Dual Workspaces (Trade_Option & Trade_Stock)
   strategy: Unified ABC Bullish & Bearish Reversal Pattern Engine + Multi-Tiered Market Structure (T1/T2/T3)
   coverage:
+    - Indivisible F&O Sizing Risk Calibration: 7.0% Naked Option Cap, 11.0% Debit Spread Net Debit Cap & 10.0% Portfolio Daily Loss Limit (ISSUE-126)
     - Debit Spread Opening Stabilization Window (09:15-09:20 IST), Net Spread Value Target Guard, Sequential Inverted Fill Elimination & Radar Spread Risk Calibration (ISSUE-125)
     - Heuristic Pricing Replacement, 0DTE Index 11:30 Cutoff Harmonization & Session Learning/Evolution System (ISSUE-117)
     - Anti-Exploded State & Point-of-Execution Chase Protection Guard (check_exploded_state_guard) (ISSUE-115)
@@ -503,9 +504,11 @@ system_integrity_safeguards:
   spread_exit_marketable_limit_pegging: "Spread Exit Marketable Limit Pegging & Engine Isolation (ISSUE-076): Stock option spread cover and unwinds calculate marketable limit prices pegged to best ask/bid (max(best_ask * 1.02, best_ask + 0.10)), clamped to tick and circuit boundaries, ensuring 100% immunity against broker 'MARKET orders blocked for stock options' rejections. Active trade queries isolate broker reconciliation by target_eng, protecting live trades from test suite pollution."
   phantom_exit_guard: "Phantom Exit Guard & Net Holding Ground Truth Verification (ISSUE-078): Before placing ANY exit SELL order for an option or long equity, close_position() queries live broker net positions via next((p for p in net_positions if p.get('tradingsymbol') == contract), None). If the contract is not found on the broker (unfilled limit order cancelled by TTL or manual cancellation), suppresses SELL execution completely, logs [PHANTOM EXIT GUARD], and marks exit as ALREADY_CLOSED. Eliminates RMS margin spikes and completely prevents accidental naked option writing."
   macro_market_regime_gate: "Macro Market Regime Direction Gate & Institutional RS Alpha Bypass (ISSUE-111): Queries real-time tick deltas of NIFTY 50 and BANKNIFTY with 20s TTL caching. Modes: TREND_FOLLOWING (blocks CE on crashes, blocks PE on rallies), CONTRARIAN (reverses direction to exploit oversold dips and overbought peaks), and OFF. Option 3 RS Alpha Bypass Exception permits decoupled outperformers (🥇 Tier 1 Gold, RVOL >= 2.0x, Spot >= +1.0% VWAP for CE, Spot <= -1.0% VWAP for PE) to execute independently of broad macro index pressure. Dynamically loaded from input/program_config.json with zero process restart and exposed in dashboard UI."
+  fno_indivisible_lot_sizing_and_daily_loss: "Indivisible F&O Lot Sizing & Portfolio Risk Calibration (ISSUE-126): 1. Naked Options Safety Cap (7.0%): calculate_position_size caps 1-lot conviction risk at max_single_lot_risk_pct=7.0% (allowing high-beta market leaders like 430 PE with ₹6,694 / 6.69% risk on ₹100k capital to size 1 lot). 2. Defined-Risk Debit Spreads Cap (11.0%): Introduces is_spread=True and max_single_lot_spread_risk_pct=11.0% in calculate_position_size, evaluating capital outlay strictly against net debit risk (₹10,763 / 10.76% on ₹100k capital), protecting trades from false 25% account ceiling blocks and unblocking execution for high-conviction hedged runners. 3. Portfolio Risk Circuit Breaker (10.0%): Synchronized max_daily_loss_pct to 10.0% across all engines (nifty50, index, daily, bear_trade) and fallback resolution, allowing up to 10% drawdown before capping new entries."
 
 verification_and_quality_assurance:
-  master_regression_suite: "scratch/run_full_regression_test.py — 35/35 Test Suites Passing (100% Success Rate)"
+  master_regression_suite: "scratch/run_full_regression_test.py — 40/40 Test Suites Passing (100% Success Rate)"
+  issue126_risk_and_spread_sizing_suite: "scratch/test_issue126_risk_and_spread_sizing.py — 6/6 Unit Tests Passing (100% Success Rate)"
   macro_gate_and_safety_suite: "scratch/test_issue111_macro_gate_and_safety_fixes.py — 12/12 Unit Tests Passing (100% Success Rate)"
   phantom_exit_guard_suite: "scratch/test_phantom_exit_guard.py — 3/3 Unit Tests Passing (100% Success Rate)"
   radar_trend_risk_confluence_suite: "scratch/test_radar_trend_and_risk_confluence.py — 3/3 Unit Tests Passing (100% Success Rate)"
@@ -521,6 +524,12 @@ verification_and_quality_assurance:
   profit_lock_and_capital_gate_suite: "scratch/test_profit_lock_and_capital_gate.py — 6/6 Unit Tests Passing (100% Success Rate)"
   ast_syntax_integrity: "100% Python files parsed with zero syntax errors"
   recent_major_issues_resolved:
+    - id: "ISSUE-126"
+      title: "Indivisible F&O Sizing Risk Calibration: 7.0% Naked Option Cap, 11.0% Debit Spread Net Debit Cap & 10.0% Portfolio Daily Loss Limit"
+      status: "RESOLVED"
+    - id: "ISSUE-125"
+      title: "Debit Spread Opening Stabilization Window (09:15-09:20 IST), Net Spread Value Target Guard, Sequential Inverted Fill Elimination & Radar Spread Risk Calibration"
+      status: "RESOLVED"
     - id: "ISSUE-113"
       title: "D1 Reversal Decoupling from Lagging EMA 13/44 Death/Golden Cross on Spot VWAP Reclaim & Anchor Priority"
       status: "RESOLVED"

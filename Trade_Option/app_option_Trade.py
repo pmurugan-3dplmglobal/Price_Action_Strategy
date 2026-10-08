@@ -1293,7 +1293,7 @@ def api_status():
                 "scan_summary": cached_data["scan_summary"].get(pid, {"anchors": {}, "abc_matches": {}})
             }
         cfg = load_config()
-        p_risk_dl = float(cfg.get("portfolio_risk", {}).get("max_daily_loss_pct", 3.0))
+        p_risk_dl = float(cfg.get("portfolio_risk", {}).get("max_daily_loss_pct", 10.0))
         m_mode = str(cfg.get("macro_market_gate", {}).get("mode", "TREND_FOLLOWING")).upper()
         for p_id in ["index", "nifty50"]:
             if p_id in cfg and isinstance(cfg[p_id], dict):

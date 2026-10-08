@@ -950,26 +950,47 @@ def _execute_highest_rr_trade_locked(kite, staged):
 
             lot_sz = int(best.get("lot_size") or (get_option_lot_size(contract) if contract else None) or STOCK_REGISTRY.get(sym, {}).get("lot_size", 1) or 1)
             allow_conviction = bool(cfg_eng.get("allow_single_lot_conviction", True))
-            max_single_risk = float(cfg_eng.get("max_single_lot_risk_pct", 5.0))
+            max_single_risk = float(cfg_eng.get("max_single_lot_risk_pct", 7.0))
+            max_single_spread_risk = float(cfg_eng.get("max_single_lot_spread_risk_pct", 11.0))
             c_tier = _parse_candidate_tier(best, default=1)
-            pos_size = int(best.get("position_size") or calculate_position_size(
-                spot_price=cp,
-                stop_loss=best.get("current_sl", 0.0),
-                capital=cap_val,
-                risk_percent=float(cfg_eng.get("MAX_RISK_PERCENT") or 1.0),
-                lot_size=lot_sz,
-                is_option=True,
-                tier=c_tier,
-                allow_zero=True,
-                allow_single_lot_conviction=allow_conviction,
-                max_single_lot_risk_pct=max_single_risk
-            ))
+            if spread_info:
+                l1_p = float(spread_info.get("leg1", {}).get("entry_price", cp))
+                l2_p = float(spread_info.get("leg2", {}).get("entry_price", 0.0))
+                pos_size = int(best.get("position_size") or calculate_position_size(
+                    spot_price=l1_p,
+                    stop_loss=l2_p,
+                    capital=cap_val,
+                    risk_percent=float(cfg_eng.get("MAX_RISK_PERCENT") or 1.0),
+                    lot_size=lot_sz,
+                    is_option=True,
+                    tier=c_tier,
+                    allow_zero=True,
+                    allow_single_lot_conviction=allow_conviction,
+                    max_single_lot_risk_pct=max_single_risk,
+                    is_spread=True,
+                    max_single_lot_spread_risk_pct=max_single_spread_risk
+                ))
+            else:
+                pos_size = int(best.get("position_size") or calculate_position_size(
+                    spot_price=cp,
+                    stop_loss=best.get("current_sl", 0.0),
+                    capital=cap_val,
+                    risk_percent=float(cfg_eng.get("MAX_RISK_PERCENT") or 1.0),
+                    lot_size=lot_sz,
+                    is_option=True,
+                    tier=c_tier,
+                    allow_zero=True,
+                    allow_single_lot_conviction=allow_conviction,
+                    max_single_lot_risk_pct=max_single_risk,
+                    is_spread=False,
+                    max_single_lot_spread_risk_pct=max_single_spread_risk
+                ))
 
             if pos_size <= 0 and not spread_info:
                 # High-Risk Auto-Spread Conversion:
-                # If naked option risk per lot exceeds the 5% budget cap (e.g. MANKIND, POLICYBZR),
+                # If naked option risk per lot exceeds the 7% budget cap (e.g. MANKIND, POLICYBZR),
                 # attempt auto-converting to a defined-risk Debit Spread (buying ATM and selling OTM).
-                # This caps maximum risk to net debit, unlocking execution for high-conviction runners.
+                # This caps maximum risk to net debit (allowing up to 11% spread risk), unlocking execution for high-conviction runners.
                 try:
                     cand_dir = best.get("direction", "BULL")
                     cand_side = best.get("side", "CE")
@@ -1006,7 +1027,9 @@ def _execute_highest_rr_trade_locked(kite, staged):
                                 tier=c_tier,
                                 allow_zero=True,
                                 allow_single_lot_conviction=True,
-                                max_single_lot_risk_pct=max_single_risk
+                                max_single_lot_risk_pct=max_single_risk,
+                                is_spread=True,
+                                max_single_lot_spread_risk_pct=max_single_spread_risk
                             )
                             if pos_size > 0:
                                 logging.info(f"🛡️ [AUTO_SPREAD_RESCUE] High-risk setup {sym} auto-converted to Debit Spread: {contract} x{pos_size} lots (Net debit: ₹{net_debit:.2f} vs naked risk)")
@@ -2201,7 +2224,8 @@ def run_fast_radar_check(kite):
                         cfg_eng_radar = load_program_config_for_engine("nifty50")
                         cap_val_radar = float(cfg_eng_radar.get("capital") or 100000.0)
                         allow_conviction_r = bool(cfg_eng_radar.get("allow_single_lot_conviction", True))
-                        max_single_risk_r = float(cfg_eng_radar.get("max_single_lot_risk_pct", 5.0))
+                        max_single_risk_r = float(cfg_eng_radar.get("max_single_lot_risk_pct", 7.0))
+                        max_single_spread_risk_r = float(cfg_eng_radar.get("max_single_lot_spread_risk_pct", 11.0))
 
                         exec_mode_r = str(cfg_eng_radar.get("execution_mode", "AUTO")).upper()
                         is_radar_spread = (exec_mode_r in ["DEBIT_SPREAD", "SPREAD_ONLY"]) or (exec_mode_r == "AUTO" and TIMEFRAME_ENTRY in ["15minute", "30minute", "60minute", "day"]) or bool(item.get("leg2_contract"))
@@ -2211,7 +2235,7 @@ def run_fast_radar_check(kite):
                         if is_radar_spread:
                             est_net_debit = float(item.get("net_debit") or (c_now * 0.45))
                             eff_spot_for_sizing = est_net_debit
-                            eff_sl_for_sizing = max(0.05, est_net_debit * 0.20)
+                            eff_sl_for_sizing = 0.0
 
                         calc_pos_sz = calculate_position_size(
                             spot_price=eff_spot_for_sizing,
@@ -2223,7 +2247,9 @@ def run_fast_radar_check(kite):
                             tier=c_tier_val,
                             allow_zero=True,
                             allow_single_lot_conviction=allow_conviction_r,
-                            max_single_lot_risk_pct=max_single_risk_r
+                            max_single_lot_risk_pct=max_single_risk_r,
+                            is_spread=is_radar_spread,
+                            max_single_lot_spread_risk_pct=max_single_spread_risk_r
                         )
                         if calc_pos_sz <= 0:
                             risk_amt = abs(eff_spot_for_sizing - eff_sl_for_sizing) * lot_sz_val

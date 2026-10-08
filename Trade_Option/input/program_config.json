@@ -20,7 +20,7 @@
   "portfolio_risk": {
     "enable": true,
     "max_concurrent_positions": 6,
-    "max_daily_loss_pct": 5.0,
+    "max_daily_loss_pct": 10.0,
     "max_same_sector_positions": 2
   },
   "liquidity_gate": {
@@ -29,8 +29,8 @@
     "min_depth_qty": 1
   },
   "macro_market_gate": {
-    "enable": true,
     "mode": "TREND_FOLLOWING",
+    "enable": true,
     "nifty_drop_threshold_pct": -0.5,
     "nifty_surge_threshold_pct": 0.5,
     "banknifty_drop_threshold_pct": -0.75,
@@ -56,7 +56,9 @@
     "timeframe_entry": "30minute",
     "timeframe_anchor": "30minute",
     "capital": 100000,
-    "max_daily_loss_pct": 5,
+    "max_daily_loss_pct": 10.0,
+    "max_single_lot_risk_pct": 7.0,
+    "max_single_lot_spread_risk_pct": 11.0,
     "strike_range": 1,
     "enable_swing_filter": true,
     "swing_min_waves": 3,
@@ -78,7 +80,9 @@
     "timeframe_entry": "5minute",
     "timeframe_anchor": "15minute",
     "capital": 100000,
-    "max_daily_loss_pct": 3.0,
+    "max_daily_loss_pct": 10.0,
+    "max_single_lot_risk_pct": 7.0,
+    "max_single_lot_spread_risk_pct": 11.0,
     "max_option_loss_pct": 28,
     "strike_range": 1,
     "enable_swing_filter": true,
@@ -89,7 +93,7 @@
     "product_type": "MIS",
     "target_index": "NIFTY_MIDCAP_100",
     "timeframe": "day",
-    "max_daily_loss_pct": 5.0,
+    "max_daily_loss_pct": 10.0,
     "enable_swing_filter": true,
     "swing_min_waves": 2,
     "swing_min_r2": 0.55
@@ -98,7 +102,7 @@
     "product_type": "CNC",
     "target_index": "NIFTY_MIDCAP_100",
     "timeframe": "day",
-    "max_daily_loss_pct": 5.0,
+    "max_daily_loss_pct": 10.0,
     "enable_swing_filter": true,
     "swing_min_waves": 2,
     "swing_min_r2": 0.55

@@ -673,5 +673,41 @@
     "lot_size": 350,
     "tag": "MISSED_OPPORTUNITY",
     "note": "Skipped by DAILY_DRAWDOWN_CAP_EXCEEDED (Today Realized: Rs 8244.45 + Unrealized: Rs 0.00 = Rs -7366.40 <= Max Allowed Loss: Rs -5000.00 [-5.0%]) (R:R=1.13, Tier=1)"
+  },
+  {
+    "contract": "RADICO26OCT4450PE",
+    "base_symbol": "RADICO",
+    "entry_price": 116.0,
+    "exit_price": null,
+    "lot_size": 150,
+    "tag": "MISSED_OPPORTUNITY",
+    "note": "Skipped by DAILY_DRAWDOWN_CAP_EXCEEDED (Today Realized: Rs 9850.23 + Unrealized: Rs 0.00 = Rs -7366.40 <= Max Allowed Loss: Rs -5000.00 [-5.0%]) (R:R=1.05, Tier=2)"
+  },
+  {
+    "contract": "ICICIBANK26OCT1350PE",
+    "base_symbol": "ICICIBANK",
+    "entry_price": 28.7,
+    "exit_price": null,
+    "lot_size": 700,
+    "tag": "MISSED_OPPORTUNITY",
+    "note": "Skipped by DAILY_DRAWDOWN_CAP_EXCEEDED (Today Realized: Rs 9850.23 + Unrealized: Rs 0.00 = Rs -7366.40 <= Max Allowed Loss: Rs -5000.00 [-5.0%]) (R:R=2.04, Tier=1)"
+  },
+  {
+    "contract": "MPHASIS26OCT2300PE",
+    "base_symbol": "MPHASIS",
+    "entry_price": 64.5,
+    "exit_price": null,
+    "lot_size": 275,
+    "tag": "MISSED_OPPORTUNITY",
+    "note": "Skipped by DAILY_DRAWDOWN_CAP_EXCEEDED (Today Realized: Rs 9850.23 + Unrealized: Rs 0.00 = Rs -7366.40 <= Max Allowed Loss: Rs -5000.00 [-5.0%]) (R:R=2.62, Tier=1)"
+  },
+  {
+    "contract": "DABUR26OCT380PE",
+    "base_symbol": "DABUR",
+    "entry_price": 6.8,
+    "exit_price": null,
+    "lot_size": 1250,
+    "tag": "MISSED_OPPORTUNITY",
+    "note": "Skipped by DAILY_DRAWDOWN_CAP_EXCEEDED (Today Realized: Rs 9850.23 + Unrealized: Rs 0.00 = Rs -7366.40 <= Max Allowed Loss: Rs -5000.00 [-5.0%]) (R:R=1.68, Tier=2)"
   }
 ]

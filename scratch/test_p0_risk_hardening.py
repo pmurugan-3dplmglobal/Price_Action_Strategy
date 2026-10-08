@@ -42,8 +42,8 @@ class TestP0RiskHardening(unittest.TestCase):
         geometric_sl = 99.0
         # ATR = 4.0 -> 1.5 * ATR = 6.0 points minimum distance
         widened_sl = calculate_option_atr_sl(entry_price=entry_price, geometric_sl=geometric_sl, atr=4.0, multiplier=1.5)
-        # Expected SL = 100 - 6.0 = 94.0
-        self.assertEqual(widened_sl, 94.0)
+        # Expected SL = 100 - max(6.0 ATR, 8% floor=8.0) = 92.0
+        self.assertEqual(widened_sl, 92.0)
         self.assertLess(widened_sl, geometric_sl)
 
     def test_02_atr_sl_preserves_wider_geometric(self):
@@ -73,8 +73,8 @@ class TestP0RiskHardening(unittest.TestCase):
         })
         # TR = 2.0 -> 1.5 * 2.0 = 3.0 pts
         sl = calculate_option_atr_sl(entry_price=101.0, geometric_sl=100.5, df_candles=df, multiplier=1.5)
-        # Expected: 101.0 - 3.0 = 98.0
-        self.assertEqual(sl, 98.0)
+        # Expected: 101.0 - max(3.0 ATR, 8% floor=8.08) = 92.9
+        self.assertEqual(sl, 92.9)
 
     def test_05_global_halt_file_detection(self):
         """Creating input/HALT causes is_global_halt() to return True."""
@@ -103,12 +103,12 @@ class TestP0RiskHardening(unittest.TestCase):
         self.assertIn("GLOBAL_HALT_ACTIVE", reason)
 
     def test_08_engine_specific_daily_loss_config(self):
-        """Index engine resolves 3% max daily loss, while stock defaults to 5%."""
+        """Index engine and stock engine resolve 10% max daily loss limit."""
         cfg_index = _load_portfolio_risk_config(engine="index")
-        self.assertEqual(cfg_index["max_daily_loss_pct"], 3.0)
+        self.assertEqual(cfg_index["max_daily_loss_pct"], 10.0)
 
         cfg_stock = _load_portfolio_risk_config(engine="nifty50")
-        self.assertEqual(cfg_stock["max_daily_loss_pct"], 5.0)
+        self.assertEqual(cfg_stock["max_daily_loss_pct"], 10.0)
 
     @patch("portfolio_risk.trade_db.get_all_trades")
     def test_09_phantom_trades_excluded_from_drawdown(self, mock_trades):

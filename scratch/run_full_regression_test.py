@@ -1105,6 +1105,24 @@ except Exception as e:
     errors.append(f"Issue 125 Spread Exit Protection Failed: {e}")
     print(f" FAILED [ERR] ({e})", flush=True)
 
+# -------------------------------------------------------------------------
+# TEST 40: Naked (7%) & Spread (11%) Risk Sizing and 10% Daily Loss Limit (ISSUE-126)
+# -------------------------------------------------------------------------
+print("[TEST 40] Testing Naked (7%) & Spread (11%) Risk Sizing & 10% Daily Loss Limit (ISSUE-126)...", end="", flush=True)
+try:
+    import subprocess
+    import paths
+    cmd_p126 = [
+        sys.executable,
+        os.path.join(paths.SCRATCH_DIR, "test_issue126_risk_and_spread_sizing.py")
+    ]
+    res_p126 = subprocess.run(cmd_p126, cwd=paths.PROJECT_ROOT, capture_output=True, text=True)
+    assert res_p126.returncode == 0, f"Issue 126 unit tests failed:\nSTDOUT:\n{res_p126.stdout}\nSTDERR:\n{res_p126.stderr}"
+    print(" PASSED [OK]", flush=True)
+except Exception as e:
+    errors.append(f"Issue 126 Risk Sizing & Daily Loss Failed: {e}")
+    print(f" FAILED [ERR] ({e})", flush=True)
+
 print("\n" + "=" * 100)
 if not errors:
     print("      ALL REGRESSION TESTS PASSED WITH 100% SUCCESS -- ZERO REGRESSIONS FOUND!")

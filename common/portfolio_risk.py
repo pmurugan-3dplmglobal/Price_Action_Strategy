@@ -4,7 +4,7 @@ portfolio_risk.py — Portfolio-Level Risk & Sector Exposure Governance.
 Enforces cross-engine portfolio risk constraints before new trade entries:
 1. Max Concurrent Positions: Caps total concurrent open/active positions (default: 6 across engines).
 2. Max Daily Loss Limit: Halts new entries if cumulative realized + active unrealized loss for today
-   exceeds a safety threshold (default: -3.0% of initial capital).
+   exceeds a safety threshold (default: -10.0% of initial capital).
 3. Max Same-Sector Positions: Prevents correlated portfolio failure by capping exposure to a single
    sector (default: max 2 positions in the same sector, e.g. BANKING_FINANCE, IT, AUTO).
 """
@@ -112,18 +112,20 @@ def _load_portfolio_risk_config(config=None, capital=None, engine=None):
         raw_max_index = cfg_all["portfolio_risk"].get("max_concurrent_index_positions")
     max_concurrent_index = int(raw_max_index) if raw_max_index is not None else 1
 
-    # Resolve max_daily_loss_pct with full fallback hierarchy (Engine-specific -> Config -> Portfolio -> Default)
+    # Resolve max_daily_loss_pct with full fallback hierarchy (Caller Config -> Engine Disk -> Portfolio Disk -> Default)
     daily_loss = None
-    if engine and isinstance(cfg_all.get(engine), dict):
-        daily_loss = cfg_all[engine].get("max_daily_loss_pct")
+    if isinstance(config, dict) and engine and isinstance(config.get(engine), dict):
+        daily_loss = config[engine].get("max_daily_loss_pct")
     if daily_loss is None:
         daily_loss = p_cfg.get("max_daily_loss_pct")
     if daily_loss is None and isinstance(config, dict):
         daily_loss = config.get("max_daily_loss_pct")
+    if daily_loss is None and engine and isinstance(cfg_all.get(engine), dict):
+        daily_loss = cfg_all[engine].get("max_daily_loss_pct")
     if daily_loss is None and isinstance(cfg_all.get("portfolio_risk"), dict):
         daily_loss = cfg_all["portfolio_risk"].get("max_daily_loss_pct")
     if daily_loss is None:
-        daily_loss = 3.0 if (engine == "index") else 5.0
+        daily_loss = 10.0
 
     return {
         "enable": enable,

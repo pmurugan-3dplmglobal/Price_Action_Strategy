@@ -4,12 +4,62 @@ meta:
   last_updated: '2026-10-08'
   purpose: Active operational tracker for v2.1.0-stable failures, root causes, regressions, and enhancements.
   historical_archive: archive/ISSUE_HISTORY_ARCHIVE.yaml (Preserves 119 resolved legacy issues prior to 2026-09-05)
-  total_active_issues: 68
+  total_active_issues: 69
   archived_issues_summary:
     total_archived: 119
     recent_archived_batch: [FEATURE-031, FEATURE-030, FEATURE-029, ISSUE-084, ISSUE-083, ISSUE-082, ISSUE-081, ISSUE-080, FEATURE-036, FEATURE-035, FEATURE-034, FEATURE-033, ISSUE-054]
     key_archived_families: [ALGO_AUDIT_CVE, QUANT_ENHANCEMENTS, RADAR_LIFECYCLE, VCP_METRICS, SCANNER_DISCOVERY, SECURITY_CONFIG, ZERO_REGRESSION_AUDIT]
 issues:
+- id: ISSUE-126
+  title: Indivisible F&O Sizing Risk Calibration (7.0% Naked Option Cap, 11.0% Debit Spread Net Debit Cap & 10.0% Portfolio Daily Loss Limit)
+  severity: HIGH
+  category: Position Sizing, Defined-Risk Spreads, Portfolio Risk Governance, F&O Lot Indivisibility
+  family: EXECUTION_QUALITY_AND_RISK
+  date_reported: '2026-10-08'
+  symptom: |
+    1. High-Conviction Naked 430 PE Rejected by 5.0% Safety Cap: Indivisible F&O lot sizing on high-beta leaders (e.g. 430 PE) with 1-lot risk of ₹6,694 (6.69% of ₹100k capital) exceeded the legacy 5.0% single-lot safety cap in calculate_position_size, causing the engine to return 0 lots and reject the trade.
+    2. Defined-Risk Debit Spreads Blocked by Single-Lot Risk Budget: Debit spreads with net debit risk of ₹10,763 (10.76% of ₹100k capital) were rejected because calculate_position_size did not differentiate between naked option risk and defined-risk debit spreads, applying a uniform 5.0% cap and evaluating gross leg 1 premium rather than net debit outlay against the 25% account ceiling.
+    3. Restrictive Daily Loss Circuit Breaker: Portfolio risk circuit breaker max_daily_loss_pct was configured at 3.0%-5.0% across engine sections, prematurely tripping after normal opening spread fluctuations and capping new valid entries.
+  root_cause: |
+    1. calculate_position_size in common/targets.py lacked dedicated support for defined-risk debit spreads vs naked options (lacked is_spread and max_single_lot_spread_risk_pct), and defaulted max_single_lot_risk_pct to 5.0%.
+    2. For debit spreads, capital outlay was calculated from gross option premium (sp * lot_size) rather than net debit risk (abs(sp - sl) * lot_size), causing expensive ATM legs (e.g. >₹25,000) to breach the 25% account capital ceiling.
+    3. stock_options_trade_engine.py did not pass is_spread or separate spread risk caps during candidate sizing, auto-spread conversion, or fast surveillance radar loop.
+    4. max_daily_loss_pct was set to 3.0%-5.0% across program_config.json files and defaulted to 3.0%/5.0% in portfolio_risk.py.
+    5. In portfolio_risk.py, disk configuration cfg_all took precedence over caller-passed config in daily loss resolution.
+  affected_files:
+  - common/targets.py
+  - common/portfolio_risk.py
+  - Trade_Option/stock_options_trade_engine.py
+  - Trade_Option/app_option_Trade.py
+  - input/program_config.json
+  - Trade_Option/input/program_config.json
+  - Trade_Stock/input/program_config.json
+  - scratch/test_p0_risk_hardening.py
+  - scratch/test_issue126_risk_and_spread_sizing.py
+  - scratch/run_full_regression_test.py
+  fix_applied: |
+    1. In common/targets.py:
+       - Enhanced calculate_position_size() with is_spread=False, max_single_lot_risk_pct=7.0 (default 7.0% for naked options, allowing ₹6,694 / 6.69% risk), and max_single_lot_spread_risk_pct=11.0 (default 11.0% for debit spreads, allowing ₹10,763 / 10.76% net debit risk).
+       - For defined-risk debit spreads (is_spread=True), evaluated capital_outlay_1lot as net debit (risk_per_lot) against the 25% account capital ceiling.
+    2. In Trade_Option/stock_options_trade_engine.py:
+       - Passed is_spread and max_single_lot_spread_risk_pct (11.0%) across candidate sizing, auto-spread rescue conversion, and fast surveillance radar risk budget gate, while retaining 7.0% for naked options.
+    3. In common/portfolio_risk.py:
+       - Updated default max_daily_loss_pct fallback to 10.0%, ensured caller-passed config takes precedence over disk settings, and updated docstrings.
+    4. In input/program_config.json, Trade_Option/input/program_config.json, Trade_Stock/input/program_config.json:
+       - Synchronized max_daily_loss_pct to 10.0% across portfolio_risk, nifty50, index, daily, and bear_trade sections.
+       - Configured max_single_lot_risk_pct: 7.0 and max_single_lot_spread_risk_pct: 11.0 in nifty50 and index sections.
+    5. In Trade_Option/app_option_Trade.py:
+       - Updated max_daily_loss_pct pre-fill fallback to 10.0%.
+    6. Created scratch/test_issue126_risk_and_spread_sizing.py (6/6 passed) and added TEST 40 to scratch/run_full_regression_test.py (all 40 suites passed 100%).
+  verification: |
+    1. Dedicated unit test suite scratch/test_issue126_risk_and_spread_sizing.py: 6/6 tests PASSED (100%).
+    2. Unit risk suite scratch/test_p0_risk_hardening.py: 9/9 tests PASSED (100%).
+    3. Master regression test suite scratch/run_full_regression_test.py: ALL 40/40 TEST SUITES PASSED (100% SUCCESS, zero regressions).
+    4. AST syntax check across all modified files: 100% OK.
+    5. Import smoke test: 100% OK.
+  status: RESOLVED
+  resolution_date: '2026-10-08'
+
 - id: ISSUE-125
   title: Debit Spread Opening Stabilization Window (09:15-09:20 IST), Net Spread Value Target Guard, Sequential Inverted Fill Elimination & Radar Spread Risk Calibration
   severity: CRITICAL
