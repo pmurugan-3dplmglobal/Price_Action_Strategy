@@ -1349,6 +1349,13 @@ def write_scan_display_data(staged, active, display_file, engine_name=None):
         }
         if engine_name:
             data["engine"] = engine_name
+            try:
+                import pattern_funnel
+                funnel_summary = pattern_funnel.get_funnel_summary(engine_name)
+                data["pattern_funnel"] = funnel_summary
+                data["incubating_a_plus"] = funnel_summary.get("category_a_plus", [])
+            except Exception:
+                pass
         os.makedirs(os.path.dirname(display_file), exist_ok=True)
         with open(display_file, "w") as f:
             json.dump(data, f, indent=2)

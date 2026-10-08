@@ -438,18 +438,37 @@ def check_portfolio_risk_caps(engine, symbol, candidate_tier=2, capital=100000.0
                 # Exclude phantom trades (zero PnL created from unexecuted/cancelled broker reconciliation)
                 if (pnl_pct_raw is None or float(pnl_pct_raw or 0.0) == 0.0) and any(k in exit_reason for k in ["RECONCIL", "NET_QTY_ZERO", "CANCEL", "EXPIRED", "UNFILLED"]):
                     continue
+                is_spread = (t.get("position_type") == "option_spread") or bool(t.get("leg2_contract"))
+                eff_basis = price_basis
+                if is_spread:
+                    sp_debit = float(t.get("net_debit") or 0.0)
+                    if sp_debit <= 0:
+                        l1_e = float(t.get("entry_spot") or t.get("entry_price") or 0.0)
+                        l2_e = float(t.get("leg2_entry_price") or 0.0)
+                        sp_debit = max(0.05, l1_e - l2_e) if (l1_e > 0 and l2_e > 0) else price_basis
+                    eff_basis = sp_debit
+
                 if t.get("pnl_inr") is not None:
                     trade_inr_pnl = float(t["pnl_inr"])
                 else:
                     pnl_pct = float(pnl_pct_raw or 0.0)
-                    trade_inr_pnl = (pnl_pct / 100.0) * price_basis * lot_sz * pos_sz
+                    trade_inr_pnl = (pnl_pct / 100.0) * eff_basis * lot_sz * pos_sz
                 today_realized_loss_inr += trade_inr_pnl
 
             # Active trades opened today → unrealized floating PnL
             elif today_str in created_at and status == "ACTIVE":
                 current_pnl_pct = float(t.get("pnl_percent") or t.get("current_pnl_pct") or 0.0)
                 if current_pnl_pct < 0:
-                    unrealized_inr = (current_pnl_pct / 100.0) * price_basis * lot_sz * pos_sz
+                    is_spread = (t.get("position_type") == "option_spread") or bool(t.get("leg2_contract"))
+                    eff_basis = price_basis
+                    if is_spread:
+                        sp_debit = float(t.get("net_debit") or 0.0)
+                        if sp_debit <= 0:
+                            l1_e = float(t.get("entry_spot") or t.get("entry_price") or 0.0)
+                            l2_e = float(t.get("leg2_entry_price") or 0.0)
+                            sp_debit = max(0.05, l1_e - l2_e) if (l1_e > 0 and l2_e > 0) else price_basis
+                        eff_basis = sp_debit
+                    unrealized_inr = (current_pnl_pct / 100.0) * eff_basis * lot_sz * pos_sz
                     today_unrealized_loss_inr += unrealized_inr
 
     local_db_pnl_inr = today_realized_loss_inr + today_unrealized_loss_inr
@@ -458,7 +477,8 @@ def check_portfolio_risk_caps(engine, symbol, candidate_tier=2, capital=100000.0
     if kite:
         try:
             net_pos = kite.positions().get("net", [])
-            live_broker_pnl = sum(float(p.get("pnl", 0.0)) for p in net_pos)
+            # Exclude delivery investment holdings (CNC) from intraday trading algorithmic drawdown
+            live_broker_pnl = sum(float(p.get("pnl", 0.0)) for p in net_pos if str(p.get("product", "")).upper() != "CNC")
             if live_broker_pnl < 0 and live_broker_pnl < total_daily_pnl_inr:
                 total_daily_pnl_inr = live_broker_pnl
                 broker_override = True

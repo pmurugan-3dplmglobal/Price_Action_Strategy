@@ -8,6 +8,7 @@ meta:
   architecture: Centralized Shared Core (common/) + Dual Workspaces (Trade_Option & Trade_Stock)
   strategy: Unified ABC Bullish & Bearish Reversal Pattern Engine + Multi-Tiered Market Structure (T1/T2/T3)
   coverage:
+    - Debit Spread Opening Stabilization Window (09:15-09:20 IST), Net Spread Value Target Guard, Sequential Inverted Fill Elimination & Radar Spread Risk Calibration (ISSUE-125)
     - Heuristic Pricing Replacement, 0DTE Index 11:30 Cutoff Harmonization & Session Learning/Evolution System (ISSUE-117)
     - Anti-Exploded State & Point-of-Execution Chase Protection Guard (check_exploded_state_guard) (ISSUE-115)
     - Index Engine Marketable Limit Parity at Best Ask (* 1.005) with LPP Clamping (ISSUE-115)

@@ -10,6 +10,56 @@ meta:
     recent_archived_batch: [FEATURE-031, FEATURE-030, FEATURE-029, ISSUE-084, ISSUE-083, ISSUE-082, ISSUE-081, ISSUE-080, FEATURE-036, FEATURE-035, FEATURE-034, FEATURE-033, ISSUE-054]
     key_archived_families: [ALGO_AUDIT_CVE, QUANT_ENHANCEMENTS, RADAR_LIFECYCLE, VCP_METRICS, SCANNER_DISCOVERY, SECURITY_CONFIG, ZERO_REGRESSION_AUDIT]
 issues:
+- id: ISSUE-125
+  title: Debit Spread Opening Stabilization Window (09:15-09:20 IST), Net Spread Value Target Guard, Sequential Inverted Fill Elimination & Radar Spread Risk Calibration
+  severity: CRITICAL
+  category: Hedged Spread Lifecycle, Opening Volatility Shield, Broker Margin RMS Invariant, Fast Radar Gating
+  family: EXECUTION_QUALITY_AND_RISK
+  date_reported: '2026-10-08'
+  symptom: |
+    1. Premature Opening Spread Exit & Severe Realized Loss: On 2026-10-08 at 09:15:38 IST (38 seconds after opening bell), the FINNIFTY bear put spread (FINNIFTY26OCT24950PE Long / FINNIFTY26OCT24800PE Short) was prematurely exited at -Rs 4,509 loss despite underlying thesis remaining intact.
+    2. False T1 Target Trigger on Losing Spread: Position monitor SPOT_TARGET_GUARD evaluated Leg 1 in isolation (Leg 1 LTP 363.55 > entry 351.90), completely ignoring that Leg 2 was at 374.95 (loss of -Rs 5,208) and net spread was trading at a severe deficit of -Rs 11.40 (vs +Rs 63.00 net debit paid).
+    3. Inverted Sequential Leg Slippage & 20s Delay: Leg 2 (Short Leg BUY cover) was placed at 09:15:38, but Leg 1 (Long Leg SELL) was blocked by Zerodha RMS margin check while Leg 2 was still OPEN, causing a 20-second unhedged naked window before Leg 1 was finally filled at 09:15:58.
+    4. Fast Radar Rejecting Valid Candidates (Issue 2): Stock options fast radar evaluated gross naked option premiums (e.g. Rs 27k-60k) rather than net spread debit (Rs 6k) at RADAR RISK BUDGET GATE and RADAR CAPITAL GATE, falsely rejecting candidates like BAJAJFINSV and BANKBARODA.
+    5. Daily Drawdown Lockdown: The -Rs 4,509 morning loss pushed portfolio drawdown to -Rs 7,366, tripping DAILY_DRAWDOWN_CAP_EXCEEDED (-Rs 5,000 cap) and blocking all new candidate entries for the remainder of the session.
+  root_cause: |
+    1. Lack of Opening Stabilization Window for Spreads: Position monitor target checks ran at 09:15:00 on the first tick without an opening settling delay. Hedged spreads have wide bid-ask spreads during the opening auction (09:15-09:20 IST) that distort individual leg values.
+    2. Spread Evaluated as Single Naked Option: In position_monitor.py, SPOT_TARGET_GUARD and candle-touch t1_hit evaluated only Leg 1 LTP and ignored Leg 2 and net spread value (curr_net_spread = leg1_ltp - leg2_ltp), falsely declaring target hit when net spread was deeply underwater.
+    3. Non-Atomic Sequential Exit Order Placement: In close_position(), _cover_spread_leg2() placed Leg 2 limit order and returned immediately without confirming fill. Zerodha RMS rejected subsequent Leg 1 sell order until Leg 2 filled on exchange, causing 20s delay.
+    4. Gross Naked Capital Outlay in Fast Radar: In stock_options_trade_engine.py, candidate position sizing and capital affordability were evaluated using c_now (naked premium) instead of net spread debit.
+    5. In portfolio_risk.py, broker P&L summation did not exclude delivery investment holdings (CNC), and spread PnL in trade DB computed from naked entry_spot rather than net debit.
+  affected_files:
+  - common/position_monitor.py
+  - Trade_Option/app_option_Trade.py
+  - Trade_Option/stock_options_trade_engine.py
+  - common/portfolio_risk.py
+  - common/resolve.py
+  - scratch/test_spread_exit_and_index_cap.py
+  - scratch/run_full_regression_test.py
+  fix_applied: |
+    1. In common/position_monitor.py:
+       - Spread Opening Stabilization Window (09:15-09:20 IST): Suppressed all automated exits (emergency candle SL, regular SL, gap breach, Target, and Spot Target) on hedged spreads (position_type == "option_spread" or leg2_contract) until completion of first 5m candle at 09:20 IST.
+       - Net Spread Value Target Evaluation: In SPOT_TARGET_GUARD and candle-touch t1_hit, dynamically fetch Leg 2 LTP, compute curr_net_spread = leg1_ltp - leg2_ltp and net_debit. Require curr_net_spread > net_debit AND curr_net_spread >= min_spread_target (net profit >= 25% ROI or 65% of strike diff). If curr_net_spread <= net_debit, strictly suppress T1 exit.
+       - Inline Fill Confirmation Loop in close_position(): After placing Leg 2 BUY order, poll Kite order status inline for up to 2.5 seconds (5 checks @ 500ms). Once status is COMPLETE, immediately proceed to Leg 1 SELL order in the same cycle, eliminating unhedged delay and RMS rejection.
+    2. In Trade_Option/app_option_Trade.py:
+       - Added target_exits_active guard enforcing now_t >= datetime_time(9, 20) for automated target exits.
+       - Suppressed single-leg naked target exits on hedged spreads in failsafe monitor.
+       - Passed position_type and leg2_contract in pos_obj to shared_close_position.
+    3. In Trade_Option/stock_options_trade_engine.py:
+       - In Fast Radar loop (Checks 5 & 6): Detected debit spread qualification (DEBIT_SPREAD, SPREAD_ONLY, AUTO on >=15m TF, or leg2_contract) and evaluated risk budget and capital affordability using Net Spread Debit (est_net_debit = c_now * 0.45, capital floor ~Rs 25k) rather than gross naked premium, unlocking valid candidates.
+    4. In common/portfolio_risk.py:
+       - Scaled trade INR P&L for option_spread records using net_debit basis rather than naked entry_spot.
+       - Excluded delivery equity holdings (product == "CNC") from algorithmic intraday drawdown sum.
+    5. In common/resolve.py:
+       - Enriched write_scan_display_data with pattern_funnel summary and incubating_a_plus to expose upcoming setups on UI dashboards.
+    6. Created unit test suite scratch/test_spread_exit_and_index_cap.py (6/6 passed) and added TEST 39 to scratch/run_full_regression_test.py (39/39 passed 100%).
+  verification: |
+    1. Dedicated unit test suite scratch/test_spread_exit_and_index_cap.py: 6/6 tests PASSED (100%).
+    2. Master regression test suite scratch/run_full_regression_test.py: ALL 39/39 TEST SUITES PASSED (100% SUCCESS, zero regressions).
+    3. AST syntax check across all 5 modified files: 100% OK.
+  status: RESOLVED
+  resolution_date: '2026-10-08'
+
 - id: ISSUE-124
   title: Test Suite Broker Order Isolation, Option Target Hit Loss Prevention, Cash Equity LTP Calibration & Portfolio Override Symmetry
   severity: HIGH

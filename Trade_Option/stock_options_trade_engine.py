@@ -2203,9 +2203,19 @@ def run_fast_radar_check(kite):
                         allow_conviction_r = bool(cfg_eng_radar.get("allow_single_lot_conviction", True))
                         max_single_risk_r = float(cfg_eng_radar.get("max_single_lot_risk_pct", 5.0))
 
+                        exec_mode_r = str(cfg_eng_radar.get("execution_mode", "AUTO")).upper()
+                        is_radar_spread = (exec_mode_r in ["DEBIT_SPREAD", "SPREAD_ONLY"]) or (exec_mode_r == "AUTO" and TIMEFRAME_ENTRY in ["15minute", "30minute", "60minute", "day"]) or bool(item.get("leg2_contract"))
+
+                        eff_spot_for_sizing = c_now
+                        eff_sl_for_sizing = sl
+                        if is_radar_spread:
+                            est_net_debit = float(item.get("net_debit") or (c_now * 0.45))
+                            eff_spot_for_sizing = est_net_debit
+                            eff_sl_for_sizing = max(0.05, est_net_debit * 0.20)
+
                         calc_pos_sz = calculate_position_size(
-                            spot_price=c_now,
-                            stop_loss=sl,
+                            spot_price=eff_spot_for_sizing,
+                            stop_loss=eff_sl_for_sizing,
                             capital=cap_val_radar,
                             risk_percent=float(cfg_eng_radar.get("MAX_RISK_PERCENT") or 1.0),
                             lot_size=lot_sz_val,
@@ -2216,7 +2226,7 @@ def run_fast_radar_check(kite):
                             max_single_lot_risk_pct=max_single_risk_r
                         )
                         if calc_pos_sz <= 0:
-                            risk_amt = abs(c_now - sl) * lot_sz_val
+                            risk_amt = abs(eff_spot_for_sizing - eff_sl_for_sizing) * lot_sz_val
                             logging.info(f"🛡️ [RADAR RISK BUDGET GATE] {sym} ({item.get('contract')}): Risk per lot (₹{risk_amt:.2f}) exceeds capital risk budget. Holding candidate from radar trigger.")
                             item["risk_exceeded"] = True
                             item["risk_msg"] = f"Risk per lot (₹{risk_amt:.0f}) exceeds capital risk budget"
@@ -2225,7 +2235,9 @@ def run_fast_radar_check(kite):
 
                         # Check 6: Pre-Execution Capital Affordability Gate (Fix 1)
                         # Prevents 106-rejection radar jamming loops on expensive mega-caps (KPITTECH, MARUTI, RELIANCE, CIPLA, ONGC)
-                        one_lot_cost = float(lot_sz_val * c_now)
+                        one_lot_cost = float(lot_sz_val * (eff_spot_for_sizing if is_radar_spread else c_now))
+                        if is_radar_spread:
+                            one_lot_cost = max(one_lot_cost, 25000.0)
                         if kite and LIVE_MARKET_DEPLOYMENT:
                             afford_ok, afford_msg, _ = check_capital_affordability(
                                 kite, required_capital=one_lot_cost, max_utilization_pct=0.90, default_capital=cap_val_radar

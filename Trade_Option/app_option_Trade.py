@@ -878,27 +878,34 @@ def refresh_data(single_run=False):
                                         except Exception:
                                             pass
 
+                                    # SPREAD & OPENING STABILIZATION GUARD:
+                                    is_fs_spread = (str(scan_sl.get("position_type") or p.get("position_type") or "").lower() == "option_spread") or bool(scan_sl.get("leg2_contract") or p.get("leg2_contract"))
+                                    target_exits_active = (now_t >= datetime_time(9, 20)) and not is_fs_spread
+
                                     # TASK 1: Pause automated exit execution if user is actively editing this symbol on the UI
                                     if clean_sym in ACTIVE_EDIT_LOCKS:
                                         logging.info(f"[FAILSAFE PAUSED] {contract_name} is currently being edited on UI. Automated exit execution paused.")
-                                    # 2. Check T3 Target Hit Exit (Active from 09:15 AM)
-                                    elif ltp_val > 0 and t3_val > 0 and ltp_val >= t3_val:
+                                    elif is_fs_spread:
+                                        # Hedged spreads must NOT be exited by single-leg naked target monitors
+                                        pass
+                                    # 2. Check T3 Target Hit Exit (Active from 09:20 AM after opening stabilization)
+                                    elif target_exits_active and ltp_val > 0 and t3_val > 0 and ltp_val >= t3_val:
                                         logging.info(f"[FAILSAFE MONITOR EXIT T3] {contract_name} LTP={ltp_val} >= T3={t3_val}")
-                                        pos_obj = {"contract": contract_name, "position_size": qty, "quantity": qty}
+                                        pos_obj = {"contract": contract_name, "position_size": qty, "quantity": qty, "position_type": scan_sl.get("position_type") or p.get("position_type"), "leg2_contract": scan_sl.get("leg2_contract") or p.get("leg2_contract")}
                                         shared_close_position(_kite_session, pos_obj, True, p.get("product"))
                                         _failsafe_exit_mark("EXIT_T3", "TARGET_HIT",
                                                             f"T3 exit ({ltp_val:.2f} >= T3 {t3_val:.2f})", ltp_val)
-                                    # 2b. Check T2 Target Exit (No T3 -> Full exit on T2 touch, Active from 09:15 AM)
-                                    elif ltp_val > 0 and t2_val > 0 and (t3_val <= 0 or t3_val is None) and ltp_val >= (t2_val - _t1_early_buffer(t2_val)):
+                                    # 2b. Check T2 Target Exit (No T3 -> Full exit on T2 touch, Active from 09:20 AM)
+                                    elif target_exits_active and ltp_val > 0 and t2_val > 0 and (t3_val <= 0 or t3_val is None) and ltp_val >= (t2_val - _t1_early_buffer(t2_val)):
                                         logging.warning(f"[FAILSAFE MONITOR EXIT T2 (no T3)] {contract_name} LTP={ltp_val} >= T2-buffer={t2_val - _t1_early_buffer(t2_val):.2f} (Target: {t2_val:.2f})")
-                                        pos_obj = {"contract": contract_name, "position_size": qty, "quantity": qty}
+                                        pos_obj = {"contract": contract_name, "position_size": qty, "quantity": qty, "position_type": scan_sl.get("position_type") or p.get("position_type"), "leg2_contract": scan_sl.get("leg2_contract") or p.get("leg2_contract")}
                                         shared_close_position(_kite_session, pos_obj, True, p.get("product"))
                                         _failsafe_exit_mark("EXIT_T2", "TARGET_HIT",
                                                             f"T2 full exit ({ltp_val:.2f} >= {t2_val - _t1_early_buffer(t2_val):.2f}, no T3)", ltp_val)
-                                    # 2c. Check T1 Target Exit (No T2/T3 -> Full exit on T1 touch, Active from 09:15 AM)
-                                    elif ltp_val > 0 and t1_val > 0 and t2_val <= 0 and (t3_val <= 0 or t3_val is None) and ltp_val >= (t1_val - _t1_early_buffer(t1_val)):
+                                    # 2c. Check T1 Target Exit (No T2/T3 -> Full exit on T1 touch, Active from 09:20 AM)
+                                    elif target_exits_active and ltp_val > 0 and t1_val > 0 and t2_val <= 0 and (t3_val <= 0 or t3_val is None) and ltp_val >= (t1_val - _t1_early_buffer(t1_val)):
                                         logging.warning(f"[FAILSAFE MONITOR EXIT T1 (no T2/T3)] {contract_name} LTP={ltp_val} >= T1-buffer={t1_val - _t1_early_buffer(t1_val):.2f} (Target: {t1_val:.2f})")
-                                        pos_obj = {"contract": contract_name, "position_size": qty, "quantity": qty}
+                                        pos_obj = {"contract": contract_name, "position_size": qty, "quantity": qty, "position_type": scan_sl.get("position_type") or p.get("position_type"), "leg2_contract": scan_sl.get("leg2_contract") or p.get("leg2_contract")}
                                         shared_close_position(_kite_session, pos_obj, True, p.get("product"))
                                         _failsafe_exit_mark("EXIT_T1", "TARGET_HIT",
                                                             f"T1 full exit ({ltp_val:.2f} >= {t1_val - _t1_early_buffer(t1_val):.2f}, no T2/T3)", ltp_val)
@@ -926,7 +933,7 @@ def refresh_data(single_run=False):
                                             logging.info(f"[SL_PAUSE_ACTIVE] Failsafe SL triggered [{exit_reason_label}] for {contract_name} at {ltp_val} but SL Exit Monitor is PAUSED. Skipping exit. Targets remain active.")
                                         else:
                                             logging.warning(f"[FAILSAFE MONITOR EXIT SL CONFIRMED] {contract_name} LTP={ltp_val} (Reason: {exit_reason_label}, Entry={effective_entry}, SL={sl_val})")
-                                            pos_obj = {"contract": contract_name, "position_size": qty, "quantity": qty}
+                                            pos_obj = {"contract": contract_name, "position_size": qty, "quantity": qty, "position_type": scan_sl.get("position_type") or p.get("position_type"), "leg2_contract": scan_sl.get("leg2_contract") or p.get("leg2_contract")}
                                             shared_close_position(_kite_session, pos_obj, True, p.get("product"))
                                             _failsafe_exit_mark("EXIT_SL", "SL_HIT",
                                                                 f"SL hit [{exit_reason_label}] | LTP {ltp_val:.2f} | Entry {effective_entry:.2f} | SL {sl_val:.2f}", ltp_val)

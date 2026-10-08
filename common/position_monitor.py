@@ -875,6 +875,34 @@ def close_position(kite, pos, live_market=True, product=None, qty_override=None,
                 if leg2_oids:
                     save_executed_exit(leg2_c, leg2_oids[0], {"type": "SPREAD_LEG2_EXIT", "qty": leg2_qty, "price": leg2_limit_price, "order_ids": leg2_oids})
                     logging.info(f"[SPREAD EXIT] Covered short leg {leg2_c} FIRST (Orders: {leg2_oids}, Qty: {leg2_qty}, Price: {leg2_limit_price})")
+                    # Fast Inline Confirmation Loop:
+                    # Zerodha RMS requires Leg 2 BUY order to be COMPLETE before Leg 1 SELL order can be placed.
+                    # Placing Leg 1 while Leg 2 is still OPEN causes immediate margin rejection & 20s unhedged delay.
+                    # Poll order status for up to 2.5 seconds (5 checks @ 500ms) for completion.
+                    if kite and live_market:
+                        leg2_first_oid = leg2_oids[0]
+                        leg2_filled = False
+                        for poll_idx in range(5):
+                            time.sleep(0.5)
+                            try:
+                                orders_list = kite.orders()
+                                for o in orders_list:
+                                    if str(o.get("order_id")) == str(leg2_first_oid):
+                                        st = o.get("status")
+                                        if st == "COMPLETE":
+                                            leg2_filled = True
+                                            break
+                                        elif st in ["REJECTED", "CANCELLED"]:
+                                            logging.error(f"[SPREAD EXIT] Leg 2 order {leg2_first_oid} was {st} ({o.get('status_message')})")
+                                            return False
+                                if leg2_filled:
+                                    logging.info(f"[SPREAD EXIT CONFIRMED] Leg 2 {leg2_c} order {leg2_first_oid} filled completely in {(poll_idx+1)*0.5:.1f}s. Proceeding immediately to Leg 1 exit.")
+                                    break
+                            except Exception as poll_err:
+                                logging.debug(f"Leg 2 fill poll error: {poll_err}")
+                        if not leg2_filled:
+                            logging.warning(f"[SPREAD EXIT PENDING] Leg 2 {leg2_c} order {leg2_first_oid} still pending after 2.5s. Holding Leg 1 exit until next cycle to avoid RMS rejection.")
+                            return False
                 return True
             except Exception as leg2_err:
                 logging.error(f"[SPREAD EXIT ERROR] Failed to exit short leg {leg2_c}: {leg2_err}")
@@ -1723,11 +1751,13 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
             secs_since_entry = get_seconds_since_entry(pos)
             is_fresh_fill = secs_since_entry < 120.0
 
+            is_spread_pos = (pos.get("position_type") == "option_spread") or bool(pos.get("leg2_contract"))
             if df.empty:
-                # If trade is fresh (< 120s) or morning circuit is paused before failsafe time,
+                # If trade is fresh (< 120s), morning circuit is paused before failsafe time,
+                # or is a hedged spread before 09:20 stabilization window:
                 # do NOT execute emergency tick exit on empty candle data (allows candles and opening spreads to settle).
-                if is_fresh_fill or (is_before_failsafe and pause_morning_circuit):
-                    logging.info(f"[CANDLE_OUTAGE_SHIELD_SUPPRESSED] Suppressed empty-candle SL for {sym}: Fresh fill ({secs_since_entry:.0f}s old) or morning circuit paused.")
+                if is_fresh_fill or (is_before_failsafe and pause_morning_circuit) or (is_spread_pos and now_time_str < "09:20"):
+                    logging.info(f"[CANDLE_OUTAGE_SHIELD_SUPPRESSED] Suppressed empty-candle SL for {sym}: Fresh fill ({secs_since_entry:.0f}s old), morning circuit paused, or spread opening stabilization.")
                     continue
 
                 # CVE-4 FIX: Decouple emergency tick protection from candle REST API outages
@@ -1941,10 +1971,22 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                         logging.critical(f"[EOD_SQUAREOFF FAILED] EOD exit order for {sym} failed or pending ({exit_res}). Retaining for retry.")
                     continue
 
-            # 1) SL Evaluation (Separated SL Monitor: Skipped until failsafe_start_str, Active at failsafe_start_str+)
             now_time_str = get_ist_now().strftime("%H:%M")
             is_before_failsafe = now_time_str < failsafe_start_str
             is_start_failsafe = failsafe_start_str <= now_time_str <= fs_end_str
+
+            # ── OPENING STABILIZATION GUARD FOR HEDGED SPREADS (09:15-09:20 IST) ──
+            # Hedged spreads (Debit / Credit Spreads) must not trigger any automated exit
+            # during the opening 5-minute volatility auction (09:15-09:20 IST).
+            # Opening tick bid-ask volatility makes individual leg pricing completely distorted.
+            is_spread_pos = (pos.get("position_type") == "option_spread") or bool(pos.get("leg2_contract"))
+            if is_spread_pos and now_time_str < "09:20":
+                logging.info(
+                    f"[SPREAD_OPENING_STABILIZATION_GUARD] Suppressed premature automated exit for spread position "
+                    f"{sym} ({contract} / {pos.get('leg2_contract')}) before 09:20 IST (now {now_time_str}). "
+                    f"Awaiting 5m candle stabilization."
+                )
+                continue
 
             # ── INTRADAY THETA STAGNATION GUARD (12:30 IST RULE) ──
             # For intraday options (3m, 5m, 15m), holding stagnant trades through mid-day (12:30 - 14:30)
@@ -2534,6 +2576,33 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
 
             t1_hit = ((lp <= (t1_val + buf_t1)) if is_short_stock else (hp >= (t1_val - buf_t1))) if (t1_val is not None and t1_val > 0) else False
 
+            # SPREAD TARGET PROFIT GUARD:
+            # For 2-leg option spreads, single-leg high/low touch MUST NOT trigger T1 if the net spread is not profitable!
+            is_spread_struct = (pos.get("position_type") == "option_spread") or bool(pos.get("leg2_contract"))
+            if is_spread_struct and t1_hit:
+                leg2_c = pos.get("leg2_contract")
+                leg2_ltp = float(pos.get("leg2_ltp") or 0.0)
+                if leg2_c and kite and live and leg2_ltp <= 0:
+                    try:
+                        l2_c_str = str(leg2_c).upper()
+                        l2_exch = "BFO" if ("SENSEX" in l2_c_str or "BSE" in l2_c_str) else "NFO"
+                        q_l2 = kite.quote([f"{l2_exch}:{leg2_c}"])
+                        if f"{l2_exch}:{leg2_c}" in q_l2:
+                            leg2_ltp = float(q_l2[f"{l2_exch}:{leg2_c}"].get("last_price", 0.0))
+                            pos["leg2_ltp"] = leg2_ltp
+                    except Exception:
+                        pass
+                net_debit = float(pos.get("net_debit") or 0.0)
+                if net_debit <= 0:
+                    l1_entry_p = float(pos.get("entry_spot") or pos.get("entry_price") or 0.0)
+                    l2_entry_p = float(pos.get("leg2_entry_price") or 0.0)
+                    net_debit = max(0.05, l1_entry_p - l2_entry_p) if (l1_entry_p > 0 and l2_entry_p > 0) else l1_entry_p
+                curr_opt_p = live_ltp if live_ltp > 0 else (cp if cp > 0 else float(pos.get("ltp") or 0.0))
+                curr_net_spread = curr_opt_p - leg2_ltp
+                if curr_net_spread <= net_debit:
+                    logging.info(f"[SPREAD_TARGET_GUARD] Suppressed Leg 1 candle T1 touch for spread {sym} ({pos.get('contract')} / {leg2_c}): Net Spread Value ({curr_net_spread:.2f}) <= Net Debit ({net_debit:.2f}) is in loss/flat. Holding spread.")
+                    t1_hit = False
+
             # SPOT_TARGET_GUARD for Options:
             # If underlying spot reaches spot_t1, trigger T1 exit to combat theta drag even if option premium lags
             if not is_stock and not t1_hit:
@@ -2569,7 +2638,47 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                                 pass
                     if curr_spot > 0:
                         curr_opt_p = live_ltp if live_ltp > 0 else (cp if cp > 0 else float(pos.get("ltp") or 0.0))
-                        if is_bull and curr_spot >= spot_t1:
+                        if is_spread_struct:
+                            leg2_c = pos.get("leg2_contract")
+                            leg2_ltp = float(pos.get("leg2_ltp") or 0.0)
+                            if leg2_c and kite and live and leg2_ltp <= 0:
+                                try:
+                                    l2_c_str = str(leg2_c).upper()
+                                    l2_exch = "BFO" if ("SENSEX" in l2_c_str or "BSE" in l2_c_str) else "NFO"
+                                    q_l2 = kite.quote([f"{l2_exch}:{leg2_c}"])
+                                    if f"{l2_exch}:{leg2_c}" in q_l2:
+                                        leg2_ltp = float(q_l2[f"{l2_exch}:{leg2_c}"].get("last_price", 0.0))
+                                        pos["leg2_ltp"] = leg2_ltp
+                                except Exception:
+                                    pass
+                            net_debit = float(pos.get("net_debit") or 0.0)
+                            if net_debit <= 0:
+                                l1_entry_p = float(pos.get("entry_spot") or pos.get("entry_price") or 0.0)
+                                l2_entry_p = float(pos.get("leg2_entry_price") or 0.0)
+                                net_debit = max(0.05, l1_entry_p - l2_entry_p) if (l1_entry_p > 0 and l2_entry_p > 0) else l1_entry_p
+                            curr_net_spread = curr_opt_p - leg2_ltp
+                            min_spread_target = net_debit * 1.25
+                            strike_diff = float(pos.get("strike_diff") or 0.0)
+                            if strike_diff > net_debit:
+                                min_spread_target = max(min_spread_target, net_debit + 0.65 * (strike_diff - net_debit))
+                            spot_target_hit = (curr_spot >= spot_t1) if is_bull else (curr_spot <= spot_t1)
+                            if spot_target_hit:
+                                if curr_net_spread > net_debit and curr_net_spread >= min_spread_target:
+                                    t1_hit = True
+                                    if not t1_val or t1_val <= 0:
+                                        t1_val = curr_opt_p
+                                    logging.info(
+                                        f"[SPOT_TARGET_GUARD] Spread T1 triggered for {sym} ({pos.get('contract')} / {leg2_c}): "
+                                        f"Spot reached target ({curr_spot:.2f} vs {spot_t1:.2f}) "
+                                        f"AND Net Spread Value ({curr_net_spread:.2f} > Net Debit {net_debit:.2f}, Target: {min_spread_target:.2f})."
+                                    )
+                                else:
+                                    logging.info(
+                                        f"[SPOT_TARGET_GUARD] Suppressed premature Spread T1 for {sym} ({pos.get('contract')} / {leg2_c}): "
+                                        f"Spot reached target ({curr_spot:.2f}), but Net Spread Value ({curr_net_spread:.2f}) "
+                                        f"<= Net Debit ({net_debit:.2f}) / Target ({min_spread_target:.2f}) is in loss/flat. Holding position."
+                                    )
+                        elif is_bull and curr_spot >= spot_t1:
                             # Long option buyer invariant: Spot-based target progression only triggers profit-taking / TARGET_HIT if live option premium is profitable (curr_opt_p > entry_s)
                             if entry_s > 0 and curr_opt_p > entry_s:
                                 t1_hit = True

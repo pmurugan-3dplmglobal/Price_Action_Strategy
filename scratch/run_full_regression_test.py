@@ -1087,6 +1087,24 @@ except Exception as e:
     errors.append(f"Issue 124 Forensic Audit Invariants Failed: {e}")
     print(f" FAILED [ERR] ({e})", flush=True)
 
+# -------------------------------------------------------------------------
+# TEST 39: Spread Exit Protection, 09:20 Stabilization, Net Debit & Radar Gating (ISSUE-125)
+# -------------------------------------------------------------------------
+print("[TEST 39] Testing Spread Exit Protection, 09:20 Stabilization & Radar Gating (ISSUE-125)...", end="", flush=True)
+try:
+    import subprocess
+    import paths
+    cmd_p125 = [
+        sys.executable,
+        os.path.join(paths.SCRATCH_DIR, "test_spread_exit_and_index_cap.py")
+    ]
+    res_p125 = subprocess.run(cmd_p125, cwd=paths.PROJECT_ROOT, capture_output=True, text=True)
+    assert res_p125.returncode == 0, f"Issue 125 unit tests failed:\nSTDOUT:\n{res_p125.stdout}\nSTDERR:\n{res_p125.stderr}"
+    print(" PASSED [OK]", flush=True)
+except Exception as e:
+    errors.append(f"Issue 125 Spread Exit Protection Failed: {e}")
+    print(f" FAILED [ERR] ({e})", flush=True)
+
 print("\n" + "=" * 100)
 if not errors:
     print("      ALL REGRESSION TESTS PASSED WITH 100% SUCCESS -- ZERO REGRESSIONS FOUND!")

@@ -596,11 +596,11 @@
   {
     "contract": "CDSL26OCT1200PE",
     "base_symbol": "CDSL",
-    "entry_price": 11.8,
+    "entry_price": 11.6,
     "exit_price": null,
     "lot_size": 475,
     "tag": "MISSED_OPPORTUNITY",
-    "note": "Skipped by DAILY_DRAWDOWN_CAP_EXCEEDED (Today Realized: Rs 4256.37 + Unrealized: Rs 0.00 = Rs -7005.65 <= Max Allowed Loss: Rs -5000.00 [-5.0%]) (R:R=0.63, Tier=2)"
+    "note": "Skipped by DAILY_DRAWDOWN_CAP_EXCEEDED (Today Realized: Rs 8244.45 + Unrealized: Rs 0.00 = Rs -6856.15 <= Max Allowed Loss: Rs -5000.00 [-5.0%]) (R:R=0.65, Tier=2)"
   },
   {
     "contract": "NMDC26OCT73PE",
@@ -664,5 +664,14 @@
     "lot_size": 950,
     "tag": "MISSED_OPPORTUNITY",
     "note": "Skipped by DAILY_DRAWDOWN_CAP_EXCEEDED (Today Realized: Rs 1065.33 + Unrealized: Rs 0.00 = Rs -7135.65 <= Max Allowed Loss: Rs -5000.00 [-5.0%]) (R:R=1.22, Tier=1)"
+  },
+  {
+    "contract": "PHOENIXLTD26OCT1800PE",
+    "base_symbol": "PHOENIXLTD",
+    "entry_price": 48.3,
+    "exit_price": null,
+    "lot_size": 350,
+    "tag": "MISSED_OPPORTUNITY",
+    "note": "Skipped by DAILY_DRAWDOWN_CAP_EXCEEDED (Today Realized: Rs 8244.45 + Unrealized: Rs 0.00 = Rs -7366.40 <= Max Allowed Loss: Rs -5000.00 [-5.0%]) (R:R=1.13, Tier=1)"
   }
 ]
