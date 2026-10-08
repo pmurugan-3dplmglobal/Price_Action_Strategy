@@ -953,6 +953,81 @@ def refresh_data(single_run=False):
                                 logging.debug(f"Failsafe monitor error for {sym}: {fs_err}")
 
                         cached_data["kite_positions"] = merged
+
+                        # ── ISSUE-123: Real-Time Bulk Quote Polling & Eviction for Scanned/Staged Setups ──
+                        try:
+                            staged_quote_keys = set()
+                            staged_items = []
+                            for eng_k in ["nifty50", "index"]:
+                                eng_disp = cached_data.get("scan_display", {}).get(eng_k, {})
+                                for cat_k in ["staged_trades", "all_staged_today"]:
+                                    for itm in eng_disp.get(cat_k, []):
+                                        cnt = itm.get("contract") or itm.get("symbol")
+                                        if cnt:
+                                            cnt_str = str(cnt).upper().replace(" ", "")
+                                            exch_pre = "BFO" if any(x in cnt_str for x in ["SENSEX", "BANKEX", "BSE"]) else ("NFO" if any(x in cnt_str for x in ["CE", "PE", "NIFTY", "BANK"]) else "NSE")
+                                            staged_quote_keys.add(f"{exch_pre}:{cnt_str}")
+                                            staged_items.append(itm)
+
+                            if staged_quote_keys and _kite_session:
+                                from session import safe_kite_call
+                                quote_list = list(staged_quote_keys)
+                                for q_i in range(0, len(quote_list), 100):
+                                    chunk = quote_list[q_i : q_i + 100]
+                                    ltp_map = safe_kite_call(_kite_session.ltp, chunk)
+                                    if ltp_map and isinstance(ltp_map, dict):
+                                        for q_key, q_val in ltp_map.items():
+                                            p_val = float(q_val.get("last_price", 0))
+                                            t_val = str(q_val.get("instrument_token", ""))
+                                            if p_val > 0:
+                                                pure_sym = q_key.split(":")[-1]
+                                                cached_data["ltp"][pure_sym] = p_val
+                                                cached_data["ltp"][q_key] = p_val
+                                                _ltp_memory[pure_sym] = p_val
+                                                if t_val:
+                                                    cached_data["ltp"][t_val] = p_val
+                                                    _ltp_memory[t_val] = p_val
+
+                            # Evaluate live price against structural Stop-Loss and Target
+                            eviction_occurred = False
+                            for itm in staged_items:
+                                cnt = itm.get("contract") or itm.get("symbol")
+                                if not cnt:
+                                    continue
+                                cnt_clean = str(cnt).upper().replace(" ", "")
+                                cur_ltp = float(cached_data["ltp"].get(cnt_clean) or cached_data["ltp"].get(f"NFO:{cnt_clean}") or cached_data["ltp"].get(f"BFO:{cnt_clean}") or 0.0)
+                                sl_lvl = float(itm.get("current_sl") or itm.get("sl") or 0.0)
+                                t1_lvl = float(itm.get("t1") or 0.0)
+                                if cur_ltp > 0 and sl_lvl > 0 and cur_ltp <= sl_lvl:
+                                    itm["is_sl_hit"] = True
+                                    itm["status"] = "SL_BREACHED"
+                                elif cur_ltp > 0 and t1_lvl > 0 and cur_ltp >= (t1_lvl * 0.995):
+                                    itm["is_t1_hit"] = True
+                                    itm["status"] = "TARGET_HIT"
+
+                            # Evict invalidated or completed setups from active staged_trades queue
+                            for eng_k, disp_f in [("nifty50", SCAN_DISPLAY_FILE), ("index", SCAN_DISPLAY_INDEX_FILE)]:
+                                eng_disp = cached_data.get("scan_display", {}).get(eng_k, {})
+                                if "staged_trades" in eng_disp and isinstance(eng_disp["staged_trades"], list):
+                                    prev_len = len(eng_disp["staged_trades"])
+                                    valid_staged = [x for x in eng_disp["staged_trades"] if not x.get("is_sl_hit") and x.get("status") not in ["SL_BREACHED", "TARGET_HIT"]]
+                                    if len(valid_staged) != prev_len:
+                                        eng_disp["staged_trades"] = valid_staged
+                                        eviction_occurred = True
+
+                            # Atomically persist updated scan_display if setups were evicted
+                            if eviction_occurred:
+                                for eng_k, disp_f in [("nifty50", SCAN_DISPLAY_FILE), ("index", SCAN_DISPLAY_INDEX_FILE)]:
+                                    if eng_k in cached_data.get("scan_display", {}) and os.path.exists(os.path.dirname(disp_f)):
+                                        try:
+                                            tmp_f = f"{disp_f}.tmp.{os.getpid()}"
+                                            with open(tmp_f, "w", encoding="utf-8") as f_out:
+                                                json.dump(cached_data["scan_display"][eng_k], f_out, indent=2)
+                                            os.replace(tmp_f, disp_f)
+                                        except Exception as write_err:
+                                            logging.debug(f"Failed to persist evicted scan_display for {eng_k}: {write_err}")
+                        except Exception as staged_quote_err:
+                            logging.debug(f"[STAGED QUOTE REFRESH ERROR] {staged_quote_err}")
                 except Exception as e:
                     logging.error(f"[KITE POSITIONS ERROR] {e}")
         except Exception as loop_err:

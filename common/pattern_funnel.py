@@ -437,7 +437,7 @@ def purge_invalidated_or_triggered(engine_name, ltp_dict=None, max_runaway_pct=N
             return updated
         return current
 
-def purge_stale_prior_day_setups(engine_name=None, today_str=None, purge_scan_display=True, force_prior_days=True):
+def purge_stale_prior_day_setups(engine_name=None, today_str=None, purge_scan_display=True, force_prior_days=True, ltp_dict=None):
     """
     Automated Morning Funnel Reset & Stale Setup Cleanup:
     Purges prior-day incubation setups from pattern_funnel.json across engines.
@@ -495,26 +495,46 @@ def purge_stale_prior_day_setups(engine_name=None, today_str=None, purge_scan_di
                 except Exception:
                     pass
 
-            # 3. Structural SL & Target Exhaustion check
-            c_now = float(x.get("entry_spot") or x.get("last_price") or x.get("close") or 0.0)
+            # 3. Structural SL & Target Exhaustion check (with Live LTP support & Option Parity)
+            cnt = x.get("contract") or x.get("symbol")
+            cnt_clean = str(cnt or "").replace(" ", "").upper()
+            live_p = 0.0
+            if ltp_dict and isinstance(ltp_dict, dict):
+                live_p = float(ltp_dict.get(cnt_clean) or ltp_dict.get(f"NFO:{cnt_clean}") or ltp_dict.get(f"BFO:{cnt_clean}") or ltp_dict.get(str(x.get("option_token", ""))) or 0.0)
+            c_now = live_p if live_p > 0 else float(x.get("last_price") or x.get("close") or x.get("entry_spot") or 0.0)
             sl = float(x.get("current_sl") or x.get("sl") or 0.0)
             t1 = float(x.get("t1") or 0.0)
             bm = float(x.get("benchmark") or 0.0)
             side = str(x.get("side", "CE")).upper()
-            is_pe = (side == "PE" or "PE" in str(contract).upper() or str(x.get("direction", "")).upper() == "BEAR")
 
-            if c_now > 0 and sl > 0:
-                if not is_pe and c_now <= sl:
-                    return False  # Bull Anchor SL breached
-                elif is_pe and c_now >= sl:
-                    return False  # Bear Anchor SL breached
+            from common.trading_core import is_option_contract
+            is_opt = is_option_contract(cnt_clean)
 
-            if c_now > 0 and bm > 0 and t1 > bm:
-                t1_80 = round(bm + 0.80 * (t1 - bm), 2)
-                if not is_pe and c_now >= t1_80:
-                    return False  # 80% T1 hit
-                elif is_pe and c_now <= t1_80:
-                    return False
+            if is_opt:
+                # Option Buyer Invariant: Both CE and PE contracts are bought long; SL hits when premium <= sl
+                if c_now > 0 and sl > 0 and c_now <= sl:
+                    return False  # Option SL breached
+                if c_now > 0 and bm > 0 and t1 > bm:
+                    t1_80 = round(bm + 0.80 * (t1 - bm), 2)
+                    if c_now >= t1_80:
+                        return False  # Option 80% T1 hit
+            else:
+                # Cash Equity: Bull buys CNC/MIS (SL if <= sl); Bear shorts MIS (SL if >= sl)
+                is_short_eq = (side in ["SELL", "PE", "BEAR"] or str(x.get("direction", "")).upper() == "BEAR")
+                if c_now > 0 and sl > 0:
+                    if not is_short_eq and c_now <= sl:
+                        return False
+                    elif is_short_eq and c_now >= sl:
+                        return False
+                if c_now > 0 and bm > 0 and t1 > 0:
+                    if not is_short_eq and t1 > bm:
+                        t1_80 = round(bm + 0.80 * (t1 - bm), 2)
+                        if c_now >= t1_80:
+                            return False
+                    elif is_short_eq and t1 < bm:
+                        t1_80 = round(bm - 0.80 * (bm - t1), 2)
+                        if c_now <= t1_80:
+                            return False
 
             return True
 
@@ -572,7 +592,7 @@ def purge_stale_prior_day_setups(engine_name=None, today_str=None, purge_scan_di
         return load_funnel_state(engine_name) if engine_name else load_funnel_state()
 
 
-def reconcile_funnel_and_display_setups(engine_name=None, today_str=None, purge_scan_display=True):
+def reconcile_funnel_and_display_setups(engine_name=None, today_str=None, purge_scan_display=True, ltp_dict=None):
     """
     Smart validity reconciliation on engine startup and routine sweeps:
     Preserves valid incubation setups up to 3 calendar days old whose Anchor SL is intact
@@ -582,7 +602,8 @@ def reconcile_funnel_and_display_setups(engine_name=None, today_str=None, purge_
         engine_name=engine_name,
         today_str=today_str,
         purge_scan_display=purge_scan_display,
-        force_prior_days=False
+        force_prior_days=False,
+        ltp_dict=ltp_dict
     )
 
 

@@ -1292,12 +1292,20 @@
                 const isExpired = expiredSet.has(cleanContract) || (t.symbol && expiredSet.has(cleanSymbol));
                 const isExitDone = execExits[cleanContract] || (t.symbol && execExits[cleanSymbol]) || execExits[t.contract || ''] || false;
 
+                const liveLtp = parseFloat(d.ltp[cleanContract] || d.ltp[cleanSymbol] || d.ltp[`NFO:${cleanContract}`] || d.ltp[`BFO:${cleanContract}`] || t.ltp || 0);
+                const isSLBreached = Boolean(t.is_sl_hit || t.status === 'SL_BREACHED' || (slNum > 0 && liveLtp > 0 && liveLtp <= slNum));
+                const isT1Reached = Boolean(t.is_t1_hit || t.status === 'TARGET_HIT' || (t1Num > 0 && liveLtp > 0 && liveLtp >= (t1Num * 0.995)));
+
                 const chartCell = `<td style="text-align:center"><button class="btn-chart" onclick="openChartModal('${t.contract||t.symbol||''}','${t.symbol||''}','${t.side||'CE'}',${t.entry_spot||t.entry||0},${t.current_sl||t.sl||0},${t.t1||0},${t.t2||0},${t.t3||0},'${res}','${t.candle_a_time||''}','${t.entry_time||''}',${t.benchmark||0},${t.anchor_floor||0},'${t.direction||'BULL'}','${t.timeframe||''}')" style="background:#1f6feb;color:#ffffff;border:none;padding:4px 8px;border-radius:4px;font-weight:bold;cursor:pointer;font-size:11px;">📈 Chart</button></td>`;
                 let actCell = '';
                 if (isExpired || isExitDone) {
                     actCell = '<td style="text-align:center"><button disabled class="btn-expired" style="background:' + (isExpired ? '#8957e5' : '#d29922') + ';color:#ffffff;border:none;padding:4px 10px;border-radius:4px;font-weight:bold;cursor:not-allowed;font-size:11px">' + (isExpired ? 'EXPIRED' : 'EXITED') + '</button></td>';
                 } else if (isBought) {
                     actCell = '<td style="text-align:center"><button disabled class="btn-bought" style="background:#238636;color:#ffffff;border:none;padding:4px 10px;border-radius:4px;font-weight:bold;cursor:not-allowed;font-size:11px">BOUGHT</button></td>';
+                } else if (isSLBreached) {
+                    actCell = '<td style="text-align:center"><button disabled class="btn-sl-breached" style="background:#da3633;color:#ffffff;border:none;padding:4px 10px;border-radius:4px;font-weight:bold;cursor:not-allowed;font-size:11px" title="Structural Stop-Loss breached on market price">🛑 SL HIT</button></td>';
+                } else if (isT1Reached) {
+                    actCell = '<td style="text-align:center"><button disabled class="btn-t1-reached" style="background:#1f6feb;color:#ffffff;border:none;padding:4px 10px;border-radius:4px;font-weight:bold;cursor:not-allowed;font-size:11px" title="Target 1 reached on market price">🎯 T1 HIT</button></td>';
                 } else if (t.risk_exceeded) {
                     actCell = `<td style="text-align:center"><button class="btn-buy" onclick="buyScannedTrade(this, '${t.symbol||''}', '${t.contract||''}', '${t.side||'CE'}', ${t.entry_spot||0}, ${t.current_sl||t.sl||0}, ${t.t1||0}, ${t.t2||0}, ${t.t3||0}, '${eng}', '${t.timeframe||''}', '${(t.candle_a_time||'').replace(/'/g,"")}', '${(t.entry_time||'').replace(/'/g,"")}', ${t.benchmark||0}, ${t.anchor_floor||0}, '${t.direction||'BULL'}', ${t.tier || 2}, true)" style="background:#da3633;color:#ffffff;border:1px solid #f85149;padding:4px 8px;border-radius:4px;font-weight:bold;cursor:pointer;font-size:10px" title="${t.risk_msg || 'Oversized lot exceeds capital risk budget'}">⚠️ HIGH RISK</button></td>`;
                 } else {
@@ -1400,11 +1408,15 @@
 
                     // T1 Hit Determination (even if T2/T3 is available)
                     const isT1Hit = (t1Val > 0 && highPrice >= (t1Val * 0.995)) || 
+                                    Boolean(t.is_t1_hit) ||
+                                    (t.status === 'TARGET_HIT') ||
                                     (dbStatus === 'TARGET_HIT') || 
                                     (trailingStage >= 1);
 
                     // SL Hit Determination
                     const isSLHit = (slVal > 0 && liveLtp > 0 && liveLtp <= slVal) || 
+                                    Boolean(t.is_sl_hit) ||
+                                    (t.status === 'SL_BREACHED') ||
                                     (dbStatus === 'SL_HIT') || 
                                     isExitDone || 
                                     (dbStatus === 'EXITED');

@@ -1051,6 +1051,24 @@ except Exception as e:
     errors.append(f"Issue 122 Decoupled Incubation vs Execution Invariants Failed: {e}")
     print(f" FAILED [ERR] ({e})", flush=True)
 
+# -------------------------------------------------------------------------
+# TEST 37: Staged Live LTP Polling, Long Option Buyer Invariant & SL Eviction (ISSUE-123)
+# -------------------------------------------------------------------------
+print("[TEST 37] Testing Staged Live LTP Polling, Long Option Buyer Invariant & SL Eviction (ISSUE-123)...", end="", flush=True)
+try:
+    import subprocess
+    import paths
+    cmd_p123 = [
+        sys.executable,
+        os.path.join(paths.SCRATCH_DIR, "test_issue123_staged_ltp_sl_eviction.py")
+    ]
+    res_p123 = subprocess.run(cmd_p123, cwd=paths.PROJECT_ROOT, capture_output=True, text=True)
+    assert res_p123.returncode == 0, f"Issue 123 unit tests failed:\nSTDOUT:\n{res_p123.stdout}\nSTDERR:\n{res_p123.stderr}"
+    print(" PASSED [OK]", flush=True)
+except Exception as e:
+    errors.append(f"Issue 123 Staged LTP Polling & SL Eviction Failed: {e}")
+    print(f" FAILED [ERR] ({e})", flush=True)
+
 print("\n" + "=" * 100)
 if not errors:
     print("      ALL REGRESSION TESTS PASSED WITH 100% SUCCESS -- ZERO REGRESSIONS FOUND!")

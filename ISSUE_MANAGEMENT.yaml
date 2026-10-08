@@ -1,15 +1,43 @@
 meta:
   system: Price Action Unified Strategy System
   version: v2.1.0-stable
-  last_updated: '2026-10-05'
+  last_updated: '2026-10-08'
   purpose: Active operational tracker for v2.1.0-stable failures, root causes, regressions, and enhancements.
   historical_archive: archive/ISSUE_HISTORY_ARCHIVE.yaml (Preserves 119 resolved legacy issues prior to 2026-09-05)
-  total_active_issues: 66
+  total_active_issues: 67
   archived_issues_summary:
     total_archived: 119
     recent_archived_batch: [FEATURE-031, FEATURE-030, FEATURE-029, ISSUE-084, ISSUE-083, ISSUE-082, ISSUE-081, ISSUE-080, FEATURE-036, FEATURE-035, FEATURE-034, FEATURE-033, ISSUE-054]
     key_archived_families: [ALGO_AUDIT_CVE, QUANT_ENHANCEMENTS, RADAR_LIFECYCLE, VCP_METRICS, SCANNER_DISCOVERY, SECURITY_CONFIG, ZERO_REGRESSION_AUDIT]
 issues:
+- id: ISSUE-123
+  title: Staged Setups Live LTP Quote Polling, Long Option Buyer SL Invariant & Active Queue Eviction
+  severity: HIGH
+  category: UI Scan Filter Invariant, LTP Quote Polling, Eviction Lifecycle, Option Buyer Symmetry
+  family: RADAR_LIFECYCLE
+  date_reported: '2026-10-08'
+  symptom: |
+    1. On the Options Dashboard 'Today\'s scan' tab, invalidated setups (e.g. TORNTPHARM26OCT4700CE whose premium collapsed from ₹150 to ₹114, far below SL ₹117.65) remained visible and continued displaying active green 'BUY' buttons.
+    2. Selecting the 'Fresh (Pre-T1 Only)' filter dropdown produced the exact same 4 setups because live LTP for unexecuted setups was missing (d.ltp was empty), causing isSLHit = (slVal > 0 && liveLtp > 0 && liveLtp <= slVal) to evaluate to false.
+    3. In common/pattern_funnel.py purge_stale_prior_day_setups and reconcile_funnel_and_display_setups, SL check used static entry_spot instead of live LTP, and inverted PE option comparison (c_now >= sl), violating the Long Option Buyer Invariant.
+  root_cause: |
+    1. Trade_Option/app_option_Trade.py only fetched Kite quotes for open broker positions (quantity != 0). Unexecuted staged setups in scan_display.json had no entry in cached_data["ltp"], leaving liveLtp == 0.
+    2. Trade_Option/templates/index.html tradeRow() defaulted to a green 'BUY' button for all staged items unless already bought, expired, or high risk, without checking isSLBreached or isT1Reached.
+    3. Common funnel reconciliation inverted PE option SL direction (treating PE as short equities rather than long option buyers who suffer loss when premium drops <= sl).
+  affected_files:
+  - Trade_Option/app_option_Trade.py
+  - common/pattern_funnel.py
+  - Trade_Option/templates/index.html
+  - Trade_Stock/templates/index.html
+  - scratch/test_issue123_staged_ltp_sl_eviction.py
+  - scratch/run_full_regression_test.py
+  fix_applied: |
+    1. In Trade_Option/app_option_Trade.py get_positions_and_pnl_worker(), implemented bulk kite.ltp() quote polling for all staged contracts across nifty50 and index engines, populating cached_data["ltp"].
+    2. Added automated SL breach evaluation (cur_ltp <= sl_lvl) and Target 1 hit evaluation: dynamically tags itm["is_sl_hit"] = True, status = "SL_BREACHED", and evicts invalidated items from the active staged_trades queue while preserving full history in all_staged_today. Atomically persists cleaned scan_display to disk.
+    3. In common/pattern_funnel.py, added ltp_dict support to purge_stale_prior_day_setups and reconcile_funnel_and_display_setups. Fixed Long Option Buyer Invariant: both CE and PE option contracts breach SL when premium <= sl, while cash equities distinguish long (<= sl) from short MIS (>= sl).
+    4. In Trade_Option/templates/index.html and Trade_Stock/templates/index.html, updated tradeRow() to render disabled '🛑 SL HIT' (#da3633) and '🎯 T1 HIT' (#1f6feb) buttons. Updated scan tab filtering so 'Fresh (Pre-T1 Only)' strictly filters out setups tagged with is_sl_hit, status === 'SL_BREACHED', or liveLtp <= slVal.
+    5. Created unit test suite scratch/test_issue123_staged_ltp_sl_eviction.py (3/3 passed) and added TEST 37 to scratch/run_full_regression_test.py (37/37 passed 100%).
+  status: RESOLVED
 - id: ISSUE-122
   title: Decoupled Category B Incubation from Hard VWAP Gate & Sub-Second Fast Radar Reclaim Execution Engine
   severity: HIGH

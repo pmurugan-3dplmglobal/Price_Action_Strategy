@@ -777,11 +777,19 @@
                 const sideStr = t.side || (isSellTrade ? 'SELL' : 'BUY');
                 const dirStr = t.direction || (isSellTrade ? 'BEAR' : 'BULL');
                 const chartCell = `<td style="text-align:center"><button class="btn-chart" onclick="openChartModal('${t.contract||t.symbol||''}','${t.symbol||''}','${sideStr}',${t.entry_spot||t.entry||0},${t.current_sl||t.sl||0},${t.t1||0},${t.t2||0},${t.t3||0},'${res}','${t.candle_a_time||''}','${t.entry_time||''}',${t.benchmark||0},${t.anchor_floor||0},'${dirStr}','${t.timeframe||''}')" style="background:#1f6feb;color:#ffffff;border:none;padding:4px 8px;border-radius:4px;font-weight:bold;cursor:pointer;font-size:11px;">📈 Chart</button></td>`;
+                const liveLtp = parseFloat(d.ltp[cleanContract] || d.ltp[cleanSymbol] || t.ltp || 0);
+                const isSLBreached = Boolean(t.is_sl_hit || t.status === 'SL_BREACHED' || (slNum > 0 && liveLtp > 0 && (isSellTrade ? liveLtp >= slNum : liveLtp <= slNum)));
+                const isT1Reached = Boolean(t.is_t1_hit || t.status === 'TARGET_HIT' || (t1Num > 0 && liveLtp > 0 && (isSellTrade ? liveLtp <= (t1Num * 1.005) : liveLtp >= (t1Num * 0.995))));
+
                 let actCell = '';
                 if (isExpired || isExitDone) {
                     actCell = '<td style="text-align:center"><button disabled class="btn-expired" style="background:' + (isExpired ? '#8957e5' : '#d29922') + ';color:#ffffff;border:none;padding:4px 10px;border-radius:4px;font-weight:bold;cursor:not-allowed;font-size:11px">' + (isExpired ? 'EXPIRED' : 'EXITED') + '</button></td>';
                 } else if (isBought) {
                     actCell = '<td style="text-align:center"><button disabled class="btn-bought" style="background:' + (isSellTrade ? '#da3633' : '#238636') + ';color:#ffffff;border:none;padding:4px 10px;border-radius:4px;font-weight:bold;cursor:not-allowed;font-size:11px">' + (isSellTrade ? 'SHORTED' : 'BOUGHT') + '</button></td>';
+                } else if (isSLBreached) {
+                    actCell = '<td style="text-align:center"><button disabled class="btn-sl-breached" style="background:#da3633;color:#ffffff;border:none;padding:4px 10px;border-radius:4px;font-weight:bold;cursor:not-allowed;font-size:11px" title="Structural Stop-Loss breached on market price">🛑 SL HIT</button></td>';
+                } else if (isT1Reached) {
+                    actCell = '<td style="text-align:center"><button disabled class="btn-t1-reached" style="background:#1f6feb;color:#ffffff;border:none;padding:4px 10px;border-radius:4px;font-weight:bold;cursor:not-allowed;font-size:11px" title="Target 1 reached on market price">🎯 T1 HIT</button></td>';
                 } else {
                     const btnLabel = isSellTrade ? 'SHORT (MIS)' : 'BUY';
                     const btnColor = isSellTrade ? '#da3633' : '#2ea043';
@@ -882,13 +890,19 @@
                     const trailingStage = parseInt(dbMatch?.trailing_stage || t.trailing_stage || 0, 10);
                     const highPrice = Math.max(liveLtp, parseFloat(dbMatch?.high_price || t.high_price || 0));
 
+                    const isSellTrade = (String(t.side || '').toUpperCase() === 'SELL' || String(t.side || '').toUpperCase() === 'PE' || String(t.direction || '').toUpperCase() === 'BEAR');
+
                     // T1 Hit Determination
                     const isT1Hit = (t1Val > 0 && highPrice >= (t1Val * 0.995)) || 
+                                    Boolean(t.is_t1_hit) ||
+                                    (t.status === 'TARGET_HIT') ||
                                     (dbStatus === 'TARGET_HIT') || 
                                     (trailingStage >= 1);
 
                     // SL Hit Determination
-                    const isSLHit = (slVal > 0 && liveLtp > 0 && liveLtp <= slVal) || 
+                    const isSLHit = (slVal > 0 && liveLtp > 0 && (isSellTrade ? liveLtp >= slVal : liveLtp <= slVal)) || 
+                                    Boolean(t.is_sl_hit) ||
+                                    (t.status === 'SL_BREACHED') ||
                                     (dbStatus === 'SL_HIT') || 
                                     isExitDone || 
                                     (dbStatus === 'EXITED');
