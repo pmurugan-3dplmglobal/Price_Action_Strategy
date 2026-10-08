@@ -565,5 +565,104 @@
     "lot_size": 30,
     "tag": "MISSED_OPPORTUNITY",
     "note": "Skipped by MAX_INDEX_POSITIONS_REACHED (1/1 active index trade(s) across portfolio: ['FINNIFTY']) (R:R=2.81, Tier=1)"
+  },
+  {
+    "contract": "RELIANCE26OCT1200PE",
+    "base_symbol": "RELIANCE",
+    "entry_price": 25.8,
+    "exit_price": null,
+    "lot_size": 500,
+    "tag": "MISSED_OPPORTUNITY",
+    "note": "Skipped by DAILY_DRAWDOWN_CAP_EXCEEDED (Today Realized: Rs 1065.33 + Unrealized: Rs 0.00 = Rs -5331.90 <= Max Allowed Loss: Rs -5000.00 [-5.0%]) (R:R=1.75, Tier=1)"
+  },
+  {
+    "contract": "TATAELXSI26OCT3100PE",
+    "base_symbol": "TATAELXSI",
+    "entry_price": 101.1,
+    "exit_price": null,
+    "lot_size": 125,
+    "tag": "MISSED_OPPORTUNITY",
+    "note": "Skipped by DAILY_DRAWDOWN_CAP_EXCEEDED (Today Realized: Rs 1065.33 + Unrealized: Rs 0.00 = Rs -5331.90 <= Max Allowed Loss: Rs -5000.00 [-5.0%]) (R:R=0.57, Tier=1)"
+  },
+  {
+    "contract": "KALYANKJIL26OCT550PE",
+    "base_symbol": "KALYANKJIL",
+    "entry_price": 12.2,
+    "exit_price": null,
+    "lot_size": 1350,
+    "tag": "MISSED_OPPORTUNITY",
+    "note": "Skipped by DAILY_DRAWDOWN_CAP_EXCEEDED (Today Realized: Rs 1065.33 + Unrealized: Rs 0.00 = Rs -5331.90 <= Max Allowed Loss: Rs -5000.00 [-5.0%]) (R:R=0.30, Tier=2)"
+  },
+  {
+    "contract": "CDSL26OCT1200PE",
+    "base_symbol": "CDSL",
+    "entry_price": 11.8,
+    "exit_price": null,
+    "lot_size": 475,
+    "tag": "MISSED_OPPORTUNITY",
+    "note": "Skipped by DAILY_DRAWDOWN_CAP_EXCEEDED (Today Realized: Rs 4256.37 + Unrealized: Rs 0.00 = Rs -7005.65 <= Max Allowed Loss: Rs -5000.00 [-5.0%]) (R:R=0.63, Tier=2)"
+  },
+  {
+    "contract": "NMDC26OCT73PE",
+    "base_symbol": "NMDC",
+    "entry_price": 2.5,
+    "exit_price": null,
+    "lot_size": 6750,
+    "tag": "MISSED_OPPORTUNITY",
+    "note": "Skipped by DAILY_DRAWDOWN_CAP_EXCEEDED (Today Realized: Rs 1065.33 + Unrealized: Rs 0.00 = Rs -5331.90 <= Max Allowed Loss: Rs -5000.00 [-5.0%]) (R:R=1.60, Tier=1)"
+  },
+  {
+    "contract": "PFC26OCT350CE",
+    "base_symbol": "PFC",
+    "entry_price": 1.9,
+    "exit_price": null,
+    "lot_size": 1300,
+    "tag": "MISSED_OPPORTUNITY",
+    "note": "Skipped by DAILY_DRAWDOWN_CAP_EXCEEDED (Today Realized: Rs 6648.39 + Unrealized: Rs 0.00 = Rs -7047.90 <= Max Allowed Loss: Rs -5000.00 [-5.0%]) (R:R=0.95, Tier=2)"
+  },
+  {
+    "contract": "TITAN26OCT4450CE",
+    "base_symbol": "TITAN",
+    "entry_price": 87.4,
+    "exit_price": null,
+    "lot_size": 175,
+    "tag": "MISSED_OPPORTUNITY",
+    "note": "Skipped by DAILY_DRAWDOWN_CAP_EXCEEDED (Today Realized: Rs 1065.33 + Unrealized: Rs 0.00 = Rs -5296.15 <= Max Allowed Loss: Rs -5000.00 [-5.0%]) (R:R=5.56, Tier=1)"
+  },
+  {
+    "contract": "TCS26OCT2100PE",
+    "base_symbol": "TCS",
+    "entry_price": 58.4,
+    "exit_price": null,
+    "lot_size": 225,
+    "tag": "MISSED_OPPORTUNITY",
+    "note": "Skipped by DAILY_DRAWDOWN_CAP_EXCEEDED (Today Realized: Rs 1065.33 + Unrealized: Rs 0.00 = Rs -5331.90 <= Max Allowed Loss: Rs -5000.00 [-5.0%]) (R:R=2.08, Tier=1)"
+  },
+  {
+    "contract": "VMM26OCT98CE",
+    "base_symbol": "VMM",
+    "entry_price": 3.3,
+    "exit_price": null,
+    "lot_size": 4850,
+    "tag": "MISSED_OPPORTUNITY",
+    "note": "Skipped by DAILY_DRAWDOWN_CAP_EXCEEDED (Today Realized: Rs 1065.33 + Unrealized: Rs 0.00 = Rs -6167.15 <= Max Allowed Loss: Rs -5000.00 [-5.0%]) (R:R=2.20, Tier=1)"
+  },
+  {
+    "contract": "POLICYBZR26OCT1000PE",
+    "base_symbol": "POLICYBZR",
+    "entry_price": 30.8,
+    "exit_price": null,
+    "lot_size": 350,
+    "tag": "MISSED_OPPORTUNITY",
+    "note": "Skipped by DAILY_DRAWDOWN_CAP_EXCEEDED (Today Realized: Rs 1065.33 + Unrealized: Rs 0.00 = Rs -5331.90 <= Max Allowed Loss: Rs -5000.00 [-5.0%]) (R:R=0.81, Tier=2)"
+  },
+  {
+    "contract": "PGEL26OCT500PE",
+    "base_symbol": "PGEL",
+    "entry_price": 7.5,
+    "exit_price": null,
+    "lot_size": 950,
+    "tag": "MISSED_OPPORTUNITY",
+    "note": "Skipped by DAILY_DRAWDOWN_CAP_EXCEEDED (Today Realized: Rs 1065.33 + Unrealized: Rs 0.00 = Rs -7135.65 <= Max Allowed Loss: Rs -5000.00 [-5.0%]) (R:R=1.22, Tier=1)"
   }
 ]

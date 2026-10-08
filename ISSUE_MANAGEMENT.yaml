@@ -4,12 +4,55 @@ meta:
   last_updated: '2026-10-08'
   purpose: Active operational tracker for v2.1.0-stable failures, root causes, regressions, and enhancements.
   historical_archive: archive/ISSUE_HISTORY_ARCHIVE.yaml (Preserves 119 resolved legacy issues prior to 2026-09-05)
-  total_active_issues: 67
+  total_active_issues: 68
   archived_issues_summary:
     total_archived: 119
     recent_archived_batch: [FEATURE-031, FEATURE-030, FEATURE-029, ISSUE-084, ISSUE-083, ISSUE-082, ISSUE-081, ISSUE-080, FEATURE-036, FEATURE-035, FEATURE-034, FEATURE-033, ISSUE-054]
     key_archived_families: [ALGO_AUDIT_CVE, QUANT_ENHANCEMENTS, RADAR_LIFECYCLE, VCP_METRICS, SCANNER_DISCOVERY, SECURITY_CONFIG, ZERO_REGRESSION_AUDIT]
 issues:
+- id: ISSUE-124
+  title: Test Suite Broker Order Isolation, Option Target Hit Loss Prevention, Cash Equity LTP Calibration & Portfolio Override Symmetry
+  severity: HIGH
+  category: Test Safety Invariant, Option PnL Classification, Cash Equity Pricing Calibration, Portfolio Risk Formatting
+  family: EXECUTION_QUALITY_AND_RISK
+  date_reported: '2026-10-08'
+  symptom: |
+    1. Accidental Real Broker Order Placement in Tests: Running `scratch/test_parity_alignment.py` during live market hours placed real orders on Zerodha Kite (Orders 261008190090834 and 261008190252045) because `test_04_buy_scanned_trade_bearish_guard` invoked `/api/buy-scanned-trade` without mocking `_kite_session` or `kite.place_order`.
+    2. False TARGET_HIT on Losing Option Contracts: In `common/position_monitor.py` SPOT_TARGET_GUARD, when underlying spot breached `spot_t1` (e.g. `curr_spot <= spot_t1` for PE), the engine flagged `status: "TARGET_HIT"` even when the option contract premium had dropped below entry price (`live_ltp <= entry_s`), misclassifying losing positions (-25% to -50% loss) as target wins in the trade database.
+    3. Cash Equity Divergent Entry & Phantom Target Exits: In `Trade_Stock/blueprints/routes_positions.py` and `Trade_Stock/app_Stock_Trade.py`, the entry price alignment guard was restricted to `if exch != "NSE" and ltp > 0:`. For cash equities (`exch == "NSE"`), stale or erroneous `entry_spot` payloads (e.g. INFY @ 1800 when live LTP was 1008) bypassed validation against live LTP, causing immediate phantom target exits (`ltp <= t1`).
+    4. Misleading Portfolio Risk Drawdown Log String: In `common/portfolio_risk.py`, when live broker P&L overrode local DB P&L, the log string printed an arithmetic impossibility: `Today Realized: Rs 0.00 + Unrealized: Rs 0.00 = Rs -6000.00 <= Max Allowed Loss`.
+    5. Configuration Discrepancy: `input/program_config.json`, `Trade_Option/input/program_config.json`, and `Trade_Stock/input/program_config.json` had `"max_option_loss_pct": 28` under `"nifty50"` but omitted it under `"index"`.
+  root_cause: |
+    1. `scratch/test_parity_alignment.py` lacked `@patch` decorators on `Trade_Stock.app_Stock_Trade._kite_session` and `load_kite_session`, allowing KiteConnect to auto-initialize real session credentials from disk and place real market orders.
+    2. `common/position_monitor.py` SPOT_TARGET_GUARD unconditionally set `t1_hit = True` upon spot reaching `spot_t1` without verifying whether option premium was profitable (`curr_opt_p > entry_s`), violating the Long Option Buyer Invariant.
+    3. `/api/buy-scanned-trade` in stock routes only checked `if exch != "NSE"` for price alignment, allowing cash equities to record divergent prices without validating against live LTP.
+    4. `common/portfolio_risk.py` did not differentiate between local DB summation and live broker override in its log string format.
+    5. Asymmetry in config files between `"nifty50"` and `"index"` sections for `max_option_loss_pct`.
+  affected_files:
+  - scratch/test_parity_alignment.py
+  - common/position_monitor.py
+  - Trade_Stock/blueprints/routes_positions.py
+  - Trade_Stock/app_Stock_Trade.py
+  - common/portfolio_risk.py
+  - input/program_config.json
+  - Trade_Option/input/program_config.json
+  - Trade_Stock/input/program_config.json
+  - scratch/test_issue124_forensic_audit_fixes.py
+  - scratch/run_full_regression_test.py
+  fix_applied: |
+    1. In `scratch/test_parity_alignment.py`: Fully mocked `_kite_session`, `place_order`, `load_kite_session`, `is_market_open`, `check_bid_ask_spread_liquidity`, and `check_portfolio_risk_caps` across test cases. Tests can never connect to Zerodha Kite or place live orders.
+    2. In `common/position_monitor.py`: In SPOT_TARGET_GUARD, enforced Long Option Buyer Invariant: spot target progression (`spot_t1` reached) only triggers profit-taking (`t1_hit = True`) if option premium is strictly profitable (`curr_opt_p > entry_s`). If `curr_opt_p <= entry_s`, suppressed T1 trigger and held position according to option premium. Added defense-in-depth clamping `status_val = "TARGET_HIT" if (is_short_stock or pnl >= 0) else "EXIT_DEFICIT"`.
+    3. In `Trade_Stock/blueprints/routes_positions.py` and `Trade_Stock/app_Stock_Trade.py`: Extended live LTP calibration to cash equities (`exch == "NSE" and ltp > 0`). If `entry_spot <= 0`, divergent by > 5%, or if live LTP already breaches target/SL, calibrated `entry_spot = ltp` and proportionally rescaled SL and targets (`current_sl`, `t1`, `t2`, `t3`) using `ltp / entry_spot` ratio, preventing immediate phantom exits.
+    4. In `common/portfolio_risk.py`: Differentiated broker override in log message: formatted as `[Local DB P&L: Rs A] overridden by [Broker Live P&L: Rs C] <= Max Allowed Loss` when broker P&L overrides local DB.
+    5. In `input/program_config.json`, `Trade_Option/input/program_config.json`, and `Trade_Stock/input/program_config.json`: Added `"max_option_loss_pct": 28` to `"index"` section matching `"nifty50"`.
+    6. Created comprehensive unit test suite `scratch/test_issue124_forensic_audit_fixes.py` (4/4 passed) and added TEST 38 to `scratch/run_full_regression_test.py` (38/38 passed 100%).
+  verification: |
+    1. Dedicated unit test suite `scratch/test_issue124_forensic_audit_fixes.py`: 4/4 tests PASSED (100%).
+    2. Parity test suite `scratch/test_parity_alignment.py`: 4/4 tests PASSED (100% with zero broker interaction).
+    3. Master regression test suite `scratch/run_full_regression_test.py`: ALL 38/38 TEST SUITES PASSED (100% SUCCESS, zero regressions).
+    4. AST syntax check across all modified files: 100% OK.
+  status: RESOLVED
+  resolution_date: '2026-10-08'
 - id: ISSUE-123
   title: Staged Setups Live LTP Quote Polling, Long Option Buyer SL Invariant & Active Queue Eviction
   severity: HIGH

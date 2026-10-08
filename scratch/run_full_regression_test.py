@@ -1069,6 +1069,24 @@ except Exception as e:
     errors.append(f"Issue 123 Staged LTP Polling & SL Eviction Failed: {e}")
     print(f" FAILED [ERR] ({e})", flush=True)
 
+# -------------------------------------------------------------------------
+# TEST 38: Forensic Audit Invariants (Isolation, SPOT_TARGET_GUARD, Calibration & Symmetry - ISSUE-124)
+# -------------------------------------------------------------------------
+print("[TEST 38] Testing Forensic Audit Invariants & Isolation (ISSUE-124)...", end="", flush=True)
+try:
+    import subprocess
+    import paths
+    cmd_p124 = [
+        sys.executable,
+        os.path.join(paths.SCRATCH_DIR, "test_issue124_forensic_audit_fixes.py")
+    ]
+    res_p124 = subprocess.run(cmd_p124, cwd=paths.PROJECT_ROOT, capture_output=True, text=True)
+    assert res_p124.returncode == 0, f"Issue 124 unit tests failed:\nSTDOUT:\n{res_p124.stdout}\nSTDERR:\n{res_p124.stderr}"
+    print(" PASSED [OK]", flush=True)
+except Exception as e:
+    errors.append(f"Issue 124 Forensic Audit Invariants Failed: {e}")
+    print(f" FAILED [ERR] ({e})", flush=True)
+
 print("\n" + "=" * 100)
 if not errors:
     print("      ALL REGRESSION TESTS PASSED WITH 100% SUCCESS -- ZERO REGRESSIONS FOUND!")

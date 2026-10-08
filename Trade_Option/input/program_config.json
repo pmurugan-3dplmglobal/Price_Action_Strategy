@@ -79,6 +79,7 @@
     "timeframe_anchor": "15minute",
     "capital": 100000,
     "max_daily_loss_pct": 3.0,
+    "max_option_loss_pct": 28,
     "strike_range": 1,
     "enable_swing_filter": true,
     "swing_min_waves": 2,

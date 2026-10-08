@@ -452,22 +452,30 @@ def check_portfolio_risk_caps(engine, symbol, candidate_tier=2, capital=100000.0
                     unrealized_inr = (current_pnl_pct / 100.0) * price_basis * lot_sz * pos_sz
                     today_unrealized_loss_inr += unrealized_inr
 
-    total_daily_pnl_inr = today_realized_loss_inr + today_unrealized_loss_inr
+    local_db_pnl_inr = today_realized_loss_inr + today_unrealized_loss_inr
+    total_daily_pnl_inr = local_db_pnl_inr
+    broker_override = False
     if kite:
         try:
             net_pos = kite.positions().get("net", [])
             live_broker_pnl = sum(float(p.get("pnl", 0.0)) for p in net_pos)
             if live_broker_pnl < 0 and live_broker_pnl < total_daily_pnl_inr:
                 total_daily_pnl_inr = live_broker_pnl
+                broker_override = True
         except Exception:
             pass
     cap_val = float(capital or 100000.0)
     max_loss_allowed_inr = -1.0 * (max_daily_loss_pct / 100.0) * cap_val
 
     if total_daily_pnl_inr < max_loss_allowed_inr:
-        reason = (f"DAILY_DRAWDOWN_CAP_EXCEEDED (Today Realized: Rs {today_realized_loss_inr:.2f} + "
-                  f"Unrealized: Rs {today_unrealized_loss_inr:.2f} = Rs {total_daily_pnl_inr:.2f} "
-                  f"<= Max Allowed Loss: Rs {max_loss_allowed_inr:.2f} [{-max_daily_loss_pct:.1f}%])")
+        if broker_override:
+            reason = (f"DAILY_DRAWDOWN_CAP_EXCEEDED ([Local DB P&L: Rs {local_db_pnl_inr:.2f}] overridden by "
+                      f"[Broker Live P&L: Rs {total_daily_pnl_inr:.2f}] "
+                      f"<= Max Allowed Loss: Rs {max_loss_allowed_inr:.2f} [{-max_daily_loss_pct:.1f}%])")
+        else:
+            reason = (f"DAILY_DRAWDOWN_CAP_EXCEEDED (Today Realized: Rs {today_realized_loss_inr:.2f} + "
+                      f"Unrealized: Rs {today_unrealized_loss_inr:.2f} = Rs {total_daily_pnl_inr:.2f} "
+                      f"<= Max Allowed Loss: Rs {max_loss_allowed_inr:.2f} [{-max_daily_loss_pct:.1f}%])")
         return False, reason, {
             "rule": "max_daily_loss_pct",
             "today_realized_pnl_inr": today_realized_loss_inr,

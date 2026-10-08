@@ -2568,16 +2568,25 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                             except Exception:
                                 pass
                     if curr_spot > 0:
+                        curr_opt_p = live_ltp if live_ltp > 0 else (cp if cp > 0 else float(pos.get("ltp") or 0.0))
                         if is_bull and curr_spot >= spot_t1:
-                            t1_hit = True
-                            if not t1_val or t1_val <= 0:
-                                t1_val = live_ltp if live_ltp > 0 else cp
-                            logging.info(f"[SPOT_TARGET_GUARD] Option T1 triggered for {sym} ({pos.get('contract')}) via Underlying Spot Target Reached (Spot: {curr_spot:.2f} >= Spot T1: {spot_t1:.2f})")
+                            # Long option buyer invariant: Spot-based target progression only triggers profit-taking / TARGET_HIT if live option premium is profitable (curr_opt_p > entry_s)
+                            if entry_s > 0 and curr_opt_p > entry_s:
+                                t1_hit = True
+                                if not t1_val or t1_val <= 0:
+                                    t1_val = curr_opt_p
+                                logging.info(f"[SPOT_TARGET_GUARD] Option T1 triggered for {sym} ({pos.get('contract')}) via Underlying Spot Target Reached (Spot: {curr_spot:.2f} >= Spot T1: {spot_t1:.2f}, Opt LTP: {curr_opt_p:.2f} > Entry: {entry_s:.2f})")
+                            else:
+                                logging.info(f"[SPOT_TARGET_GUARD] Suppressed premature Option T1 for {sym} ({pos.get('contract')}): Spot {curr_spot:.2f} >= Spot T1 {spot_t1:.2f}, but Option Premium ({curr_opt_p:.2f} <= Entry {entry_s:.2f}) is in loss/flat. Holding position.")
                         elif (not is_bull) and curr_spot <= spot_t1:
-                            t1_hit = True
-                            if not t1_val or t1_val <= 0:
-                                t1_val = live_ltp if live_ltp > 0 else cp
-                            logging.info(f"[SPOT_TARGET_GUARD] Option PE T1 triggered for {sym} ({pos.get('contract')}) via Underlying Spot Target Reached (Spot: {curr_spot:.2f} <= Spot T1: {spot_t1:.2f})")
+                            # Long option buyer invariant: Spot-based target progression only triggers profit-taking / TARGET_HIT if live option PE premium is profitable (curr_opt_p > entry_s)
+                            if entry_s > 0 and curr_opt_p > entry_s:
+                                t1_hit = True
+                                if not t1_val or t1_val <= 0:
+                                    t1_val = curr_opt_p
+                                logging.info(f"[SPOT_TARGET_GUARD] Option PE T1 triggered for {sym} ({pos.get('contract')}) via Underlying Spot Target Reached (Spot: {curr_spot:.2f} <= Spot T1: {spot_t1:.2f}, Opt LTP: {curr_opt_p:.2f} > Entry: {entry_s:.2f})")
+                            else:
+                                logging.info(f"[SPOT_TARGET_GUARD] Suppressed premature Option PE T1 for {sym} ({pos.get('contract')}): Spot {curr_spot:.2f} <= Spot T1 {spot_t1:.2f}, but Option Premium ({curr_opt_p:.2f} <= Entry {entry_s:.2f}) is in loss/flat. Holding position.")
 
             if t1_val and t1_hit:
                 # RULE: If T2 or T3 is NOT available, exit 100% at T1 (early exit threshold)!
@@ -2602,8 +2611,9 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                                 event_time=last.get('date'))
                         det_str = f"T1 exit ({lp:.2f} <= {t1_val + buf_t1:.2f})" if is_short_stock else f"T1 exit ({hp:.2f} >= {t1_val - buf_t1:.2f})"
                         if tid:
+                            status_val = "TARGET_HIT" if (is_short_stock or pnl >= 0) else "EXIT_DEFICIT"
                             trade_db.update_trade(tid, {
-                                "status": "TARGET_HIT",
+                                "status": status_val,
                                 "exit_time": dt.now().strftime("%Y-%m-%d %H:%M:%S"),
                                 "pnl_percent": round(pnl, 2),
                                 "details": det_str
@@ -2708,8 +2718,9 @@ def monitor_active_positions(kite, registry, positions_dict, lock, product_type,
                                         event_time=last.get('date'))
                                 det_str = f"T1 100% banked (Single-Lot @ {exit_price:.2f})"
                                 if tid:
+                                    status_val = "TARGET_HIT" if (is_short_stock or pnl >= 0) else "EXIT_DEFICIT"
                                     trade_db.update_trade(tid, {
-                                        "status": "TARGET_HIT",
+                                        "status": status_val,
                                         "exit_time": dt.now().strftime("%Y-%m-%d %H:%M:%S"),
                                         "exit_price": round(exit_price, 2),
                                         "pnl_percent": round(pnl, 2),

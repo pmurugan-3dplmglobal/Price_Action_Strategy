@@ -18,30 +18,32 @@ class TestStockOptionsParity(unittest.TestCase):
 
     def test_01_api_analyze_trade_entry_price(self):
         """Verify api_analyze_trade extracts entry_price / entry_spot without crashing."""
+        from unittest.mock import patch
         from Trade_Stock.app_Stock_Trade import app
-        with app.test_client() as client:
-            with client.session_transaction() as sess:
-                sess["user"] = "test_admin"
-                sess["role"] = "admin"
-            # Post payload with entry_price
-            resp = client.post('/api/analyze-trade', json={
-                "symbol": "RELIANCE",
-                "entry_price": 2800.0,
-                "engine": "daily"
-            })
-            self.assertIn(resp.status_code, [200, 400])
-        data = resp.get_json()
-        if resp.status_code == 200:
-            self.assertTrue(data.get("ok"))
-            self.assertIn("entry_price", data)
+        with patch("common.trading_core.load_kite_session", return_value=(None, None)):
+            with app.test_client() as client:
+                with client.session_transaction() as sess:
+                    sess["user"] = "test_admin"
+                    sess["role"] = "admin"
+                # Post payload with entry_price
+                resp = client.post('/api/analyze-trade', json={
+                    "symbol": "RELIANCE",
+                    "entry_price": 2800.0,
+                    "engine": "daily"
+                })
+                self.assertIn(resp.status_code, [200, 400])
+                data = resp.get_json()
+                if resp.status_code == 200:
+                    self.assertTrue(data.get("ok"))
+                    self.assertIn("entry_price", data)
 
-        # Post payload with entry_spot fallback
-        resp2 = client.post('/api/analyze-trade', json={
-            "symbol": "TCS",
-            "entry_spot": 3900.0,
-            "engine": "daily"
-        })
-        self.assertIn(resp2.status_code, [200, 400])
+                # Post payload with entry_spot fallback
+                resp2 = client.post('/api/analyze-trade', json={
+                    "symbol": "TCS",
+                    "entry_spot": 3900.0,
+                    "engine": "daily"
+                })
+                self.assertIn(resp2.status_code, [200, 400])
 
     def test_02_tier_resolution_logic(self):
         """Verify tier resolution does not demote T1 Gold and does not over-promote T3 Momentum."""
@@ -104,28 +106,61 @@ class TestStockOptionsParity(unittest.TestCase):
         self.assertIn("vcp_badge", vcp)
 
     def test_04_buy_scanned_trade_bearish_guard(self):
-        """Verify /api/buy-scanned-trade accepts side='SELL' and uses PRODUCT_MIS."""
+        """Verify /api/buy-scanned-trade accepts side='SELL' and uses PRODUCT_MIS without placing real orders."""
+        from unittest.mock import MagicMock, patch
         from Trade_Stock.app_Stock_Trade import app
-        with app.test_client() as client:
-            with client.session_transaction() as sess:
-                sess["user"] = "test_admin"
-                sess["role"] = "admin"
-            # Post payload with side: SELL
-            resp = client.post('/api/buy-scanned-trade', json={
-                "symbol": "INFY",
-                "contract": "INFY",
-                "side": "SELL",
-                "direction": "BEAR",
-                "entry_spot": 1800.0,
-                "current_sl": 1850.0,
-                "t1": 1700.0,
-                "t2": 1650.0,
-                "t3": 1600.0,
-                "engine": "daily",
-                "force": False
-            })
-            # If market closed or offline, it might return 400 Kite order failure or 200 recorded
-            self.assertIn(resp.status_code, [200, 400])
+        import Trade_Stock.app_Stock_Trade as app_stock
+
+        mock_kite = MagicMock()
+        mock_kite.place_order.return_value = "ORD_MOCK_12345"
+        mock_kite.quote.return_value = {
+            "NSE:INFY": {
+                "last_price": 1800.0,
+                "depth": {
+                    "buy": [{"price": 1799.0, "quantity": 100}],
+                    "sell": [{"price": 1801.0, "quantity": 100}]
+                }
+            }
+        }
+        mock_kite.VARIETY_REGULAR = "regular"
+        mock_kite.VARIETY_AMO = "amo"
+        mock_kite.TRANSACTION_TYPE_BUY = "BUY"
+        mock_kite.TRANSACTION_TYPE_SELL = "SELL"
+        mock_kite.PRODUCT_MIS = "MIS"
+        mock_kite.PRODUCT_CNC = "CNC"
+        mock_kite.PRODUCT_NRML = "NRML"
+        mock_kite.ORDER_TYPE_LIMIT = "LIMIT"
+
+        with patch.object(app_stock, "_kite_session", mock_kite), \
+             patch("Trade_Stock.app_Stock_Trade._kite_session", mock_kite), \
+             patch("common.trading_core.load_kite_session", return_value=(None, None)), \
+             patch("common.trading_core.is_market_open", return_value=True), \
+             patch("common.trading_core.check_bid_ask_spread_liquidity", return_value=(True, 0.001, "OK", 0)), \
+             patch("common.portfolio_risk.check_portfolio_risk_caps", return_value=(True, "OK", {})):
+            with app.test_client() as client:
+                with client.session_transaction() as sess:
+                    sess["user"] = "test_admin"
+                    sess["role"] = "admin"
+                # Post payload with side: SELL
+                resp = client.post('/api/buy-scanned-trade', json={
+                    "symbol": "INFY",
+                    "contract": "INFY",
+                    "side": "SELL",
+                    "direction": "BEAR",
+                    "entry_spot": 1800.0,
+                    "current_sl": 1850.0,
+                    "t1": 1700.0,
+                    "t2": 1650.0,
+                    "t3": 1600.0,
+                    "engine": "daily",
+                    "force": False
+                })
+                self.assertIn(resp.status_code, [200, 400])
+                if resp.status_code == 200:
+                    mock_kite.place_order.assert_called()
+                    call_kwargs = mock_kite.place_order.call_args[1]
+                    self.assertEqual(call_kwargs.get("transaction_type"), "SELL")
+                    self.assertEqual(call_kwargs.get("product"), "MIS")
 
 if __name__ == "__main__":
     unittest.main()

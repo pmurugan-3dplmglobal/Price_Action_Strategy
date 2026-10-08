@@ -63,6 +63,7 @@ meta:
     - Morning Bell Breakout Execution & Overnight Incubation Retention Engine (09:15 Radar unlock, 5-day holiday incubation lookback, anti-chase retest retention) (ISSUE-120)
     - Decoupled Category B Incubation from Hard VWAP Gate & Sub-Second Fast Radar Reclaim Execution Engine (ISSUE-122)
     - Staged Setups Live LTP Quote Polling, Long Option Buyer SL Invariant & Active Queue Eviction (ISSUE-123)
+    - Forensic Audit Invariants — Emergency Test Suite Broker Order Isolation, Option Target Hit Loss Prevention, Cash Equity LTP Calibration & Portfolio Override Symmetry (ISSUE-124)
 
 architecture:
   diagram: |

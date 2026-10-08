@@ -319,10 +319,28 @@ def api_buy_scanned_trade():
             except Exception as bf_err:
                 logging.warning(f"1-Click Buy display backfill skipped: {bf_err}")
 
-        # Align option entry price with real execution/LTP price if spot price was passed or stale
+        # Align option or cash equity entry price with real execution/LTP price if spot price was passed, stale, or divergent
         if exch != "NSE" and ltp > 0:
             if entry_spot <= 0 or (abs(entry_spot - ltp) / max(entry_spot, ltp) > 0.50):
                 logging.info(f"[PRICE ALIGN] Overriding divergent entry_spot {entry_spot} with live option LTP {ltp} for {contract}")
+                entry_spot = ltp
+        elif exch == "NSE" and ltp > 0:
+            # For cash equities, validate/calibrate entry_spot against live LTP to prevent immediate phantom target exits
+            is_breaching_target = (is_sell and t1 > 0 and ltp <= t1) or (not is_sell and t1 > 0 and ltp >= t1)
+            is_divergent = entry_spot <= 0 or (abs(entry_spot - ltp) / max(entry_spot, ltp) > 0.05) or is_breaching_target
+            if is_divergent:
+                logging.info(f"[PRICE ALIGN] Overriding divergent cash equity entry_spot {entry_spot} with live LTP {ltp} for {contract}")
+                if entry_spot > 0 and (current_sl > 0 or t1 > 0):
+                    ratio = ltp / entry_spot
+                    if current_sl > 0:
+                        current_sl = round(round((current_sl * ratio) / 0.05) * 0.05, 2)
+                    if t1 > 0:
+                        t1 = round(round((t1 * ratio) / 0.05) * 0.05, 2)
+                    if t2 > 0:
+                        t2 = round(round((t2 * ratio) / 0.05) * 0.05, 2)
+                    if t3 > 0:
+                        t3 = round(round((t3 * ratio) / 0.05) * 0.05, 2)
+                    logging.info(f"[PRICE ALIGN] Rescaled SL/Targets for {contract} using ratio {ratio:.4f}: SL={current_sl}, T1={t1}, T2={t2}, T3={t3}")
                 entry_spot = ltp
 
         tf_val = data.get("timeframe") or data.get("tf") or "30minute"
