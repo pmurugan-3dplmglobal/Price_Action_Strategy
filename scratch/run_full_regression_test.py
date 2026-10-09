@@ -1121,6 +1121,22 @@ try:
     print(" PASSED [OK]", flush=True)
 except Exception as e:
     errors.append(f"Issue 126 Risk Sizing & Daily Loss Failed: {e}")
+# -------------------------------------------------------------------------
+# TEST 41: Pre-Market Delta Zeroing, Macro Cache TTL Eviction & Token Hardening (ISSUE-127)
+# -------------------------------------------------------------------------
+print("[TEST 41] Testing Pre-Market Delta Zeroing, Cache TTL Eviction & Token Hardening (ISSUE-127)...", end="", flush=True)
+try:
+    import subprocess
+    import paths
+    cmd_p127 = [
+        sys.executable,
+        os.path.join(paths.SCRATCH_DIR, "test_issue127_macro_cache_and_token_hardening.py")
+    ]
+    res_p127 = subprocess.run(cmd_p127, cwd=paths.PROJECT_ROOT, capture_output=True, text=True)
+    assert res_p127.returncode == 0, f"Issue 127 unit tests failed:\nSTDOUT:\n{res_p127.stdout}\nSTDERR:\n{res_p127.stderr}"
+    print(" PASSED [OK]", flush=True)
+except Exception as e:
+    errors.append(f"Issue 127 Macro Cache & Token Hardening Failed: {e}")
     print(f" FAILED [ERR] ({e})", flush=True)
 
 print("\n" + "=" * 100)

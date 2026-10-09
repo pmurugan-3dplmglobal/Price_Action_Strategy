@@ -8,6 +8,7 @@ meta:
   architecture: Centralized Shared Core (common/) + Dual Workspaces (Trade_Option & Trade_Stock)
   strategy: Unified ABC Bullish & Bearish Reversal Pattern Engine + Multi-Tiered Market Structure (T1/T2/T3)
   coverage:
+    - Macro Gate Pre-Market Index Delta Zeroing, Stale Cache TTL Eviction (120s) & High-Visibility Token Exception Alerts (ISSUE-127)
     - Indivisible F&O Sizing Risk Calibration: 7.0% Naked Option Cap, 11.0% Debit Spread Net Debit Cap & 10.0% Portfolio Daily Loss Limit (ISSUE-126)
     - Debit Spread Opening Stabilization Window (09:15-09:20 IST), Net Spread Value Target Guard, Sequential Inverted Fill Elimination & Radar Spread Risk Calibration (ISSUE-125)
     - Heuristic Pricing Replacement, 0DTE Index 11:30 Cutoff Harmonization & Session Learning/Evolution System (ISSUE-117)

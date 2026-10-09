@@ -1,15 +1,56 @@
 meta:
   system: Price Action Unified Strategy System
   version: v2.1.0-stable
-  last_updated: '2026-10-08'
+  last_updated: '2026-10-09'
   purpose: Active operational tracker for v2.1.0-stable failures, root causes, regressions, and enhancements.
   historical_archive: archive/ISSUE_HISTORY_ARCHIVE.yaml (Preserves 119 resolved legacy issues prior to 2026-09-05)
-  total_active_issues: 69
+  total_active_issues: 70
   archived_issues_summary:
     total_archived: 119
     recent_archived_batch: [FEATURE-031, FEATURE-030, FEATURE-029, ISSUE-084, ISSUE-083, ISSUE-082, ISSUE-081, ISSUE-080, FEATURE-036, FEATURE-035, FEATURE-034, FEATURE-033, ISSUE-054]
     key_archived_families: [ALGO_AUDIT_CVE, QUANT_ENHANCEMENTS, RADAR_LIFECYCLE, VCP_METRICS, SCANNER_DISCOVERY, SECURITY_CONFIG, ZERO_REGRESSION_AUDIT]
 issues:
+- id: ISSUE-127
+  title: Macro Gate Pre-Market Index Delta Zeroing, Stale Cache TTL Eviction (120s) & High-Visibility Token Exception Alerts
+  severity: CRITICAL
+  category: Macro Market Regime Gate, Pre-Market Cache Poisoning, Cache TTL Staleness, Kite Session Lifecycle, High-Visibility Telemetry
+  family: MACRO_GATE_AND_AUTH_RESILIENCE
+  date_reported: '2026-10-09'
+  symptom: |
+    1. Zero Trade Execution Despite 04:45 AM Token Activation: Daily Kite access token was generated at 04:45 AM IST, but no trades triggered throughout the entire trading day.
+    2. False Intraday Market Crash Lockout on Call (CE) Options: Stock options engine blocked high-conviction Call setups citing MACRO_NIFTY_CRASH_GATE (NIFTY down -1.64%), despite market not having crashed intraday.
+    3. Silent Spot Quote Failure on Expired Access Token: Spot quote and LTP pre-fetches for 210+ symbols failed silently inside logging.debug, masking the fact that the Kite access token was expired and unusable.
+  root_cause: |
+    1. Zerodha Backend Token Reset Window (06:00-06:30 AM IST): Zerodha Kite invalidates all active access tokens daily during morning maintenance between 06:00 and 06:30 AM IST (invalidated at 06:19:01 AM today). Any token generated before this window (e.g. 04:45 AM) is permanently wiped by Zerodha before market open. Daily tokens must be generated after 07:00 AM IST (recommended 08:30-09:00 AM IST).
+    2. Pre-Market Cache Poisoning: At 04:48 AM IST, pre-market quotes queried Kite before market open. Pre-market quotes compare yesterday's close to the day-before-yesterday close, yielding yesterday's percentage return (-1.64%). This value was stored in _MACRO_CACHE in common/macro_gate.py.
+    3. Cache Staleness Without TTL Eviction on API Failure: In common/macro_gate.py, get_macro_index_deltas() returned _MACRO_CACHE["data"] whenever a quote call failed. When the token expired at 06:19 AM, live quote calls failed, and the engine continually fell back to the 04:48 AM stale cache (-1.64%) with no maximum age ceiling, locking out Call options with a fake crash state all day.
+    4. Silent Exception Swallowing: In stock_options_trade_engine.py (lines 350-365) and macro_gate.py, quote fetch errors caused by TokenException were logged only as logging.debug, making authentication failures invisible in standard logs.
+  affected_files:
+  - common/macro_gate.py
+  - Trade_Option/stock_options_trade_engine.py
+  - scratch/test_issue127_macro_cache_and_token_hardening.py
+  - scratch/run_full_regression_test.py
+  - ISSUE_MANAGEMENT.yaml
+  - MASTER_DOCUMENTATION.yaml
+  fix_applied: |
+    1. In common/macro_gate.py:
+       - Pre-Market Delta Zeroing (< 09:15 AM IST): Added IST wall-clock check _get_ist_time() < time(9, 15). Before market open, forces index deltas (NIFTY, BANKNIFTY) to 0.0% with ok=True, pre_market=True, completely eliminating prior-session return poisoning.
+       - Cache Staleness TTL Eviction (MAX_CACHE_AGE_SEC = 120.0): If live quote calls fail and cache age exceeds 120 seconds, the stale cache is evicted. Returns safe fallback ok=False, delta=0.0%, ensuring stale caches can NEVER lock out Call options.
+       - Pre-Market Cache Invalidation at Open: At and after 09:15 AM IST, pre-market cached entries are evicted, immediately triggering live quotes on the opening bell.
+       - High-Visibility Auth Exception Logging: Detects TokenException, PermissionException, and auth-related errors via is_auth_or_token_error(). Logs prominent warning [MACRO_GATE_AUTH_FAILED] advising that daily tokens must be generated after 07:00 AM IST.
+    2. In Trade_Option/stock_options_trade_engine.py:
+       - Bulk Spot Quote Pre-Fetch Hardening (lines 350-365): Added auth error detection on chunk quote fetch and LTP fallback errors. Emits high-visibility [SPOT_QUOTES_AUTH_FAILED] warning and halts batch polling immediately to prevent log spam and alert operations.
+    3. Created scratch/test_issue127_macro_cache_and_token_hardening.py:
+       - Validated pre-market delta zeroing (04:48 AM), cache TTL staleness eviction (>120s), fresh cache retention (<20s), token exception detection and safe fallback, and 09:15 bell cache invalidation (15/15 unit tests passed 100%).
+    4. Added TEST 41 to scratch/run_full_regression_test.py validating all 41 test suites.
+  verification: |
+    1. Dedicated unit test suite scratch/test_issue127_macro_cache_and_token_hardening.py: 15/15 tests PASSED (100%).
+    2. Existing macro test suite scratch/test_issue111_macro_gate_and_safety_fixes.py: 15/15 tests PASSED (100%).
+    3. Master regression suite scratch/run_full_regression_test.py: ALL 41 TEST SUITES PASSED (100% SUCCESS, zero regressions).
+    4. AST syntax checks on all modified files: 100% OK.
+  status: RESOLVED
+  resolution_date: '2026-10-09'
+
 - id: ISSUE-126
   title: Indivisible F&O Sizing Risk Calibration (7.0% Naked Option Cap, 11.0% Debit Spread Net Debit Cap & 10.0% Portfolio Daily Loss Limit)
   severity: HIGH

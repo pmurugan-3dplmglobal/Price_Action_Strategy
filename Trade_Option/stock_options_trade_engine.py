@@ -355,12 +355,28 @@ def run_scan_cycle(kite, universe_mode="AUTO"):
                 if q_res and isinstance(q_res, dict):
                     spot_quotes.update(q_res)
             except Exception as q_err:
+                try:
+                    from common.macro_gate import is_auth_or_token_error
+                except ImportError:
+                    from macro_gate import is_auth_or_token_error
+                if is_auth_or_token_error(q_err):
+                    logging.warning(
+                        f"[SPOT_QUOTES_AUTH_FAILED] Kite token expired or unauthorized during spot quotes prefetch: {q_err}. "
+                        f"Daily token must be generated after 07:00 AM IST!"
+                    )
+                    break
                 logging.debug(f"Chunk quote fetch error, falling back to LTP: {q_err}")
                 try:
                     ltp_res = safe_kite_call(kite.ltp, chunk)
                     if ltp_res and isinstance(ltp_res, dict):
                         spot_quotes.update(ltp_res)
                 except Exception as ltp_err:
+                    if is_auth_or_token_error(ltp_err):
+                        logging.warning(
+                            f"[SPOT_QUOTES_AUTH_FAILED] Kite token expired or unauthorized during spot LTP fallback: {ltp_err}. "
+                            f"Daily token must be generated after 07:00 AM IST!"
+                        )
+                        break
                     logging.debug(f"Chunk LTP fallback error: {ltp_err}")
 
     # Dynamic token resolution from spot quotes if any registry entry is missing token

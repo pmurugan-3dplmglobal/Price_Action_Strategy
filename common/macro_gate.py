@@ -20,6 +20,7 @@ import os
 import json
 import time
 import logging
+from datetime import datetime as dt, time as dtime
 from typing import Tuple, Dict, Any
 
 _MACRO_CACHE = {
@@ -27,6 +28,39 @@ _MACRO_CACHE = {
     "data": {}
 }
 _CACHE_TTL_SECONDS = 20.0
+MAX_CACHE_AGE_SEC = 120.0
+
+
+def is_auth_or_token_error(err: Exception) -> bool:
+    """Detects if an exception is caused by an expired or invalid Kite access token / auth error."""
+    if err is None:
+        return False
+    try:
+        from kiteconnect.exceptions import TokenException, PermissionException
+        if isinstance(err, (TokenException, PermissionException)):
+            return True
+    except ImportError:
+        pass
+    err_str = str(err).lower()
+    return any(k in err_str for k in (
+        "tokenexception", "access_token", "invalid token", "token is invalid",
+        "token expired", "token has expired", "permissionexception", "incorrect `api_key`",
+        "auth", "403", "forbidden"
+    ))
+
+
+def _get_ist_time() -> dtime:
+    """Return current time of day in Indian Standard Time (IST)."""
+    try:
+        try:
+            from common.timeframe_utils import get_ist_time
+        except ImportError:
+            from timeframe_utils import get_ist_time
+        return get_ist_time()
+    except Exception:
+        import datetime
+        return datetime.datetime.now().time()
+
 
 _CONFIG_CACHE = {
     "mtime": 0.0,
@@ -187,15 +221,57 @@ def get_macro_gate_config(force_reload: bool = False) -> Dict[str, Any]:
 def get_macro_index_deltas(kite) -> Dict[str, Any]:
     """
     Fetches real-time LTP and calculates % change from previous close for NIFTY 50 and NIFTY BANK.
-    Uses 20-second TTL cache to prevent API rate-limit exhaustion.
+    Uses 20-second TTL cache to prevent API rate-limit exhaustion, with a 120-second max staleness ceiling.
+    Before 09:15 AM IST, forces index deltas to 0.0% with ok=True (pre-market protection).
     """
     global _MACRO_CACHE
     now = time.time()
+    now_t = _get_ist_time()
+
+    # Pre-market index delta zeroing (Fix 1 - ISSUE-127):
+    # Before 09:15 AM IST, pre-market quotes compare yesterday's close to day-before-yesterday close,
+    # which would poison the cache with yesterday's percentage return. Force deltas to 0.0% with ok=True.
+    if now_t < dtime(9, 15):
+        pre_market_res = {
+            "NIFTY": 0.0,
+            "NIFTY_LTP": 0.0,
+            "NIFTY_CLOSE": 0.0,
+            "BANKNIFTY": 0.0,
+            "BANKNIFTY_LTP": 0.0,
+            "BANKNIFTY_CLOSE": 0.0,
+            "ok": True,
+            "pre_market": True
+        }
+        _MACRO_CACHE["timestamp"] = now
+        _MACRO_CACHE["data"] = pre_market_res
+        return pre_market_res
+
+    # Normal market hours (>= 09:15 AM):
+    # If cache is fresh (< 20s) and not a pre-market placeholder, return cached data
     if (now - _MACRO_CACHE["timestamp"]) < _CACHE_TTL_SECONDS and _MACRO_CACHE["data"]:
-        return _MACRO_CACHE["data"]
+        if not _MACRO_CACHE["data"].get("pre_market"):
+            return _MACRO_CACHE["data"]
+
+    # Helper function to evaluate cached fallback safely against MAX_CACHE_AGE_SEC (Fix 2 - ISSUE-127)
+    def _safe_cached_or_fallback() -> Dict[str, Any]:
+        cache_age = now - _MACRO_CACHE["timestamp"]
+        # Only reuse cache if it is fresh (<= MAX_CACHE_AGE_SEC) AND it had ok=True AND not pre_market
+        if _MACRO_CACHE["data"] and _MACRO_CACHE["data"].get("ok") and not _MACRO_CACHE["data"].get("pre_market") and cache_age <= MAX_CACHE_AGE_SEC:
+            return _MACRO_CACHE["data"]
+        # Stale cache (>120s) or no valid cache: NEVER use stale cache to assert market crashes! Return ok=False, delta=0.0%
+        return {
+            "NIFTY": 0.0,
+            "NIFTY_LTP": 0.0,
+            "NIFTY_CLOSE": 0.0,
+            "BANKNIFTY": 0.0,
+            "BANKNIFTY_LTP": 0.0,
+            "BANKNIFTY_CLOSE": 0.0,
+            "ok": False,
+            "stale": True
+        }
 
     if kite is None:
-        return _MACRO_CACHE["data"] or {"NIFTY": 0.0, "BANKNIFTY": 0.0, "ok": False}
+        return _safe_cached_or_fallback()
 
     try:
         try:
@@ -206,7 +282,7 @@ def get_macro_index_deltas(kite) -> Dict[str, Any]:
         instruments = ["NSE:NIFTY 50", "NSE:NIFTY BANK"]
         quotes = safe_kite_call(kite.quote, instruments)
         if not isinstance(quotes, dict):
-            return _MACRO_CACHE["data"] or {"NIFTY": 0.0, "BANKNIFTY": 0.0, "ok": False}
+            return _safe_cached_or_fallback()
 
         nifty_q = quotes.get("NSE:NIFTY 50", {})
         banknifty_q = quotes.get("NSE:NIFTY BANK", {})
@@ -226,14 +302,22 @@ def get_macro_index_deltas(kite) -> Dict[str, Any]:
             "BANKNIFTY": round(bn_delta, 2),
             "BANKNIFTY_LTP": bn_ltp,
             "BANKNIFTY_CLOSE": bn_cp,
-            "ok": True
+            "ok": True,
+            "pre_market": False
         }
         _MACRO_CACHE["timestamp"] = now
         _MACRO_CACHE["data"] = res
         return res
     except Exception as e:
-        logging.debug(f"[MACRO_GATE] Failed to query index quotes: {e}")
-        return _MACRO_CACHE["data"] or {"NIFTY": 0.0, "BANKNIFTY": 0.0, "ok": False}
+        if is_auth_or_token_error(e):
+            logging.warning(
+                f"[MACRO_GATE_AUTH_FAILED] Kite access token expired or invalid in macro gate: {e}. "
+                f"Daily token must be generated after 07:00 AM IST!"
+            )
+        else:
+            logging.warning(f"[MACRO_GATE] Failed to query index quotes: {e}")
+        return _safe_cached_or_fallback()
+
 
 
 def check_rs_alpha_exception(
@@ -366,7 +450,10 @@ def check_rs_alpha_exception(
                 if ltp > 0 and avg_p > 0:
                     vwap_dist = ((ltp - avg_p) / avg_p) * 100.0
         except Exception as e:
-            logging.debug(f"[MACRO_GATE] Live quote VWAP query failed for {sym_clean}: {e}")
+            if is_auth_or_token_error(e):
+                logging.warning(f"[MACRO_GATE_AUTH_FAILED] Live quote VWAP query failed for {sym_clean} due to token/auth error: {e}")
+            else:
+                logging.debug(f"[MACRO_GATE] Live quote VWAP query failed for {sym_clean}: {e}")
 
     if vwap_dist is None:
         return False, "VWAP_DATA_UNAVAILABLE"
@@ -441,6 +528,15 @@ def evaluate_macro_index_gate(
 
     deltas = get_macro_index_deltas(kite)
     if not deltas.get("ok"):
+        return True, "MACRO_DATA_UNAVAILABLE_PERMITTED"
+
+    # Cache staleness guard (Fix 2 - ISSUE-127):
+    cache_age = time.time() - _MACRO_CACHE.get("timestamp", 0.0)
+    if cache_age > MAX_CACHE_AGE_SEC and not deltas.get("pre_market"):
+        logging.warning(
+            f"[MACRO_GATE_STALE_CACHE_EVICTED] Macro cache age ({cache_age:.1f}s) exceeded TTL ({MAX_CACHE_AGE_SEC}s). "
+            f"Stale crash lockout prevented. Permitting trade."
+        )
         return True, "MACRO_DATA_UNAVAILABLE_PERMITTED"
 
     side_upper = str(side).upper()
